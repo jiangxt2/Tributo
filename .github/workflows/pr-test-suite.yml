@@ -26,34 +26,16 @@ jobs:
           fi
 
   lint:
-    name: Lint (Python ${{ matrix.python-version }})
+    name: Lint
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.10", "3.12"]
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
 
-      - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Install ruff
-        run: uv pip install --system ruff
-
       - name: Lint (ruff)
-        run: ruff check src/ tests/
+        run: uvx ruff check src/ tests/
 
       - name: Format check (ruff)
-        run: ruff format --check src/ tests/
-
-      - name: Type check (mypy)
-        run: |
-          uv pip install --system mypy
-          mypy src/tributo
-
-      - name: Verify README examples
-        run: python scripts/verify_readme_examples.py
+        run: uvx ruff format --check src/ tests/
 
   unit-tests:
     name: Unit Tests (Python ${{ matrix.python-version }})
@@ -71,6 +53,12 @@ jobs:
 
       - name: Install project from lock file
         run: uv sync --locked
+
+      - name: Type check (mypy)
+        run: uv run mypy src/tributo
+
+      - name: Verify README examples
+        run: uv run python scripts/verify_readme_examples.py
 
       - name: Check public API annotations
         run: uv run python tools/check_public_api_annotations.py
@@ -97,5 +85,6 @@ jobs:
 
       - name: Smoke test (install wheel and run CLI)
         run: |
-          uv pip install --system dist/*.whl
-          tributo --help
+          uv venv /tmp/smoke-venv --python 3.12
+          uv pip install --python /tmp/smoke-venv/bin/python dist/*.whl
+          /tmp/smoke-venv/bin/tributo --help
