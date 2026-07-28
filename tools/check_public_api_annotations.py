@@ -16,8 +16,8 @@ Usage::
 
 from __future__ import annotations
 
-import ast
 import argparse
+import ast
 import sys
 from pathlib import Path
 
@@ -28,7 +28,13 @@ _DEVELOPER_API_DECORATOR = "DeveloperAPI"
 
 # Symbols explicitly exempted from the @PublicAPI / @DeveloperAPI requirement.
 # — PublicAPI / Stability / DeveloperAPI: self-referential
-_EXEMPT_NAMES: set[str] = {"PublicAPI", "Stability", "get_stability", "is_public_api", "DeveloperAPI"}
+_EXEMPT_NAMES: set[str] = {
+    "PublicAPI",
+    "Stability",
+    "get_stability",
+    "is_public_api",
+    "DeveloperAPI",
+}
 
 
 # ── AST helpers ──────────────────────────────────────────────────────────────
@@ -42,6 +48,8 @@ class _ModuleCollector(ast.NodeVisitor):
         self.annotated: set[str] = set()
         # {imported_name: ("module.path", "original_name")}
         self.imports: dict[str, tuple[str, str]] = {}
+        # Modules discovered via __getattr__ lazy imports (e.g. gRPC symbols)
+        self.lazy_import_modules: set[str] = set()
 
     # -- __all__ ---------------------------------------------------------------
 
@@ -87,6 +95,10 @@ class _ModuleCollector(ast.NodeVisitor):
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         if self._has_api_decorator(node.decorator_list):
             self.annotated.add(node.name)
+        # Detect __getattr__ lazy-import modules so we can resolve
+        # symbols imported this way (e.g. gRPC optional deps).
+        if node.name == "__getattr__":
+            self._collect_lazy_imports(node)
         self.generic_visit(node)
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
@@ -120,6 +132,30 @@ class _ModuleCollector(ast.NodeVisitor):
         for alias in node.names:
             name = alias.asname or alias.name
             self.imports[name] = (alias.name, alias.name)
+
+    # -- lazy imports via __getattr__ -----------------------------------------
+
+    def _collect_lazy_imports(self, node: ast.FunctionDef) -> None:
+        """Extract module paths from ``__getattr__``-style lazy imports.
+
+        Patterns recognised:
+
+        - ``from tributo.serving.grpc_deployment import X as _obj``
+        - ``__import__("tributo.serving.grpc_runner", fromlist=[...])``
+        """
+        for child in ast.walk(node):
+            if isinstance(child, ast.ImportFrom):
+                if child.module is not None:
+                    self.lazy_import_modules.add(child.module)
+            elif isinstance(child, ast.Call):
+                if (
+                    isinstance(child.func, ast.Name)
+                    and child.func.id == "__import__"
+                    and child.args
+                    and isinstance(child.args[0], ast.Constant)
+                    and isinstance(child.args[0].value, str)
+                ):
+                    self.lazy_import_modules.add(child.args[0].value)
 
     # -- helpers ---------------------------------------------------------------
 
@@ -196,6 +232,34 @@ def _check_symbol_annotated(
             if _check_symbol_annotated(src_root, sub, defining_file, origin, visited):
                 return True
 
+    # 3. Try lazy-import modules (__getattr__ pattern, e.g. gRPC deps)
+    for lazy_mod in collector.lazy_import_modules:
+        defining_file = _resolve_module(src_root, lazy_mod)
+        if defining_file is not None and defining_file.is_file():
+            try:
+                source = defining_file.read_text(encoding="utf-8")
+                tree = ast.parse(source, filename=str(defining_file))
+            except (SyntaxError, OSError):
+                continue
+            sub = _ModuleCollector()
+            sub.visit(tree)
+            if symbol in sub.annotated:
+                return True
+            # Also try following the symbol through this module's imports
+            if symbol in sub.imports:
+                mod_path, origin = sub.imports[symbol]
+                df = _resolve_module(src_root, mod_path)
+                if df is not None and df.is_file():
+                    try:
+                        src2 = df.read_text(encoding="utf-8")
+                        tree2 = ast.parse(src2, filename=str(df))
+                    except (SyntaxError, OSError):
+                        continue
+                    sub2 = _ModuleCollector()
+                    sub2.visit(tree2)
+                    if _check_symbol_annotated(src_root, sub2, df, origin, visited):
+                        return True
+
     return False
 
 
@@ -208,7 +272,7 @@ def _check_file(src_root: Path, filepath: Path) -> list[tuple[str, str]]:
         source = filepath.read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(filepath))
     except (SyntaxError, OSError) as exc:
-        return [(f"<read-error>", f"cannot read or parse: {exc}")]
+        return [("<read-error>", f"cannot read or parse: {exc}")]
 
     collector = _ModuleCollector()
     collector.visit(tree)
@@ -222,13 +286,18 @@ def _check_file(src_root: Path, filepath: Path) -> list[tuple[str, str]]:
             continue
         if not _check_symbol_annotated(src_root, collector, filepath, symbol):
             violations.append(
-                (symbol, "exported in __all__ but no @PublicAPI found (checked imports)")
+                (
+                    symbol,
+                    "exported in __all__ but no @PublicAPI found (checked imports)",
+                )
             )
 
     return violations
 
 
-def _scan_src(src_root: Path, verbose: bool = False) -> dict[str, list[tuple[str, str]]]:
+def _scan_src(
+    src_root: Path, verbose: bool = False
+) -> dict[str, list[tuple[str, str]]]:
     """Scan all .py files under src_root. Returns {relpath: [(symbol, reason)]}."""
     results: dict[str, list[tuple[str, str]]] = {}
 
@@ -252,7 +321,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description="Check that __all__ exports have @PublicAPI annotations.",
     )
     parser.add_argument(
-        "--verbose", "-v",
+        "--verbose",
+        "-v",
         action="store_true",
         help="Print every violation as it is found",
     )
@@ -267,7 +337,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> None:
     args = _parse_args(argv)
 
-    src_root = Path(args.src_root) if args.src_root else Path(__file__).resolve().parent.parent / "src" / "tributo"
+    src_root = (
+        Path(args.src_root)
+        if args.src_root
+        else Path(__file__).resolve().parent.parent / "src" / "tributo"
+    )
     if not src_root.is_dir():
         print(f"Error: source root not found: {src_root}", file=sys.stderr)
         sys.exit(2)

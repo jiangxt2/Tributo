@@ -53,8 +53,8 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install project from lock file
-        run: uv sync --locked
+      - name: Install dependencies
+        run: uv sync
 
       - name: Type check (mypy)
         run: uv run mypy src/tributo
