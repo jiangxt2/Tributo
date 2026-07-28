@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="35%" r="75%">
+      <stop offset="0%" stop-color="#1A153A"/>
+      <stop offset="100%" stop-color="#0A0A14"/>
+    </radialGradient>
+  </defs>
+  <rect x="0" y="0" width="32" height="32" rx="6" fill="url(#bg)"/>
+  <!-- Crystal prism -->
+  <polygon points="16,8 21,11 21,20 16,23 11,20 11,11"
+           fill="#00F0FF" opacity="0.92"/>
+  <!-- Top face highlight -->
+  <polygon points="16,8 21,11 16,14 11,11" fill="white" opacity="0.35"/>
+  <!-- Orbit nodes -->
+  <circle cx="16" cy="5" r="1.5" fill="#A78BFA" opacity="0.85"/>
+  <circle cx="26" cy="14" r="1.5" fill="#A78BFA" opacity="0.85"/>
+  <circle cx="6" cy="14" r="1.5" fill="#A78BFA" opacity="0.85"/>
+</svg>

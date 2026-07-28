@@ -1,0 +1,33 @@
+name: Nightly Test
+
+on:
+  schedule:
+    - cron: "37 2 * * *"  # 02:37 UTC daily
+  workflow_dispatch:
+
+jobs:
+  full-test:
+    name: Full Test Suite (Python 3.12)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+
+      - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
+        with:
+          python-version: "3.12"
+
+      - name: Install project with all extras
+        run: uv pip install --system ".[dev,training,embeddings,registry,data]"
+
+      - name: Run all tests (including slow)
+        run: |
+          python -m pytest tests/ \
+            -m "not integration and not s3" \
+            -v --tb=long --timeout=300
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: nightly-test-results
+          path: .pytest_cache/

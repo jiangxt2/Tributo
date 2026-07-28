@@ -1,0 +1,191 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <defs>
+    <!-- Background gradient: deep space -->
+    <radialGradient id="bgGrad" cx="50%" cy="40%" r="70%">
+      <stop offset="0%" stop-color="#1A153A"/>
+      <stop offset="100%" stop-color="#0A0A14"/>
+    </radialGradient>
+    <!-- Core glow gradient -->
+    <radialGradient id="coreGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#00F0FF" stop-opacity="0.35"/>
+      <stop offset="50%" stop-color="#7000FF" stop-opacity="0.1"/>
+      <stop offset="100%" stop-color="#0A0A14" stop-opacity="0"/>
+    </radialGradient>
+    <!-- Beam gradient: purple → cyan -->
+    <linearGradient id="beamGrad" x1="128" y1="220" x2="128" y2="80">
+      <stop offset="0%" stop-color="#8B5CF6" stop-opacity="0"/>
+      <stop offset="30%" stop-color="#A855F7"/>
+      <stop offset="70%" stop-color="#00E0FF"/>
+      <stop offset="100%" stop-color="#00F0FF" stop-opacity="0.6"/>
+    </linearGradient>
+    <!-- Node gradient -->
+    <linearGradient id="nodeGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#C084FC"/>
+      <stop offset="100%" stop-color="#7C3AED"/>
+    </linearGradient>
+    <!-- Crystal fill -->
+    <linearGradient id="crystalGrad" x1="50%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="#00F0FF"/>
+      <stop offset="50%" stop-color="#06B6D4"/>
+      <stop offset="100%" stop-color="#0891B2"/>
+    </linearGradient>
+    <!-- Circuit line gradient -->
+    <linearGradient id="circuitGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#7C3AED" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#06B6D4" stop-opacity="0.2"/>
+    </linearGradient>
+
+    <!-- Multi-layer glow filters -->
+    <filter id="glowSm" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="1.5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glowMd" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glowLg" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glowXl" x="-150%" y="-150%" width="400%" height="400%">
+      <feGaussianBlur stdDeviation="16" result="blur"/>
+    </filter>
+    <filter id="glowNeon" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="2" result="blur1"/>
+      <feGaussianBlur stdDeviation="5" result="blur2"/>
+      <feGaussianBlur stdDeviation="10" result="blur3"/>
+      <feMerge>
+        <feMergeNode in="blur3"/>
+        <feMergeNode in="blur2"/>
+        <feMergeNode in="blur1"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Rounded dark background -->
+  <rect x="0" y="0" width="256" height="256" rx="48" fill="url(#bgGrad)"/>
+
+  <!-- Subtle tech grid -->
+  <g opacity="0.04" stroke="white" stroke-width="0.5">
+    <line x1="0" y1="64" x2="256" y2="64"/><line x1="0" y1="128" x2="256" y2="128"/>
+    <line x1="0" y1="192" x2="256" y2="192"/>
+    <line x1="64" y1="0" x2="64" y2="256"/><line x1="128" y1="0" x2="128" y2="256"/>
+    <line x1="192" y1="0" x2="192" y2="256"/>
+  </g>
+
+  <!-- Ambient large glow behind center -->
+  <circle cx="128" cy="118" r="70" fill="url(#coreGlow)" filter="url(#glowXl)"/>
+
+  <!-- ===== Circuit traces (thin connection lines) ===== -->
+  <g fill="none" stroke-width="1" opacity="0.25">
+    <!-- Hex ring -->
+    <polygon points="128,52 187,86 187,154 128,188 69,154 69,86"
+             stroke="url(#circuitGrad)" stroke-width="1"/>
+    <!-- Inner hex ring -->
+    <polygon points="128,70 170,94 170,146 128,170 86,146 86,94"
+             stroke="url(#circuitGrad)" stroke-width="0.7" opacity="0.5"/>
+    <!-- Spokes -->
+    <line x1="128" y1="118" x2="128" y2="52" stroke="#7C3AED" opacity="0.4"/>
+    <line x1="128" y1="118" x2="187" y2="86" stroke="#7C3AED" opacity="0.4"/>
+    <line x1="128" y1="118" x2="187" y2="154" stroke="#7C3AED" opacity="0.4"/>
+    <line x1="128" y1="118" x2="128" y2="188" stroke="#7C3AED" opacity="0.4"/>
+    <line x1="128" y1="118" x2="69" y2="154" stroke="#7C3AED" opacity="0.4"/>
+    <line x1="128" y1="118" x2="69" y2="86" stroke="#7C3AED" opacity="0.4"/>
+  </g>
+
+  <!-- ===== Outer orbit nodes ===== -->
+  <g filter="url(#glowSm)">
+    <circle cx="128" cy="52" r="4.5" fill="url(#nodeGrad)" opacity="0.9"/>
+    <circle cx="187" cy="86" r="4.5" fill="url(#nodeGrad)" opacity="0.9"/>
+    <circle cx="187" cy="154" r="4.5" fill="url(#nodeGrad)" opacity="0.9"/>
+    <circle cx="128" cy="188" r="4.5" fill="url(#nodeGrad)" opacity="0.9"/>
+    <circle cx="69" cy="154" r="4.5" fill="url(#nodeGrad)" opacity="0.9"/>
+    <circle cx="69" cy="86" r="4.5" fill="url(#nodeGrad)" opacity="0.9"/>
+  </g>
+
+  <!-- Inner orbit ring nodes (smaller, staggered) -->
+  <g filter="url(#glowSm)" opacity="0.5">
+    <circle cx="128" cy="70" r="2.5" fill="#A78BFA"/>
+    <circle cx="170" cy="94" r="2.5" fill="#A78BFA"/>
+    <circle cx="170" cy="146" r="2.5" fill="#A78BFA"/>
+    <circle cx="128" cy="170" r="2.5" fill="#A78BFA"/>
+    <circle cx="86" cy="146" r="2.5" fill="#A78BFA"/>
+    <circle cx="86" cy="94" r="2.5" fill="#A78BFA"/>
+  </g>
+
+  <!-- ===== Three converging energy beams ===== -->
+  <g filter="url(#glowMd)" opacity="0.3">
+    <!-- Bottom beam -->
+    <polygon points="124,182 132,182 131,108 125,108" fill="url(#beamGrad)"/>
+    <!-- Bottom-left beam -->
+    <polygon points="74,150 82,143 112,118 107,110" fill="url(#beamGrad)"/>
+    <!-- Bottom-right beam -->
+    <polygon points="182,150 174,143 144,118 149,110" fill="url(#beamGrad)"/>
+  </g>
+
+  <!-- ===== Central crystal (hexagonal prism) ===== -->
+  <!-- Outer glow layer -->
+  <polygon points="128,88 157,105 157,135 128,152 99,135 99,105"
+           fill="#00F0FF" opacity="0.25" filter="url(#glowLg)"/>
+
+  <!-- Crystal body -->
+  <polygon points="128,92 153,107 153,133 128,148 103,133 103,107"
+           fill="url(#crystalGrad)" opacity="0.9" filter="url(#glowMd)"/>
+
+  <!-- Crystal top face (3D effect) -->
+  <polygon points="128,92 153,107 128,122 103,107"
+           fill="white" opacity="0.35"/>
+
+  <!-- Crystal left face -->
+  <polygon points="103,107 128,122 128,148 103,133"
+           fill="white" opacity="0.08"/>
+
+  <!-- Crystal right face -->
+  <polygon points="128,122 153,107 153,133 128,148"
+           fill="black" opacity="0.15"/>
+
+  <!-- Crystal edge highlights -->
+  <polygon points="128,88 157,105 157,135 128,152 99,135 99,105"
+           fill="none" stroke="white" stroke-width="0.8" opacity="0.4"
+           filter="url(#glowSm)"/>
+
+  <!-- Bright inner core -->
+  <polygon points="128,108 140,115 140,129 128,136 116,129 116,115"
+           fill="white" opacity="0.4" filter="url(#glowSm)"/>
+
+  <!-- ===== Scattered data particles ===== -->
+  <g filter="url(#glowSm)" opacity="0.5">
+    <!-- Around top beam area -->
+    <circle cx="148" cy="54" r="1.2" fill="#00F0FF"/>
+    <circle cx="112" cy="48" r="0.8" fill="#A78BFA"/>
+    <circle cx="136" cy="62" r="1" fill="#C084FC"/>
+    <!-- Around right beam area -->
+    <circle cx="196" cy="102" r="1" fill="#00F0FF"/>
+    <circle cx="206" cy="118" r="0.8" fill="#A78BFA"/>
+    <circle cx="190" cy="132" r="1.2" fill="#C084FC"/>
+    <!-- Around left beam area -->
+    <circle cx="60" cy="102" r="1.2" fill="#00F0FF"/>
+    <circle cx="50" cy="118" r="0.8" fill="#A78BFA"/>
+    <circle cx="66" cy="132" r="1" fill="#C084FC"/>
+    <!-- Around bottom area -->
+    <circle cx="118" cy="196" r="1" fill="#A78BFA"/>
+    <circle cx="140" cy="198" r="0.8" fill="#00F0FF"/>
+    <circle cx="158" cy="170" r="1" fill="#C084FC"/>
+    <circle cx="96" cy="168" r="1.2" fill="#A78BFA"/>
+    <!-- Scattered around -->
+    <circle cx="44" cy="156" r="0.7" fill="#A78BFA" opacity="0.6"/>
+    <circle cx="212" cy="88" r="0.7" fill="#00F0FF" opacity="0.6"/>
+    <circle cx="208" cy="160" r="0.7" fill="#C084FC" opacity="0.6"/>
+    <circle cx="48" cy="76" r="0.7" fill="#00F0FF" opacity="0.6"/>
+  </g>
+
+  <!-- Corner accent dots -->
+  <g opacity="0.15">
+    <circle cx="28" cy="28" r="2" fill="#00F0FF"/>
+    <circle cx="228" cy="28" r="2" fill="#A78BFA"/>
+    <circle cx="28" cy="228" r="2" fill="#A78BFA"/>
+    <circle cx="228" cy="228" r="2" fill="#00F0FF"/>
+  </g>
+</svg>

@@ -1,0 +1,214 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" fill="none">
+  <defs>
+    <radialGradient id="bgGrad" cx="30%" cy="50%" r="80%">
+      <stop offset="0%" stop-color="#151030"/>
+      <stop offset="100%" stop-color="#08080F"/>
+    </radialGradient>
+    <linearGradient id="titleGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#E0E7FF"/>
+      <stop offset="55%" stop-color="#C4B5FD"/>
+      <stop offset="100%" stop-color="#00F0FF"/>
+    </linearGradient>
+    <linearGradient id="crystalGrad" x1="50%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="#00F0FF"/>
+      <stop offset="60%" stop-color="#06B6D4"/>
+      <stop offset="100%" stop-color="#0891B2"/>
+    </linearGradient>
+    <linearGradient id="ambientPurple" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7C3AED" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#7C3AED" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="ambientCyan" x1="1" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#00F0FF" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#00F0FF" stop-opacity="0"/>
+    </linearGradient>
+    <!-- Pill gradients -->
+    <linearGradient id="pillPurple" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#7C3AED" stop-opacity="0.2"/>
+      <stop offset="100%" stop-color="#5B21B6" stop-opacity="0.1"/>
+    </linearGradient>
+    <linearGradient id="pillCyan" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#06B6D4" stop-opacity="0.2"/>
+      <stop offset="100%" stop-color="#0891B2" stop-opacity="0.1"/>
+    </linearGradient>
+    <!-- Glow filters -->
+    <filter id="glowSm">
+      <feGaussianBlur stdDeviation="2" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glowMd">
+      <feGaussianBlur stdDeviation="5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glowLg">
+      <feGaussianBlur stdDeviation="12" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glowXl">
+      <feGaussianBlur stdDeviation="60" result="b"/>
+    </filter>
+    <filter id="glowNeon">
+      <feGaussianBlur stdDeviation="3" result="b1"/>
+      <feGaussianBlur stdDeviation="8" result="b2"/>
+      <feGaussianBlur stdDeviation="16" result="b3"/>
+      <feMerge>
+        <feMergeNode in="b3"/><feMergeNode in="b2"/>
+        <feMergeNode in="b1"/><feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect x="0" y="0" width="1280" height="640" fill="url(#bgGrad)"/>
+
+  <!-- Ambient glow orbs -->
+  <ellipse cx="380" cy="320" rx="300" ry="250" fill="#7C3AED" opacity="0.04" filter="url(#glowXl)"/>
+  <ellipse cx="1000" cy="180" rx="250" ry="200" fill="#00F0FF" opacity="0.03" filter="url(#glowXl)"/>
+
+  <!-- Tech grid -->
+  <g opacity="0.025" stroke="white" stroke-width="0.5">
+    <line x1="0" y1="107" x2="1280" y2="107"/>
+    <line x1="0" y1="213" x2="1280" y2="213"/>
+    <line x1="0" y1="320" x2="1280" y2="320"/>
+    <line x1="0" y1="427" x2="1280" y2="427"/>
+    <line x1="0" y1="533" x2="1280" y2="533"/>
+    <line x1="213" y1="0" x2="213" y2="640"/>
+    <line x1="427" y1="0" x2="427" y2="640"/>
+    <line x1="640" y1="0" x2="640" y2="640"/>
+    <line x1="853" y1="0" x2="853" y2="640"/>
+    <line x1="1067" y1="0" x2="1067" y2="640"/>
+  </g>
+
+  <!-- Subtle dot field -->
+  <g opacity="0.035">
+    <circle cx="80" cy="80" r="1.5" fill="white"/>
+    <circle cx="180" cy="80" r="1.5" fill="white"/>
+    <circle cx="280" cy="80" r="1.5" fill="white"/>
+    <circle cx="80" cy="180" r="1.5" fill="white"/>
+    <circle cx="180" cy="180" r="1.5" fill="white"/>
+    <circle cx="80" cy="560" r="1.5" fill="white"/>
+    <circle cx="180" cy="560" r="1.5" fill="white"/>
+    <circle cx="280" cy="560" r="1.5" fill="white"/>
+    <circle cx="80" cy="460" r="1.5" fill="white"/>
+    <circle cx="180" cy="460" r="1.5" fill="white"/>
+    <circle cx="1200" cy="80" r="1.5" fill="white"/>
+    <circle cx="1100" cy="80" r="1.5" fill="white"/>
+    <circle cx="1000" cy="80" r="1.5" fill="white"/>
+    <circle cx="1200" cy="560" r="1.5" fill="white"/>
+    <circle cx="1100" cy="560" r="1.5" fill="white"/>
+    <circle cx="1000" cy="560" r="1.5" fill="white"/>
+    <circle cx="1200" cy="460" r="1.5" fill="white"/>
+    <circle cx="1100" cy="460" r="1.5" fill="white"/>
+    <circle cx="1200" cy="180" r="1.5" fill="white"/>
+    <circle cx="1100" cy="180" r="1.5" fill="white"/>
+  </g>
+
+  <!-- ===== Large icon mark (left-center) ===== -->
+  <g transform="translate(380, 320) scale(3)">
+    <!-- Ambient core glow -->
+    <circle cx="0" cy="0" r="55" fill="#00F0FF" opacity="0.08" filter="url(#glowXl)"/>
+
+    <!-- Hex rings -->
+    <polygon points="0,-52 45,-26 45,26 0,52 -45,26 -45,-26"
+             fill="none" stroke="#7C3AED" stroke-width="0.7" opacity="0.3"/>
+    <polygon points="0,-38 33,-19 33,19 0,38 -33,19 -33,-19"
+             fill="none" stroke="#06B6D4" stroke-width="0.5" opacity="0.2"/>
+    <polygon points="0,-24 21,-12 21,12 0,24 -21,12 -21,-12"
+             fill="none" stroke="#00F0FF" stroke-width="0.4" opacity="0.12"/>
+
+    <!-- Spokes -->
+    <g stroke="#7C3AED" stroke-width="0.7" opacity="0.3">
+      <line x1="0" y1="0" x2="0" y2="-52"/>
+      <line x1="0" y1="0" x2="45" y2="-26"/>
+      <line x1="0" y1="0" x2="45" y2="26"/>
+      <line x1="0" y1="0" x2="0" y2="52"/>
+      <line x1="0" y1="0" x2="-45" y2="26"/>
+      <line x1="0" y1="0" x2="-45" y2="-26"/>
+    </g>
+
+    <!-- Outer nodes with glow -->
+    <g filter="url(#glowSm)">
+      <circle cx="0" cy="-52" r="3.5" fill="#A78BFA" opacity="0.85"/>
+      <circle cx="45" cy="-26" r="3.5" fill="#A78BFA" opacity="0.85"/>
+      <circle cx="45" cy="26" r="3.5" fill="#A78BFA" opacity="0.85"/>
+      <circle cx="0" cy="52" r="3.5" fill="#A78BFA" opacity="0.85"/>
+      <circle cx="-45" cy="26" r="3.5" fill="#A78BFA" opacity="0.85"/>
+      <circle cx="-45" cy="-26" r="3.5" fill="#A78BFA" opacity="0.85"/>
+    </g>
+
+    <!-- Inner orbit dots -->
+    <g opacity="0.35">
+      <circle cx="0" cy="-38" r="1.5" fill="#C084FC"/>
+      <circle cx="33" cy="-19" r="1.5" fill="#C084FC"/>
+      <circle cx="33" cy="19" r="1.5" fill="#C084FC"/>
+      <circle cx="0" cy="38" r="1.5" fill="#C084FC"/>
+      <circle cx="-33" cy="19" r="1.5" fill="#C084FC"/>
+      <circle cx="-33" cy="-19" r="1.5" fill="#C084FC"/>
+    </g>
+
+    <!-- Crystal prism body -->
+    <polygon points="0,-22 19,-11 19,11 0,22 -19,11 -19,-11"
+             fill="url(#crystalGrad)" opacity="0.92" filter="url(#glowSm)"/>
+    <!-- Top face highlight (3D) -->
+    <polygon points="0,-22 19,-11 0,0 -19,-11" fill="white" opacity="0.32"/>
+    <!-- Left face -->
+    <polygon points="-19,-11 0,0 0,22 -19,11" fill="white" opacity="0.06"/>
+    <!-- Right face shadow -->
+    <polygon points="0,0 19,-11 19,11 0,22" fill="black" opacity="0.12"/>
+    <!-- Edge -->
+    <polygon points="0,-24 21,-12 21,12 0,24 -21,12 -21,-12"
+             fill="none" stroke="white" stroke-width="0.6" opacity="0.4"/>
+    <!-- Inner bright -->
+    <polygon points="0,-12 10,-6 10,6 0,12 -10,6 -10,-6"
+             fill="white" opacity="0.38" filter="url(#glowSm)"/>
+
+    <!-- Particle scatter around crystal -->
+    <g filter="url(#glowSm)" opacity="0.5">
+      <circle cx="24" cy="-32" r="1" fill="#00F0FF"/>
+      <circle cx="32" cy="-6" r="0.8" fill="#A78BFA"/>
+      <circle cx="-24" cy="-32" r="0.8" fill="#A78BFA"/>
+      <circle cx="-32" cy="-6" r="1" fill="#00F0FF"/>
+      <circle cx="28" cy="26" r="0.9" fill="#C084FC"/>
+      <circle cx="-28" cy="26" r="0.9" fill="#00F0FF"/>
+      <circle cx="0" cy="-44" r="0.7" fill="#A78BFA"/>
+      <circle cx="38" cy="12" r="0.7" fill="#00F0FF"/>
+      <circle cx="-38" cy="12" r="0.7" fill="#C084FC"/>
+    </g>
+  </g>
+
+  <!-- ===== Right text block ===== -->
+  <!-- Title -->
+  <text x="620" y="295" font-family="system-ui, -apple-system, sans-serif" font-weight="800"
+        font-size="76" letter-spacing="-1.5" fill="url(#titleGrad)">Tributo</text>
+
+  <!-- Tagline -->
+  <text x="625" y="340" font-family="system-ui, -apple-system, sans-serif" font-weight="400"
+        font-size="22" fill="#94A3B8" letter-spacing="0.4">Unified ML Platform for Ray Clusters</text>
+
+  <!-- Neon accent line -->
+  <rect x="625" y="358" width="320" height="3" rx="1.5">
+    <animate attributeName="opacity" values="0.15;0.4;0.15" dur="4s" repeatCount="indefinite"/>
+  </rect>
+
+  <!-- Feature pills with neon border effect -->
+  <g transform="translate(625, 388)">
+    <!-- Training -->
+    <rect x="0" y="0" width="82" height="30" rx="15" fill="url(#pillPurple)" stroke="#7C3AED" stroke-width="0.8" opacity="0.7"/>
+    <text x="41" y="19" font-family="system-ui, -apple-system, sans-serif" font-weight="600" font-size="13" fill="#C084FC" text-anchor="middle">Training</text>
+
+    <!-- Inference -->
+    <rect x="95" y="0" width="84" height="30" rx="15" fill="url(#pillCyan)" stroke="#06B6D4" stroke-width="0.8" opacity="0.7"/>
+    <text x="137" y="19" font-family="system-ui, -apple-system, sans-serif" font-weight="600" font-size="13" fill="#22D3EE" text-anchor="middle">Inference</text>
+
+    <!-- Embeddings -->
+    <rect x="192" y="0" width="98" height="30" rx="15" fill="url(#pillPurple)" stroke="#7C3AED" stroke-width="0.8" opacity="0.7"/>
+    <text x="241" y="19" font-family="system-ui, -apple-system, sans-serif" font-weight="600" font-size="13" fill="#C084FC" text-anchor="middle">Embeddings</text>
+
+    <!-- Serving -->
+    <rect x="303" y="0" width="76" height="30" rx="15" fill="url(#pillCyan)" stroke="#06B6D4" stroke-width="0.8" opacity="0.7"/>
+    <text x="341" y="19" font-family="system-ui, -apple-system, sans-serif" font-weight="600" font-size="13" fill="#22D3EE" text-anchor="middle">Serving</text>
+  </g>
+
+  <!-- Bottom accent -->
+  <rect x="0" y="636" width="1280" height="4" fill="url(#titleGrad)" opacity="0.12"/>
+</svg>

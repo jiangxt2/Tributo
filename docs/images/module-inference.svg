@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="40%" r="70%">
+      <stop offset="0%" stop-color="#0E3A4A"/>
+      <stop offset="100%" stop-color="#061F2B"/>
+    </radialGradient>
+    <filter id="glowSm">
+      <feGaussianBlur stdDeviation="1.5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glowMd">
+      <feGaussianBlur stdDeviation="3" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect x="0" y="0" width="64" height="64" rx="14" fill="url(#bg)"/>
+  <g opacity="0.05" stroke="white" stroke-width="0.3">
+    <line x1="0" y1="32" x2="64" y2="32"/><line x1="32" y1="0" x2="32" y2="64"/>
+  </g>
+  <!-- Neon lightning bolt -->
+  <polygon points="36,6 18,30 28,30 22,56 48,30 36,30 42,6"
+           fill="#00F0FF" opacity="0.25" filter="url(#glowMd)"/>
+  <polygon points="36,8 20,30 28,30 24,54 46,30 36,30 40,8"
+           fill="#22D3EE" opacity="0.85" filter="url(#glowSm)"/>
+  <polygon points="38,12 24,30 30,30 26,50 44,30 36,30 38,12"
+           fill="white" opacity="0.3"/>
+</svg>

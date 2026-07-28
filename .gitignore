@@ -1,0 +1,66 @@
+# Claude Code
+CLAUDE.md
+CLAUDE.local.md
+.claude/
+
+# Environment
+.env
+.venv
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Package manager
+.uv/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.benchmarks
+
+# Local test workspace
+testing/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Type checking
+.mypy_cache/
+
+# Python version
+.python-version
+
+# Training artifacts
+.ray_results/
+mlruns/
+*.onnx
+*.pth
+*.parquet
+
+# Data (keep package and test data directories)
+data/
+!src/tributo/data/
+!tests/data/
+
+# Logs
+*.log
+
+# Temp
+tmp/

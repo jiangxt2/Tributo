@@ -1,0 +1,30 @@
+name: Publish to PyPI
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  publish:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    environment: release
+
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+
+      - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
+        with:
+          python-version: "3.12"
+
+      - name: Build wheel and sdist
+        run: uv build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247
+        with:
+          packages-dir: dist/

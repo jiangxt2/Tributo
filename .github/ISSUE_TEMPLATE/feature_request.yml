@@ -1,0 +1,46 @@
+name: Feature Request
+description: Suggest a new feature
+title: "[Feature] "
+labels: ["feature", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the feature suggestion! Please check existing issues
+        to avoid duplicates before submitting.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: |
+        What problem are you trying to solve? Describe your use case.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: |
+        How would you like Tributo to address this? Be as specific as
+        possible (API shape, CLI command, config option, etc.).
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any workarounds or alternative approaches you've tried.
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Affected modules
+      description: Which Tributo modules would this touch?
+      options:
+        - label: Training
+        - label: Embeddings
+        - label: Serving / Inference
+        - label: Data / Storage
+        - label: Registry / MLflow
+        - label: Backend integration
+        - label: CLI
+        - label: Documentation

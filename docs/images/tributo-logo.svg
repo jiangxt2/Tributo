@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 160" fill="none">
+  <defs>
+    <radialGradient id="iconBg" cx="50%" cy="40%" r="70%">
+      <stop offset="0%" stop-color="#1A153A"/>
+      <stop offset="100%" stop-color="#0A0A14"/>
+    </radialGradient>
+    <linearGradient id="textGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#E0E7FF"/>
+      <stop offset="50%" stop-color="#C4B5FD"/>
+      <stop offset="100%" stop-color="#00F0FF"/>
+    </linearGradient>
+    <linearGradient id="accentLine" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#7C3AED" stop-opacity="0"/>
+      <stop offset="40%" stop-color="#A855F7"/>
+      <stop offset="100%" stop-color="#00F0FF" stop-opacity="0.3"/>
+    </linearGradient>
+    <linearGradient id="crystalGrad" x1="50%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="#00F0FF"/>
+      <stop offset="100%" stop-color="#0891B2"/>
+    </linearGradient>
+    <filter id="glowSm">
+      <feGaussianBlur stdDeviation="1.5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glowLg">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+    </filter>
+  </defs>
+
+  <!-- Icon area -->
+  <rect x="0" y="10" width="140" height="140" rx="28" fill="url(#iconBg)"/>
+
+  <!-- Tech grid in icon -->
+  <g opacity="0.04" stroke="white" stroke-width="0.3">
+    <line x1="0" y1="47" x2="140" y2="47"/><line x1="0" y1="93" x2="140" y2="93"/>
+    <line x1="47" y1="0" x2="47" y2="140"/><line x1="93" y1="0" x2="93" y2="140"/>
+  </g>
+
+  <!-- Mini core icon -->
+  <g transform="translate(70, 80) scale(0.75)">
+    <!-- Ambient glow behind -->
+    <circle cx="0" cy="0" r="60" fill="#00F0FF" opacity="0.06" filter="url(#glowLg)"/>
+
+    <!-- Hex rings -->
+    <polygon points="0,-52 45,-26 45,26 0,52 -45,26 -45,-26"
+             fill="none" stroke="#7C3AED" stroke-width="0.8" opacity="0.3"/>
+    <polygon points="0,-36 31,-18 31,18 0,36 -31,18 -31,-18"
+             fill="none" stroke="#06B6D4" stroke-width="0.5" opacity="0.2"/>
+
+    <!-- Spokes -->
+    <g stroke="#7C3AED" stroke-width="0.8" opacity="0.3">
+      <line x1="0" y1="0" x2="0" y2="-52"/><line x1="0" y1="0" x2="45" y2="-26"/>
+      <line x1="0" y1="0" x2="45" y2="26"/><line x1="0" y1="0" x2="0" y2="52"/>
+      <line x1="0" y1="0" x2="-45" y2="26"/><line x1="0" y1="0" x2="-45" y2="-26"/>
+    </g>
+
+    <!-- Outer nodes -->
+    <g filter="url(#glowSm)">
+      <circle cx="0" cy="-52" r="3.5" fill="#A78BFA" opacity="0.8"/>
+      <circle cx="45" cy="-26" r="3.5" fill="#A78BFA" opacity="0.8"/>
+      <circle cx="45" cy="26" r="3.5" fill="#A78BFA" opacity="0.8"/>
+      <circle cx="0" cy="52" r="3.5" fill="#A78BFA" opacity="0.8"/>
+      <circle cx="-45" cy="26" r="3.5" fill="#A78BFA" opacity="0.8"/>
+      <circle cx="-45" cy="-26" r="3.5" fill="#A78BFA" opacity="0.8"/>
+    </g>
+
+    <!-- Crystal prism -->
+    <polygon points="0,-22 19,-11 19,11 0,22 -19,11 -19,-11"
+             fill="url(#crystalGrad)" opacity="0.9" filter="url(#glowSm)"/>
+    <!-- 3D top face -->
+    <polygon points="0,-22 19,-11 0,0 -19,-11" fill="white" opacity="0.3"/>
+    <!-- Edge highlight -->
+    <polygon points="0,-24 21,-12 21,12 0,24 -21,12 -21,-12"
+             fill="none" stroke="white" stroke-width="0.6" opacity="0.35"/>
+    <!-- Inner core -->
+    <polygon points="0,-12 10,-6 10,6 0,12 -10,6 -10,-6"
+             fill="white" opacity="0.35" filter="url(#glowSm)"/>
+
+    <!-- Particles -->
+    <g opacity="0.4">
+      <circle cx="22" cy="-38" r="0.8" fill="#00F0FF"/>
+      <circle cx="30" cy="-8" r="0.6" fill="#A78BFA"/>
+      <circle cx="-22" cy="-38" r="0.8" fill="#A78BFA"/>
+      <circle cx="-30" cy="-8" r="0.6" fill="#00F0FF"/>
+      <circle cx="28" cy="24" r="0.7" fill="#A78BFA"/>
+      <circle cx="-28" cy="24" r="0.7" fill="#00F0FF"/>
+      <circle cx="0" cy="44" r="0.8" fill="#A78BFA"/>
+    </g>
+  </g>
+
+  <!-- Title -->
+  <text x="158" y="82" font-family="system-ui, -apple-system, sans-serif" font-weight="800"
+        font-size="42" letter-spacing="-0.5" fill="url(#textGrad)">Tributo</text>
+
+  <!-- Tagline -->
+  <text x="160" y="108" font-family="system-ui, -apple-system, sans-serif" font-weight="400"
+        font-size="14" fill="#94A3B8" letter-spacing="0.3">Unified ML Platform for Ray Clusters</text>
+
+  <!-- Neon accent line -->
+  <rect x="160" y="118" width="200" height="2" rx="1" fill="url(#accentLine)"/>
+</svg>

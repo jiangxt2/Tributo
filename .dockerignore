@@ -1,0 +1,13 @@
+# Exclude everything by default
+*
+
+# --- Keep only source code and necessary files ---
+!src/
+!pyproject.toml
+!uv.lock
+!.python-version
+
+# Strip cache dirs from included source
+**/__pycache__/
+**/*.pyc
+**/*.pyo

@@ -1,0 +1,22 @@
+# Ray working_dir exclusions — large files and caches
+data/
+*.parquet
+*.onnx
+*.onnx.data
+*.pth
+tmp/
+outputs/
+mlruns/
+.ray_results/
+.venv/
+.git/
+.claude/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+explore/
+docs/
+*.md
+uv.lock

@@ -1,0 +1,55 @@
+name: Deploy Docs
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "docs/**"
+      - "src/tributo/**/*.py"
+      - "mkdocs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+
+      - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
+        with:
+          python-version: "3.12"
+
+      - name: Install project and docs tools
+        run: |
+          uv pip install --system ".[dev]"
+          uv pip install --system mkdocs mkdocs-material mkdocstrings[python]
+
+      - name: Build MkDocs site
+        run: mkdocs build --strict
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@98ef48e41587a300b82de4cf298aa98b57b2faae
+        with:
+          path: site/
+
+  deploy:
+    name: Deploy to Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128

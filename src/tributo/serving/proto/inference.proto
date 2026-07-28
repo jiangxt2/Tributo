@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package tributo.serving;
+
+// gRPC 推理服务定义
+service InferenceService {
+  // Unary RPC：单请求单响应
+  rpc Predict(PredictRequest) returns (PredictResponse);
+
+  // Server streaming：单请求流式响应
+  rpc StreamPredict(PredictRequest) returns (stream PredictResponse);
+
+  // Client streaming：流式请求单响应
+  rpc BatchPredict(stream PredictRequest) returns (PredictResponse);
+}
+
+// 预测请求
+message PredictRequest {
+  // 输入特征向量
+  repeated float features = 1;
+
+  // 模型名称（可选，用于多模型场景）
+  string model_name = 2;
+}
+
+// 预测响应
+message PredictResponse {
+  // 预测结果
+  repeated float predictions = 1;
+
+  // 置信度
+  float confidence = 2;
+}

@@ -1,0 +1,208 @@
+"""Core Ray job submission interface.
+
+Provides the main ``TributoClient`` class for connecting to a Ray cluster
+and submitting / querying / stopping jobs.  ``RayJob`` is retained as a
+backward-compatible wrapper.
+"""
+
+from __future__ import annotations
+
+import logging
+
+from ray.job_submission import JobSubmissionClient
+
+from tributo.config import JobConfig
+from tributo.exceptions import JobExecutionError, JobSubmissionError
+from tributo.util.annotations import PublicAPI
+
+logger = logging.getLogger(__name__)
+
+
+@PublicAPI(stability="stable")
+class TributoClient:
+    """Unified Ray cluster client.
+
+    Manages the connection lifecycle and provides job submission, status
+    query, log retrieval, and stop methods.  Connection parameters
+    (``address``) are separated from job parameters (``entrypoint``,
+    ``runtime_env``, etc.).
+
+    Args:
+        address: Ray cluster dashboard URL
+            (e.g. ``"http://127.0.0.1:8265"``).
+
+    Example:
+        >>> client = TributoClient("http://127.0.0.1:8265")
+        >>> job_id = client.submit(entrypoint="python script.py")
+        >>> status = client.get_status(job_id)
+    """
+
+    def __init__(self, address: str):
+        self.address = address
+        self._client: JobSubmissionClient | None = None
+
+    def _get_client(self) -> JobSubmissionClient:
+        """Get or create the underlying Ray ``JobSubmissionClient``."""
+        if self._client is None:
+            self._client = JobSubmissionClient(self.address)
+        return self._client
+
+    # ── submit ──
+
+    def submit(
+        self,
+        entrypoint: str,
+        runtime_env: dict | None = None,
+        metadata: dict[str, str] | None = None,
+        submission_id: str | None = None,
+        entrypoint_num_cpus: float | None = None,
+        entrypoint_num_gpus: float | None = None,
+        entrypoint_memory: int | None = None,
+    ) -> str:
+        """Submit a job to the Ray cluster.
+
+        Args:
+            entrypoint: Command to run.
+            runtime_env: Ray runtime environment configuration.
+            metadata: Additional metadata key-value pairs.
+            submission_id: Optional deterministic submission ID for
+                idempotency.
+            entrypoint_num_cpus: CPUs for the entrypoint process.
+            entrypoint_num_gpus: GPUs for the entrypoint process.
+            entrypoint_memory: Memory (bytes) for the entrypoint process.
+
+        Returns:
+            Job ID string.
+
+        Raises:
+            JobSubmissionError: If submission fails.
+        """
+        try:
+            logger.info("Submitting job to %s", self.address)
+            job_id = self._get_client().submit_job(
+                entrypoint=entrypoint,
+                runtime_env=runtime_env,
+                metadata=metadata,
+                submission_id=submission_id,
+                entrypoint_num_cpus=entrypoint_num_cpus,
+                entrypoint_num_gpus=entrypoint_num_gpus,
+                entrypoint_memory=entrypoint_memory,
+            )
+            logger.info("Job submitted successfully: %s", job_id)
+            return job_id
+        except Exception as e:
+            logger.error("Failed to submit job: %s", e)
+            raise JobSubmissionError(f"Failed to submit job: {e}") from e
+
+    # ── query / control ──
+
+    def get_status(self, job_id: str) -> str:
+        """Get the status of a submitted job.
+
+        Args:
+            job_id: The job ID to query.
+
+        Returns:
+            Job status string (e.g. ``"RUNNING"``, ``"SUCCEEDED"``).
+
+        Raises:
+            JobExecutionError: If the status query fails.
+        """
+        try:
+            status = self._get_client().get_job_status(job_id)
+            return status.value
+        except Exception as e:
+            logger.error("Failed to get job status: %s", e)
+            raise JobExecutionError(f"Failed to get job status: {e}") from e
+
+    def get_logs(self, job_id: str) -> str:
+        """Get logs for a submitted job.
+
+        Args:
+            job_id: The job ID to query.
+
+        Returns:
+            Job logs as a string.
+
+        Raises:
+            JobExecutionError: If log retrieval fails.
+        """
+        try:
+            return self._get_client().get_job_logs(job_id)
+        except Exception as e:
+            logger.error("Failed to get job logs: %s", e)
+            raise JobExecutionError(f"Failed to get job logs: {e}") from e
+
+    def stop_job(self, job_id: str) -> bool:
+        """Stop a running job.
+
+        Args:
+            job_id: The job ID to stop.
+
+        Returns:
+            True if the job was stopped successfully.
+
+        Raises:
+            JobExecutionError: If the stop request fails.
+        """
+        try:
+            result = self._get_client().stop_job(job_id)
+            logger.info("Job %s stopped: %s", job_id, result)
+            return result
+        except Exception as e:
+            logger.error("Failed to stop job: %s", e)
+            raise JobExecutionError(f"Failed to stop job: {e}") from e
+
+
+@PublicAPI(stability="stable")
+class RayJob:
+    """Backward-compatible wrapper around :class:`TributoClient`.
+
+    Binds a ``JobConfig`` to the client so that ``submit()`` requires
+    no arguments.  Prefer :class:`TributoClient` for new code.
+
+    Args:
+        address: Ray cluster dashboard URL.
+        config: Job configuration (used only by ``submit()``).
+
+    .. deprecated::
+        Use :class:`TributoClient` instead.  ``RayJob`` is retained
+        for backward compatibility and will be removed in a future
+        version.
+    """
+
+    def __init__(self, address: str, config: JobConfig):
+        import warnings
+
+        warnings.warn(
+            "RayJob is deprecated, use TributoClient instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self.address = address
+        self.config = config
+        self._client = TributoClient(address)
+
+    def submit(self) -> str:
+        """Submit the job using the bound config."""
+        return self._client.submit(
+            entrypoint=self.config.entrypoint,
+            runtime_env=self.config.runtime_env,
+            metadata=self.config.metadata,
+            submission_id=self.config.submission_id,
+            entrypoint_num_cpus=self.config.num_cpus,
+            entrypoint_num_gpus=self.config.num_gpus,
+            entrypoint_memory=self.config.memory,
+        )
+
+    def get_status(self, job_id: str) -> str:
+        """Get the status of a submitted job."""
+        return self._client.get_status(job_id)
+
+    def get_logs(self, job_id: str) -> str:
+        """Get logs for a submitted job."""
+        return self._client.get_logs(job_id)
+
+    def stop_job(self, job_id: str) -> bool:
+        """Stop a running job."""
+        return self._client.stop_job(job_id)
