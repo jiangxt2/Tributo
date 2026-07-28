@@ -17,11 +17,13 @@ jobs:
           python-version: "3.12"
 
       - name: Install project with all extras
-        run: uv pip install --system ".[dev,training,embeddings,registry,data]"
+        run: |
+          uv venv .venv
+          uv pip install --python .venv/bin/python ".[dev,training,embeddings,registry,data]"
 
       - name: Run all tests (including slow)
         run: |
-          python -m pytest tests/ \
+          .venv/bin/python -m pytest tests/ \
             -m "not integration and not s3" \
             -v --tb=long --timeout=300
 

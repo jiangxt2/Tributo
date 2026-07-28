@@ -31,11 +31,12 @@ jobs:
 
       - name: Install project and docs tools
         run: |
-          uv pip install --system ".[dev]"
-          uv pip install --system mkdocs mkdocs-material mkdocstrings[python]
+          uv venv .venv
+          uv pip install --python .venv/bin/python ".[dev]"
+          uv pip install --python .venv/bin/python mkdocs mkdocs-material mkdocstrings[python]
 
       - name: Build MkDocs site
-        run: mkdocs build --strict
+        run: .venv/bin/mkdocs build --strict
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@98ef48e41587a300b82de4cf298aa98b57b2faae

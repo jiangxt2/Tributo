@@ -54,9 +54,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
-        run: |
-          rm -f uv.lock
-          uv sync --extra dev
+        run: uv sync --extra dev
 
       - name: Type check (mypy)
         run: uv run mypy src/tributo
