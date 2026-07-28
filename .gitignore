@@ -19,6 +19,7 @@ build/
 
 # Package manager
 .uv/
+uv.lock
 
 # Testing
 .pytest_cache/
