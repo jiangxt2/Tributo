@@ -143,7 +143,9 @@ def pu_auc_score(
     tpr_arr = tpr_arr[sorted_indices]
 
     # np.trapezoid (NumPy 2.0+) / np.trapz (NumPy 1.x)
-    _trapz = getattr(np, "trapezoid", np.trapz)
+    _trapz = getattr(np, "trapezoid", None)
+    if _trapz is None:
+        _trapz = np.trapz  # type: ignore[attr-defined]
     auc = float(_trapz(tpr_arr, fpr_arr))
     return max(0.0, min(1.0, auc))
 

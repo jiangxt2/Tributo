@@ -18,8 +18,18 @@ class TestRegistry:
         """内置连接器应已注册。"""
         connectors = list_connectors()
         assert "parquet" in connectors
-        assert "lance" in connectors
-        assert "iceberg" in connectors
+        try:
+            import lance  # noqa: F401
+
+            assert "lance" in connectors
+        except ImportError:
+            pass
+        try:
+            import pyiceberg  # noqa: F401
+
+            assert "iceberg" in connectors
+        except ImportError:
+            pass
 
     def test_get_connector_returns_instance(self):
         connector = get_connector("parquet")
