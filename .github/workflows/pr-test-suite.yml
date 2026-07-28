@@ -31,6 +31,8 @@ jobs:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
 
+      - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
+
       - name: Lint (ruff)
         run: uvx ruff check src/ tests/
 
