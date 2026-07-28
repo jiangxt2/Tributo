@@ -51,7 +51,7 @@ dev = [
     "black>=23.0.0",
     "mypy>=1.0.0",
     "types-PyYAML>=6.0.12.20250516",
-    "pandas-stubs~=2.1.4",
+    "pandas-stubs>=2.1.4,<2.4.0",
 ]
 data = [
     "pylance>=4.0.0",
