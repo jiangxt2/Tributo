@@ -6,7 +6,7 @@ user look-alike.
 
 ## Getting Started
 
-- **Python**: 3.10+
+- **Python**: >=3.12,<3.14 (see `pyproject.toml`)
 - **Package manager**: uv (see `pyproject.toml`)
 
 ```bash
@@ -56,3 +56,9 @@ Use the Feature Request template
 
 All commits must be signed off: `Signed-off-by: Your Name <email@example.com>`.
 We follow the [Developer Certificate of Origin](https://developercertificate.org/).
+
+**Recommended**: Install the auto-signoff hook to append `Signed-off-by` automatically:
+
+```bash
+cp scripts/prepare-commit-msg .git/hooks/prepare-commit-msg
+```

@@ -33,3 +33,51 @@ jobs:
         with:
           name: nightly-test-results
           path: .pytest_cache/
+
+  s3-test:
+    name: S3 Integration Test (MinIO)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+
+      - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
+        with:
+          python-version: "3.12"
+
+      - name: Start MinIO
+        run: |
+          docker run -d --name minio \
+            -p 9000:9000 \
+            -e MINIO_ROOT_USER=minioadmin \
+            -e MINIO_ROOT_PASSWORD=minioadmin123 \
+            minio/minio:latest \
+            server /data --console-address ":9001"
+          echo "Waiting for MinIO..."
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:9000/minio/health/live; then
+              echo ""
+              echo "MinIO ready"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "MinIO failed to start"
+          docker logs minio
+          exit 1
+
+      - name: Install project and create bucket
+        run: |
+          uv venv .venv
+          uv pip install --python .venv/bin/python ".[dev,data]"
+          uv pip install --python .venv/bin/python awscli
+          .venv/bin/aws configure set aws_access_key_id minioadmin
+          .venv/bin/aws configure set aws_secret_access_key minioadmin123
+          .venv/bin/aws --endpoint-url http://localhost:9000 s3 mb s3://tributo-test
+
+      - name: Run S3 integration tests
+        env:
+          S3_ENDPOINT: http://localhost:9000
+          AWS_ACCESS_KEY_ID: minioadmin
+          AWS_SECRET_ACCESS_KEY: minioadmin123
+        run: |
+          .venv/bin/python -m pytest tests/ -m s3 -v --tb=long --timeout=300
