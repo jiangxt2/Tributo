@@ -1,2 +1,2 @@
-# Global code owners — PRs to master require at least one approving review.
-* @jiangxt2
+# Global code owners — all PRs require review from at least one maintainer.
+* @jiangxt2/tributo-maintainers

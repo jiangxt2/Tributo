@@ -1,14 +1,19 @@
 changelog:
   categories:
     - title: 🚀 New Features
-      labels:
-        - enhancement
+      labels: []
+      excludeLabels: []
+      authors: []
     - title: 🐛 Bug Fixes
-      labels:
-        - bug
+      labels: []
     - title: 📖 Documentation
-      labels:
-        - documentation
+      labels: []
+    - title: 🧪 Testing
+      labels: []
+    - title: 🔧 Refactoring & Cleanup
+      labels: []
+    - title: 📦 Dependencies
+      labels: []
     - title: Other Changes
       labels:
         - "*"

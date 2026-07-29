@@ -11,6 +11,7 @@ import os
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from tributo.data.base import S3Config
     from tributo.inference.base import BasePredictor
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -19,6 +20,24 @@ from tributo.exceptions import JobConfigurationError
 from tributo.util.annotations import PublicAPI
 
 logger = logging.getLogger(__name__)
+
+
+def _build_s3_config(raw: dict[str, str]) -> "S3Config | None":
+    """Build S3Config from a raw dict, returning None if empty.
+
+    Centralises the duplicated S3Config construction previously spread
+    across data-load and data-write paths.
+    """
+    from tributo.data.base import S3Config
+
+    if not raw:
+        return None
+    return S3Config(
+        access_key_id=raw.get("access_key_id"),
+        secret_access_key=raw.get("secret_access_key"),
+        endpoint=raw.get("endpoint"),
+        region=raw.get("region"),
+    )
 
 
 @PublicAPI(stability="beta")
@@ -145,18 +164,7 @@ def run_batch_inference(
         if feature_columns:
             ds = ds.select_columns(feature_columns)
     elif config.input_uri.startswith("s3://"):
-        from tributo.data.base import S3Config
-
-        s3 = (
-            S3Config(
-                access_key_id=config.s3_config.get("access_key_id"),
-                secret_access_key=config.s3_config.get("secret_access_key"),
-                endpoint=config.s3_config.get("endpoint"),
-                region=config.s3_config.get("region"),
-            )
-            if config.s3_config
-            else None
-        )
+        s3 = _build_s3_config(config.s3_config)
         ds = get_connector("parquet").read(
             path=config.input_uri,
             columns=feature_columns or None,
@@ -203,16 +211,7 @@ def run_batch_inference(
 
         from tributo.data._s3 import to_pyarrow_s3_kwargs
 
-        s3 = (
-            S3Config(
-                access_key_id=config.s3_config.get("access_key_id"),
-                secret_access_key=config.s3_config.get("secret_access_key"),
-                endpoint=config.s3_config.get("endpoint"),
-                region=config.s3_config.get("region"),
-            )
-            if config.s3_config
-            else None
-        )
+        s3 = _build_s3_config(config.s3_config)
         write_kwargs["filesystem"] = pafs.S3FileSystem(**to_pyarrow_s3_kwargs(s3))
         output_path = config.output_uri.removeprefix("s3://")
     else:

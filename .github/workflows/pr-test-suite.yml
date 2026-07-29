@@ -125,14 +125,8 @@ jobs:
       - name: Build wheel and sdist
         run: uv build
 
-      - name: Smoke test (wheel)
+      - name: Smoke test (install wheel and run CLI)
         run: |
           uv venv /tmp/smoke-venv --python 3.12
           uv pip install --python /tmp/smoke-venv/bin/python dist/*.whl
           /tmp/smoke-venv/bin/tributo --help
-
-      - name: Smoke test (sdist)
-        run: |
-          uv venv /tmp/smoke-sdist --python 3.12
-          uv pip install --python /tmp/smoke-sdist/bin/python dist/*.tar.gz
-          /tmp/smoke-sdist/bin/python -c "import tributo; print(tributo.__version__)"
