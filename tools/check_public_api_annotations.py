@@ -34,6 +34,9 @@ _EXEMPT_NAMES: set[str] = {
     "get_stability",
     "is_public_api",
     "DeveloperAPI",
+    # Type aliases — cannot be decorated; the underlying types are annotated.
+    "SourceConfig",
+    "TrainerSpec",
 }
 
 

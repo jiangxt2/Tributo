@@ -10,15 +10,24 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
+from tributo.training.algorithm_spec import AlgorithmSpec
 from tributo.util.annotations import PublicAPI
 
 if TYPE_CHECKING:
     import ray.data
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatible alias (Phase 1: pure alias, no warning)
+# ---------------------------------------------------------------------------
+# v1.x — TrainerSpec = AlgorithmSpec (zero-friction migration)
+# v2.0 — add @deprecated + DeprecationWarning on constructor use
+# v3.0 — remove TrainerSpec name
+TrainerSpec = AlgorithmSpec
 
 
 class TrainerCallback(Protocol):
@@ -35,26 +44,6 @@ class TrainerCallback(Protocol):
         self, trainer: BaseTrainer, summary: dict[str, Any]
     ) -> None: ...
     def on_run_error(self, trainer: BaseTrainer, error: Exception) -> None: ...
-
-
-@PublicAPI(stability="beta")
-@dataclass(frozen=True)
-class TrainerSpec:
-    """Trainer registration spec.
-
-    Attributes:
-        name: Short trainer name (e.g. ``"xgboost"``), used by the CLI and
-            registry lookup.
-        trainer_cls: ``BaseTrainer`` subclass.
-        default_config: Default configuration dict, overridable by user
-            config.
-        supported_tasks: List of supported task types.
-    """
-
-    name: str
-    trainer_cls: type
-    default_config: dict[str, Any] = field(default_factory=dict)
-    supported_tasks: list[str] = field(default_factory=lambda: ["train"])
 
 
 @PublicAPI(stability="beta")

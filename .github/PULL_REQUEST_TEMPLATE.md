@@ -4,22 +4,11 @@
 
 Closes #
 
-## Why
-
-<!-- Why are these changes needed? What problem do they solve? -->
-
 ## What Changes
 
 <!-- Brief bullet list of changes. -->
 
 -
-
-## User-facing Changes
-
-<!-- Does this PR introduce any user-facing changes? List API changes,
-     property additions/removals, CLI changes, or behavioral differences. -->
-
-- [ ] No user-facing changes
 
 ## Test Plan
 

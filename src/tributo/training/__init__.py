@@ -26,6 +26,12 @@ from __future__ import annotations
 import logging
 
 from tributo.exceptions import JobConfigurationError
+from tributo.training.algorithm_spec import (
+    AlgorithmSpec,
+    DataContract,
+    ProblemType,
+    ResourceHints,
+)
 from tributo.training.base import BaseTrainer, TrainerSpec
 from tributo.training.job_submitter import (
     submit_training_job,
@@ -73,7 +79,12 @@ from tributo.training.priors import estimate_class_prior  # noqa: E402
 __all__ = [
     # BaseTrainer abstraction
     "BaseTrainer",
+    # AlgorithmSpec & supporting types
+    "AlgorithmSpec",
     "TrainerSpec",
+    "DataContract",
+    "ProblemType",
+    "ResourceHints",
     # Registry
     "register",
     "get_trainer",

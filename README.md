@@ -8,6 +8,7 @@
 <p align="center">
   <a href="https://pypi.org/project/tributo"><img src="https://img.shields.io/pypi/v/tributo?color=blue" alt="PyPI"></a>
   <a href="https://github.com/jiangxt2/tributo/actions/workflows/pr-test-suite.yml"><img src="https://github.com/jiangxt2/tributo/actions/workflows/pr-test-suite.yml/badge.svg" alt="CI"></a>
+  <a href="https://codecov.io/gh/jiangxt2/tributo"><img src="https://codecov.io/gh/jiangxt2/tributo/branch/master/graph/badge.svg" alt="Coverage"></a>
   <a href="https://pypi.org/project/tributo"><img src="https://img.shields.io/pypi/pyversions/tributo" alt="Python versions"></a>
   <a href="https://github.com/jiangxt2/tributo/blob/master/LICENSE"><img src="https://img.shields.io/github/license/jiangxt2/tributo" alt="License"></a>
 </p>

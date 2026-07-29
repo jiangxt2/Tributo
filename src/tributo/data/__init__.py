@@ -32,6 +32,14 @@ except ImportError:
 import tributo.data.parquet  # noqa: E402, F401, I001
 from tributo.data.base import DataConnector, S3Config, WriteMode  # noqa: E402
 from tributo.data.registry import get_connector, list_connectors, register_connector  # noqa: E402
+from tributo.data.source_config import (  # noqa: E402
+    CsvSourceConfig,
+    IcebergSourceConfig,
+    LegacyConfigNormalizer,
+    ParquetSourceConfig,
+    SourceConfig,
+    SqlSourceConfig,
+)
 
 __all__ = [
     # Abstract base classes and config
@@ -42,6 +50,13 @@ __all__ = [
     "get_connector",
     "register_connector",
     "list_connectors",
+    # Source configuration
+    "SourceConfig",
+    "ParquetSourceConfig",
+    "CsvSourceConfig",
+    "SqlSourceConfig",
+    "IcebergSourceConfig",
+    "LegacyConfigNormalizer",
 ]
 
 # Auto-discover third-party connector plugins via entry_points

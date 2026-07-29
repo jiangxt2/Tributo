@@ -2,16 +2,17 @@
 
 Pre-configured lightweight models with validated pooling and normalization
 settings. Users reference models by short name instead of raw HF model IDs.
+
+Delegates to the generic ``Registry`` base class in ``_common/registry.py``.
 """
 
 from __future__ import annotations
 
 import logging
-import threading
 from dataclasses import dataclass
 from typing import Literal
 
-from tributo.exceptions import JobConfigurationError
+from tributo._common.registry import PluginAwareRegistry, Registry
 from tributo.util.annotations import PublicAPI
 
 logger = logging.getLogger(__name__)
@@ -41,21 +42,40 @@ class ModelSpec:
     onnx_opset: int = 14
 
 
-#: Built-in registry of validated models.
-_REGISTRY: dict[str, ModelSpec] = {
-    "bge-small-zh": ModelSpec(
+def _discover_model_plugins() -> list[tuple[str, ModelSpec]]:
+    """Lazy entry_points discovery helper."""
+    from tributo.plugin import discover_model_plugins  # noqa: E402
+
+    result: list[tuple[str, ModelSpec]] = []
+    for ep_spec in discover_model_plugins():
+        result.append((ep_spec.name, ep_spec))
+    return result
+
+
+_registry: Registry[str, ModelSpec] = PluginAwareRegistry(
+    name="model",
+    discover=_discover_model_plugins,
+)
+
+# Register built-in models.
+_registry.register(
+    "bge-small-zh",
+    ModelSpec(
         name="bge-small-zh-v1.5",
         hf_model_id="BAAI/bge-small-zh-v1.5",
         dim=512,
         pooling="cls",
         normalize=True,
     ),
-}
-_REGISTRY_LOCK = threading.Lock()
+)
 
 #: Module-level list of built-in ModelSpecs, exported for entry_points discovery.
-#: Third-party plugins are appended by auto-discovery below.
-model_specs: list[ModelSpec] = list(_REGISTRY.values())
+#: Populated from ``_registry._store`` directly to avoid triggering lazy plugin
+#: discovery at import time.  Callers needing the full list including plugins
+#: should use ``list_models()`` instead.
+model_specs: list[ModelSpec] = [
+    _registry._store["bge-small-zh"],
+]
 
 
 @PublicAPI(stability="beta")
@@ -71,16 +91,13 @@ def get_spec(name: str) -> ModelSpec:
     Raises:
         JobConfigurationError: If the model name is not registered.
     """
-    if name not in _REGISTRY:
-        available = ", ".join(sorted(_REGISTRY))
-        raise JobConfigurationError(f"Unknown model '{name}'. Available: {available}")
-    return _REGISTRY[name]
+    return _registry.get(name)
 
 
 @PublicAPI(stability="beta")
 def list_models() -> list[str]:
     """Return a sorted list of registered short model names."""
-    return sorted(_REGISTRY)
+    return _registry.list()
 
 
 @PublicAPI(stability="beta")
@@ -93,20 +110,5 @@ def register(spec: ModelSpec) -> None:
     Raises:
         JobConfigurationError: If the short name is already registered.
     """
-    with _REGISTRY_LOCK:
-        if spec.name in _REGISTRY:
-            raise JobConfigurationError(f"Model '{spec.name}' is already registered")
-        _REGISTRY[spec.name] = spec
+    _registry.register(spec.name, spec)
     logger.info("Registered embedding model: %s", spec.name)
-
-
-# Auto-discover third-party model plugins via entry_points
-from tributo.plugin import discover_model_plugins  # noqa: E402
-
-for _ep_spec in discover_model_plugins():
-    try:
-        register(_ep_spec)
-    except JobConfigurationError:
-        logger.debug(
-            "Model %r from plugin already registered; skipping.", _ep_spec.name
-        )

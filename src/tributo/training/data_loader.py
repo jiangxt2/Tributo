@@ -1,12 +1,22 @@
-"""Ray Dataset distributed data loading, supporting local CSV/Parquet, S3 Parquet, ClickHouse."""
+"""Ray Dataset distributed data loading, supporting local CSV/Parquet, S3 Parquet, ClickHouse.
+
+Uses ``LegacyConfigNormalizer`` to convert raw dict configs into typed
+``SourceConfig`` objects, eliminating the hardcoded ``if/elif`` dispatch.
+"""
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from tributo._common import find_project_root
+from tributo.data.source_config import (
+    CsvSourceConfig,
+    IcebergSourceConfig,
+    LegacyConfigNormalizer,
+    ParquetSourceConfig,
+    SqlSourceConfig,
+)
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -19,7 +29,7 @@ def load_ray_dataset_from_config(
 ) -> "ray.data.Dataset":
     """Load a Ray Dataset from a YAML ``data`` section (lazy, data does not land in Driver memory).
 
-    Supports csv / parquet (local), s3 (via DataConnector), clickhouse.
+    Supports csv / parquet (local), s3 (via DataConnector), clickhouse, iceberg.
 
     Args:
         data_config: The ``data`` dictionary from YAML.
@@ -28,113 +38,195 @@ def load_ray_dataset_from_config(
     Returns:
         Ray Dataset, lazily evaluated.
     """
+    source = LegacyConfigNormalizer.normalize(data_config)
+
+    # -- SQL sources (ClickHouse, Doris, PostgreSQL, MySQL) -----------------
+    if isinstance(source, SqlSourceConfig):
+        return _load_sql_dataset(source)
+
+    # -- CSV / Parquet (local or S3) ----------------------------------------
+    if isinstance(source, (ParquetSourceConfig, CsvSourceConfig)):
+        return _load_file_dataset(source, project_root_path)
+
+    # -- Iceberg ------------------------------------------------------------
+    if isinstance(source, IcebergSourceConfig):
+        from tributo.data import get_connector
+
+        connector = get_connector("iceberg")
+        return connector.read(
+            catalog=source.catalog,
+            table=source.table,
+        )
+
+    raise ValueError(f"unsupported source type: {type(source).__name__}")
+
+
+# ---------------------------------------------------------------------------
+# File-based loading (CSV / Parquet — local or S3)
+# ---------------------------------------------------------------------------
+
+
+def _load_file_dataset(
+    source: ParquetSourceConfig | CsvSourceConfig,
+    project_root_path: Path | None = None,
+) -> "ray.data.Dataset":
+    """Load a file-based dataset, routing S3 paths through connectors."""
     import ray.data
 
-    data_type = data_config.get("type", "csv")
+    path = source.path
 
-    if data_type == "csv":
-        root = project_root_path or find_project_root()
-        file_path = data_config.get("path", "")
-        fmt = data_config.get("format", "")
-        full_path = Path(file_path)
-        if not full_path.is_absolute():
-            full_path = root / file_path
-        if not full_path.exists():
-            raise FileNotFoundError(f"Data file not found: {full_path}")
-        if fmt == "csv":
-            return ray.data.read_csv(str(full_path))
-        return ray.data.read_parquet(str(full_path))
-
-    if data_type == "s3":
+    if path.startswith("s3://"):
         from tributo.data import S3Config, get_connector
 
-        uri = data_config.get("uri", "")
-        if not uri:
-            raise ValueError("missing s3 uri in data config")
-        fmt = data_config.get("format", "parquet")
-        if fmt not in {"parquet", "csv"}:
-            raise ValueError(f"unsupported s3 format: {fmt!r}")
-        s3_cfg = data_config.get("s3", {})
-        s3_config = S3Config(**s3_cfg) if s3_cfg else None
-        columns = data_config.get("columns")
+        fmt = "csv" if isinstance(source, CsvSourceConfig) else "parquet"
+        s3_cfg_raw = source.s3
+        s3_config = S3Config(**(s3_cfg_raw or {})) if s3_cfg_raw else None
         connector = get_connector(fmt)
-        return connector.read(path=uri, s3=s3_config, columns=columns)
+        kwargs: dict = {"path": path, "s3": s3_config}
+        if source.columns:
+            kwargs["columns"] = source.columns
+        return connector.read(**kwargs)
 
-    if data_type == "clickhouse":
-        return _load_clickhouse_dataset(data_config)
+    # -- local path ---------------------------------------------------------
+    root = project_root_path or find_project_root()
+    full_path = Path(path)
+    if not full_path.is_absolute():
+        full_path = root / path
+    if not full_path.exists():
+        raise FileNotFoundError(f"Data file not found: {full_path}")
 
-    raise ValueError(f"unsupported data type: {data_type}")
+    if isinstance(source, CsvSourceConfig):
+        return ray.data.read_csv(str(full_path))
+    return ray.data.read_parquet(
+        str(full_path), columns=source.columns if source.columns else None
+    )
 
 
-def _load_clickhouse_dataset(data_config: dict) -> "ray.data.Dataset":
-    """Execute a ClickHouse SQL query and return the result as a Ray Dataset.
+# ---------------------------------------------------------------------------
+# SQL loading (ClickHouse native client)
+# ---------------------------------------------------------------------------
 
-    Uses ``clickhouse_connect`` to execute the parameterized SQL on the
-    ClickHouse server and converts the resulting PyArrow table into a Ray
-    Dataset.  For large result sets, consider pre-exporting to Parquet/S3
-    instead.
 
-    Args:
-        data_config: Data config dict containing:
-            ch_host, ch_port, ch_database, ch_user, ch_password,
-            ch_sql, ch_sql_params.
+def _load_sql_dataset(source: SqlSourceConfig) -> "ray.data.Dataset":
+    """Execute a SQL query and return the result as a Ray Dataset.
 
-    Returns:
-        Ray Dataset created from the query result.
+    Uses the dialect-appropriate client:
+
+    * ``clickhouse`` — ``clickhouse_connect`` native client.
+    * ``doris`` / ``mysql`` — MySQL protocol (via PyMySQL if available).
+    * ``postgresql`` — reserved for ConnectorX integration.
+
+    For large result sets, consider pre-exporting to Parquet/S3 instead.
     """
+    if source.dialect == "clickhouse":
+        return _load_clickhouse(source)
+    if source.dialect == "doris":
+        return _load_doris_mysql(source)
+    if source.dialect in ("postgresql", "mysql"):
+        return _load_connectorx(source)
+
+    raise ValueError(f"unsupported SQL dialect: {source.dialect!r}")
+
+
+def _load_clickhouse(source: SqlSourceConfig) -> "ray.data.Dataset":
+    """Execute a ClickHouse query via the native ``clickhouse_connect`` client."""
     import ray.data
 
-    sql = data_config.get("ch_sql", "")
-    if not sql:
-        raise ValueError("missing ch_sql in clickhouse data config")
+    if not source.sql:
+        raise ValueError("missing sql in clickhouse source config")
 
-    # Resolve connection params: explicit config > env var > built-in default.
-    # Uses ``is None`` rather than ``or`` so that falsy values (empty string,
-    # port 0) are preserved when explicitly set in config.
-    host = data_config.get("ch_host")
-    if host is None:
-        host = os.getenv("TRIBUTO_CLICKHOUSE_HOST", "localhost")
-
-    port_cfg = data_config.get("ch_port")
-    if port_cfg is not None:
-        port = int(port_cfg)
-    else:
-        port_env = os.getenv("TRIBUTO_CLICKHOUSE_PORT")
-        port = int(port_env) if port_env else 8123
-
-    database = data_config.get("ch_database")
-    if database is None:
-        database = os.getenv("TRIBUTO_CLICKHOUSE_DB", "")
-
-    user = data_config.get("ch_user")
-    if user is None:
-        user = os.getenv("TRIBUTO_CLICKHOUSE_USER", "default")
-
-    password = data_config.get("ch_password")
-    if password is None:
-        password = os.getenv("TRIBUTO_CLICKHOUSE_PASSWORD", "")
-    params = data_config.get("ch_sql_params", {}) or {}
+    resolved = LegacyConfigNormalizer.resolve_env(source)
 
     import clickhouse_connect  # type: ignore[import-untyped]
 
     client = clickhouse_connect.get_client(
-        host=host,
-        port=port,
-        username=user,
-        password=password,
-        database=database,
+        host=resolved.host,
+        port=resolved.port,
+        username=resolved.user,
+        password=resolved.password or "",
+        database=resolved.database,
     )
-    result = client.query_arrow(sql, parameters=params)
-    table = result  # clickhouse_connect returns pyarrow.Table directly
+    try:
+        table = client.query_arrow(
+            resolved.sql,
+            parameters=resolved.params,
+        )
+    finally:
+        client.close()
 
     if table is None or table.num_rows == 0:
         raise ValueError("ClickHouse query returned empty result")
 
-    # Convert to Ray Dataset — the Arrow table lives in Driver memory,
-    # then Ray distributes blocks to workers.  For large result sets,
-    # set a reasonable block size so workers get manageable chunks.
     num_blocks = max(1, table.num_rows // 10000)
     return ray.data.from_arrow(table, override_num_blocks=num_blocks)
+
+
+def _load_doris_mysql(source: SqlSourceConfig) -> "ray.data.Dataset":
+    """Execute a Doris query via MySQL protocol."""
+    import ray.data
+
+    if not source.sql:
+        raise ValueError("missing sql in doris source config")
+
+    resolved = LegacyConfigNormalizer.resolve_env(source)
+
+    import pyarrow as pa
+    import pymysql
+
+    conn = pymysql.connect(
+        host=resolved.host,
+        port=resolved.port or 9030,
+        user=resolved.user,
+        password=resolved.password,
+        database=resolved.database,
+    )
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(resolved.sql)
+            if cursor.description is None:
+                raise ValueError(
+                    "Doris query returned no result set "
+                    "(did you run a non-SELECT statement?)."
+                )
+            rows = cursor.fetchall()
+            if not rows:
+                raise ValueError("Doris query returned empty result")
+            columns = [desc[0] for desc in cursor.description]
+            # Build Arrow table column-wise (single pass over rows).
+            table = pa.table(
+                {col: [row[i] for row in rows] for i, col in enumerate(columns)}
+            )
+    finally:
+        conn.close()
+
+    return ray.data.from_arrow(table)
+
+
+def _load_connectorx(source: SqlSourceConfig) -> "ray.data.Dataset":
+    """Execute a PostgreSQL/MySQL query via ConnectorX (experimental)."""
+    raise NotImplementedError(
+        f"ConnectorX path for {source.dialect!r} is not yet implemented. "
+        "Use the native client path instead."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Legacy helpers (preserved for backward compatibility)
+# ---------------------------------------------------------------------------
+
+
+def _load_clickhouse_dataset(data_config: dict) -> "ray.data.Dataset":
+    """Backward-compatible wrapper: directly call the ClickHouse loader from a dict.
+
+    Deprecated: prefer ``load_ray_dataset_from_config`` which normalises via
+    ``LegacyConfigNormalizer``.
+    """
+    source = LegacyConfigNormalizer.normalize(data_config)
+    if not isinstance(source, SqlSourceConfig):
+        raise ValueError(
+            f"Expected clickhouse data config, got {type(source).__name__}"
+        )
+    return _load_clickhouse(source)
 
 
 def load_dataframe_from_config(
