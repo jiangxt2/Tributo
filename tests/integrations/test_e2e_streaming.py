@@ -20,12 +20,15 @@ import os
 import sys
 import time
 
-# 设置 HuggingFace 缓存目录（避免权限问题）
-os.environ["HF_HOME"] = "/tmp/hf_cache"
-
 import httpx
+import pytest
 import ray
 from ray import serve
+
+pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
+
+# 设置 HuggingFace 缓存目录（避免权限问题）
+os.environ["HF_HOME"] = "/tmp/hf_cache"
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"

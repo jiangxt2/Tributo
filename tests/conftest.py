@@ -15,6 +15,7 @@ _TESTS_DIR = Path(__file__).parent
 
 _OPTIONAL_IMPORTS = {
     "integrations": ["mlflow"],
+    "integrations/test_e2e_streaming.py": ["httpx"],
     "serving/test_streaming_http.py": ["httpx"],
     "serving/test_streaming_integration.py": ["httpx"],
     "serving/test_streaming_deployment.py": ["transformers"],
