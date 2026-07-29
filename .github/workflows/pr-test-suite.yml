@@ -18,12 +18,21 @@ jobs:
       - name: Check Signed-off-by
         run: |
           git fetch origin "${{ github.event.pull_request.base.sha }}"
-          if git log --format='%B' "${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}" | grep -q "Signed-off-by"; then
-            echo "✅ All commits have Signed-off-by"
-          else
-            echo "❌ Missing Signed-off-by in one or more PR commits"
+          FAIL=0
+          for commit in $(git log --format='%H' "${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"); do
+            if ! git log -1 --format='%B' "$commit" | grep -q "^Signed-off-by:"; then
+              echo "❌ Commit $commit is missing Signed-off-by"
+              FAIL=1
+            fi
+          done
+          if [ "$FAIL" -eq 1 ]; then
+            echo ""
+            echo "All commits must have a Signed-off-by line."
+            echo "Run: git commit --amend -s"
+            echo "Or set up the auto-signoff hook: cp scripts/prepare-commit-msg .git/hooks/"
             exit 1
           fi
+          echo "✅ All commits have Signed-off-by"
 
   lint:
     name: Lint
@@ -85,8 +94,14 @@ jobs:
       - name: Build wheel and sdist
         run: uv build
 
-      - name: Smoke test (install wheel and run CLI)
+      - name: Smoke test (wheel)
         run: |
           uv venv /tmp/smoke-venv --python 3.12
           uv pip install --python /tmp/smoke-venv/bin/python dist/*.whl
           /tmp/smoke-venv/bin/tributo --help
+
+      - name: Smoke test (sdist)
+        run: |
+          uv venv /tmp/smoke-sdist --python 3.12
+          uv pip install --python /tmp/smoke-sdist/bin/python dist/*.tar.gz
+          /tmp/smoke-sdist/bin/python -c "import tributo; print(tributo.__version__)"

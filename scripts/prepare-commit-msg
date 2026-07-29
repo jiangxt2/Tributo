@@ -1,0 +1,23 @@
+#!/bin/sh
+# Git prepare-commit-msg hook — auto-appends Signed-off-by to every commit.
+# Install: cp scripts/prepare-commit-msg .git/hooks/prepare-commit-msg
+# Based on Ray's prepare-commit-msg hook.
+
+COMMIT_MESSAGE_FILE="$1"
+
+NAME="$(git config --get user.name)"
+EMAIL="$(git config --get user.email)"
+
+if [ -z "$NAME" ]; then
+    echo "empty git config user.name"
+    exit 1
+fi
+
+if [ -z "$EMAIL" ]; then
+    echo "empty git config user.email"
+    exit 1
+fi
+
+git interpret-trailers --if-exists doNothing --trailer \
+    "Signed-off-by: $NAME <$EMAIL>" \
+    --in-place "$COMMIT_MESSAGE_FILE"
