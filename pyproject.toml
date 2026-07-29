@@ -50,6 +50,7 @@ dev = [
     "mypy>=1.0.0",
     "types-PyYAML>=6.0.12.20250516",
     "pandas-stubs~=2.1.4",
+    "httpx>=0.25.0",
 ]
 data = [
     "pylance>=4.0.0",
@@ -150,7 +151,7 @@ filterwarnings = [
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "s3: marks tests that require real S3 access (deselect with '-m \"not s3\"')",
-    "integration: marks tests that require MLflow server (deselect with '-m \"not integration\"')",
+    "integration: marks tests that require real services (Ray Serve, MLflow, Docker cluster) (deselect with '-m \"not integration\"')",
 ]
 addopts = "-m 'not slow'"
 

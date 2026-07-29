@@ -1,13 +1,25 @@
 name: Nightly Test
 
+# Daily heavy regression on master.
+#
+# What this covers vs pr-test-suite:
+#   - slow tests (too expensive for every push)
+#   - all extras installed (catches missing-dependency bugs like httpx)
+#
+# What this does NOT cover:
+#   - integration tests (need Docker Ray cluster + MLflow server)
+#   - s3 tests (need MinIO / S3 credentials)
+# These require real infrastructure — run them locally in the Docker
+# cluster per tests/integrations/ file headers.
+
 on:
   schedule:
     - cron: "37 2 * * *"  # 02:37 UTC daily
   workflow_dispatch:
 
 jobs:
-  full-test:
-    name: Full Test Suite (Python 3.12)
+  heavy-regression:
+    name: Heavy Regression (Python 3.12)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -17,15 +29,13 @@ jobs:
           python-version: "3.12"
 
       - name: Install project with all extras
-        run: |
-          uv venv .venv
-          uv pip install --python .venv/bin/python ".[dev,training,embeddings,registry,data]"
+        run: uv sync --all-extras
 
-      - name: Run all tests (including slow)
+      - name: Run heavy tests (includes slow)
         run: |
-          .venv/bin/python -m pytest tests/ \
+          uv run python -m pytest tests/ \
             -m "not integration and not s3" \
-            -v --tb=long --timeout=300
+            -v --tb=long --timeout=600
 
       - name: Upload test results
         if: failure()
