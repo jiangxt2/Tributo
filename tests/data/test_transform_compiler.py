@@ -39,7 +39,9 @@ def compiler() -> ConcreteTransformCompiler:
 
 
 class TestCompilationSuccess:
-    def test_all_five_specs_compile_daft(self, compiler: ConcreteTransformCompiler) -> None:
+    def test_all_five_specs_compile_daft(
+        self, compiler: ConcreteTransformCompiler
+    ) -> None:
         pipeline = TransformPipeline(
             steps=[
                 FilterEq(column="x", value=30),
@@ -54,7 +56,9 @@ class TestCompilationSuccess:
         for i, step in enumerate(compiled.steps):
             assert step.ordinal == i
 
-    def test_all_five_specs_compile_ray(self, compiler: ConcreteTransformCompiler) -> None:
+    def test_all_five_specs_compile_ray(
+        self, compiler: ConcreteTransformCompiler
+    ) -> None:
         pipeline = TransformPipeline(
             steps=[
                 FilterEq(column="x", value=30),
@@ -67,7 +71,9 @@ class TestCompilationSuccess:
         compiled = compiler.compile(pipeline, TransformBackend.RAY, SCHEMA)
         assert len(compiled.steps) == 5
 
-    def test_select_columns_output_schema(self, compiler: ConcreteTransformCompiler) -> None:
+    def test_select_columns_output_schema(
+        self, compiler: ConcreteTransformCompiler
+    ) -> None:
         pipeline = TransformPipeline(steps=[SelectColumns(columns=["name", "id"])])
         compiled = compiler.compile(pipeline, TransformBackend.DAFT, SCHEMA)
         out_schema = compiled.steps[0].output_schema
@@ -82,32 +88,44 @@ class TestCompilationSuccess:
 
 
 class TestColumnNotFound:
-    def test_filter_eq_missing_column(self, compiler: ConcreteTransformCompiler) -> None:
+    def test_filter_eq_missing_column(
+        self, compiler: ConcreteTransformCompiler
+    ) -> None:
         pipeline = TransformPipeline(steps=[FilterEq(column="z", value=1)])
         with pytest.raises(ValueError, match="Column 'z' not found"):
             compiler.compile(pipeline, TransformBackend.DAFT, SCHEMA)
 
-    def test_filter_range_missing_column(self, compiler: ConcreteTransformCompiler) -> None:
+    def test_filter_range_missing_column(
+        self, compiler: ConcreteTransformCompiler
+    ) -> None:
         pipeline = TransformPipeline(steps=[FilterRange(column="z", low=0, high=100)])
         with pytest.raises(ValueError, match="Column 'z' not found"):
             compiler.compile(pipeline, TransformBackend.DAFT, SCHEMA)
 
-    def test_filter_isin_missing_column(self, compiler: ConcreteTransformCompiler) -> None:
+    def test_filter_isin_missing_column(
+        self, compiler: ConcreteTransformCompiler
+    ) -> None:
         pipeline = TransformPipeline(steps=[FilterIsIn(column="z", values=[1])])
         with pytest.raises(ValueError, match="Column 'z' not found"):
             compiler.compile(pipeline, TransformBackend.DAFT, SCHEMA)
 
-    def test_filter_null_missing_column(self, compiler: ConcreteTransformCompiler) -> None:
+    def test_filter_null_missing_column(
+        self, compiler: ConcreteTransformCompiler
+    ) -> None:
         pipeline = TransformPipeline(steps=[FilterNull(column="z")])
         with pytest.raises(ValueError, match="Column 'z' not found"):
             compiler.compile(pipeline, TransformBackend.DAFT, SCHEMA)
 
-    def test_select_columns_missing_column(self, compiler: ConcreteTransformCompiler) -> None:
+    def test_select_columns_missing_column(
+        self, compiler: ConcreteTransformCompiler
+    ) -> None:
         pipeline = TransformPipeline(steps=[SelectColumns(columns=["z"])])
         with pytest.raises(ValueError, match="Column 'z' in SelectColumns not found"):
             compiler.compile(pipeline, TransformBackend.DAFT, SCHEMA)
 
-    def test_select_then_filter_removed_column(self, compiler: ConcreteTransformCompiler) -> None:
+    def test_select_then_filter_removed_column(
+        self, compiler: ConcreteTransformCompiler
+    ) -> None:
         """SelectColumns removes 'name', then FilterEq on 'name' → compile error."""
         pipeline = TransformPipeline(
             steps=[
@@ -141,7 +159,9 @@ class TestIllegalValues:
         with pytest.raises(ValueError, match="FilterRange low"):
             FilterRange(column="x", low=100, high=10)
 
-    def test_select_columns_duplicate(self, compiler: ConcreteTransformCompiler) -> None:
+    def test_select_columns_duplicate(
+        self, compiler: ConcreteTransformCompiler
+    ) -> None:
         pipeline = TransformPipeline(steps=[SelectColumns(columns=["id", "id"])])
         with pytest.raises(ValueError, match="Duplicate column"):
             compiler.compile(pipeline, TransformBackend.DAFT, SCHEMA)
@@ -153,7 +173,9 @@ class TestIllegalValues:
 
 
 class TestFrozenSemantics:
-    def test_empty_pipeline_is_identity(self, compiler: ConcreteTransformCompiler) -> None:
+    def test_empty_pipeline_is_identity(
+        self, compiler: ConcreteTransformCompiler
+    ) -> None:
         pipeline = TransformPipeline()
         compiled = compiler.compile(pipeline, TransformBackend.DAFT, SCHEMA)
         assert len(compiled.steps) == 0

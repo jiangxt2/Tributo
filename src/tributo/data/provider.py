@@ -66,7 +66,9 @@ class Availability:
         return cls(is_available=True)
 
     @classmethod
-    def unavailable(cls, *, reason: str, missing_extra: str | None = None) -> "Availability":
+    def unavailable(
+        cls, *, reason: str, missing_extra: str | None = None
+    ) -> "Availability":
         return cls(is_available=False, reason=reason, missing_extra=missing_extra)
 
 
@@ -198,8 +200,9 @@ class CompiledPipeline:
 class TransformCompiler(ABC):
     """Compile a TransformPipeline to a CompiledPipeline for a specific backend.
 
-    The provider calls ``compile()`` once for the full pipeline, then uses
-    ``CompiledPipeline.apply()`` for residual steps after pushdown.
+    The provider calls ``compile()`` once for the full pipeline, then applies
+    residual steps via the backend-specific functions in ``transform_compiler``
+    (``apply_pipeline_to_daft_df`` / ``apply_pipeline_to_ray_ds``).
     """
 
     @abstractmethod
@@ -292,8 +295,12 @@ class SourceRouter:
     or full provider_id.
     """
 
-    strategy: dict[tuple[str, str | None], tuple[str, ...]] = field(default_factory=dict)
-    _registry: dict[str, type[SourceProvider]] = field(default_factory=dict, init=False, repr=False)
+    strategy: dict[tuple[str, str | None], tuple[str, ...]] = field(
+        default_factory=dict
+    )
+    _registry: dict[str, type[SourceProvider]] = field(
+        default_factory=dict, init=False, repr=False
+    )
 
     def register(self, cls: type[SourceProvider]) -> None:
         ident = cls.identity()
@@ -329,9 +336,7 @@ class SourceRouter:
         # source_kind already encodes dialect for SQL types (e.g. "sql_clickhouse")
         chain = self.strategy.get((source_kind, None), ())
         if not chain:
-            raise ValueError(
-                f"No strategy entry for source_kind={source_kind!r}"
-            )
+            raise ValueError(f"No strategy entry for source_kind={source_kind!r}")
         reasons: list[str] = []
         for pid in chain:
             cls = self._registry.get(pid)
@@ -351,13 +356,16 @@ class SourceRouter:
             + "; ".join(reasons)
         )
 
-    def _explicit_select(self, config: SourceInput, engine: str) -> type[SourceProvider]:
+    def _explicit_select(
+        self, config: SourceInput, engine: str
+    ) -> type[SourceProvider]:
         # Try exact provider_id first, then alias
         cls = self._registry.get(engine)
         if cls is None:
             # Look up by alias
             matches = [
-                c for c in self._registry.values()
+                c
+                for c in self._registry.values()
                 if c.identity().selector_alias == engine and c.can_handle(config)
             ]
             if len(matches) > 1:
@@ -369,7 +377,9 @@ class SourceRouter:
             cls = matches[0]
 
         if not cls.can_handle(config):
-            raise ValueError(f"Provider {cls.identity().provider_id} cannot handle this config")
+            raise ValueError(
+                f"Provider {cls.identity().provider_id} cannot handle this config"
+            )
         avail = cls.availability(config)
         if not avail.is_available:
             raise ValueError(

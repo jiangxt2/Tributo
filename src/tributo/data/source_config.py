@@ -174,7 +174,12 @@ SourceInput = BuiltinSourceConfig | RawSourceConfig
 # Reserved built-in type names — RawSourceConfig with these types is rejected.
 _RESERVED_BUILTIN_TYPES: frozenset[str] = frozenset(
     cls.model_fields["type"].default
-    for cls in (ParquetSourceConfig, CsvSourceConfig, SqlSourceConfig, IcebergSourceConfig)
+    for cls in (
+        ParquetSourceConfig,
+        CsvSourceConfig,
+        SqlSourceConfig,
+        IcebergSourceConfig,
+    )
     if hasattr(cls.model_fields["type"], "default")
 )
 

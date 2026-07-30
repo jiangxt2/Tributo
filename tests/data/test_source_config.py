@@ -164,7 +164,9 @@ class TestUnsupportedType:
     def test_builtin_type_rejected_from_raw(self) -> None:
         from tributo.data.source_config import RawSourceConfig
 
-        with pytest.raises(ValueError, match="cannot be constructed as RawSourceConfig"):
+        with pytest.raises(
+            ValueError, match="cannot be constructed as RawSourceConfig"
+        ):
             RawSourceConfig(type="parquet", raw={})
 
 

@@ -79,7 +79,9 @@ def assert_tables_equal(
     for i, (lf, rf) in enumerate(zip(left.schema, right.schema)):
         assert lf.name == rf.name, f"Field {i} name: {lf.name} vs {rf.name}"
         assert lf.type == rf.type, f"Field {i} ({lf.name}) type: {lf.type} vs {rf.type}"
-        assert lf.nullable == rf.nullable, f"Field {i} ({lf.name}) nullable: {lf.nullable} vs {rf.nullable}"
+        assert lf.nullable == rf.nullable, (
+            f"Field {i} ({lf.name}) nullable: {lf.nullable} vs {rf.nullable}"
+        )
 
     # Value check: sort by row_id if present, then compare column-by-column
     # with NaN-safe equality (NaN != NaN in IEEE 754)
@@ -100,11 +102,10 @@ def assert_tables_equal(
                 continue
             if isinstance(lv, float) and isinstance(rv, float):
                 import math
+
                 if math.isnan(lv) and math.isnan(rv):
                     continue
-            raise AssertionError(
-                f"Column {col_name!r} row {i}: {lv!r} != {rv!r}"
-            )
+            raise AssertionError(f"Column {col_name!r} row {i}: {lv!r} != {rv!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -141,17 +142,13 @@ class TestDS1Parquet:
         df = self.daft.read_parquet(self.parquet_path)
         df = df.where(self.daft.col("city") == "A")
         result = df.collect().to_arrow()
-        expected = self.canonical.filter(
-            pa.compute.equal(self.canonical["city"], "A")
-        )
+        expected = self.canonical.filter(pa.compute.equal(self.canonical["city"], "A"))
         assert_tables_equal(result, expected)
 
     def test_filter_range(self) -> None:
         """FilterRange: low ≤ x ≤ high."""
         df = self.daft.read_parquet(self.parquet_path)
-        df = df.where(
-            (self.daft.col("x") >= 30) & (self.daft.col("x") <= 90)
-        )
+        df = df.where((self.daft.col("x") >= 30) & (self.daft.col("x") <= 90))
         result = df.collect().to_arrow()
         mask = pa.compute.and_(
             pa.compute.greater_equal(self.canonical["x"], 30),
@@ -175,9 +172,7 @@ class TestDS1Parquet:
         df = self.daft.read_parquet(self.parquet_path)
         df = df.where(self.daft.col("name").is_null())
         result = df.collect().to_arrow()
-        expected = self.canonical.filter(
-            pa.compute.is_null(self.canonical["name"])
-        )
+        expected = self.canonical.filter(pa.compute.is_null(self.canonical["name"]))
         assert_tables_equal(result, expected)
 
     def test_empty_filter_result(self) -> None:

@@ -168,7 +168,9 @@ def _compile_ray(spec: TransformSpec, schema: pa.Schema) -> tuple[Any, pa.Schema
     if isinstance(spec, FilterIsIn):
         if len(spec.values) == 0:
             # Always false: use an impossible condition
-            return ray_col(spec.column).is_null() & ray_col(spec.column).is_not_null(), schema
+            return ray_col(spec.column).is_null() & ray_col(
+                spec.column
+            ).is_not_null(), schema
         return ray_col(spec.column).is_in(spec.values), schema
 
     if isinstance(spec, FilterNull):
@@ -209,7 +211,9 @@ def apply_pipeline_to_daft_df(
         elif isinstance(step.backend_op, daft.Expression):
             result = result.where(step.backend_op)
         else:
-            raise ValueError(f"Unknown backend op type for Daft: {type(step.backend_op)}")
+            raise ValueError(
+                f"Unknown backend op type for Daft: {type(step.backend_op)}"
+            )
     return result
 
 
@@ -235,5 +239,7 @@ def apply_pipeline_to_ray_ds(
         elif isinstance(step.backend_op, Expr):
             result = result.filter(expr=step.backend_op)
         else:
-            raise ValueError(f"Unknown backend op type for Ray: {type(step.backend_op)}")
+            raise ValueError(
+                f"Unknown backend op type for Ray: {type(step.backend_op)}"
+            )
     return result
