@@ -89,6 +89,16 @@ class Registry(Generic[K, V]):
         with self._lock:
             return key in self._store
 
+    def snapshot(self) -> dict[K, V]:
+        """Return a shallow copy of the key→value mapping under the lock.
+
+        The returned dict is a brand-new dict — the caller cannot mutate
+        ``_store`` through it.  Value integrity is the responsibility of
+        the value type (e.g. deeply-immutable ``AlgorithmSpec``).
+        """
+        with self._lock:
+            return dict(self._store)
+
 
 class PluginAwareRegistry(Registry[K, V]):
     """Registry with lazy ``entry_points`` plugin discovery.

@@ -12,8 +12,9 @@ from abc import ABC, abstractmethod
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
+from tributo._common.config import StrictConfigModel
 from tributo.util.annotations import PublicAPI
 
 if TYPE_CHECKING:
@@ -34,7 +35,7 @@ class WriteMode(Enum):
 
 
 @PublicAPI(stability="alpha")
-class S3Config(BaseModel):
+class S3Config(StrictConfigModel):
     """S3 connection configuration, shared across all data modules.
 
     Environment variable fallbacks:
