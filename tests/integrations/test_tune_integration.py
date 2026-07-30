@@ -137,7 +137,6 @@ def test_simple_trainable():
         assert "max_depth" in best_params, "最佳参数应该包含 max_depth"
 
     logger.info("✅ 测试 1 通过：简单 trainable 函数")
-    return True
 
 
 @pytest.mark.slow
@@ -188,10 +187,10 @@ def test_tune_runner_with_xgboost():
                 },
             }
         }
-        yaml_path = Path(tmp_dir) / "space.yaml"
-        yaml_path.write_text(yaml.dump(search_space_content))  # noqa: F821
+        json_path = Path(tmp_dir) / "space.json"
+        json_path.write_text(json.dumps(search_space_content))
 
-        search_space = parse_search_space(str(yaml_path))
+        search_space = parse_search_space(str(json_path))
         logger.info(f"搜索空间: {search_space}")
 
         # 配置（XGBoostTrainer 使用 train-logloss 作为指标）
@@ -234,7 +233,6 @@ def test_tune_runner_with_xgboost():
         assert best_result.metrics is not None, "最佳结果应该有指标"
 
         logger.info("✅ 测试 2 通过：TuneRunner + XGBoostTrainer")
-        return True
 
 
 @pytest.mark.slow
@@ -301,7 +299,6 @@ def test_scheduler_asha():
         assert best_result.metrics is not None, "最佳结果应该有指标"
 
     logger.info("✅ 测试 3 通过：ASHA 调度器")
-    return True
 
 
 @pytest.mark.slow
@@ -351,7 +348,6 @@ def test_fail_fast():
         assert len(failed_trials) <= 1, "fail_fast=True 时应该只运行 1 个失败 trial"
 
     logger.info("✅ 测试 4 通过：fail_fast 行为")
-    return True
 
 
 @pytest.mark.slow
@@ -405,7 +401,6 @@ def test_time_budget():
         assert len(result_grid) > 0, "应该有至少一个 trial"
 
     logger.info("✅ 测试 5 通过：时间预算")
-    return True
 
 
 @pytest.mark.slow
@@ -455,7 +450,6 @@ def test_max_concurrent_trials():
         assert elapsed < 15, f"运行时间异常: {elapsed:.1f} 秒"
 
     logger.info("✅ 测试 6 通过：最大并发 trial 数")
-    return True
 
 
 def main():
@@ -492,8 +486,8 @@ def main():
 
     for test_name, test_func in tests:
         try:
-            success = test_func()
-            results[test_name] = success
+            test_func()
+            results[test_name] = True
         except Exception:
             logger.exception("测试 '%s' 异常", test_name)
             raise

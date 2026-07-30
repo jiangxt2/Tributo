@@ -20,6 +20,8 @@ from ray.job_submission import JobStatus, JobSubmissionClient
 
 from tributo.training import submit_training_job, wait_for_job
 
+pytestmark = pytest.mark.integration
+
 
 @pytest.fixture(scope="module")
 def job_client():

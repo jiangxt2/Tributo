@@ -1,5 +1,5 @@
 # Ray working_dir exclusions — large files and caches
-data/
+/data/
 *.parquet
 *.onnx
 *.onnx.data
@@ -19,4 +19,5 @@ __pycache__/
 explore/
 docs/
 *.md
+!/README.md
 uv.lock

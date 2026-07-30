@@ -21,6 +21,8 @@ jobs:
   heavy-regression:
     name: Heavy Regression (Python 3.12)
     runs-on: ubuntu-latest
+    env:
+      RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO: "0"
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
 

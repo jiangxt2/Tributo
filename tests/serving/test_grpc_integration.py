@@ -22,7 +22,7 @@ from tributo.serving.grpc_runner import (
 )
 from tributo.serving.proto.generated import inference_pb2, inference_pb2_grpc
 
-pytestmark = pytest.mark.slow
+pytestmark = [pytest.mark.slow, pytest.mark.integration]
 
 # 集群配置
 GRPC_ADDRESS = "localhost:8001"
