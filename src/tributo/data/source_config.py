@@ -87,6 +87,12 @@ class SqlSourceConfig(StrictConfigModel):
     partitioning: SqlPartitioning | None = None
 
     @model_validator(mode="after")
+    def _require_sql(self) -> "SqlSourceConfig":
+        if not self.sql.strip():
+            raise ValueError("sql field must be non-empty for SqlSourceConfig")
+        return self
+
+    @model_validator(mode="after")
     def _normalize_empty_params(self) -> "SqlSourceConfig":
         """Normalize empty params dict to None.
 
@@ -114,12 +120,6 @@ class SqlPartitioning(BaseModel):
     column: str
     num_partitions: int | None = Field(default=None, ge=1)
     bound_strategy: Literal["min-max", "percentile"] = "min-max"
-
-    @model_validator(mode="after")
-    def _require_sql(self) -> SqlSourceConfig:
-        if not self.sql.strip():
-            raise ValueError("sql field must be non-empty for SqlSourceConfig")
-        return self
 
 
 @PublicAPI(stability="beta")
