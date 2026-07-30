@@ -60,6 +60,9 @@ __all__ = [
     "SqlSourceConfig",
     "IcebergSourceConfig",
     "LegacyConfigNormalizer",
+    "RawSourceConfig",
+    "SourceInput",
+    "SqlPartitioning",
 ]
 
 # Auto-discover third-party connector plugins via entry_points

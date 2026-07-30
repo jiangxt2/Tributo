@@ -15,7 +15,6 @@ from tributo.data.provider import (
 )
 from tributo.data.source_config import LegacyConfigNormalizer, RawSourceConfig
 
-
 # ---------------------------------------------------------------------------
 # Mock providers for testing
 # ---------------------------------------------------------------------------
@@ -31,7 +30,7 @@ class MockDaftProvider(SourceProvider):
 
     @classmethod
     def can_handle(cls, config: Any) -> bool:
-        from tributo.data.source_config import ParquetSourceConfig, CsvSourceConfig
+        from tributo.data.source_config import CsvSourceConfig, ParquetSourceConfig
 
         return isinstance(config, (ParquetSourceConfig, CsvSourceConfig))
 

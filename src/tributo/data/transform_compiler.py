@@ -123,7 +123,6 @@ def _validate_select_columns(spec: SelectColumns, schema: pa.Schema) -> None:
 def _compile_daft(spec: TransformSpec, schema: pa.Schema) -> tuple[Any, pa.Schema]:
     """Compile a TransformSpec to a Daft expression + output schema."""
     import daft
-
     from daft import col as daft_col
 
     if isinstance(spec, FilterEq):
