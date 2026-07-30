@@ -9,12 +9,12 @@ from pydantic import ValidationError
 
 from tributo._common.storage import parse_s3_url
 from tributo.training.xgboost_trainer import (
-    DataConfig,
     ModelConfig,
     OutputConfig,
     RayConfig,
     S3Config,
     TrainingParams,
+    XGBoostDataConfig,
     XGBoostTrainingConfig,
 )
 
@@ -57,11 +57,11 @@ class TestS3Config:
         assert cfg.endpoint is None
 
 
-class TestDataConfig:
-    """DataConfig Pydantic 模型测试。"""
+class TestXGBoostDataConfig:
+    """XGBoostDataConfig Pydantic 模型测试。"""
 
     def test_defaults(self):
-        cfg = DataConfig()
+        cfg = XGBoostDataConfig()
         assert cfg.type == "csv"
         assert cfg.format == "parquet"
         assert cfg.label_col == "label"
@@ -69,7 +69,7 @@ class TestDataConfig:
         assert cfg.uri is None
 
     def test_s3_type_with_uri(self):
-        cfg = DataConfig(
+        cfg = XGBoostDataConfig(
             type="s3",
             uri="s3://bucket/data.parquet",
             s3=S3Config(endpoint="http://minio:9000"),
@@ -79,7 +79,7 @@ class TestDataConfig:
         assert cfg.s3.endpoint == "http://minio:9000"
 
     def test_feature_columns(self):
-        cfg = DataConfig(
+        cfg = XGBoostDataConfig(
             type="csv",
             path="data/train.csv",
             label_col="label",
@@ -88,7 +88,7 @@ class TestDataConfig:
         assert cfg.feature_columns == ["a", "b", "c"]
 
     def test_feature_columns_default_empty(self):
-        cfg = DataConfig()
+        cfg = XGBoostDataConfig()
         assert cfg.feature_columns == []
 
 
@@ -235,7 +235,7 @@ class TestXGBoostTrainingConfig:
 
     def test_full_config(self):
         cfg = XGBoostTrainingConfig(
-            data=DataConfig(
+            data=XGBoostDataConfig(
                 type="s3",
                 uri="s3://bucket/data.parquet",
                 label_col="target",

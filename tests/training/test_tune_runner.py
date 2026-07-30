@@ -8,7 +8,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from tributo.exceptions import JobExecutionError
-from tributo.training.base import BaseTrainer, TrainerSpec
+from tributo.training.algorithm_spec import AlgorithmSpec
+from tributo.training.base import BaseTrainer
 from tributo.training.tune_config import TuneSearchConfig
 from tributo.training.tune_runner import TuneRunner, extract_best_params
 
@@ -30,8 +31,8 @@ class MockTrainer(BaseTrainer):
 
 @pytest.fixture
 def trainer_spec():
-    """Create a mock TrainerSpec."""
-    return TrainerSpec(
+    """Create a mock AlgorithmSpec."""
+    return AlgorithmSpec(
         name="mock",
         trainer_cls=MockTrainer,
         default_config={"learning_rate": 0.01},
@@ -53,48 +54,58 @@ def tune_config():
 
 @pytest.fixture
 def search_space():
-    """Create a simple search space."""
-    from ray import tune
+    """Create a simple SearchSpaceSpec."""
+    from tributo.training.tune_space import SearchParamSpec, SearchSpaceSpec
 
-    return {
-        "learning_rate": tune.uniform(0.001, 0.1),
-    }
+    return SearchSpaceSpec(
+        parameters=(
+            SearchParamSpec(
+                path="training.learning_rate",
+                kind="uniform",
+                lower=0.001,
+                upper=0.1,
+            ),
+        )
+    )
+
+
+@pytest.fixture
+def effective_config():
+    """Minimal effective config."""
+    return {"training": {"learning_rate": 0.01}}
 
 
 class TestTuneRunner:
     """Tests for TuneRunner class."""
 
-    def test_init_valid_config(self, trainer_spec, tune_config, search_space):
+    def test_init_valid_config(
+        self, trainer_spec, tune_config, search_space, effective_config
+    ):
         """Test initialization with valid configuration."""
-        runner = TuneRunner(trainer_spec, tune_config, search_space)
+        runner = TuneRunner(trainer_spec, tune_config, search_space, effective_config)
         assert runner._trainer_spec == trainer_spec
         assert runner._tune_config == tune_config
-        assert runner._search_space == search_space
 
-    def test_init_invalid_search_alg(self, trainer_spec, search_space):
-        """Test initialization with invalid search algorithm.
-
-        Pydantic validation in TuneSearchConfig rejects invalid values early.
-        """
+    def test_init_invalid_search_alg(
+        self, trainer_spec, search_space, effective_config
+    ):
+        """Test initialization with invalid search algorithm."""
         with pytest.raises(ValueError):
             TuneSearchConfig(search_alg="invalid")
 
-    def test_init_invalid_scheduler(self, trainer_spec, search_space):
-        """Test initialization with invalid scheduler.
-
-        Pydantic validation in TuneSearchConfig rejects invalid values early.
-        """
+    def test_init_invalid_scheduler(self, trainer_spec, search_space, effective_config):
+        """Test initialization with invalid scheduler."""
         with pytest.raises(ValueError):
             TuneSearchConfig(scheduler="invalid")
 
     @patch("tributo.training.tune_runner.Tuner")
     def test_build_trainable_reports_metrics(
-        self, mock_tuner_cls, trainer_spec, tune_config, search_space
+        self, mock_tuner_cls, trainer_spec, tune_config, search_space, effective_config
     ):
         """Test that trainable function reports metrics correctly."""
         from ray import tune as ray_tune
 
-        runner = TuneRunner(trainer_spec, tune_config, search_space)
+        runner = TuneRunner(trainer_spec, tune_config, search_space, effective_config)
         trainable = runner._build_trainable(
             datasets={"train": MagicMock()},
             output_path="/tmp/test",
@@ -102,7 +113,7 @@ class TestTuneRunner:
         assert callable(trainable)
 
         with patch.object(ray_tune, "report") as mock_report:
-            trainable({"learning_rate": 0.05})
+            trainable({"training.learning_rate": 0.05})
             mock_report.assert_called_once()
             reported = mock_report.call_args[0][0]
             assert "loss" in reported
@@ -112,7 +123,7 @@ class TestTuneRunner:
 
     @patch("tributo.training.tune_runner.Tuner")
     def test_build_trainable_raises_when_no_metrics(
-        self, mock_tuner_cls, trainer_spec, tune_config, search_space
+        self, mock_tuner_cls, trainer_spec, tune_config, search_space, effective_config
     ):
         """Test that trainable raises when trainer returns no numeric metrics."""
 
@@ -126,12 +137,12 @@ class TestTuneRunner:
             def export_model(self, checkpoint: Any, output_path: str) -> None:
                 pass
 
-        no_metric_spec = TrainerSpec(
+        no_metric_spec = AlgorithmSpec(
             name="no_metric",
             trainer_cls=NoMetricTrainer,
             default_config={},
         )
-        runner = TuneRunner(no_metric_spec, tune_config, search_space)
+        runner = TuneRunner(no_metric_spec, tune_config, search_space, effective_config)
         trainable = runner._build_trainable(
             datasets={"train": MagicMock()},
             output_path="/tmp/test",
@@ -142,7 +153,7 @@ class TestTuneRunner:
 
     @patch("tributo.training.tune_runner.Tuner")
     def test_build_trainable_wraps_exception(
-        self, mock_tuner_cls, trainer_spec, tune_config, search_space
+        self, mock_tuner_cls, trainer_spec, tune_config, search_space, effective_config
     ):
         """Test that trainable wraps trainer exceptions with context."""
 
@@ -156,12 +167,12 @@ class TestTuneRunner:
             def export_model(self, checkpoint: Any, output_path: str) -> None:
                 raise RuntimeError("export failed")
 
-        failing_spec = TrainerSpec(
+        failing_spec = AlgorithmSpec(
             name="failing",
             trainer_cls=FailingTrainer,
             default_config={},
         )
-        runner = TuneRunner(failing_spec, tune_config, search_space)
+        runner = TuneRunner(failing_spec, tune_config, search_space, effective_config)
         trainable = runner._build_trainable(
             datasets={"train": MagicMock()},
             output_path="/tmp/test",
@@ -170,7 +181,9 @@ class TestTuneRunner:
         with pytest.raises(JobExecutionError):
             trainable({"learning_rate": 0.05})
 
-    def test_bayesopt_requires_dependency(self, trainer_spec, search_space):
+    def test_bayesopt_requires_dependency(
+        self, trainer_spec, search_space, effective_config
+    ):
         """Test that BayesOpt raises ImportError when not installed."""
         tune_config = TuneSearchConfig(search_alg="bayesopt")
 
@@ -183,7 +196,7 @@ class TestTuneRunner:
             },
         ):
             with pytest.raises(ImportError):
-                TuneRunner(trainer_spec, tune_config, search_space)
+                TuneRunner(trainer_spec, tune_config, search_space, effective_config)
 
 
 class TestExtractBestParams:

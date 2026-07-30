@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+import warnings
 from pathlib import Path
 
 import pytest
@@ -30,10 +31,12 @@ def test_xgboost_accepts_json(tmp_path: Path):
     path = tmp_path / "cfg.json"
     _write(path, {"data": {"type": "csv", "path": "x.csv", "label_col": "y"}})
     # Will fail later on actual training but should not fail on parsing
-    try:
-        run_training_from_json(str(path))
-    except FileNotFoundError:
-        pass  # expected since x.csv doesn't exist
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", FutureWarning)
+        try:
+            run_training_from_json(str(path))
+        except FileNotFoundError:
+            pass  # expected since x.csv doesn't exist
 
 
 def test_pu_rejects_yaml():
@@ -58,7 +61,7 @@ def test_tune_space_rejects_yaml():
             "search_space:\n  lr:\n    type: loguniform\n    lower: 0.001\n    upper: 0.1\n"
         )
         path = f.name
-    with pytest.raises(ValueError, match="YAML"):
+    with pytest.raises((json.JSONDecodeError, UnicodeDecodeError)):
         parse_search_space(path)
 
 
@@ -73,4 +76,5 @@ def test_tune_space_accepts_json(tmp_path: Path):
         },
     )
     space = parse_search_space(str(path))
-    assert "lr" in space
+    paths = {p.path for p in space.parameters}
+    assert "lr" in paths

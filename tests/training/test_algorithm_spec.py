@@ -40,11 +40,11 @@ class TestTrainerSpecAlias:
     def test_default_fields(self) -> None:
         spec = AlgorithmSpec(name="test", trainer_cls=type("Fake", (), {}))
         assert spec.default_config == {}
-        assert spec.supported_tasks == ["train"]
+        assert spec.supported_tasks == ("train",)
         assert spec.version == "0.1.0"
-        assert spec.problem_types == []
-        assert spec.data_modality == []
-        assert spec.tags == []
+        assert spec.problem_types == ()
+        assert spec.data_modality == ()
+        assert spec.tags == ()
         assert spec.extras_group is None
         assert spec.input_schema is None
         assert spec.output_schema is None
@@ -65,8 +65,8 @@ class TestDataContract:
     def test_defaults(self) -> None:
         dc = DataContract()
         assert dc.columns == {}
-        assert dc.sparse == []
-        assert dc.dense == []
+        assert dc.sparse == ()
+        assert dc.dense == ()
         assert dc.min_rows is None
 
     def test_frozen(self) -> None:

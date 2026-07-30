@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from tributo.training.data_loader import load_ray_dataset_from_config
+from tributo.training.data_loader import load_ray_dataset_from_source
 
 
 def test_s3_parquet_uses_parquet_connector():
@@ -12,12 +12,8 @@ def test_s3_parquet_uses_parquet_connector():
         mock_connector = MagicMock()
         mock_connector.read.return_value = MagicMock()
         mock_get_connector.return_value = mock_connector
-        load_ray_dataset_from_config(
-            {
-                "type": "s3",
-                "uri": "s3://bucket/data.parquet",
-                "format": "parquet",
-            }
+        load_ray_dataset_from_source(
+            {"type": "parquet", "path": "s3://bucket/data.parquet"}
         )
         mock_get_connector.assert_called_once_with("parquet")
 
@@ -27,11 +23,10 @@ def test_s3_csv_uses_csv_connector():
         mock_connector = MagicMock()
         mock_connector.read.return_value = MagicMock()
         mock_get_connector.return_value = mock_connector
-        load_ray_dataset_from_config(
+        load_ray_dataset_from_source(
             {
-                "type": "s3",
-                "uri": "s3://bucket/data.csv",
-                "format": "csv",
+                "type": "csv",
+                "path": "s3://bucket/data.csv",
                 "s3": {"region": "us-east-1"},
             }
         )
@@ -39,15 +34,11 @@ def test_s3_csv_uses_csv_connector():
 
 
 def test_s3_unsupported_format_raises():
-    with patch("tributo.data.get_connector"):
-        try:
-            load_ray_dataset_from_config(
-                {
-                    "type": "s3",
-                    "uri": "s3://bucket/data.orc",
-                    "format": "orc",
-                }
-            )
-            raise AssertionError("expected ValueError")
-        except ValueError as exc:
-            assert "unsupported s3 format" in str(exc)
+    """Unknown source type is rejected by TypeAdapter discriminator."""
+    from pydantic import ValidationError
+
+    try:
+        load_ray_dataset_from_source({"type": "bogus", "path": "s3://bucket/data.orc"})
+        raise AssertionError("expected ValidationError")
+    except ValidationError:
+        pass
