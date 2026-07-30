@@ -151,11 +151,23 @@ class TestLegacyIceberg:
 
 
 class TestUnsupportedType:
-    """Unrecognised ``type`` raises ValueError."""
+    """Unrecognised ``type`` returns RawSourceConfig for plugin passthrough."""
 
     def test_unsupported(self) -> None:
-        with pytest.raises(ValueError, match="unsupported data type"):
-            LegacyConfigNormalizer.normalize({"type": "hive"})
+        from tributo.data.source_config import RawSourceConfig
+
+        result = LegacyConfigNormalizer.normalize({"type": "hive", "key": "val"})
+        assert isinstance(result, RawSourceConfig)
+        assert result.type == "hive"
+        assert result.raw == {"type": "hive", "key": "val"}
+
+    def test_builtin_type_rejected_from_raw(self) -> None:
+        from tributo.data.source_config import RawSourceConfig
+
+        with pytest.raises(
+            ValueError, match="cannot be constructed as RawSourceConfig"
+        ):
+            RawSourceConfig(type="parquet", raw={})
 
 
 class TestResolveEnv:

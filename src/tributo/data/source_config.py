@@ -6,9 +6,9 @@ dispatch in ``training/data_loader.py`` and ``inference/pipeline.py``.
 
 from __future__ import annotations
 
-from typing import Annotated, Literal, Union
+from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from tributo.util.annotations import PublicAPI
 
@@ -81,7 +81,37 @@ class SqlSourceConfig(BaseModel):
     user: str | None = None
     password: str | None = None
     sql: str = ""
-    params: dict[str, str] | None = None
+    params: dict[str, Any] | None = None
+    partitioning: SqlPartitioning | None = None
+
+    @model_validator(mode="after")
+    def _normalize_empty_params(self) -> "SqlSourceConfig":
+        """Normalize empty params dict to None.
+
+        ``params={}`` is semantically identical to ``params=None``
+        (no parameterization).  Downstream routing checks ``is not None``
+        to decide whether a query is parameterized.
+        """
+        if self.params == {}:
+            object.__setattr__(self, "params", None)
+        return self
+
+
+# ---------------------------------------------------------------------------
+# SQL partitioning hint — used by Daft Provider to split large query results
+# ---------------------------------------------------------------------------
+
+
+@PublicAPI(stability="alpha")
+class SqlPartitioning(BaseModel):
+    """Performance hint for SQL result partitioning.
+
+    Only consumed by Daft Provider; Legacy Provider ignores it.
+    """
+
+    column: str
+    num_partitions: int | None = Field(default=None, ge=1)
+    bound_strategy: Literal["min-max", "percentile"] = "min-max"
 
 
 @PublicAPI(stability="beta")
@@ -92,21 +122,68 @@ class IcebergSourceConfig(BaseModel):
         type: Discriminator value.
         catalog: Catalog name (e.g. ``"gravitino"``).
         table: Fully qualified table name.
+        catalog_properties: PyIceberg catalog connection properties.
+        s3: S3 authentication config for object storage access.
+        snapshot_id: Specific snapshot to read (``None`` = current).
     """
 
     type: Literal["iceberg"] = "iceberg"  # noqa: A003
     catalog: str = Field(min_length=1)
     table: str = Field(min_length=1)
+    catalog_properties: dict[str, str] = Field(default_factory=dict)
+    s3: dict[str, str] | None = None
+    snapshot_id: int | None = None
 
 
 # ---------------------------------------------------------------------------
-# Discriminated union
+# Two-level source input
 # ---------------------------------------------------------------------------
 
-SourceConfig = Annotated[
+# Built-in types keep the Pydantic discriminated union (all discriminators are Literal).
+BuiltinSourceConfig = Annotated[
     Union[ParquetSourceConfig, CsvSourceConfig, SqlSourceConfig, IcebergSourceConfig],
     Field(discriminator="type"),
 ]
+
+# Keep SourceConfig alias for backward compatibility.
+SourceConfig = BuiltinSourceConfig
+
+
+@PublicAPI(stability="alpha")
+class RawSourceConfig(BaseModel):
+    """Passthrough for third-party / unknown source types.
+
+    ``type`` is a free-form string (not Literal), so this class must NOT be
+    placed inside a Pydantic ``Field(discriminator="type")`` union.
+    """
+
+    type: str  # noqa: A003
+    raw: dict[str, Any]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_builtin_type(cls, data: Any) -> Any:
+        if isinstance(data, dict) and data.get("type") in _RESERVED_BUILTIN_TYPES:
+            raise ValueError(
+                f"Built-in type {data['type']!r} cannot be constructed as RawSourceConfig"
+            )
+        return data
+
+
+# Top-level union: no discriminator — validated by Pydantic TypeAdapter.
+SourceInput = BuiltinSourceConfig | RawSourceConfig
+
+# Reserved built-in type names — RawSourceConfig with these types is rejected.
+_RESERVED_BUILTIN_TYPES: frozenset[str] = frozenset(
+    cls.model_fields["type"].default
+    for cls in (
+        ParquetSourceConfig,
+        CsvSourceConfig,
+        SqlSourceConfig,
+        IcebergSourceConfig,
+    )
+    if hasattr(cls.model_fields["type"], "default")
+)
 
 # ---------------------------------------------------------------------------
 # DIALECT DEFAULTS
@@ -161,11 +238,11 @@ class LegacyConfigNormalizer:
     @staticmethod
     def normalize(
         data_config: dict,
-    ) -> ParquetSourceConfig | CsvSourceConfig | SqlSourceConfig | IcebergSourceConfig:
-        """Convert a legacy data_config dict to a typed SourceConfig.
+    ) -> SourceInput:
+        """Convert a legacy data_config dict to a typed SourceInput.
 
-        Raises:
-            ValueError: If ``data_config["type"]`` is unrecognised.
+        Unknown types become ``RawSourceConfig`` for plugin passthrough.
+        Malformed built-in types still raise ``ValueError``.
         """
         data_type = data_config.get("type", "csv")
 
@@ -173,6 +250,8 @@ class LegacyConfigNormalizer:
             return LegacyConfigNormalizer._normalize_s3(data_config)
         if data_type == "csv":
             return LegacyConfigNormalizer._normalize_csv(data_config)
+        if data_type == "parquet":
+            return LegacyConfigNormalizer._normalize_parquet(data_config)
         if data_type == "iceberg":
             return LegacyConfigNormalizer._normalize_iceberg(data_config)
 
@@ -180,7 +259,10 @@ class LegacyConfigNormalizer:
             dialect: _SqlDialect = _SQL_DIALECT_TYPES[data_type]  # type: ignore[valid-type]
             return LegacyConfigNormalizer._normalize_sql(data_config, dialect)
 
-        raise ValueError(f"unsupported data type: {data_type!r}")
+        # Unknown type → passthrough for plugin providers.
+        # Reserved built-in types are rejected above; only genuinely unknown
+        # types reach here.
+        return RawSourceConfig(type=data_type, raw=data_config)
 
     # -- private normalizers -------------------------------------------------------
 
@@ -197,6 +279,13 @@ class LegacyConfigNormalizer:
         if fmt == "csv":
             return CsvSourceConfig(path=uri, s3=s3_cfg, columns=columns)
         return ParquetSourceConfig(path=uri, s3=s3_cfg, columns=columns)
+
+    @staticmethod
+    def _normalize_parquet(data_config: dict) -> ParquetSourceConfig:
+        path = data_config.get("path", "")
+        s3_cfg = data_config.get("s3")
+        columns = data_config.get("columns")
+        return ParquetSourceConfig(path=path, s3=s3_cfg, columns=columns)
 
     @staticmethod
     def _normalize_csv(data_config: dict) -> ParquetSourceConfig | CsvSourceConfig:
@@ -250,6 +339,9 @@ class LegacyConfigNormalizer:
         return IcebergSourceConfig(
             catalog=data_config.get("catalog", ""),
             table=data_config.get("table", ""),
+            catalog_properties=data_config.get("catalog_properties", {}),
+            s3=data_config.get("s3"),
+            snapshot_id=data_config.get("snapshot_id"),
         )
 
     # -- env fallback helper -------------------------------------------------------

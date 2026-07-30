@@ -37,7 +37,10 @@ from tributo.data.source_config import (  # noqa: E402
     IcebergSourceConfig,
     LegacyConfigNormalizer,
     ParquetSourceConfig,
+    RawSourceConfig,
     SourceConfig,
+    SourceInput,
+    SqlPartitioning,
     SqlSourceConfig,
 )
 
@@ -57,6 +60,9 @@ __all__ = [
     "SqlSourceConfig",
     "IcebergSourceConfig",
     "LegacyConfigNormalizer",
+    "RawSourceConfig",
+    "SourceInput",
+    "SqlPartitioning",
 ]
 
 # Auto-discover third-party connector plugins via entry_points
