@@ -59,25 +59,37 @@ data = [
 clickhouse = [
     "clickhouse-connect>=1.3.0",
 ]
+s3 = [
+    "boto3>=1.42.91",
+]
+model-export = [
+    "tributo[s3]",
+    "onnx>=1.16.0",
+    "onnxruntime>=1.20.0",
+]
+model-export-torch = [
+    "tributo[model-export]",
+    "torch>=2.5.0",
+    "safetensors>=0.4.3",
+    "onnxscript>=0.1.0",
+]
 training = [
-    "tributo[clickhouse,data]",
+    "tributo[clickhouse,data,model-export,s3]",
     "xgboost>=2.1.0",
     "daft>=0.7.0,<0.8.0",
     "onnxmltools>=1.13.0",
     "skl2onnx>=1.17.0",
 ]
 embeddings = [
-    "tributo[data]",
+    "tributo[data,model-export,s3]",
     "transformers>=4.40.0",
-    "optimum[onnxruntime]>=1.20.0",
+    "optimum-onnx[onnxruntime]>=0.1.0",
     "tokenizers>=0.19.0",
     "daft>=0.7.0,<0.8.0",
 ]
 identity = [
-    "tributo[data]",
-    "torch>=2.0.0",
+    "tributo[data,model-export-torch]",
     "onnxruntime>=1.20.0",
-    "onnxscript>=0.1.0",
 ]
 streaming = [
     "tributo[embeddings]",
@@ -107,6 +119,16 @@ pu = "tributo.training.pu_trainer"
 
 [project.entry-points."tributo.models"]
 bge_small_zh = "tributo.embeddings.registry"
+
+[project.entry-points."tributo.exporters"]
+
+[project.entry-points."tributo.source_providers"]
+
+[project.entry-points."tributo.validators"]
+
+[project.entry-points."tributo.model_flavors"]
+
+[project.entry-points."tributo.model_factories"]
 
 [build-system]
 requires = ["hatchling"]

@@ -1,0 +1,416 @@
+"""Bundle export registries — discovery, registration, and candidate selection.
+
+Five registries provide the plugin backbone:
+
+- ``ExportRegistry`` — ModelExporter candidates.
+- ``SourceProviderRegistry`` — Resolve provider by trainer_type.
+- ``ValidatorRegistry`` — Validator chain members.
+- ``FlavorRegistry`` — Runtime model loading by flavor_id.
+- ``ModelFactoryRegistry`` — Safetensors architecture reconstruction.
+
+All registries expose ``diagnostics()`` for inspecting plugin load issues.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from tributo.exceptions import JobConfigurationError
+from tributo.training.exporters.models import (
+    ExportTarget,
+    PlannedTarget,
+    PluginLoadDiagnostic,
+    SupportRequest,
+    SupportResult,
+    ValidatorBinding,
+)
+from tributo.training.exporters.protocols import (
+    ExportValidator,
+    ModelExporter,
+    ModelFactory,
+    SourceProvider,
+)
+from tributo.util.annotations import DeveloperAPI, PublicAPI
+
+logger = logging.getLogger(__name__)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ExportRegistry
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@PublicAPI(stability="beta")
+class ExportRegistry:
+    """Registry of ``ModelExporter`` classes keyed by ``exporter_id``.
+
+    Supports ``list_candidates()`` for filtering by ``(source_kind, output_format)``
+    and priority-based selection.
+    """
+
+    def __init__(self) -> None:
+        self._by_id: dict[str, type[ModelExporter]] = {}
+        self._diagnostics: list[PluginLoadDiagnostic] = []
+
+    # -- write --
+
+    def register(self, exporter_cls: type[ModelExporter]) -> None:
+        """Register *exporter_cls* by its ``exporter_id``."""
+        eid = exporter_cls.exporter_id
+        if not isinstance(eid, str) or not eid:
+            self._diagnostics.append(
+                PluginLoadDiagnostic(
+                    group="tributo.exporters",
+                    entry_point_name=getattr(
+                        exporter_cls, "__name__", str(exporter_cls)
+                    ),
+                    reason=f"Invalid exporter_id: {eid!r}",
+                )
+            )
+            return
+        if eid in self._by_id:
+            self._diagnostics.append(
+                PluginLoadDiagnostic(
+                    group="tributo.exporters",
+                    entry_point_name=eid,
+                    reason=f"Duplicate exporter_id {eid!r} — all conflicts disabled",
+                )
+            )
+            del self._by_id[eid]
+            return
+        self._by_id[eid] = exporter_cls
+
+    def unregister(self, exporter_id: str) -> None:
+        self._by_id.pop(exporter_id, None)
+
+    # -- read --
+
+    def get(self, exporter_id: str) -> type[ModelExporter]:
+        if exporter_id not in self._by_id:
+            raise JobConfigurationError(
+                f"Unknown exporter {exporter_id!r}. Available: {sorted(self._by_id)}"
+            )
+        return self._by_id[exporter_id]
+
+    def list_candidates(
+        self,
+        source_kind: str,
+        output_format: str,
+    ) -> list[type[ModelExporter]]:
+        """Return candidates sorted by priority (highest first), then exporter_id.
+
+        Does NOT call ``supports()`` — that is the Planner's job.
+        """
+        candidates = [
+            c for c in self._by_id.values() if c.output_format == output_format
+        ]
+        candidates.sort(key=lambda c: (-c.priority, c.exporter_id))
+        return candidates
+
+    def list_all(self) -> list[str]:
+        return sorted(self._by_id)
+
+    def contains(self, exporter_id: str) -> bool:
+        return exporter_id in self._by_id
+
+    def diagnostics(self) -> tuple[PluginLoadDiagnostic, ...]:
+        return tuple(self._diagnostics)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SourceProviderRegistry
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@PublicAPI(stability="beta")
+class SourceProviderRegistry:
+    """Registry of ``SourceProvider`` classes keyed by ``provider_id``.
+
+    ``resolve(trainer_type)`` returns the highest-priority provider for
+    a given trainer type.  Ties raise an error.
+    """
+
+    def __init__(self) -> None:
+        self._by_id: dict[str, type[SourceProvider]] = {}
+        self._diagnostics: list[PluginLoadDiagnostic] = []
+
+    def register(self, provider_cls: type[SourceProvider]) -> None:
+        pid = provider_cls.provider_id
+        if not isinstance(pid, str) or not pid:
+            self._diagnostics.append(
+                PluginLoadDiagnostic(
+                    group="tributo.source_providers",
+                    entry_point_name=str(provider_cls),
+                    reason=f"Invalid provider_id: {pid!r}",
+                )
+            )
+            return
+        if pid in self._by_id:
+            self._diagnostics.append(
+                PluginLoadDiagnostic(
+                    group="tributo.source_providers",
+                    entry_point_name=pid,
+                    reason=f"Duplicate provider_id {pid!r}",
+                )
+            )
+            del self._by_id[pid]
+            return
+        self._by_id[pid] = provider_cls
+
+    def resolve(self, trainer_type: str) -> type[SourceProvider]:
+        candidates = [p for p in self._by_id.values() if p.trainer_type == trainer_type]
+        if not candidates:
+            raise JobConfigurationError(
+                f"No SourceProvider for trainer_type {trainer_type!r}. "
+                f"Registered: {sorted(self._by_id)}"
+            )
+        candidates.sort(key=lambda c: (-c.priority, c.provider_id))
+        top = candidates[0]
+        # Check for ties
+        if len(candidates) > 1 and candidates[1].priority == top.priority:
+            tied = [c.provider_id for c in candidates if c.priority == top.priority]
+            raise JobConfigurationError(
+                f"Ambiguous SourceProvider for {trainer_type!r}: {tied}. "
+                "Specify provider_id explicitly."
+            )
+        return top
+
+    def list_all(self) -> list[str]:
+        return sorted(self._by_id)
+
+    def diagnostics(self) -> tuple[PluginLoadDiagnostic, ...]:
+        return tuple(self._diagnostics)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ValidatorRegistry
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@PublicAPI(stability="beta")
+class ValidatorRegistry:
+    """Registry of ``ExportValidator`` classes keyed by ``validator_id``."""
+
+    def __init__(self) -> None:
+        self._by_id: dict[str, type[ExportValidator]] = {}
+        self._diagnostics: list[PluginLoadDiagnostic] = []
+
+    def register(self, validator_cls: type[ExportValidator]) -> None:
+        vid = validator_cls.validator_id
+        if not isinstance(vid, str) or not vid:
+            return
+        if vid in self._by_id:
+            self._diagnostics.append(
+                PluginLoadDiagnostic(
+                    group="tributo.validators",
+                    entry_point_name=vid,
+                    reason=f"Duplicate validator_id {vid!r}",
+                )
+            )
+            del self._by_id[vid]
+            return
+        self._by_id[vid] = validator_cls
+
+    def get(self, validator_id: str) -> type[ExportValidator]:
+        if validator_id not in self._by_id:
+            raise JobConfigurationError(
+                f"Unknown validator {validator_id!r}. Available: {sorted(self._by_id)}"
+            )
+        return self._by_id[validator_id]
+
+    def list_all(self) -> list[str]:
+        return sorted(self._by_id)
+
+    def diagnostics(self) -> tuple[PluginLoadDiagnostic, ...]:
+        return tuple(self._diagnostics)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# FlavorRegistry
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@PublicAPI(stability="beta")
+class FlavorRegistry:
+    """Registry of ``ModelFlavor`` classes keyed by ``flavor_id``.
+
+    Flavor IDs are more specific than format strings: ``onnx-runtime-v1``
+    and ``hf-embedding-onnx-v1`` share ``format="onnx"`` but differ in
+    their loading behaviour.
+    """
+
+    def __init__(self) -> None:
+        self._by_id: dict[str, type[Any]] = {}
+        self._diagnostics: list[PluginLoadDiagnostic] = []
+
+    def register(self, flavor_cls: type[Any]) -> None:
+        fid = getattr(flavor_cls, "flavor_id", None)
+        if not isinstance(fid, str) or not fid:
+            return
+        if fid in self._by_id:
+            self._diagnostics.append(
+                PluginLoadDiagnostic(
+                    group="tributo.model_flavors",
+                    entry_point_name=fid,
+                    reason=f"Duplicate flavor_id {fid!r}",
+                )
+            )
+            del self._by_id[fid]
+            return
+        self._by_id[fid] = flavor_cls
+
+    def get(self, flavor_id: str) -> type[Any]:
+        if flavor_id not in self._by_id:
+            raise JobConfigurationError(
+                f"Unknown flavor {flavor_id!r}. Available: {sorted(self._by_id)}"
+            )
+        return self._by_id[flavor_id]
+
+    def list_all(self) -> list[str]:
+        return sorted(self._by_id)
+
+    def diagnostics(self) -> tuple[PluginLoadDiagnostic, ...]:
+        return tuple(self._diagnostics)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ModelFactoryRegistry
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@PublicAPI(stability="beta")
+class ModelFactoryRegistry:
+    """Registry of ``ModelFactory`` classes keyed by ``architecture_id``."""
+
+    def __init__(self) -> None:
+        self._by_id: dict[str, type[ModelFactory]] = {}
+        self._diagnostics: list[PluginLoadDiagnostic] = []
+
+    def register(self, factory_cls: type[ModelFactory]) -> None:
+        aid = factory_cls.architecture_id
+        if not isinstance(aid, str) or not aid:
+            return
+        if aid in self._by_id:
+            self._diagnostics.append(
+                PluginLoadDiagnostic(
+                    group="tributo.model_factories",
+                    entry_point_name=aid,
+                    reason=f"Duplicate architecture_id {aid!r}",
+                )
+            )
+            del self._by_id[aid]
+            return
+        self._by_id[aid] = factory_cls
+
+    def get(self, architecture_id: str) -> type[ModelFactory]:
+        if architecture_id not in self._by_id:
+            raise JobConfigurationError(
+                f"Unknown architecture {architecture_id!r}. "
+                f"Available: {sorted(self._by_id)}"
+            )
+        return self._by_id[architecture_id]
+
+    def list_all(self) -> list[str]:
+        return sorted(self._by_id)
+
+    def diagnostics(self) -> tuple[PluginLoadDiagnostic, ...]:
+        return tuple(self._diagnostics)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Candidate selection helpers
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@DeveloperAPI
+def select_candidate(
+    candidates: list[type[ModelExporter]],
+    target: ExportTarget,
+    request: SupportRequest,
+    validator_registry: ValidatorRegistry,
+) -> PlannedTarget:
+    """Select the best candidate from *candidates* for *target*.
+
+    Algorithm (deterministic, no side-effects):
+
+    1. Filter: call ``candidate.supports(request)``.
+    2. If *target.exporter_id* is set, use only that candidate.
+    3. Pick highest-priority supported candidate; tied priorities raise.
+    4. Build ``PlannedTarget`` with typed options.
+
+    Raises:
+        JobConfigurationError: No supported candidate or ambiguous choice.
+    """
+    if target.exporter_id is not None:
+        exact = [c for c in candidates if c.exporter_id == target.exporter_id]
+        if not exact:
+            raise JobConfigurationError(
+                f"Exporter {target.exporter_id!r} not found among candidates "
+                f"for format={target.format!r}"
+            )
+        if not exact[0].supports(request).supported:
+            result = exact[0].supports(request)
+            raise JobConfigurationError(
+                f"Exporter {target.exporter_id!r} does not support "
+                f"{target.format!r}: [{result.code}] {result.reason}"
+            )
+        candidate = exact[0]
+    else:
+        supported: list[tuple[type[ModelExporter], SupportResult]] = []
+        for c in candidates:
+            result = c.supports(request)
+            if result.supported:
+                supported.append((c, result))
+
+        if not supported:
+            reasons = []
+            for c in candidates:
+                r = c.supports(request)
+                reasons.append(f"  {c.exporter_id}: [{r.code}] {r.reason}")
+            raise JobConfigurationError(
+                f"No exporter supports {target.format!r} for "
+                f"source_kind={request.source_kind!r}:\n" + "\n".join(reasons)
+            )
+
+        supported.sort(key=lambda x: (-x[0].priority, x[0].exporter_id))
+        top = supported[0]
+        if len(supported) > 1 and supported[1][0].priority == top[0].priority:
+            tied = [
+                x[0].exporter_id for x in supported if x[0].priority == top[0].priority
+            ]
+            raise JobConfigurationError(
+                f"Ambiguous exporter choice for {target.format!r}: {tied}. "
+                "Set exporter_id to disambiguate."
+            )
+
+        candidate = top[0]
+
+    # Build typed options
+    typed_options = candidate.options_model(**target.options).model_dump()
+
+    # Resolve validator bindings
+    bindings: list[ValidatorBinding] = []
+    for vb in candidate.validator_bindings:
+        # Override defaults from target.validation if provided
+        overrides = target.validation.get(vb.validator_id, {})
+        merged = {**vb.default_options, **overrides}
+        # Validate against the validator's own options model
+        validator_cls = validator_registry.get(vb.validator_id)
+        validator_cls.options_model(**merged)
+        bindings.append(
+            ValidatorBinding(
+                validator_id=vb.validator_id,
+                required=vb.required,
+                default_options=merged,
+            )
+        )
+
+    return PlannedTarget(
+        target=target,
+        exporter_id=candidate.exporter_id,
+        typed_options=typed_options,
+        validator_bindings=tuple(bindings),
+        implicit=False,
+        publish=True,
+    )
