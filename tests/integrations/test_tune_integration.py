@@ -147,10 +147,17 @@ def test_tune_runner_with_xgboost():
     - TuneRunner 可以正确将 TrainerSpec 适配为 trainable
     - 闭包捕获 datasets 和 output_path 正确工作
     - 与 XGBoostTrainer 集成正常
+    - runtime_env 参数正确透传给 ray.init()
     """
     logger.info("=" * 60)
     logger.info("测试 2：TuneRunner + XGBoostTrainer")
     logger.info("=" * 60)
+
+    # Shut down existing Ray session so runner.run(runtime_env=...) can
+    # reinitialize Ray with the needed pip packages. This test runs last
+    # in main(), so no other tests are affected.
+    if ray.is_initialized():
+        ray.shutdown()
 
     # 获取 XGBoost 训练器
     try:
@@ -214,6 +221,7 @@ def test_tune_runner_with_xgboost():
             datasets={"train": dataset},
             output_path=str(output_path),
             experiment_name="test_xgboost_tune",
+            runtime_env={"pip": ["xgboost"]},
         )
 
         # 验证结果
@@ -233,6 +241,9 @@ def test_tune_runner_with_xgboost():
         assert best_result.metrics is not None, "最佳结果应该有指标"
 
         logger.info("✅ 测试 2 通过：TuneRunner + XGBoostTrainer")
+
+        # Clean up Ray session initialized by runner.run(runtime_env=...)
+        ray.shutdown()
 
 
 @pytest.mark.slow

@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable
 
+import ray
 import ray.data
 from ray.tune import ResultGrid, RunConfig, Tuner
 from ray.tune.schedulers import ASHAScheduler, FIFOScheduler, HyperBandScheduler
@@ -214,6 +215,7 @@ class TuneRunner:
         datasets: dict[str, ray.data.Dataset],
         output_path: str,
         experiment_name: str = "tributo-tune",
+        runtime_env: dict[str, Any] | None = None,
     ) -> ResultGrid:
         """Execute hyperparameter search.
 
@@ -221,10 +223,29 @@ class TuneRunner:
             datasets: Dataset dictionary (e.g. {"train": ds}).
             output_path: Output path (local or S3).
             experiment_name: Experiment name.
+            runtime_env: Optional Ray runtime environment for Tune trial workers.
+                In Ray Tune v1, this is set at the Ray session level and
+                inherited by all trial actors. If Ray has not been initialized
+                when this method is called, ``ray.init(runtime_env=runtime_env)``
+                is called automatically. If Ray is already initialized, a
+                warning is logged — set ``runtime_env`` at ``ray.init()`` before
+                creating the ``TuneRunner`` instead.
+                Example: ``{"pip": ["xgboost"]}`` to install optional extras.
 
         Returns:
             Ray Tune ResultGrid containing all trial results.
         """
+        # Set runtime_env at Ray session level (only before ray.init)
+        if runtime_env is not None:
+            if not ray.is_initialized():
+                ray.init(runtime_env=runtime_env)
+            else:
+                logger.warning(
+                    "runtime_env=%s provided but Ray is already initialized. "
+                    "Set runtime_env at ray.init() before creating TuneRunner.",
+                    runtime_env,
+                )
+
         # Capture datasets and output_path via closure, not injected into param_space
         trainable = self._build_trainable(datasets, output_path)
 
