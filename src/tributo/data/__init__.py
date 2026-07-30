@@ -37,7 +37,10 @@ from tributo.data.source_config import (  # noqa: E402
     IcebergSourceConfig,
     LegacyConfigNormalizer,
     ParquetSourceConfig,
+    RawSourceConfig,
     SourceConfig,
+    SourceInput,
+    SqlPartitioning,
     SqlSourceConfig,
 )
 
