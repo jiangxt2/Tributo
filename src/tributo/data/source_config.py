@@ -102,6 +102,7 @@ class SqlSourceConfig(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+@PublicAPI(stability="alpha")
 class SqlPartitioning(BaseModel):
     """Performance hint for SQL result partitioning.
 
@@ -148,6 +149,7 @@ BuiltinSourceConfig = Annotated[
 SourceConfig = BuiltinSourceConfig
 
 
+@PublicAPI(stability="alpha")
 class RawSourceConfig(BaseModel):
     """Passthrough for third-party / unknown source types.
 
