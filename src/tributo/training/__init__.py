@@ -28,7 +28,10 @@ import logging
 from tributo.exceptions import JobConfigurationError
 from tributo.training.algorithm_spec import (
     AlgorithmSpec,
+    AlgorithmStatus,
     DataContract,
+    DataLoadingMode,
+    ProblemFamily,
     ProblemType,
     ResourceHints,
 )
@@ -41,7 +44,14 @@ from tributo.training.onnx_exporter import export_to_onnx
 from tributo.training.registry import get_trainer, list_trainers, register
 from tributo.training.tune_config import TuneSearchConfig
 from tributo.training.tune_runner import TuneRunner, extract_best_params
-from tributo.training.tune_space import parse_search_space
+from tributo.training.tune_space import (
+    SearchSpaceSpec,
+    parse_search_space,
+    resolve_local_overrides,
+    to_ray_param_space,
+    validate_search_targets,
+    warn_search_space_conflicts,
+)
 from tributo.training.xgboost_trainer import (
     build_trainer,
     run_training_from_json,
@@ -81,8 +91,11 @@ __all__ = [
     "BaseTrainer",
     # AlgorithmSpec & supporting types
     "AlgorithmSpec",
+    "AlgorithmStatus",
     "TrainerSpec",
     "DataContract",
+    "DataLoadingMode",
+    "ProblemFamily",
     "ProblemType",
     "ResourceHints",
     # Registry
@@ -96,7 +109,12 @@ __all__ = [
     "TuneSearchConfig",
     "TuneRunner",
     "parse_search_space",
+    "SearchSpaceSpec",
     "extract_best_params",
+    "resolve_local_overrides",
+    "to_ray_param_space",
+    "validate_search_targets",
+    "warn_search_space_conflicts",
     # Utilities
     "export_to_onnx",
     "submit_training_job",
@@ -138,3 +156,12 @@ for _ep_spec in discover_trainer_plugins():
             "Trainer %r from plugin already registered; skipping.",
             _ep_spec.name,
         )
+
+# Phase 3 integrity gate: validate replacement graph after all plugins loaded.
+from tributo.training.catalog import get_algorithm_catalog as _get_catalog  # noqa: E402
+
+try:
+    _get_catalog().validate_integrity()
+except JobConfigurationError:
+    logger.exception("Algorithm catalog integrity check failed")
+    raise

@@ -5,31 +5,32 @@ setting up a Ray cluster would be overkill.  Ray is still required as a
 library (``ray.data`` for local data loading), but no cluster or head
 node is needed.
 
-Usage via CLI::
-
-    tributo tune run --trainer xgboost --config train.json \
-        --space search.json --output ./out --local
-
-Programmatic::
+Phase 3 (canonical)::
 
     from tributo.training.local_runner import run_local_trial
-    from tributo.training.registry import get_trainer
+    from tributo.training.config import build_effective_config
 
-    trainer_spec = get_trainer("xgboost")
-    summary = run_local_trial(
-        trainer_spec=trainer_spec,
-        training_config={"data": {"train_path": "data.parquet"}, ...},
-        output_path="./output",
-    )
+    spec = get_trainer("xgboost")
+    effective = build_effective_config(spec, raw_user_config)
+    summary = run_local_trial(spec, effective_config=effective, output_path="./out")
+
+Legacy signature (still supported)::
+
+    run_local_trial(spec, training_config=raw_dict, output_path="./out")
 """
 
 from __future__ import annotations
 
 import logging
 import time
-from pathlib import Path
 from typing import Any
 
+from tributo.training.algorithm_spec import AlgorithmSpec, DataLoadingMode
+from tributo.training.config import (
+    resolve_data_source,
+    validate_and_normalize_config,
+    validate_execution_config,
+)
 from tributo.util.annotations import PublicAPI
 
 logger = logging.getLogger(__name__)
@@ -37,70 +38,76 @@ logger = logging.getLogger(__name__)
 
 @PublicAPI(stability="beta")
 def run_local_trial(
-    trainer_spec: Any,  # TrainerSpec (lazy import to avoid hard dependency)
-    training_config: dict[str, Any],
+    trainer_spec: AlgorithmSpec,
     output_path: str,
-    search_space: dict[str, Any] | None = None,
+    *,
+    effective_config: dict[str, Any] | None = None,
+    training_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run a single training trial locally without a Ray cluster.
 
-    Loads data via ``ray.data.read_parquet`` (works locally with no
-    cluster), instantiates the trainer, and calls the template method
-    :meth:`BaseTrainer.run`.
+    Accepts either:
+
+    * ``effective_config`` — a fully-merged, validated config dict
+      (preferred Phase 3 path), or
+    * ``training_config`` — raw user config (legacy path; the runner
+      merges ``default_config`` internally).
 
     Args:
-        trainer_spec: A ``TrainerSpec`` from ``tributo.training.registry``.
-        training_config: Training configuration dict.  Must contain a
-            ``data`` section with ``train_path`` pointing to a Parquet file.
+        trainer_spec: An ``AlgorithmSpec`` from the registry.
         output_path: Directory for exported model artifacts.
-        search_space: Optional parameter overrides merged into the config.
+        effective_config: Pre-validated canonical config (Phase 3).
+        training_config: Raw user config dict (legacy; must contain
+            ``data`` section for driver-mode algorithms).
 
     Returns:
         A dict with ``status``, ``duration_sec``, and additional fields
         populated by the trainer's ``export_model`` via ``self._summary``.
 
     Raises:
-        FileNotFoundError: If ``train_path`` does not exist.
-        ValueError: If the training config is missing ``data.train_path``.
+        JobConfigurationError: Config is missing data source.
+        FileNotFoundError: Data file not found.
     """
-    import ray.data
-
-    search_space = search_space or {}
-    trainer_cls = trainer_spec.trainer_cls
-
-    # Build config from defaults + training_config + search_space overrides
-    config = {
-        **trainer_spec.default_config,
-        **training_config,
-        **search_space,
-    }
-
-    data_cfg = config.get("data", {})
-    train_path = data_cfg.get("train_path") or data_cfg.get("path")
-    if not train_path:
+    # -- Resolve config -------------------------------------------------------
+    if effective_config is not None:
+        config = effective_config
+    elif training_config is not None:
+        # Legacy path: shallow merge (not recursive).  Only top-level keys from
+        # *training_config* replace those in *default_config*; nested sections
+        # are replaced wholesale, not deeply merged.  Prefer the Phase 3
+        # ``effective_config`` path for recursive merge semantics.
+        config = {**trainer_spec.default_config, **training_config}
+    else:
         raise ValueError(
-            "Local mode requires 'data.train_path' or 'data.path' "
-            "pointing to a Parquet file."
+            "run_local_trial requires either effective_config or training_config"
         )
 
-    if not Path(train_path).exists() and "://" not in str(train_path):
-        raise FileNotFoundError(f"Training data not found: {train_path}")
+    # Re-validate idempotently (protects programmatic callers).
+    config = validate_and_normalize_config(trainer_spec, config)
+    validate_execution_config(trainer_spec, config, datasets_supplied=False)
 
-    logger.info(
-        "Running local trial: trainer=%s, data=%s", trainer_spec.name, train_path
-    )
+    # -- Load data ------------------------------------------------------------
+    datasets: dict[str, Any] = {}
+    if trainer_spec.data_loading != DataLoadingMode.CANONICAL_TRAINER:
+        import ray.data
+
+        source = resolve_data_source(trainer_spec, config)
+        from tributo.training.data_loader import load_ray_dataset_from_source
+
+        train_ds = load_ray_dataset_from_source(source)
+        datasets["train"] = train_ds
+
+        data_cfg = config.get("data", {})
+        if isinstance(data_cfg, dict) and data_cfg.get("val_path"):
+            datasets["val"] = ray.data.read_parquet(data_cfg["val_path"])
+        if isinstance(data_cfg, dict) and data_cfg.get("test_path"):
+            datasets["test"] = ray.data.read_parquet(data_cfg["test_path"])
+
+    # -- Run training ---------------------------------------------------------
+    logger.info("Running local trial: trainer=%s", trainer_spec.name)
     t0 = time.monotonic()
 
-    # Load data via ray.data (local, no cluster required)
-    train_ds = ray.data.read_parquet(train_path)
-    datasets: dict[str, ray.data.Dataset] = {"train": train_ds}
-    if data_cfg.get("val_path"):
-        datasets["val"] = ray.data.read_parquet(data_cfg["val_path"])
-    if data_cfg.get("test_path"):
-        datasets["test"] = ray.data.read_parquet(data_cfg["test_path"])
-
-    # Instantiate trainer and run the template method
-    trainer = trainer_cls(datasets=datasets, config=config)
+    trainer = trainer_spec.trainer_cls(datasets=datasets, config=config)
     summary = trainer.run(output_path=output_path)
 
     duration = time.monotonic() - t0
