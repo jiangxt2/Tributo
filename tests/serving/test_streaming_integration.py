@@ -20,6 +20,8 @@ from tests.serving._streaming_test_services import (
     SlowStreamingService,
 )
 
+pytestmark = pytest.mark.integration
+
 # ---------------------------------------------------------------------------
 # 常量
 # ---------------------------------------------------------------------------

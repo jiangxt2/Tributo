@@ -147,6 +147,7 @@ timeout = 180
 filterwarnings = [
     "error",
     "ignore::DeprecationWarning",
+    "ignore:lance is not fork-safe:UserWarning",
 ]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",

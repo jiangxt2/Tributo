@@ -51,6 +51,7 @@ DEFAULT_EXCLUDES = [
     "**/.ruff_cache",
     "docs/**",
     "**/*.md",
+    "!README.md",
     ".gitignore",
 ]
 
