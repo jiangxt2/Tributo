@@ -1036,11 +1036,11 @@ def tune_run(
             apply_dot_overrides,
             build_effective_config,
             resolve_data_source,
-            validate_search_targets,
         )
         from tributo.training.tune_space import (
             parse_search_space,
             resolve_local_overrides,
+            validate_search_targets,
             warn_search_space_conflicts,
         )
 

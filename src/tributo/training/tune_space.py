@@ -280,6 +280,7 @@ def _check_cross_param_prefixes(params: list[SearchParamSpec]) -> None:
 # ---------------------------------------------------------------------------
 
 
+@PublicAPI(stability="beta")
 def warn_search_space_conflicts(
     raw_user_config: Mapping[str, Any],
     space_spec: SearchSpaceSpec,
@@ -317,6 +318,7 @@ def _resolve_dot_path(mapping: Mapping[str, Any], path: str) -> Any:
     return current
 
 
+@PublicAPI(stability="beta")
 def validate_search_targets(
     effective_config: dict[str, Any],
     space_spec: SearchSpaceSpec,

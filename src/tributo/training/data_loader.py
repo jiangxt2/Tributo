@@ -63,7 +63,7 @@ def load_ray_dataset_from_source(
         ValidationError: If *source* fails Pydantic validation.
         ValueError: Unsupported source type (should not happen after validation).
     """
-    adapter = TypeAdapter(SourceConfig)
+    adapter: TypeAdapter[Any] = TypeAdapter(SourceConfig)
     cfg = adapter.validate_python(source)
 
     if isinstance(cfg, SqlSourceConfig):
@@ -286,7 +286,7 @@ def _load_clickhouse_dataset(data_config: dict) -> "ray.data.Dataset":
 def load_dataframe_from_config(
     data_config: dict,
     project_root_path: Path | None = None,
-) -> "pd.DataFrame":  # noqa: F821
+) -> "pd.DataFrame":  # type: ignore[name-defined]  # noqa: F821
     """Load a DataFrame from a YAML ``data`` section (fully loaded into Driver memory).
 
     ⚠️ Only suitable for small datasets. Use ``load_ray_dataset_from_config`` for large data.

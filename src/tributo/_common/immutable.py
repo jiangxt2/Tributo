@@ -82,7 +82,7 @@ class FrozenDict(dict[str, Any]):
 
     # -- hash / equality -----------------------------------------------------
 
-    def __hash__(self) -> int:
+    def __hash__(self) -> int:  # type: ignore[override]
         # All values must also be hashable — this holds because deep_freeze
         # only produces FrozenDict, tuple, primitives, and Enum values.
         return hash(tuple(sorted(self.items())))

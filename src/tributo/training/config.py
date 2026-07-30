@@ -69,7 +69,7 @@ def validate_and_normalize_config(
     """
     config = deep_thaw(raw_config)
     if spec.config_model is None:
-        return config
+        return config  # type: ignore[no-any-return]
     try:
         model = spec.config_model.model_validate(config)
         return model.model_dump(mode="python")
@@ -167,7 +167,7 @@ def merge_nested(
             result[key] = merge_nested(result[key], value)
         else:
             result[key] = deep_thaw(value)
-    return result
+    return result  # type: ignore[no-any-return]
 
 
 def apply_dot_overrides(
@@ -201,7 +201,7 @@ def apply_dot_overrides(
                 )
             target = target[key]
         target[keys[-1]] = deep_thaw(value)
-    return result
+    return result  # type: ignore[no-any-return]
 
 
 def _validate_dot_path(path: str) -> None:
@@ -249,7 +249,7 @@ def resolve_data_source(
         # Re-validate through TypeAdapter to catch source-level errors early.
         from pydantic import TypeAdapter
 
-        adapter = TypeAdapter(SourceConfig)
+        adapter: TypeAdapter[Any] = TypeAdapter(SourceConfig)
         try:
             validated = adapter.validate_python(source)
         except ValidationError as e:
@@ -257,7 +257,7 @@ def resolve_data_source(
                 f"Invalid data.source for {spec.name!r}:\n"
                 f"{json.dumps(e.errors(), indent=2, default=str)}"
             ) from e
-        return validated.model_dump(mode="python")
+        return validated.model_dump(mode="python")  # type: ignore[no-any-return]
 
     # LEGACY_DRIVER
     cfg = LegacyConfigNormalizer.normalize(data)
