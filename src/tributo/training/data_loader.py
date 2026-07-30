@@ -1,13 +1,24 @@
-"""Ray Dataset distributed data loading, supporting local CSV/Parquet, S3 Parquet, ClickHouse.
+"""Ray Dataset distributed data loading.
 
-Uses ``LegacyConfigNormalizer`` to convert raw dict configs into typed
-``SourceConfig`` objects, eliminating the hardcoded ``if/elif`` dispatch.
+Canonical entry-point (Phase 3)::
+
+    from tributo.training.data_loader import load_ray_dataset_from_source
+    ds = load_ray_dataset_from_source({"type": "parquet", "path": "s3://..."})
+
+Legacy entry-point (deprecated, kept for old plugins)::
+
+    from tributo.training.data_loader import load_ray_dataset_from_config
+    ds = load_ray_dataset_from_config({"type": "s3", "uri": "s3://...", ...})
 """
 
 from __future__ import annotations
 
+import logging
+import warnings
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from pydantic import TypeAdapter
 
 from tributo._common import find_project_root
 from tributo.data.source_config import (
@@ -15,50 +26,95 @@ from tributo.data.source_config import (
     IcebergSourceConfig,
     LegacyConfigNormalizer,
     ParquetSourceConfig,
+    SourceConfig,
     SqlSourceConfig,
 )
 
 if TYPE_CHECKING:
-    import pandas as pd
     import ray.data
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Canonical loader (Phase 3)
+# ---------------------------------------------------------------------------
+
+
+def load_ray_dataset_from_source(
+    source: dict[str, Any],
+    *,
+    project_root_path: Path | None = None,
+) -> "ray.data.Dataset":
+    """Load a Ray Dataset from a canonical ``SourceConfig`` dict.
+
+    Validates *source* against the ``SourceConfig`` discriminated union
+    before dispatching to the appropriate loader.  Unknown fields are
+    rejected because all four source types inherit ``StrictConfigModel``.
+
+    Args:
+        source: Canonical source dict, e.g.
+            ``{"type": "parquet", "path": "s3://bucket/data"[, "s3": {...}]}``.
+        project_root_path: Project root for resolving relative paths.
+
+    Returns:
+        Ray Dataset (lazy — data does not land in driver memory).
+
+    Raises:
+        ValidationError: If *source* fails Pydantic validation.
+        ValueError: Unsupported source type (should not happen after validation).
+    """
+    adapter: TypeAdapter[Any] = TypeAdapter(SourceConfig)
+    cfg = adapter.validate_python(source)
+
+    if isinstance(cfg, SqlSourceConfig):
+        return _load_sql_dataset(cfg)
+    if isinstance(cfg, (ParquetSourceConfig, CsvSourceConfig)):
+        return _load_file_dataset(cfg, project_root_path)
+    if isinstance(cfg, IcebergSourceConfig):
+        from tributo.data import get_connector
+
+        connector = get_connector("iceberg")
+        return connector.read(catalog=cfg.catalog, table=cfg.table)
+
+    raise ValueError(f"unsupported source type: {type(cfg).__name__}")
+
+
+# ---------------------------------------------------------------------------
+# Legacy loader (deprecated wrapper)
+# ---------------------------------------------------------------------------
 
 
 def load_ray_dataset_from_config(
     data_config: dict,
     project_root_path: Path | None = None,
 ) -> "ray.data.Dataset":
-    """Load a Ray Dataset from a YAML ``data`` section (lazy, data does not land in Driver memory).
+    """Load a Ray Dataset from a legacy flat ``data`` dict.
 
-    Supports csv / parquet (local), s3 (via DataConnector), clickhouse, iceberg.
+    .. deprecated::
+        Use ``load_ray_dataset_from_source()`` with a canonical
+        ``{"type": "...", "path": "..."}`` dict instead.  This wrapper
+        normalises the legacy dict via ``LegacyConfigNormalizer`` and
+        delegates to the canonical loader.
 
     Args:
-        data_config: The ``data`` dictionary from YAML.
-        project_root_path: Project root directory for resolving relative paths.
+        data_config: Legacy ``data`` dict (``type: s3``, ``type: csv``, etc.).
+        project_root_path: Project root for resolving relative paths.
 
     Returns:
-        Ray Dataset, lazily evaluated.
+        Ray Dataset (lazy).
     """
-    source = LegacyConfigNormalizer.normalize(data_config)
-
-    # -- SQL sources (ClickHouse, Doris, PostgreSQL, MySQL) -----------------
-    if isinstance(source, SqlSourceConfig):
-        return _load_sql_dataset(source)
-
-    # -- CSV / Parquet (local or S3) ----------------------------------------
-    if isinstance(source, (ParquetSourceConfig, CsvSourceConfig)):
-        return _load_file_dataset(source, project_root_path)
-
-    # -- Iceberg ------------------------------------------------------------
-    if isinstance(source, IcebergSourceConfig):
-        from tributo.data import get_connector
-
-        connector = get_connector("iceberg")
-        return connector.read(
-            catalog=source.catalog,
-            table=source.table,
-        )
-
-    raise ValueError(f"unsupported source type: {type(source).__name__}")
+    warnings.warn(
+        "load_ray_dataset_from_config() is deprecated. "
+        "Use load_ray_dataset_from_source() with a canonical source dict.",
+        FutureWarning,
+        stacklevel=2,
+    )
+    cfg = LegacyConfigNormalizer.normalize(data_config)
+    # Dump back to dict so the canonical loader re-validates via TypeAdapter.
+    return load_ray_dataset_from_source(
+        cfg.model_dump(mode="python"),
+        project_root_path=project_root_path,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -76,13 +132,11 @@ def _load_file_dataset(
     path = source.path
 
     if path.startswith("s3://"):
-        from tributo.data import S3Config, get_connector
+        from tributo.data import get_connector
 
         fmt = "csv" if isinstance(source, CsvSourceConfig) else "parquet"
-        s3_cfg_raw = source.s3
-        s3_config = S3Config(**(s3_cfg_raw or {})) if s3_cfg_raw else None
         connector = get_connector(fmt)
-        kwargs: dict = {"path": path, "s3": s3_config}
+        kwargs: dict[str, Any] = {"path": path, "s3": source.s3}
         if source.columns:
             kwargs["columns"] = source.columns
         return connector.read(**kwargs)
@@ -232,7 +286,7 @@ def _load_clickhouse_dataset(data_config: dict) -> "ray.data.Dataset":
 def load_dataframe_from_config(
     data_config: dict,
     project_root_path: Path | None = None,
-) -> "pd.DataFrame":
+) -> "pd.DataFrame":  # type: ignore[name-defined]  # noqa: F821
     """Load a DataFrame from a YAML ``data`` section (fully loaded into Driver memory).
 
     ⚠️ Only suitable for small datasets. Use ``load_ray_dataset_from_config`` for large data.

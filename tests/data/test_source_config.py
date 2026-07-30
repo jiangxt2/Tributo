@@ -53,7 +53,9 @@ class TestLegacyS3:
             {"type": "s3", "uri": "s3://bkt/data.parquet", "s3": s3_cfg}
         )
         assert isinstance(result, ParquetSourceConfig)
-        assert result.s3 == s3_cfg
+        assert result.s3 is not None
+        assert result.s3.endpoint == s3_cfg["endpoint"]
+        assert result.s3.region == s3_cfg["region"]
 
     def test_with_columns(self) -> None:
         result = LegacyConfigNormalizer.normalize(

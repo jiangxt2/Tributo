@@ -8,9 +8,16 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import Field
 
-from tributo.training.base import BaseTrainer, TrainerSpec
+from tributo._common.config import StrictConfigModel
+from tributo.training.algorithm_spec import (
+    AlgorithmSpec,
+    DataLoadingMode,
+    ProblemType,
+    ResourceHints,
+)
+from tributo.training.base import BaseTrainer
 from tributo.training.features.column_types import (
     DenseFeat,
     SparseFeat,
@@ -28,7 +35,7 @@ logger = logging.getLogger(__name__)
 # ── Pydantic config models ──
 
 
-class FeatureItemConfig(BaseModel):
+class FeatureItemConfig(StrictConfigModel):
     """Single feature column configuration."""
 
     name: str
@@ -48,7 +55,7 @@ class FeatureItemConfig(BaseModel):
     )
 
 
-class PULearningConfig(BaseModel):
+class PULearningConfig(StrictConfigModel):
     """PU Learning configuration."""
 
     enabled: bool = Field(default=False, description="Whether to enable PU Learning")
@@ -64,7 +71,7 @@ class PULearningConfig(BaseModel):
     gamma: float = Field(default=1.0, description="Negative risk scaling factor")
 
 
-class LossConfig(BaseModel):
+class LossConfig(StrictConfigModel):
     """Loss function configuration."""
 
     type: Literal["bce", "focal", "nnpu"] = Field(
@@ -75,10 +82,8 @@ class LossConfig(BaseModel):
     gamma: float = Field(default=2.0, description="Focal Loss focusing parameter")
 
 
-class DNNModelConfig(BaseModel):
+class DNNModelConfig(StrictConfigModel):
     """DNN model configuration."""
-
-    model_config = ConfigDict(extra="allow")
 
     dnn_hidden_units: list[int] = Field(
         default=[256, 128, 64],
@@ -88,7 +93,7 @@ class DNNModelConfig(BaseModel):
     use_batch_norm: bool = Field(default=False, description="Whether to use BatchNorm")
 
 
-class DNNTrainingParams(BaseModel):
+class DNNTrainingParams(StrictConfigModel):
     """DNN training hyperparameters."""
 
     epochs: int = Field(default=10, ge=1, description="Number of training epochs")
@@ -105,7 +110,7 @@ class DNNTrainingParams(BaseModel):
     )
 
 
-class DNNRayConfig(BaseModel):
+class DNNRayConfig(StrictConfigModel):
     """Ray cluster configuration."""
 
     num_workers: int = Field(default=2, ge=1)
@@ -121,7 +126,7 @@ class DNNRayConfig(BaseModel):
     )
 
 
-class DNNOutputConfig(BaseModel):
+class DNNOutputConfig(StrictConfigModel):
     """Output configuration."""
 
     onnx_path: Optional[str] = None
@@ -130,7 +135,7 @@ class DNNOutputConfig(BaseModel):
     preprocessor_path: Optional[str] = None
 
 
-class DNNTrainingConfig(BaseModel):
+class DNNTrainingConfig(StrictConfigModel):
     """Complete configuration for DNN distributed training."""
 
     data: Any = Field(default=None, description="Data source configuration")
@@ -743,4 +748,15 @@ def run_dnn_training_from_json(config_path: str) -> dict[str, Any]:
 
 # ── Built-in registration ──
 
-register(TrainerSpec(name="dnn", trainer_cls=DNNTrainerImpl))
+register(
+    AlgorithmSpec(
+        name="dnn",
+        trainer_cls=DNNTrainerImpl,
+        problem_types=(ProblemType.BINARY_CLASSIFICATION,),
+        data_modality=("tabular",),
+        extras_group="identity",
+        data_loading=DataLoadingMode.CANONICAL_DRIVER,
+        resource_hints=ResourceHints(gpu_required=False),
+        config_model=DNNTrainingConfig,
+    )
+)

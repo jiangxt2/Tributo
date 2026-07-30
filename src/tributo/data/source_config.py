@@ -10,6 +10,8 @@ from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, Field, model_validator
 
+from tributo._common.config import StrictConfigModel
+from tributo.data.base import S3Config
 from tributo.util.annotations import PublicAPI
 
 # ---------------------------------------------------------------------------
@@ -18,41 +20,41 @@ from tributo.util.annotations import PublicAPI
 
 
 @PublicAPI(stability="beta")
-class ParquetSourceConfig(BaseModel):
+class ParquetSourceConfig(StrictConfigModel):
     """Parquet source (local filesystem or S3).
 
     Attributes:
         type: Discriminator value.
         path: File or directory path (local absolute, or S3 URI).
         columns: Column names to read (``None`` = all columns).
-        s3: S3 authentication dict (passed through to ``S3Config``).
+        s3: S3 authentication (``None`` = no S3 / env fallback).
     """
 
     type: Literal["parquet"] = "parquet"  # noqa: A003
     path: str = Field(min_length=1)
     columns: list[str] | None = None
-    s3: dict[str, str] | None = None
+    s3: S3Config | None = None
 
 
 @PublicAPI(stability="beta")
-class CsvSourceConfig(BaseModel):
+class CsvSourceConfig(StrictConfigModel):
     """CSV source (local filesystem or S3).
 
     Attributes:
         type: Discriminator value.
         path: File path.
-        s3: S3 authentication dict (only relevant for S3 paths).
+        s3: S3 authentication (``None`` = no S3 / env fallback).
         columns: Column names to read (``None`` = all columns).
     """
 
     type: Literal["csv"] = "csv"  # noqa: A003
     path: str = Field(min_length=1)
-    s3: dict[str, str] | None = None
+    s3: S3Config | None = None
     columns: list[str] | None = None
 
 
 @PublicAPI(stability="beta")
-class SqlSourceConfig(BaseModel):
+class SqlSourceConfig(StrictConfigModel):
     """Unified SQL data source for ClickHouse, Doris, PostgreSQL, and MySQL.
 
     The ``dialect`` field determines the runtime client:
@@ -85,6 +87,12 @@ class SqlSourceConfig(BaseModel):
     partitioning: SqlPartitioning | None = None
 
     @model_validator(mode="after")
+    def _require_sql(self) -> "SqlSourceConfig":
+        if not self.sql.strip():
+            raise ValueError("sql field must be non-empty for SqlSourceConfig")
+        return self
+
+    @model_validator(mode="after")
     def _normalize_empty_params(self) -> "SqlSourceConfig":
         """Normalize empty params dict to None.
 
@@ -115,7 +123,7 @@ class SqlPartitioning(BaseModel):
 
 
 @PublicAPI(stability="beta")
-class IcebergSourceConfig(BaseModel):
+class IcebergSourceConfig(StrictConfigModel):
     """Iceberg table source.
 
     Attributes:

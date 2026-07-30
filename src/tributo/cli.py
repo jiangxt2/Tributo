@@ -715,6 +715,200 @@ def embed_serve_status(app_name: str):
         sys.exit(1)
 
 
+# ── Algo ────────────────────────────────────────────────────────────────────────
+
+
+@main.group()
+def algo():
+    """Algorithm catalog: list, inspect, and validate algorithm configurations."""
+    pass
+
+
+@algo.command("list")
+@click.option("--family", type=str, default=None, help="Problem family filter")
+@click.option("--problem-type", type=str, default=None, help="Problem type filter")
+@click.option("--modality", type=str, default=None, help="Data modality filter")
+@click.option("--tag", type=str, default=None, help="Tag filter")
+@click.option("--extras", type=str, default=None, help="Extras group filter")
+@click.option(
+    "--deprecated/--no-deprecated", default=False, help="Include deprecated algorithms"
+)
+@click.option("--json", "json_output", is_flag=True, default=False, help="JSON output")
+def algo_list(
+    family: str | None,
+    problem_type: str | None,
+    modality: str | None,
+    tag: str | None,
+    extras: str | None,
+    deprecated: bool,
+    json_output: bool,
+):
+    """List available algorithms."""
+    from tributo.training.algorithm_spec import (
+        PROBLEM_FAMILY_MAP,
+        ProblemFamily,
+        ProblemType,
+    )
+    from tributo.training.catalog import get_algorithm_catalog
+
+    catalog = get_algorithm_catalog()
+
+    try:
+        pf = ProblemFamily(family) if family else None
+    except ValueError as e:
+        raise click.BadParameter(
+            f"'{family}' is not a valid problem family. "
+            f"Choices: {[pf.value for pf in ProblemFamily]}",
+            param_hint="--family",
+        ) from e
+    try:
+        pt = ProblemType(problem_type) if problem_type else None
+    except ValueError as e:
+        raise click.BadParameter(
+            f"'{problem_type}' is not a valid problem type. "
+            f"Choices: {[pt.value for pt in ProblemType]}",
+            param_hint="--problem-type",
+        ) from e
+
+    names = catalog.list(
+        problem_family=pf,
+        problem_type=pt,
+        modality=modality,
+        tag=tag,
+        extras_group=extras,
+        include_deprecated=deprecated,
+    )
+
+    if json_output:
+        result = []
+        for name in names:
+            spec = catalog.get_spec(name)
+            result.append(
+                {
+                    "name": name,
+                    "problem_types": [pt.value for pt in spec.problem_types],
+                    "data_modality": list(spec.data_modality),
+                    "tags": list(spec.tags),
+                    "gpu_required": spec.resource_hints.gpu_required,
+                    "status": spec.status.value,
+                    "extras_group": spec.extras_group,
+                }
+            )
+        click.echo(json.dumps(result, indent=2))
+    else:
+        if not names:
+            click.echo("No algorithms found.")
+            return
+        header = f"{'NAME':<20} {'FAMILY':<25} {'MODALITY':<12} {'GPU REQ':<8} {'STATUS':<10}"
+        click.echo(header)
+        click.echo("-" * len(header))
+        for name in names:
+            spec = catalog.get_spec(name)
+            families = sorted(
+                {
+                    pf.value
+                    for pf in ProblemFamily
+                    if any(pt in spec.problem_types for pt in PROBLEM_FAMILY_MAP[pf])
+                }
+            )
+            family_str = ", ".join(families) if families else "-"
+            modality_str = ", ".join(spec.data_modality) if spec.data_modality else "-"
+            click.echo(
+                f"{name:<20} {family_str:<25} {modality_str:<12} "
+                f"{'Y' if spec.resource_hints.gpu_required else 'N':<8} "
+                f"{spec.status.value:<10}"
+            )
+
+
+@algo.command("info")
+@click.argument("name")
+def algo_info(name: str):
+    """Show detailed information about an algorithm."""
+    from tributo.training.catalog import get_algorithm_catalog
+
+    catalog = get_algorithm_catalog()
+    try:
+        spec = catalog.get_spec(name)
+    except TributoError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+    click.echo(f"Name:           {spec.name}")
+    click.echo(f"Version:        {spec.version}")
+    click.echo(f"Status:         {spec.status.value}")
+    click.echo(f"Problem Types:  {[pt.value for pt in spec.problem_types] or '-'}")
+    click.echo(f"Data Modality:  {list(spec.data_modality) or '-'}")
+    click.echo(f"Tags:           {list(spec.tags) or '-'}")
+    click.echo(f"GPU Required:   {spec.resource_hints.gpu_required}")
+    click.echo(f"Min Memory GB:  {spec.resource_hints.min_memory_gb}")
+    click.echo(f"Min CPUs:       {spec.resource_hints.min_cpus}")
+    click.echo(f"Extras Group:   {spec.extras_group or '-'}")
+    click.echo(f"Supported Tasks:{list(spec.supported_tasks)}")
+    click.echo(
+        f"Config Model:   {spec.config_model.__name__ if spec.config_model else '-'}"
+    )
+    click.echo(f"Data Loading:   {spec.data_loading.value}")
+    if spec.deprecated_since:
+        click.echo(
+            f"Deprecated:     since {spec.deprecated_since} → {spec.replacement}"
+        )
+
+
+@algo.command("config-schema")
+@click.argument("name")
+def algo_config_schema(name: str):
+    """Print the JSON Schema for an algorithm's config model."""
+    from tributo.training.catalog import get_algorithm_catalog
+
+    catalog = get_algorithm_catalog()
+    try:
+        schema = catalog.get_config_schema(name)
+    except TributoError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+    click.echo(json.dumps(schema, indent=2))
+
+
+@algo.command("validate")
+@click.option("--algo", "algo_name", required=True, help="Algorithm name")
+@click.option(
+    "--config",
+    "config_path",
+    type=click.Path(exists=True),
+    required=True,
+    help="Path to config JSON file",
+)
+def algo_validate(algo_name: str, config_path: str):
+    """Validate a training config against an algorithm's config model."""
+    from tributo.training.catalog import get_algorithm_catalog
+    from tributo.training.config import build_effective_config
+
+    catalog = get_algorithm_catalog()
+    try:
+        spec = catalog.get_spec(algo_name)
+    except TributoError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+    if spec.config_model is None:
+        click.echo(
+            f"Validation unavailable: algorithm '{algo_name}' "
+            f"does not declare a config_model."
+        )
+        sys.exit(2)
+
+    with open(config_path, encoding="utf-8") as f:
+        user_config = json.load(f)
+
+    try:
+        build_effective_config(spec, user_config, datasets_supplied=False)
+    except TributoError as e:
+        click.echo(f"Validation FAILED:\n{e}", err=True)
+        sys.exit(1)
+
+    click.echo(f"Config is valid for algorithm '{algo_name}'.")
+
+
 # ── Tune ────────────────────────────────────────────────────────────────────────
 
 
@@ -722,26 +916,6 @@ def embed_serve_status(app_name: str):
 def tune():
     """Hyperparameter tuning with Ray Tune."""
     pass
-
-
-def _detect_search_space_conflicts(
-    training_cfg: dict[str, Any],
-    search_space: dict[str, Any],
-) -> list[str]:
-    """Detect keys defined in both training config and search space.
-
-    Search space values override fixed config values in TuneRunner, so warn
-    the user to avoid surprising behavior.
-    """
-    conflicts: list[str] = []
-    for section in ("model", "training", "ray", "output"):
-        section_cfg = training_cfg.get(section)
-        if not isinstance(section_cfg, dict):
-            continue
-        for key in section_cfg:
-            if key in search_space:
-                conflicts.append(f"{section}.{key}")
-    return conflicts
 
 
 @tune.command("run")
@@ -857,21 +1031,50 @@ def tune_run(
 
         trainer_spec = get_trainer(trainer)
 
+        # Phase 3 prep order: parse → merge → validate → search check → data → runner
+        from tributo.training.config import (
+            apply_dot_overrides,
+            build_effective_config,
+            resolve_data_source,
+        )
+        from tributo.training.tune_space import (
+            parse_search_space,
+            resolve_local_overrides,
+            validate_search_targets,
+            warn_search_space_conflicts,
+        )
+
+        space_spec = parse_search_space(space)
+        effective = build_effective_config(
+            trainer_spec, training_cfg, datasets_supplied=False
+        )
+        warn_search_space_conflicts(training_cfg, space_spec)
+        validate_search_targets(effective, space_spec)
+
         if local:
             # ── local mode: single trial, no Ray ──────────────────────────
             from tributo.training.local_runner import run_local_trial
-            from tributo.training.tune_space import parse_search_space
 
-            search_space = parse_search_space(space)
+            overrides = resolve_local_overrides(space_spec, effective)
+            local_config = apply_dot_overrides(effective, overrides)
+            # Re-validate with dot overrides applied.
+            from tributo.training.config import (
+                validate_and_normalize_config,
+                validate_execution_config,
+            )
+
+            local_config = validate_and_normalize_config(trainer_spec, local_config)
+            validate_execution_config(
+                trainer_spec, local_config, datasets_supplied=False
+            )
 
             click.echo(f"Running local trial (trainer={trainer})...")
             result = run_local_trial(
                 trainer_spec=trainer_spec,
-                training_config=training_cfg,
+                effective_config=local_config,
                 output_path=output,
-                search_space=search_space,
             )
-            if result["status"] == "success":
+            if result.get("status") == "succeeded":
                 click.echo(
                     f"Local trial completed in {result['duration_sec']}s → "
                     f"{result.get('model_path', output)}"
@@ -884,20 +1087,9 @@ def tune_run(
             return
 
         # ── distributed mode: Ray Tune ───────────────────────────────────
-        from tributo.training.data_loader import load_ray_dataset_from_config
+        from tributo.training.data_loader import load_ray_dataset_from_source
         from tributo.training.tune_config import TuneSearchConfig
         from tributo.training.tune_runner import TuneRunner, extract_best_params
-        from tributo.training.tune_space import parse_search_space
-
-        search_space = parse_search_space(space)
-
-        conflicts = _detect_search_space_conflicts(training_cfg, search_space)
-        if conflicts:
-            logger.warning(
-                "The following keys are defined in both training config and search space; "
-                "search space values will override: %s",
-                conflicts,
-            )
 
         tune_config = TuneSearchConfig(
             metric=metric,
@@ -910,15 +1102,16 @@ def tune_run(
             fail_fast=fail_fast,
         )
 
-        # Load dataset
-        data_cfg = training_cfg.get("data")
-        if not data_cfg:
-            raise JobConfigurationError("Training config must contain 'data' section")
-        train_ds = load_ray_dataset_from_config(data_cfg)
-        datasets = {"train": train_ds}
+        # Load dataset from canonical source (DRIVER mode only).
+        datasets: dict[str, Any] = {}
+        if trainer_spec.data_loading.value != "canonical_trainer":
+            source = resolve_data_source(trainer_spec, effective)
+            train_ds = load_ray_dataset_from_source(source)
+            datasets = {"train": train_ds}
 
-        # Run tuning
-        runner = TuneRunner(trainer_spec, tune_config, search_space)
+        runner = TuneRunner(
+            trainer_spec, tune_config, space_spec, effective_config=effective
+        )
         result_grid = runner.run(
             datasets=datasets,
             output_path=output,

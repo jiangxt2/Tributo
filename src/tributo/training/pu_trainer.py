@@ -29,9 +29,16 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
-from tributo.training.base import BaseTrainer, TrainerSpec
+from tributo._common.config import StrictConfigModel
+from tributo.training.algorithm_spec import (
+    AlgorithmSpec,
+    DataLoadingMode,
+    ProblemType,
+    ResourceHints,
+)
+from tributo.training.base import BaseTrainer
 from tributo.training.dnn_trainer import (
     DNNModelConfig,
     DNNOutputConfig,
@@ -51,7 +58,7 @@ logger = logging.getLogger(__name__)
 # ── PU-specific config models ──
 
 
-class PUConfig(BaseModel):
+class PUConfig(StrictConfigModel):
     """PU Learning configuration."""
 
     loss_type: Literal["nnpu", "upu"] = Field(
@@ -72,7 +79,7 @@ class PUConfig(BaseModel):
     gamma: float = Field(default=1.0, description="Negative risk scaling factor")
 
 
-class PURayConfig(BaseModel):
+class PURayConfig(StrictConfigModel):
     """Ray cluster configuration (PU-specific, defaults to num_workers=1).
 
     PU training currently does not support DDP; multiple workers train
@@ -96,7 +103,7 @@ class PURayConfig(BaseModel):
     )
 
 
-class PUTrainingConfig(BaseModel):
+class PUTrainingConfig(StrictConfigModel):
     """Complete configuration for PU distributed training."""
 
     data: Any = Field(default=None, description="Data source configuration")
@@ -122,7 +129,7 @@ def pu_train_loop_per_worker(config: dict[str, Any]) -> None:
     the dataset.  Reuses the DNN model architecture and enforces a PU loss.
 
     Config keys:
-        data (dict): Data source config, forwarded to load_ray_dataset_from_config.
+        data (dict): Canonical data config with ``source`` key (a ``SourceConfig`` dict).
         features (list): Feature column configs.
         label_col (str): Label column name, default ``"label"``.
         model (dict): DNN model config.
@@ -140,7 +147,7 @@ def pu_train_loop_per_worker(config: dict[str, Any]) -> None:
     import torch.optim as optim
     from torch.utils.data import DataLoader
 
-    from tributo.training.data_loader import load_ray_dataset_from_config
+    from tributo.training.data_loader import load_ray_dataset_from_source
     from tributo.training.features.column_types import (
         features_from_dicts,
     )
@@ -164,7 +171,10 @@ def pu_train_loop_per_worker(config: dict[str, Any]) -> None:
     if data_cfg is None:
         raise ValueError("data config is required for PU training")
 
-    ds = load_ray_dataset_from_config(data_cfg)
+    source = data_cfg.get("source")
+    if source is None:
+        raise ValueError("data.source is required for PU training")
+    ds = load_ray_dataset_from_source(source)
 
     # Convert to pandas (worker loads full data internally)
     import pandas as pd
@@ -612,7 +622,16 @@ def run_pu_training_from_json(config_path: str) -> dict[str, Any]:
 
 # ── Built-in registration ──
 
-_trainer_spec = TrainerSpec(name="pu", trainer_cls=PUTrainerImpl)
+_trainer_spec = AlgorithmSpec(
+    name="pu",
+    trainer_cls=PUTrainerImpl,
+    problem_types=(ProblemType.PU_LEARNING,),
+    data_modality=("tabular",),
+    extras_group="identity",
+    data_loading=DataLoadingMode.CANONICAL_TRAINER,
+    resource_hints=ResourceHints(gpu_required=False),
+    config_model=PUTrainingConfig,
+)
 register(_trainer_spec)
 
 # Exported for entry_points discovery (see tributo.plugin)

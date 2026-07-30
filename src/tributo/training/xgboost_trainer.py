@@ -5,11 +5,18 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
 
+from tributo._common.config import StrictConfigModel
 from tributo.data.base import S3Config
 from tributo.integrations.broker import CancellationChecker
-from tributo.training.base import BaseTrainer, TrainerSpec
+from tributo.training.algorithm_spec import (
+    AlgorithmSpec,
+    DataLoadingMode,
+    ProblemType,
+    ResourceHints,
+)
+from tributo.training.base import BaseTrainer
 from tributo.training.registry import register
 from tributo.util.annotations import PublicAPI
 
@@ -23,22 +30,26 @@ logger = logging.getLogger(__name__)
 # ── Pydantic config models ──
 
 
-class DataConfig(BaseModel):
-    """Data source configuration."""
+class XGBoostDataConfig(StrictConfigModel):
+    """XGBoost data configuration with training semantics.
 
-    type: str = Field(
-        default="csv", description="Data source type: csv | s3 | clickhouse"
-    )
-    path: Optional[str] = Field(default=None, description="Local data path")
-    uri: Optional[str] = Field(default=None, description="S3 URI")
-    format: str = Field(default="parquet", description="Data format: csv | parquet")
+    Canonical path uses ``source`` (a ``SourceConfig``).  Legacy flat fields
+    (``type``, ``path``, ``uri``, …) are still accepted for backward
+    compatibility and will be routed through the legacy adapter.
+    """
+
+    source: Any = Field(default=None, description="Canonical SourceConfig dict")
     label_col: str = Field(default="label", description="Label column name")
     feature_columns: list[str] = Field(
         default_factory=list, description="Feature columns for training"
     )
-    s3: S3Config = Field(default_factory=S3Config)
     feature_id_map: dict[str, str] = Field(default_factory=dict)
-    # ── ClickHouse ──
+    # ── legacy flat fields ──
+    type: str = Field(default="csv", description="[legacy] data source type")  # noqa: A003
+    path: str | None = Field(default=None, description="[legacy] local path")
+    uri: str | None = Field(default=None, description="[legacy] S3 URI")
+    format: str = Field(default="parquet", description="[legacy] data format")  # noqa: A003
+    s3: S3Config = Field(default_factory=S3Config, description="[legacy] S3 config")
     ch_host: str = ""
     ch_port: int = 9000
     ch_database: str = ""
@@ -48,8 +59,8 @@ class DataConfig(BaseModel):
     ch_sql_params: dict[str, str] = Field(default_factory=dict)
 
 
-class ModelConfig(BaseModel):
-    """XGBoost model parameters."""
+class ModelConfig(StrictConfigModel):
+    """XGBoost model parameters — extra fields allowed for native params."""
 
     model_config = ConfigDict(extra="allow")
 
@@ -61,7 +72,7 @@ class ModelConfig(BaseModel):
     )
 
 
-class TrainingParams(BaseModel):
+class TrainingParams(StrictConfigModel):
     """Training hyperparameters."""
 
     num_rounds: int = Field(default=100, ge=1, description="Number of boosting rounds")
@@ -76,7 +87,7 @@ class TrainingParams(BaseModel):
     seed: int = Field(default=42, description="Random seed")
 
 
-class RayConfig(BaseModel):
+class RayConfig(StrictConfigModel):
     """Ray cluster configuration."""
 
     num_workers: int = Field(default=4, ge=1)
@@ -92,7 +103,7 @@ class RayConfig(BaseModel):
     )
 
 
-class OutputConfig(BaseModel):
+class OutputConfig(StrictConfigModel):
     """Output configuration."""
 
     onnx_path: Optional[str] = None
@@ -100,10 +111,10 @@ class OutputConfig(BaseModel):
     metrics_path: Optional[str] = None
 
 
-class XGBoostTrainingConfig(BaseModel):
+class XGBoostTrainingConfig(StrictConfigModel):
     """Complete configuration for XGBoost distributed training."""
 
-    data: DataConfig = Field(default_factory=DataConfig)
+    data: XGBoostDataConfig = Field(default_factory=XGBoostDataConfig)
     model: ModelConfig = Field(default_factory=ModelConfig)
     training: TrainingParams = Field(default_factory=TrainingParams)
     ray: RayConfig = Field(default_factory=RayConfig)
@@ -706,7 +717,20 @@ def run_training_with_config(config: dict[str, Any]) -> dict[str, Any]:
 
 # Built-in registration
 
-_trainer_spec = TrainerSpec(name="xgboost", trainer_cls=XGBoostTrainerImpl)
+_trainer_spec = AlgorithmSpec(
+    name="xgboost",
+    trainer_cls=XGBoostTrainerImpl,
+    problem_types=(
+        ProblemType.BINARY_CLASSIFICATION,
+        ProblemType.MULTI_CLASS_CLASSIFICATION,
+        ProblemType.REGRESSION,
+    ),
+    data_modality=("tabular",),
+    extras_group="training",
+    data_loading=DataLoadingMode.CANONICAL_DRIVER,
+    resource_hints=ResourceHints(gpu_required=False),
+    config_model=XGBoostTrainingConfig,
+)
 register(_trainer_spec)
 
 # Exported for entry_points discovery (see tributo.plugin)
