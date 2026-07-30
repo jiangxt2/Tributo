@@ -189,3 +189,273 @@ def _iter_entry_points(group: str) -> Any:
     """Iterate over entry points for *group*."""
     eps = entry_points(group=group)
     yield from eps
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Export plugin groups (PR 1 — contracts only)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _validate_api_version(obj: Any, expected: int) -> bool:
+    """Check that *obj* declares ``api_version == expected``."""
+    av = getattr(obj, "api_version", None)
+    return av == expected
+
+
+def discover_exporter_plugins() -> list[Any]:
+    """Discover third-party exporters registered as ``tributo.exporters``.
+
+    Each entry point must point to a ``ModelExporter`` class with
+    ``api_version == 1``.
+    """
+    from tributo.training.exporters.protocols import ModelExporter
+
+    enabled = _get_enabled_plugins()
+    classes: list[Any] = []
+
+    for ep in _iter_entry_points("tributo.exporters"):
+        if enabled is not None and ep.name not in enabled:
+            logger.debug(
+                "Skipping exporter plugin %r (not in TRIBUTO_PLUGINS)", ep.name
+            )
+            continue
+        try:
+            cls = ep.load()
+        except Exception:
+            logger.warning(
+                "Failed to load exporter plugin %r (%s)",
+                ep.name,
+                ep.value,
+                exc_info=True,
+            )
+            continue
+
+        if not (isinstance(cls, type) and issubclass(cls, ModelExporter)):  # type: ignore[misc]
+            logger.warning(
+                "Exporter plugin %r is not a ModelExporter subclass (got %r); skipping.",
+                ep.name,
+                cls,
+            )
+            continue
+        if not _validate_api_version(cls, 1):
+            logger.warning(
+                "Exporter plugin %r has unsupported api_version (got %r, expected 1); skipping.",
+                ep.name,
+                getattr(cls, "api_version", None),
+            )
+            continue
+        if ep.name != cls.exporter_id:
+            logger.warning(
+                "Exporter plugin entry-point name %r != exporter_id %r; skipping.",
+                ep.name,
+                cls.exporter_id,
+            )
+            continue
+
+        classes.append(cls)
+        logger.info("Discovered exporter plugin %r (%s)", ep.name, ep.value)
+
+    return classes
+
+
+def discover_source_provider_plugins() -> list[Any]:
+    """Discover third-party source providers as ``tributo.source_providers``."""
+    from tributo.training.exporters.protocols import SourceProvider
+
+    enabled = _get_enabled_plugins()
+    classes: list[Any] = []
+
+    for ep in _iter_entry_points("tributo.source_providers"):
+        if enabled is not None and ep.name not in enabled:
+            logger.debug("Skipping source provider plugin %r", ep.name)
+            continue
+        try:
+            cls = ep.load()
+        except Exception:
+            logger.warning(
+                "Failed to load source provider plugin %r (%s)",
+                ep.name,
+                ep.value,
+                exc_info=True,
+            )
+            continue
+
+        if not (isinstance(cls, type) and issubclass(cls, SourceProvider)):  # type: ignore[misc]
+            logger.warning(
+                "Source provider plugin %r is not a SourceProvider subclass (got %r); skipping.",
+                ep.name,
+                cls,
+            )
+            continue
+        if not _validate_api_version(cls, 1):
+            logger.warning(
+                "Source provider plugin %r unsupported api_version (got %r); skipping.",
+                ep.name,
+                getattr(cls, "api_version", None),
+            )
+            continue
+        if ep.name != cls.provider_id:
+            logger.warning(
+                "Source provider entry-point name %r != provider_id %r; skipping.",
+                ep.name,
+                cls.provider_id,
+            )
+            continue
+
+        classes.append(cls)
+        logger.info("Discovered source provider plugin %r (%s)", ep.name, ep.value)
+
+    return classes
+
+
+def discover_validator_plugins() -> list[Any]:
+    """Discover third-party validators as ``tributo.validators``."""
+    from tributo.training.exporters.protocols import ExportValidator
+
+    enabled = _get_enabled_plugins()
+    classes: list[Any] = []
+
+    for ep in _iter_entry_points("tributo.validators"):
+        if enabled is not None and ep.name not in enabled:
+            logger.debug("Skipping validator plugin %r", ep.name)
+            continue
+        try:
+            cls = ep.load()
+        except Exception:
+            logger.warning(
+                "Failed to load validator plugin %r (%s)",
+                ep.name,
+                ep.value,
+                exc_info=True,
+            )
+            continue
+
+        if not (isinstance(cls, type) and issubclass(cls, ExportValidator)):  # type: ignore[misc]
+            logger.warning(
+                "Validator plugin %r is not an ExportValidator subclass (got %r); skipping.",
+                ep.name,
+                cls,
+            )
+            continue
+        if not _validate_api_version(cls, 1):
+            logger.warning(
+                "Validator plugin %r unsupported api_version (got %r); skipping.",
+                ep.name,
+                getattr(cls, "api_version", None),
+            )
+            continue
+        if ep.name != cls.validator_id:
+            logger.warning(
+                "Validator entry-point name %r != validator_id %r; skipping.",
+                ep.name,
+                cls.validator_id,
+            )
+            continue
+
+        classes.append(cls)
+        logger.info("Discovered validator plugin %r (%s)", ep.name, ep.value)
+
+    return classes
+
+
+def discover_flavor_plugins() -> list[Any]:
+    """Discover third-party model flavors as ``tributo.model_flavors``.
+
+    Each entry point must point to a ``ModelFlavor`` subclass with a
+    ``flavor_id`` class variable and ``api_version == 1``.
+    """
+    from tributo.training.flavor import ModelFlavor
+
+    enabled = _get_enabled_plugins()
+    classes: list[Any] = []
+
+    for ep in _iter_entry_points("tributo.model_flavors"):
+        if enabled is not None and ep.name not in enabled:
+            logger.debug("Skipping flavor plugin %r", ep.name)
+            continue
+        try:
+            cls = ep.load()
+        except Exception:
+            logger.warning(
+                "Failed to load flavor plugin %r (%s)", ep.name, ep.value, exc_info=True
+            )
+            continue
+
+        if not (isinstance(cls, type) and issubclass(cls, ModelFlavor)):
+            logger.warning(
+                "Flavor plugin %r is not a ModelFlavor subclass (got %r); skipping.",
+                ep.name,
+                cls,
+            )
+            continue
+        if not _validate_api_version(cls, 1):
+            logger.warning(
+                "Flavor plugin %r unsupported api_version (got %r); skipping.",
+                ep.name,
+                getattr(cls, "api_version", None),
+            )
+            continue
+
+        fid = getattr(cls, "flavor_id", None)
+        if ep.name != fid:
+            logger.warning(
+                "Flavor entry-point name %r != flavor_id %r; skipping.",
+                ep.name,
+                fid,
+            )
+            continue
+
+        classes.append(cls)
+        logger.info("Discovered flavor plugin %r (%s)", ep.name, ep.value)
+
+    return classes
+
+
+def discover_model_factory_plugins() -> list[Any]:
+    """Discover third-party model factories as ``tributo.model_factories``."""
+    from tributo.training.exporters.protocols import ModelFactory
+
+    enabled = _get_enabled_plugins()
+    classes: list[Any] = []
+
+    for ep in _iter_entry_points("tributo.model_factories"):
+        if enabled is not None and ep.name not in enabled:
+            logger.debug("Skipping model factory plugin %r", ep.name)
+            continue
+        try:
+            cls = ep.load()
+        except Exception:
+            logger.warning(
+                "Failed to load model factory plugin %r (%s)",
+                ep.name,
+                ep.value,
+                exc_info=True,
+            )
+            continue
+
+        if not (isinstance(cls, type) and issubclass(cls, ModelFactory)):  # type: ignore[misc]
+            logger.warning(
+                "Model factory plugin %r is not a ModelFactory subclass (got %r); skipping.",
+                ep.name,
+                cls,
+            )
+            continue
+        if not _validate_api_version(cls, 1):
+            logger.warning(
+                "Model factory plugin %r unsupported api_version (got %r); skipping.",
+                ep.name,
+                getattr(cls, "api_version", None),
+            )
+            continue
+        if ep.name != cls.architecture_id:
+            logger.warning(
+                "Model factory entry-point name %r != architecture_id %r; skipping.",
+                ep.name,
+                cls.architecture_id,
+            )
+            continue
+
+        classes.append(cls)
+        logger.info("Discovered model factory plugin %r (%s)", ep.name, ep.value)
+
+    return classes
