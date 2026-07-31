@@ -14,6 +14,7 @@ checkpoint, and caching are deferred to a future version.
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -138,16 +139,11 @@ class Pipeline:
         if not self.steps:
             raise JobConfigurationError("Pipeline must have at least one step.")
 
-        # Check unique step names.
-        if len(self._step_map) != len(self.steps):
-            duplicates = [
-                s.name
-                for s in self.steps
-                if [t.name for t in self.steps].count(s.name) > 1
-            ]
-            raise JobConfigurationError(
-                f"Duplicate step names: {sorted(set(duplicates))}"
-            )
+        # Check unique step names via Counter (O(n)).
+        name_counts = Counter(s.name for s in self.steps)
+        duplicates = [name for name, count in name_counts.items() if count > 1]
+        if duplicates:
+            raise JobConfigurationError(f"Duplicate step names: {sorted(duplicates)}")
 
         # Check cycles via topological sort (Kahn's algorithm).
         self._check_cycles()
@@ -248,8 +244,16 @@ class Pipeline:
         executed with the upstream step outputs as inputs.  All steps
         run in-process (no distributed execution).
 
+        Pipeline-step trainers receive upstream data via
+        ``self.config["_pipeline_inputs"]``, a dict mapping input port
+        names to the resolved upstream outputs (or ``initial_data`` for
+        root steps).  Subclasses should read this key in ``setup()``
+        or ``training_loop()`` rather than relying on ``self.datasets``,
+        which the pipeline always passes as an empty dict.
+
         Args:
-            initial_data: Initial data dict passed to root steps.
+            initial_data: Initial data dict passed to root steps
+                (steps with no upstream inputs).
 
         Returns:
             A dict mapping ``{step_name: step_output}`` for every step.

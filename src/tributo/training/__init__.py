@@ -86,17 +86,10 @@ except ImportError:
     _has_pu = False
 
 # Class prior estimation (pure numpy, always available)
+# BaseGraphTrainer has no hard dependency on torch/PyG — all graph-library
+# imports happen inside the user's build_graph/build_sampler implementation.
+from tributo.training.graph_trainer import BaseGraphTrainer  # noqa: E402
 from tributo.training.priors import estimate_class_prior  # noqa: E402
-
-# GNN graph trainer (lazy import, requires torch + torch_geometric)
-try:
-    from tributo.training.graph_trainer import (  # noqa: F401
-        BaseGraphTrainer,
-    )
-
-    _has_graph = True
-except ImportError:
-    _has_graph = False
 
 # Causal estimator (lazy import, requires dowhy + econml)
 try:
@@ -146,17 +139,11 @@ __all__ = [
     "export_to_onnx",
     "submit_training_job",
     "wait_for_job",
+    # GNN base class (no optional deps)
+    "BaseGraphTrainer",
     # Class prior estimation
     "estimate_class_prior",
 ]
-
-# Dynamically export GNN-related symbols (if torch + torch_geometric available)
-if _has_graph:
-    __all__.extend(
-        [
-            "BaseGraphTrainer",
-        ]
-    )
 
 # Dynamically export causal-related symbols (if dowhy + econml available)
 if _has_causal:

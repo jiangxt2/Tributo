@@ -25,6 +25,7 @@ the output of one runner feeds into the input of the next.
 from __future__ import annotations
 
 import logging
+from collections import deque
 from typing import Any, Callable
 
 from tributo._common.dag import topological_order
@@ -165,9 +166,9 @@ def _topological_sort(root: ModelRunner) -> list[ModelRunner]:
     """Return nodes in topological order via the shared DAG kernel."""
     # Collect all reachable nodes via BFS from *root*.
     all_nodes: dict[str, ModelRunner] = {}
-    queue: list[ModelRunner] = [root]
+    queue: deque[ModelRunner] = deque([root])
     while queue:
-        node = queue.pop()
+        node = queue.popleft()
         if node.name in all_nodes:
             continue
         all_nodes[node.name] = node

@@ -48,10 +48,9 @@ class KafkaStreamSource(StreamSource):
         self._batch_size: int = 64
         self._config: dict[str, Any] = {}
         self._closed: bool = False
-        # Track the last successfully yielded message per partition so
-        # commit() only advances offsets for records that were actually
-        # processed (at-least-once semantics).
-        self._committable: list[Any] = []  # confluent_kafka Message objects
+        # Track max offset per partition for the current batch so
+        # commit() issues a single batched RPC (at-least-once semantics).
+        self._batch_offsets: dict[Any, int] = {}  # TopicPartition → offset+1
 
     # -- StreamSource interface -----------------------------------------------
 
@@ -96,87 +95,93 @@ class KafkaStreamSource(StreamSource):
             raise ConnectionError(f"Kafka connection failed: {exc}") from exc
 
     def poll(self, timeout_ms: int = 1000) -> Iterator[dict[str, Any]]:
-        """Poll for the next micro-batch from Kafka.
+        """Continuously poll for micro-batches from Kafka.
 
-        Collects up to ``batch_size`` messages, then yields them as a
-        single batch dict.
+        Collects up to ``batch_size`` messages per batch, yielding
+        each batch as a columnar dict.  The iterator runs until
+        ``close()`` is called.
 
         Args:
             timeout_ms: Max time to wait for each message.
 
         Yields:
-            A dict with column names as keys and lists as values.
+            Columnar batch dicts indefinitely.
         """
         if self._consumer is None:
             raise RuntimeError("KafkaStreamSource not open — call open() first.")
 
-        batch: list[dict[str, Any]] = []
-        committable: list[Any] = []
-        while len(batch) < self._batch_size:
-            msg = self._consumer.poll(timeout=timeout_ms / 1000.0)
-            if msg is None:
-                break  # no more messages within timeout
-            if msg.error():
-                logger.warning("Kafka message error: %s", msg.error())
+        import json
+
+        while not self._closed:
+            batch: list[dict[str, Any]] = []
+            offsets: dict[Any, int] = {}  # TopicPartition → max offset+1
+
+            while len(batch) < self._batch_size:
+                msg = self._consumer.poll(timeout=timeout_ms / 1000.0)
+                if msg is None:
+                    break  # no more messages within timeout
+                if msg.error():
+                    logger.warning("Kafka message error: %s", msg.error())
+                    continue
+
+                # Guard against tombstone / null-value records.
+                raw_value = msg.value()
+                if raw_value is None:
+                    logger.debug("Skipping tombstone (null-value) Kafka message")
+                    continue
+
+                try:
+                    value = json.loads(raw_value.decode("utf-8"))
+                except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                    logger.warning("Failed to decode Kafka message: %s", exc)
+                    continue
+
+                # Skip non-dict records (scalars, lists).
+                if not isinstance(value, dict):
+                    logger.warning(
+                        "Skipping non-dict Kafka record (type=%s)",
+                        type(value).__name__,
+                    )
+                    continue
+
+                batch.append(value)
+                # Track the max offset per partition (offset+1 = next to read).
+                tp = (msg.topic(), msg.partition())
+                offsets[tp] = max(offsets.get(tp, 0), msg.offset() + 1)
+
+            if not batch:
                 continue
 
-            # Guard against tombstone / null-value records.
-            raw_value = msg.value()
-            if raw_value is None:
-                logger.debug("Skipping tombstone (null-value) Kafka message")
-                continue
-
-            import json
-
-            try:
-                value = json.loads(raw_value.decode("utf-8"))
-            except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-                logger.warning("Failed to decode Kafka message: %s", exc)
-                continue
-
-            # Skip non-dict records (scalars, lists).
-            if not isinstance(value, dict):
-                logger.warning(
-                    "Skipping non-dict Kafka record (type=%s)", type(value).__name__
-                )
-                continue
-
-            batch.append(value)
-            committable.append(msg)  # only commit messages we actually yielded
-
-        if not batch:
-            return
-
-        # Transpose list-of-dicts → dict-of-lists (columnar batch).
-        # Collect union of all keys in the batch (not just first record's).
-        all_keys: set[str] = set()
-        for row in batch:
-            all_keys.update(row.keys())
-        column_batch = {k: [row.get(k) for row in batch] for k in all_keys}
-        self._committable = committable
-        yield column_batch
+            # Transpose list-of-dicts → dict-of-lists (columnar batch).
+            all_keys: set[str] = set()
+            for row in batch:
+                all_keys.update(row.keys())
+            column_batch = {k: [row.get(k) for row in batch] for k in all_keys}
+            self._batch_offsets = offsets
+            yield column_batch
 
     def commit(self) -> None:
-        """Commit offsets only for the last successfully yielded batch.
+        """Commit offsets for the last yielded batch in a single RPC.
 
-        Uses per-message commit to advance offsets only for records
-        that were actually returned by ``poll()`` and accepted by the
-        caller (at-least-once semantics).  Skipped / errored / tombstone
-        records are never committed — they will be re-delivered on the
-        next poll cycle.
+        Advances each partition's offset to the highest successfully
+        yielded message + 1 (at-least-once semantics).  Skipped /
+        errored / tombstone records are never committed.
         """
-        if self._consumer is None:
+        if self._consumer is None or not self._batch_offsets:
             return
-        committed = 0
-        for msg in self._committable:
-            try:
-                self._consumer.commit(message=msg, asynchronous=False)
-                committed += 1
-            except Exception as exc:
-                logger.warning("Kafka commit failed for message: %s", exc)
-        self._committable.clear()
-        if committed:
-            logger.debug("Committed %d Kafka offset(s)", committed)
+        try:
+            from confluent_kafka import TopicPartition
+
+            tp_offsets = [
+                TopicPartition(tp[0], tp[1], offset)
+                for tp, offset in self._batch_offsets.items()
+            ]
+            self._consumer.commit(offsets=tp_offsets, asynchronous=False)
+            logger.debug("Committed %d Kafka partition(s)", len(tp_offsets))
+        except Exception as exc:
+            logger.warning("Kafka commit failed: %s", exc)
+        finally:
+            self._batch_offsets.clear()
 
     def close(self) -> None:
         """Gracefully close the Kafka consumer."""

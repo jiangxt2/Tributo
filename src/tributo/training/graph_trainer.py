@@ -72,8 +72,8 @@ class BaseGraphTrainer(BaseTrainer):
         if not graph_config:
             raise ValueError(
                 f"{type(self).__name__}: config must contain a "
-                f"'graph_data' section with node_features_path and "
-                f"edge_index_path."
+                f"'graph_data' section specifying the graph input "
+                f"tables (nodes, edges, and optionally labels)."
             )
 
         bundle = GraphDataBundle.from_config(graph_config)

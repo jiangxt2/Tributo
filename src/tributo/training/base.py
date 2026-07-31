@@ -198,19 +198,23 @@ class BaseTrainer(ABC):
 
             self.export_artifacts(checkpoint, output_path)
 
-            # Fire on_export_end (legacy — retained for backward compat)
+            # Fire artifact-exported callbacks.  If a callback implements
+            # on_artifacts_exported (the new hook), use it.  Otherwise
+            # fall back to on_export_end for backward compatibility.
+            # This avoids double-firing when a callback delegates
+            # on_artifacts_exported → on_export_end.
             for cb in self._callbacks:
-                try:
-                    cb.on_export_end(self, output_path)
-                except Exception as e:
-                    logger.warning("Callback on_export_end failed: %s", e)
-
-            # Fire on_artifacts_exported (new extension point)
-            for cb in self._callbacks:
-                try:
-                    cb.on_artifacts_exported(self, output_path)
-                except Exception as e:
-                    logger.warning("Callback on_artifacts_exported failed: %s", e)
+                has_new_hook = "on_artifacts_exported" in type(cb).__dict__
+                if has_new_hook:
+                    try:
+                        cb.on_artifacts_exported(self, output_path)
+                    except Exception as e:
+                        logger.warning("Callback on_artifacts_exported failed: %s", e)
+                else:
+                    try:
+                        cb.on_export_end(self, output_path)
+                    except Exception as e:
+                        logger.warning("Callback on_export_end failed: %s", e)
 
             logger.info("%s training completed.", type(self).__name__)
 

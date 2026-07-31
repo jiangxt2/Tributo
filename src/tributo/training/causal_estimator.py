@@ -69,7 +69,7 @@ class CausalEffect:
 
     method: str
     estimand: str = ""
-    estimate_value: float = 0.0
+    estimate_value: float | None = None
     ci_lower: float | None = None
     ci_upper: float | None = None
     p_value: float | None = None
@@ -218,7 +218,7 @@ class BaseCausalEstimator(BaseTrainer):
         return RefutationResult(
             method=method,
             passed=True,
-            new_effect=estimate.estimate_value,
+            new_effect=estimate.estimate_value or 0.0,
             interpretation=f"Placebo refutation ({method}) not implemented; "
             f"estimate accepted by default.",
         )
