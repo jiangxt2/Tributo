@@ -110,6 +110,41 @@ jobs:
             -m "not integration and not slow and not s3" \
             -v --tb=short --timeout=180
 
+  export-s3:
+    name: Export S3 Integration (MinIO)
+    runs-on: ubuntu-latest
+    needs: [paths-filter, lint]
+    if: needs.paths-filter.outputs.code == 'true'
+    services:
+      minio:
+        image: minio/minio:latest
+        env:
+          MINIO_ROOT_USER: minioadmin
+          MINIO_ROOT_PASSWORD: minioadmin123
+        ports:
+          - 9000:9000
+        options: >-
+          --health-cmd "curl -f http://localhost:9000/minio/health/live"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+
+      - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Run S3 export integration tests
+        run: uv run python -m pytest tests/integration/test_export_s3.py -v --tb=short --timeout=180
+        env:
+          S3_ENDPOINT: http://localhost:9000
+          AWS_ACCESS_KEY_ID: minioadmin
+          AWS_SECRET_ACCESS_KEY: minioadmin123
+
   build:
     name: Package Build & Smoke Test
     runs-on: ubuntu-latest
