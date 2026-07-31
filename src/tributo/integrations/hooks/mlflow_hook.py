@@ -1,0 +1,223 @@
+"""MLflow post-publish hook — register a published bundle in MLflow Model Registry.
+
+Invoked after ``BundleRepository.commit()`` succeeds.  Registers the bundle
+as an MLflow model version under a registered model name derived from the
+bundle's flavor and source info.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import logging
+from typing import Any, ClassVar
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from tributo.exporting.hooks import HookReceipt
+from tributo.util.annotations import PublicAPI
+
+logger = logging.getLogger(__name__)
+
+
+# ── Options model ────────────────────────────────────────────────────────────────
+
+
+@PublicAPI(stability="beta")
+class MLflowHookOptions(BaseModel):
+    """Options for ``MLflowPostPublishHook``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    model_name: str = Field(
+        default="",
+        min_length=0,
+        description=(
+            "Registered model name in MLflow. When empty, derived from "
+            "source_kind + flavor (e.g. 'xgboost-onnx')."
+        ),
+    )
+    tracking_uri: str | None = Field(
+        default=None,
+        description="MLflow tracking URI. Defaults to MLFLOW_TRACKING_URI env var.",
+    )
+    registry_uri: str | None = Field(
+        default=None,
+        description="MLflow registry URI. Defaults to MLFLOW_REGISTRY_URI env var.",
+    )
+    tags: dict[str, str] = Field(default_factory=dict)
+    stage: str = Field(
+        default="None",
+        pattern=r"^(None|Staging|Production|Archived)$",
+    )
+    required: bool = False
+
+
+# ── Hook implementation ──────────────────────────────────────────────────────────
+
+
+@PublicAPI(stability="beta")
+class MLflowPostPublishHook:
+    """Register a published bundle as an MLflow model version.
+
+    This hook is called after the bundle has been committed to storage.
+    It creates (or updates) a registered model in MLflow and adds a new
+    version pointing to the bundle's manifest.
+
+    Failure is non-fatal by default (required=False).  Set required=True
+    in options to fail the publication when MLflow registration fails.
+    """
+
+    hook_id: ClassVar[str] = "mlflow-registry-v1"
+
+    def execute(
+        self,
+        canonical_uri: str,
+        manifest: dict[str, Any],
+        options: dict[str, Any] | None = None,
+    ) -> HookReceipt:
+        """Register the bundle in MLflow Model Registry.
+
+        Args:
+            canonical_uri: Bundle canonical URI.
+            manifest: The committed manifest as a JSON dict.
+            options: Hook-specific options (MLflowHookOptions fields).
+
+        Returns:
+            HookReceipt indicating success/failure.
+        """
+        try:
+            import mlflow
+            from mlflow.tracking import MlflowClient
+        except ImportError:
+            return HookReceipt(
+                hook_id=self.hook_id,
+                status="skipped",
+                error="mlflow not installed",
+                retryable=False,
+            )
+
+        opts = options or {}
+        model_name = opts.get("model_name", "") or _derive_model_name(manifest)
+        tracking_uri = opts.get("tracking_uri")
+        registry_uri = opts.get("registry_uri")
+        stage = opts.get("stage", "None")
+        tags = opts.get("tags", {})
+
+        if tracking_uri:
+            mlflow.set_tracking_uri(tracking_uri)
+        if registry_uri:
+            mlflow.set_registry_uri(registry_uri)
+
+        try:
+            client = MlflowClient()
+
+            # Ensure registered model exists.
+            try:
+                client.get_registered_model(model_name)
+            except Exception:
+                client.create_registered_model(
+                    model_name,
+                    tags={"tributo_version": manifest.get("tributo_version", "")},
+                )
+                logger.info("Created MLflow registered model %r", model_name)
+
+            # Determine source URI — prefer manifest URI, fall back to canonical.
+            source_uri = canonical_uri
+            manifest_sha = manifest.get("_manifest_sha256", "")
+            if not manifest_sha:
+                manifest_sha = hashlib.sha256(
+                    str(manifest).encode()
+                ).hexdigest()
+
+            run_id = manifest.get("execution", {}).get("execution_id", "")
+
+            # Create model version.
+            version = client.create_model_version(
+                name=model_name,
+                source=source_uri,
+                run_id=run_id or None,
+                tags={
+                    "tributo_bundle_id": manifest.get("bundle_id", ""),
+                    "tributo_flavor": _derive_flavor(manifest),
+                    "tributo_source_kind": manifest.get(
+                        "source_info", {}
+                    ).get("source_kind", ""),
+                    **tags,
+                },
+            )
+
+            # Set stage if requested.
+            if stage and stage != "None":
+                client.transition_model_version_stage(
+                    name=model_name,
+                    version=version.version,
+                    stage=stage,
+                )
+
+            logger.info(
+                "Registered MLflow model %r version %s",
+                model_name,
+                version.version,
+            )
+
+            return HookReceipt(
+                hook_id=self.hook_id,
+                status="success",
+                idempotency_key=self.idempotency_key(
+                    canonical_uri, manifest_sha, options
+                ),
+            )
+
+        except Exception as exc:
+            logger.error(
+                "MLflow hook failed for model %r: %s",
+                model_name,
+                exc,
+                exc_info=True,
+            )
+            return HookReceipt(
+                hook_id=self.hook_id,
+                status="failed",
+                error=str(exc)[:4096],
+                retryable=True,
+                idempotency_key=self.idempotency_key(
+                    canonical_uri,
+                    hashlib.sha256(str(manifest).encode()).hexdigest(),
+                    options,
+                ),
+            )
+
+    def idempotency_key(
+        self,
+        canonical_uri: str,
+        manifest_sha256: str,
+        options: dict[str, Any] | None = None,
+    ) -> str:
+        """Derive an idempotency key from canonical_uri + manifest_sha256.
+
+        MLflow model version creation is idempotent with respect to
+        (model_name, source, run_id).  We use a hash of these to detect
+        duplicates.
+        """
+        opts = options or {}
+        model_name = opts.get("model_name", "")
+        payload = f"{model_name}/{canonical_uri}/{manifest_sha256}"
+        return hashlib.sha256(payload.encode()).hexdigest()
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────────
+
+
+def _derive_model_name(manifest: dict[str, Any]) -> str:
+    """Derive an MLflow registered model name from the manifest."""
+    source_kind = manifest.get("source_info", {}).get("source_kind", "model")
+    flavor = _derive_flavor(manifest)
+    return f"tributo-{source_kind}-{flavor}"
+
+
+def _derive_flavor(manifest: dict[str, Any]) -> str:
+    """Extract flavor string from manifest artifacts."""
+    artifacts = manifest.get("artifacts", [])
+    if artifacts:
+        return artifacts[0].get("flavor_id", artifacts[0].get("format", "unknown"))
+    return "unknown"

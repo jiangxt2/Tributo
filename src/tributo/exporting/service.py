@@ -102,6 +102,7 @@ class BundleExportService:
         self._manifest_registry = manifest_registry or ManifestSchemaRegistry()
         self._repository = repository
         self._operation_store = operation_store
+        self._hooks_runner: Any = None  # Lazily initialized in export_bundle.
 
         # Register built-in schema readers.
         from tributo.exporting.manifest import (
@@ -260,7 +261,7 @@ class BundleExportService:
                 self._operation_store.record_execution(record)
 
             # Phase 6: Post-publish hooks.
-            if self._repository is not None and hasattr(self, "_hooks_runner"):
+            if self._repository is not None and self._hooks_runner is not None:
                 manifest_dict = json.loads(
                     Path(published.result.manifest_uri).read_bytes()
                 )

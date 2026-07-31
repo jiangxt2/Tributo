@@ -106,4 +106,6 @@ _BUILTIN_OPTIONS: dict[str, type[BaseModel]] = {
     "torch-safetensors-v1": SafetensorsOptions,
     "hf-onnx-v1": HFONNXOptions,
     "onnx-quantizer-v1": ONNXQuantizerOptions,
+    "torch-export-v1": None,  # TorchExportOptions defined in integrations/exporters/torch_export.py
+    "tensorrt-v1": None,      # TensorRTOptions defined in integrations/exporters/tensorrt_plugin.py
 }
