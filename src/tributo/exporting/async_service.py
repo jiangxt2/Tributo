@@ -108,6 +108,19 @@ class AsyncBundleExportService:
         except ValueError:
             pass
 
+        # Register built-in validators.
+        from tributo.exporting.validators import StructureValidator
+
+        try:
+            self._validators.register(StructureValidator)
+        except Exception:
+            pass
+
+        # Load entry-point plugins into registries.
+        from tributo.exporting.service import _load_entry_point_plugins
+
+        _load_entry_point_plugins(self._exports, self._providers, self._validators)
+
     async def export_bundle_async(
         self,
         source: ExportSource,
@@ -174,14 +187,18 @@ class AsyncBundleExportService:
 
             published = await loop.run_in_executor(
                 executor,
-                publisher.publish,
-                execution,
-                staging,
-                config.bundle_uri or "",
-                bundle_id,
-                execution_id,
-                tributo_version,
-                source_info,
+                lambda: publisher.publish(
+                    execution=execution,
+                    staging_root=staging,
+                    bundle_uri=config.bundle_uri or "",
+                    bundle_id=bundle_id,
+                    execution_id=execution_id,
+                    tributo_version=tributo_version,
+                    source_info=source_info,
+                    storage_profile=config.storage_profile,
+                    alias_config=config.alias,
+                    roles=config.roles,
+                ),
             )
 
             return published.result

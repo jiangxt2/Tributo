@@ -152,7 +152,11 @@ class TorchSafetensorsExporter:
             flavor_id="safetensors-v1",
             variant=None,
             files=tuple(files),
-            entrypoint="model.safetensors",
+            entrypoint=(
+                "model.safetensors.index.json"
+                if max_shard_bytes > 0 and total_bytes > max_shard_bytes
+                else "model.safetensors"
+            ),
             producer=ProducerInfo(
                 exporter_id=self.exporter_id,
                 framework_versions={

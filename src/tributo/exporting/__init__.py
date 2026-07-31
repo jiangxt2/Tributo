@@ -107,7 +107,7 @@ def load_bundle(ref: BundleRef | str) -> dict[str, Any]:
         import json
 
         canonical = json.dumps(
-            manifest_dict, sort_keys=True, separators=(",", ":")
+            manifest_dict, sort_keys=True, separators=(",", ":"), ensure_ascii=False
         ).encode("utf-8")
         actual_sha256 = hashlib.sha256(canonical).hexdigest()
         if actual_sha256 != expected_sha256:
@@ -142,3 +142,30 @@ __all__ = [
     "ProvenanceBuilder",
     "AsyncBundleExportService",
 ]
+
+
+def _get_signing() -> tuple[Any, Any, Any]:
+    """Lazy-import signing symbols (cryptography is optional)."""
+    from tributo.exporting.signing import (  # pragma: no cover
+        BundleSigner,
+        BundleVerifier,
+        generate_signing_key,
+    )
+
+    return BundleSigner, BundleVerifier, generate_signing_key
+
+
+def __getattr__(name: str) -> Any:
+    if name == "generate_signing_key":
+        return _get_signing()[2]
+    if name == "BundleSigner":
+        return _get_signing()[0]
+    if name == "BundleVerifier":
+        return _get_signing()[1]
+    if name == "ProvenanceBuilder":
+        from tributo.exporting.provenance import ProvenanceBuilder as _pb
+        return _pb
+    if name == "AsyncBundleExportService":
+        from tributo.exporting.async_service import AsyncBundleExportService as _aes
+        return _aes
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

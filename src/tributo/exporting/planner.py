@@ -305,6 +305,14 @@ class ExportPlanner:
         for n in implicit_nodes:
             all_nodes[n.target.name] = n
 
-        # Phase 3: Topological sort (Kahn's algorithm).
+        # Phase 3: Validate role → target references.
+        for role_name, target_name in config.roles.items():
+            if target_name not in all_nodes:
+                raise JobConfigurationError(
+                    f"Role {role_name!r} references target {target_name!r} "
+                    f"which does not exist. Available targets: {sorted(all_nodes)}"
+                )
+
+        # Phase 4: Topological sort (Kahn's algorithm).
         ordered = _topological_sort(all_nodes)
         return ExportPlan(nodes=ordered, explicit_targets=config.targets)

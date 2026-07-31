@@ -57,8 +57,16 @@ def _materialize_artifact(
     """Verify draft files exist, compute hashes/sizes, return LogicalArtifact.
 
     The manager does NOT trust exporter-reported hashes — it re-reads every
-    file from disk.
+    file from disk.  Also validates that ``draft.name`` is safe for use in
+    filesystem paths (no ``/`` or ``..`` components).
     """
+    # Guard against hostile draft.name (path traversal).
+    if "/" in draft.name or "\\" in draft.name or draft.name in (".", ".."):
+        raise JobExecutionError(
+            f"Exporter {draft.producer.exporter_id!r} returned unsafe "
+            f"artifact name {draft.name!r}"
+        )
+
     materialized: list[ArtifactFile] = []
     seen_paths: set[str] = set()
 

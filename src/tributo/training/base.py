@@ -22,18 +22,25 @@ logger = logging.getLogger(__name__)
 
 # ── Plugin helpers ────────────────────────────────────────────────────────────────
 
-_provider_plugins_loaded = False
+_provider_plugins_cache: list[Any] | None = None
 
 
 def _load_provider_plugins(registry: Any) -> None:
-    """Load source-provider plugins into *registry* (cached)."""
-    global _provider_plugins_loaded
-    if not _provider_plugins_loaded:
+    """Load source-provider plugins into *registry*.
+
+    Discovery runs once (cached), but classes are re-registered into every
+    fresh registry so that repeated ``.run()`` calls in the same process
+    see the full provider set.
+    """
+    global _provider_plugins_cache
+    if _provider_plugins_cache is None:
         from tributo.plugin import discover_source_provider_plugins
 
-        for cls in discover_source_provider_plugins():
+        _provider_plugins_cache = discover_source_provider_plugins()
+
+    for cls in _provider_plugins_cache:
+        if cls.provider_id not in {p.provider_id for p in registry._by_id.values()}:
             registry.register(cls)
-        _provider_plugins_loaded = True
 
 
 # ---------------------------------------------------------------------------

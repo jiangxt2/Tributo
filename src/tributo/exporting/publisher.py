@@ -100,7 +100,9 @@ def _s3_put_json(
     if if_none_match:
         extra["IfNoneMatch"] = "*"
     if if_match is not None:
-        extra["IfMatch"] = if_match
+        # re-add quotes — S3/MinIO requires quoted ETag in If-Match header
+        tag = if_match.strip('"')
+        extra["IfMatch"] = f'"{tag}"'
     if metadata:
         extra["Metadata"] = metadata
 
@@ -765,8 +767,9 @@ class Publisher:
                     )
 
         else:
-            # Local publish.
-            bundle_dir = Path(bundle_uri) / bundle_id
+            # Local publish — strip file:// prefix if present.
+            local_uri = bundle_uri[7:] if bundle_uri.startswith("file://") else bundle_uri
+            bundle_dir = Path(local_uri) / bundle_id
             final_dir, actual_manifest_sha256 = _local_publish(
                 bundle_dir=bundle_dir,
                 staging_root=staging_root,
@@ -789,7 +792,7 @@ class Publisher:
             alias_failure = None
 
             if alias_config is not None:
-                alias_dir = Path(bundle_uri) / "aliases"
+                alias_dir = Path(local_uri) / "aliases"
                 alias_dir.mkdir(parents=True, exist_ok=True)
                 alias_path = alias_dir / f"{alias_config.name}.json"
                 alias_uri = str(alias_path)

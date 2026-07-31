@@ -119,7 +119,6 @@ class TorchONNXExporter:
                     output_path = context.artifact_dir / "model.onnx"
                     onnx_program.save(
                         str(output_path),
-                        # Use external data for large models.
                         **(
                             {"external_weights_path": "model_weights.bin"}
                             if external_data
@@ -127,33 +126,26 @@ class TorchONNXExporter:
                         ),
                     )
                     logger.info(
-                        "ONNX model exported via dynamo_export to %s (opset: dynamo-native)",
+                        "ONNX model exported via dynamo_export to %s",
                         output_path,
                     )
                 else:
-                    # Fallback to legacy export with dynamo=True flag.
-                    output_path = self._legacy_export(
-                        model, sample_inputs, input_names, output_names,
-                        opset, context.artifact_dir, external_data,
-                    )
-                    logger.info(
-                        "ONNX model exported via legacy export(dynamo=True) to %s",
-                        output_path,
-                    )
+                    # No dynamo_export available — fall through to legacy.
+                    raise NotImplementedError("torch.onnx.dynamo_export not available")
             except Exception as exc:
                 logger.warning(
-                    "torch.onnx.dynamo_export failed: %s — falling back to legacy export",
+                    "torch.onnx.dynamo_export failed: %s — falling back to legacy export(dynamo=False)",
                     exc,
                 )
                 output_path = self._legacy_export(
                     model, sample_inputs, input_names, output_names,
-                    opset, context.artifact_dir, external_data,
+                    opset, context.artifact_dir, external_data, use_dynamo=False,
                 )
         else:
-            # Legacy torch.onnx.export path.
+            # Legacy torch.onnx.export path — classic tracing backend.
             output_path = self._legacy_export(
                 model, sample_inputs, input_names, output_names,
-                opset, context.artifact_dir, external_data,
+                opset, context.artifact_dir, external_data, use_dynamo=False,
             )
 
         # Determine which files were produced.
@@ -203,6 +195,7 @@ class TorchONNXExporter:
         opset: int,
         artifact_dir: Any,  # Path
         external_data: bool,
+        use_dynamo: bool = False,
     ) -> Any:
         """Legacy ``torch.onnx.export`` path."""
         import torch
@@ -210,9 +203,16 @@ class TorchONNXExporter:
         model.eval()
         output_path = artifact_dir / "model.onnx"
 
+        # When sample_inputs is a single-tensor tuple, unwrap to avoid
+        # torch.onnx.export complaining about extra tuple nesting.
+        if len(sample_inputs) == 1:
+            model_input = sample_inputs[0]
+        else:
+            model_input = sample_inputs
+
         torch.onnx.export(
             model,
-            sample_inputs if len(sample_inputs) > 1 else sample_inputs[0],
+            model_input,
             str(output_path),
             opset_version=opset,
             input_names=input_names,
@@ -220,7 +220,7 @@ class TorchONNXExporter:
             dynamic_axes={
                 name: {0: "batch_size"} for name in input_names
             },
-            dynamo=True,  # Use dynamo backend for export.
+            dynamo=use_dynamo,
             export_params=True,
             do_constant_folding=True,
         )

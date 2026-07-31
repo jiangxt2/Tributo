@@ -9,7 +9,6 @@ legacy ``BaseTrainer.export_model()`` path when ``output.targets`` is set.
 
 from __future__ import annotations
 
-import datetime
 import hashlib
 import json
 import logging
@@ -163,13 +162,12 @@ class BundleExportService:
         if config.targets is None:
             raise ValueError("BundleExportService requires targets (bundle mode)")
 
-        # Generate stable IDs. started_at is captured once and used for
-        # the bundle_id so that retries with the same request_id produce
-        # the same bundle_id (per the plan's idempotency design).
-        started_at = datetime.datetime.now(datetime.timezone.utc)
+        # Generate stable IDs. bundle_id is derived solely from request_id
+        # so retries with the same request_id produce the identical bundle_id
+        # (per the plan's idempotency design).
         request_id = config.request_id or uuid.uuid4().hex
         execution_id = f"exec-{uuid.uuid4().hex[:12]}"
-        bundle_id = _make_bundle_id(request_id, started_at)
+        bundle_id = _make_bundle_id(request_id)
 
         planner = ExportPlanner(self._exports, self._validators)
         manager = ExportManager(self._exports, self._validators)
@@ -261,15 +259,26 @@ class BundleExportService:
                 self._operation_store.record_execution(record)
 
             # Phase 6: Post-publish hooks.
-            if self._repository is not None and self._hooks_runner is not None:
-                manifest_dict = json.loads(
-                    Path(published.result.manifest_uri).read_bytes()
-                )
-                self._hooks_runner.run(
-                    canonical_uri=published.result.canonical_uri,
-                    manifest=manifest_dict,
-                    manifest_sha256=published.result.manifest_sha256,
-                )
+            if self._repository is not None:
+                # Build manifest dict from published result.
+                from tributo.exporting.hooks import PublicationRunner
+
+                manifest_dict = _build_manifest_dict(published.result)
+
+                # Load hooks from entry points and build runner.
+                hooks_entries = _discover_hook_plugins()
+                if hooks_entries:
+                    hooks_list: list[tuple[Any, dict[str, Any], bool]] = [
+                        (h(), {}, False) for h in hooks_entries
+                    ]
+                    self._hooks_runner = PublicationRunner(hooks_list)
+
+                if self._hooks_runner is not None:
+                    self._hooks_runner.run(
+                        canonical_uri=published.result.canonical_uri,
+                        manifest=manifest_dict,
+                        manifest_sha256=published.result.manifest_sha256,
+                    )
 
             # Phase 7: Callback (before staging cleanup).
             if callback is not None:
@@ -323,18 +332,49 @@ def _load_entry_point_plugins(
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 
-def _make_bundle_id(
-    request_id: str, started_at: datetime.datetime | None = None
-) -> str:
+def _make_bundle_id(request_id: str) -> str:
     """Generate a stable, deterministic bundle ID from a request_id.
 
-    When *started_at* is provided, it includes sub-second resolution
-    (microseconds) so that retries within the same second still produce
-    the identical bundle ID.  When ``None``, uses the current time.
+    Deterministic — identical request_id always produces the identical
+    bundle_id, enabling true idempotent retry.
     """
-    if started_at is not None:
-        ts = started_at.strftime("%Y%m%dT%H%M%S-%f")
-    else:
-        ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S-%f")
-    digest = hashlib.sha256(request_id.encode("utf-8")).hexdigest()[:16]
-    return f"{ts}-{digest}"
+    digest = hashlib.sha256(request_id.encode("utf-8")).hexdigest()
+    return f"bundle-{digest[:32]}"
+
+
+def _build_manifest_dict(result: BundleResult) -> dict[str, Any]:
+    """Build a JSON-serialisable manifest dict from a BundleResult.
+
+    Works for both local and S3 manifest URIs — reads from the S3 manifest
+    when the URI starts with ``s3://``, otherwise reads from the local path.
+    """
+    manifest_uri = result.manifest_uri
+    if manifest_uri.startswith("s3://"):
+        from tributo._common.storage import get_boto3_client, parse_s3_url
+
+        bucket, key = parse_s3_url(manifest_uri)
+        client = get_boto3_client()
+        resp = client.get_object(Bucket=bucket, Key=key)
+        raw = resp["Body"].read()
+        return json.loads(raw.decode("utf-8"))  # type: ignore[no-any-return]
+    return json.loads(Path(manifest_uri).read_bytes())  # type: ignore[no-any-return]
+
+
+_hook_plugins_cache: list[Any] | None = None
+
+
+def _discover_hook_plugins() -> list[Any]:
+    """Discover post-publish hook plugins (cached)."""
+    global _hook_plugins_cache
+    if _hook_plugins_cache is None:
+        from tributo.plugin import _iter_entry_points
+
+        _hook_plugins_cache = []
+        for ep in _iter_entry_points("tributo.hooks"):
+            try:
+                cls = ep.load()
+                if hasattr(cls, "hook_id"):
+                    _hook_plugins_cache.append(cls)
+            except Exception:
+                logger.debug("Failed to load hook plugin %r", ep.name, exc_info=True)
+    return _hook_plugins_cache

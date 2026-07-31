@@ -94,7 +94,7 @@ class RayDnnSourceProvider:
         # Check for full model checkpoint.
         model_pt_path = ckpt_dir / "model.pt"
         if model_pt_path.exists():
-            model = torch.load(model_pt_path, map_location="cpu", weights_only=False)
+            model = torch.load(model_pt_path, map_location="cpu", weights_only=True)
         else:
             # Check for state_dict only.
             state_dict_path = ckpt_dir / "state_dict.pt"

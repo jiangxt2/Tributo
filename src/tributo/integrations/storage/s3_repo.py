@@ -263,7 +263,7 @@ def _s3_put_json(
     if if_none_match:
         extra["IfNoneMatch"] = "*"
     if if_match is not None:
-        extra["IfMatch"] = if_match
+        extra["IfMatch"] = f'"{if_match}"'
     if metadata:
         extra["Metadata"] = metadata
     body = json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -367,4 +367,8 @@ def _s3_lease_acquire(
             if head:
                 _s3_put_json(client, bucket, lease_key, lease_data, if_match=head["etag"])
                 return lease_key, False
-    return lease_key, False
+    raise RuntimeError(
+        f"Lease {lease_key} held by {existing.get('owner', 'unknown')}"
+        f" until {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(existing.get('expires_at', 0)))}"
+        if existing else f"Lease {lease_key} unavailable"
+    )

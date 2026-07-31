@@ -143,7 +143,7 @@ class TorchExportExporter:
             "export_method": "torch.export",
             "input_structure": _describe_inputs(example_inputs),
             "graph_node_count": len(ep.graph.nodes),
-            "graph_module_call_signature": str(ep.graph.signature),
+            "graph_module_call_signature": str(ep.graph_signature),
         }
         meta_path.write_text(json.dumps(meta_data, indent=2))
 
