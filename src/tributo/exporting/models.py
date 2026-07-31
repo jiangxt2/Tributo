@@ -256,6 +256,11 @@ class ArtifactDraft(BaseModel):
     entrypoint: str
     producer: ProducerInfo
     derived_from: tuple[ArtifactRef, ...] = ()
+    artifact_kind: str = Field(
+        default="model",
+        pattern=r"^(model|report|diagnostics|graph_snapshot)$",
+        description="Artifact kind — model, report, diagnostics, or graph_snapshot.",
+    )
 
     @model_validator(mode="after")
     def _check_entrypoint(self) -> ArtifactDraft:
@@ -283,6 +288,11 @@ class LogicalArtifact(BaseModel):
     producer: ProducerInfo
     derived_from: tuple[ArtifactRef, ...] = ()
     validation: tuple["ValidationResult", ...] = ()
+    artifact_kind: str = Field(
+        default="model",
+        pattern=r"^(model|report|diagnostics|graph_snapshot)$",
+        description="Artifact kind — model, report, diagnostics, or graph_snapshot.",
+    )
 
     @classmethod
     def compute_tree_digest(cls, files: tuple[ArtifactFile, ...]) -> str:

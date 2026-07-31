@@ -31,6 +31,7 @@ except ImportError:
     pass
 import tributo.data.parquet  # noqa: E402, F401, I001
 from tributo.data.base import DataConnector, S3Config, WriteMode  # noqa: E402
+from tributo.data.graph import GraphDataBundle, GraphSchema  # noqa: E402
 from tributo.data.registry import get_connector, list_connectors, register_connector  # noqa: E402
 from tributo.data.source_config import (  # noqa: E402
     CsvSourceConfig,
@@ -49,6 +50,9 @@ __all__ = [
     "DataConnector",
     "WriteMode",
     "S3Config",
+    # Graph data abstraction
+    "GraphSchema",
+    "GraphDataBundle",
     # Registry
     "get_connector",
     "register_connector",

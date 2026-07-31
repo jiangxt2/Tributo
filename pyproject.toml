@@ -101,6 +101,18 @@ grpc = [
 registry = [
     "mlflow>=2.18.0,<3.0.0",
 ]
+graph = [
+    "tributo[model-export-torch]",
+    "torch-geometric>=2.5.0",
+]
+causal = [
+    "dowhy>=0.11.0",
+    "econml>=0.15.0",
+]
+streaming-inference = [
+    "confluent-kafka>=2.3.0",
+    "ray[serve]",
+]
 test-integration = [
     "tributo[training]",
     "pytest>=7.0.0",
@@ -127,6 +139,9 @@ torch-safetensors-v1 = "tributo.integrations.exporters.torch_safetensors:TorchSa
 torch-onnx-v1 = "tributo.integrations.exporters.torch_onnx:TorchONNXExporter"
 torch-export-v1 = "tributo.integrations.exporters.torch_export:TorchExportExporter"
 hf-onnx-v1 = "tributo.integrations.exporters.hf_onnx:HuggingFaceONNXExporter"
+torchscript = "tributo.training.exporters.torchscript:TorchScriptExporter"
+safetensors = "tributo.training.exporters.safetensors:SafetensorsExporter"
+causal_report = "tributo.training.exporters.causal_report:CausalReportExporter"
 
 [project.entry-points."tributo.source_providers"]
 ray-xgboost-v1 = "tributo.integrations.sources.ray_xgboost:RayXGBoostSourceProvider"
@@ -143,6 +158,9 @@ onnx-runtime-v1 = "tributo.integrations.validators.onnx_runtime:ONNXRuntimeValid
 mlflow-registry-v1 = "tributo.integrations.hooks.mlflow_hook:MLflowPostPublishHook"
 
 [project.entry-points."tributo.tensorrt_plugins"]
+
+[project.entry-points."tributo.stream_sources"]
+kafka = "tributo.streaming.kafka_source:KafkaStreamSource"
 
 [build-system]
 requires = ["hatchling"]

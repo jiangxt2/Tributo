@@ -1,14 +1,20 @@
 """Base trainer and registration spec.
 
 ``BaseTrainer`` uses the Template Method pattern — subclasses only need to
-implement ``setup``, ``training_loop``, and ``export_model``.  An optional
-callback mechanism supports integration with experiment trackers such as
-MLflow.
+implement ``setup``, ``training_loop``, and ``export_model`` (or the newer
+``export_artifacts`` for non-model outputs).  An optional callback mechanism
+supports integration with experiment trackers such as MLflow.
+
+.. deprecated:: 0.5.0
+    Override ``export_artifacts()`` instead of ``export_model()``.
+    ``export_model()`` is kept as a backward-compatible alias with a
+    no-op default implementation.
 """
 
 from __future__ import annotations
 
 import logging
+import warnings
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -62,6 +68,7 @@ class TrainerCallback(Protocol):
     def on_setup_start(self, trainer: BaseTrainer) -> None: ...
     def on_training_end(self, trainer: BaseTrainer, result: Any) -> None: ...
     def on_export_end(self, trainer: BaseTrainer, output_path: str) -> None: ...
+    def on_artifacts_exported(self, trainer: BaseTrainer, output_path: str) -> None: ...
     def on_run_complete(
         self, trainer: BaseTrainer, summary: dict[str, Any]
     ) -> None: ...
@@ -70,12 +77,17 @@ class TrainerCallback(Protocol):
 
 @PublicAPI(stability="beta")
 class BaseTrainer(ABC):
-    """Base class for trainers — ``setup → training_loop → export_model``.
+    """Base class for trainers — ``setup → training_loop → export_artifacts``.
 
-    Subclasses must implement three abstract methods:
+    Subclasses must implement two abstract methods:
     - ``setup()``: Initialise model, optimizer, data preprocessing, etc.
     - ``training_loop()``: Run training, return a checkpoint or model object.
-    - ``export_model()``: Export the model to the given path.
+
+    For artifact export, subclasses should override ``export_artifacts()``
+    (the new extension point).  ``export_model()`` is kept for backward
+    compatibility — its default no-op implementation is called by
+    ``export_artifacts()`` when the subclass only overrides the legacy
+    ``export_model()`` method.
 
     The base class provides ``run()`` as a Template Method that orchestrates
     the three steps in order.
@@ -96,7 +108,8 @@ class BaseTrainer(ABC):
             Currently supported keys:
             - ``callbacks``: ``list[TrainerCallback]`` — callback objects
               implementing the lifecycle methods (``on_setup_start``,
-              ``on_training_end``, ``on_export_end``, ``on_run_complete``,
+              ``on_training_end``, ``on_export_end``,
+              ``on_artifacts_exported``, ``on_run_complete``,
               ``on_run_error``).
     """
 
@@ -132,9 +145,56 @@ class BaseTrainer(ABC):
     def training_loop(self) -> Any:
         """Run training and return a checkpoint or model object."""
 
+    # -- artifact export (Phase 4: algorithm extensibility) --------------------
+
+    def export_artifacts(self, checkpoint: Any, output_path: str) -> None:
+        """Export training artifacts to *output_path*.
+
+        The default implementation delegates to ``export_model()`` for
+        backward compatibility.  Subclasses that produce non-model
+        artifacts (reports, diagnostics, graph snapshots) should override
+        this method directly.
+
+        Args:
+            checkpoint: The checkpoint or model object returned by
+                ``training_loop``.
+            output_path: Export destination (local path or S3 URI).
+        """
+        # Detect the no-op path: if neither export_artifacts nor export_model
+        # was overridden by the subclass, warn the user.
+        if type(self).export_model is BaseTrainer.export_model:
+            logger.warning(
+                "%s does not override export_artifacts() or export_model(); "
+                "no artifact will be exported.",
+                type(self).__name__,
+            )
+        self.export_model(checkpoint, output_path)
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        # Warn at class-definition time when a subclass still uses the
+        # legacy export_model path (instead of export_artifacts).  The
+        # export_artifacts default delegates to export_model, so existing
+        # subclasses keep working — this is a gentle nudge, not a break.
+        if (
+            "export_model" in cls.__dict__
+            and "export_artifacts" not in cls.__dict__
+        ):
+            warnings.warn(
+                f"{cls.__name__} overrides export_model() — "
+                "export_artifacts() is the preferred hook. "
+                "Override export_artifacts() instead for artifact-kit-aware export.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
     @abstractmethod
-    def export_model(self, checkpoint: Any, output_path: str) -> None:
-        """Export the model to the given path.
+    def export_artifacts(self, checkpoint: Any, output_path: str) -> None:
+        """Export training artifacts to the given path.
+
+        Subclasses implement this instead of the legacy ``export_model``.
+        The default implementation delegates to ``export_model``, so
+        existing subclasses continue to work without changes.
 
         Args:
             checkpoint: The checkpoint or model object returned by
@@ -142,25 +202,59 @@ class BaseTrainer(ABC):
             output_path: Export destination (local path or S3 URI).
         """
 
+    def _export_artifacts_default(
+        self, checkpoint: Any, output_path: str
+    ) -> None:
+        """Default artifact-export dispatch."""
+        if type(self).export_artifacts is not BaseTrainer.export_artifacts:
+            self.export_artifacts(checkpoint, output_path)
+        elif type(self).export_model is not BaseTrainer.export_model:
+            self.export_model(checkpoint, output_path)
+        else:
+            logger.warning(
+                "%s does not override export_artifacts() or export_model(); "
+                "no artifact will be exported.",
+                type(self).__name__,
+            )
+        self.export_model(checkpoint, output_path)
+
+    def export_model(self, checkpoint: Any, output_path: str) -> None:  # noqa: B027
+        """Export the model to the given path.
+
+        .. deprecated:: 0.5.0
+            Override ``export_artifacts()`` instead.  This method is kept
+            as a backward-compatible alias — the default implementation
+            is a no-op.
+
+        Args:
+            checkpoint: The checkpoint or model object returned by
+                ``training_loop``.
+            output_path: Export destination (local path or S3 URI).
+        """
+        pass
+
+    # -- Template Method -------------------------------------------------------
+
     def run(
         self,
         output_path: str,
         *,
         bundle_config: Any | None = None,
     ) -> dict[str, Any]:
-        """Template Method: ``setup → training_loop → export_model``.
+        """Template Method: ``setup → training_loop → export_artifacts``.
 
         Subclasses should write their actual results into ``self._summary``
-        inside ``export_model``; this method returns that dict.
+        inside ``export_artifacts`` (or the legacy ``export_model``); this
+        method returns that dict.
 
         When *bundle_config* is set (a ``BundleOutputConfig`` with non-empty
         ``targets``), the export path is routed through
-        ``BundleExportService`` instead of the legacy ``export_model()``
+        ``BundleExportService`` instead of the legacy ``export_artifacts()``
         method.  This is the **bundle mode** entry point — it uses the
         new export framework (planner → executor → publisher).
 
         Args:
-            output_path: Model export path (legacy mode).
+            output_path: Artifact export path.
             bundle_config: Optional ``BundleOutputConfig`` for bundle-mode
                 export.  When provided and has non-empty targets, the
                 export is routed through the new bundle pipeline.
@@ -196,14 +290,25 @@ class BaseTrainer(ABC):
             ):
                 self._export_bundle(checkpoint, bundle_config)
             else:
-                self.export_model(checkpoint, output_path)
+                self._export_artifacts_default(checkpoint, output_path)
 
-            # Fire on_export_end
+            # Fire artifact-exported callbacks.  If a callback implements
+            # on_artifacts_exported (the new hook), use it.  Otherwise
+            # fall back to on_export_end for backward compatibility.
+            # This avoids double-firing when a callback delegates
+            # on_artifacts_exported → on_export_end.
             for cb in self._callbacks:
-                try:
-                    cb.on_export_end(self, output_path)
-                except Exception as e:
-                    logger.warning("Callback on_export_end failed: %s", e)
+                has_new_hook = "on_artifacts_exported" in type(cb).__dict__
+                if has_new_hook:
+                    try:
+                        cb.on_artifacts_exported(self, output_path)
+                    except Exception as e:
+                        logger.warning("Callback on_artifacts_exported failed: %s", e)
+                else:
+                    try:
+                        cb.on_export_end(self, output_path)
+                    except Exception as e:
+                        logger.warning("Callback on_export_end failed: %s", e)
 
             logger.info("%s training completed.", type(self).__name__)
 

@@ -38,6 +38,11 @@ _EXEMPT_NAMES: set[str] = {
     "SourceConfig",
     "SourceInput",
     "TrainerSpec",
+    # Stable string constants — Python str objects cannot be decorated.
+    "ARTIFACT_KIND_MODEL",
+    "ARTIFACT_KIND_REPORT",
+    "ARTIFACT_KIND_DIAGNOSTICS",
+    "ARTIFACT_KIND_GRAPH_SNAPSHOT",
 }
 
 
