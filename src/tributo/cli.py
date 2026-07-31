@@ -215,6 +215,7 @@ def export(
     """Export a trained model to one or more formats as a bundle."""
     try:
         from tributo.exporting.models import (
+            AliasConfig,
             BundleOutputConfig,
             ExportTarget,
         )
@@ -244,26 +245,31 @@ def export(
             request_id=request_id,
             storage_profile=storage_profile,
             roles=roles_dict,
-            alias={"name": alias} if alias else None,  # type: ignore[arg-type]
+            alias=AliasConfig(name=alias) if alias else None,
         )
 
-        # Resolve source provider.
+        # Resolve source provider by scheme.
         source_uri = source
-
         if source.startswith("ray://"):
             source_uri = source[6:]  # strip ray:// prefix
         elif source.startswith("hf://"):
-            raise click.BadParameter(
-                "HuggingFace source (hf://) is not yet supported. "
-                "Use a local checkpoint path or ray://<path> instead."
+            source_uri = source[5:]  # strip hf:// prefix
+
+        if source.startswith("hf://"):
+            from tributo.integrations.sources.huggingface import (
+                HuggingFaceSourceProvider,
             )
-        # Local checkpoint paths use RayXGBoostSourceProvider.
 
-        from tributo.integrations.sources.ray_xgboost import (
-            RayXGBoostSourceProvider,
-        )
+            provider = HuggingFaceSourceProvider()
+        else:
+            # Ray checkpoints and local checkpoint paths use the
+            # RayXGBoostSourceProvider (DNN/PU providers are selected by
+            # the trainer-type registry in the training path).
+            from tributo.integrations.sources.ray_xgboost import (
+                RayXGBoostSourceProvider,
+            )
 
-        provider = RayXGBoostSourceProvider()
+            provider = RayXGBoostSourceProvider()
         service = BundleExportService()
 
         with provider.open_source(source_uri) as export_source:
@@ -286,6 +292,106 @@ def export(
 
     except Exception as e:
         click.echo(f"Export failed: {e}", err=True)
+        sys.exit(1)
+
+
+@main.command("inspect")
+@click.argument("uri")
+@click.option(
+    "--storage-profile",
+    default=None,
+    help="Storage profile name for S3 credentials",
+)
+@click.option(
+    "--json",
+    "json_output",
+    is_flag=True,
+    default=False,
+    help="Output the manifest as JSON",
+)
+def inspect(uri: str, storage_profile: str | None, json_output: bool):
+    """Inspect a published bundle manifest.
+
+    URI can be a local path, ``file://``, ``s3://`` manifest/bundle URI,
+    or an ``s3://`` alias pointer.
+    """
+    try:
+        from tributo.exporting.bundle_reader import BundleReader
+
+        reader = BundleReader()
+        manifest = reader.read_manifest(uri, storage_profile=storage_profile)
+
+        if json_output:
+            click.echo(manifest.model_dump_json(indent=2))
+            return
+
+        click.echo(f"Bundle ID:     {manifest.bundle_id}")
+        click.echo(f"Status:        {manifest.status}")
+        click.echo(f"Created:       {manifest.created_at.isoformat()}")
+        click.echo(f"Canonical URI: {manifest.canonical_uri}")
+        click.echo("Roles:")
+        for name, target in (manifest.roles or {}).items():
+            click.echo(f"  {name} → {target}")
+        click.echo("Artifacts:")
+        for a in manifest.artifacts:
+            click.echo(
+                f"  {a.name}  [{a.format}/{a.flavor_id}]  digest {a.tree_digest[:12]}…"
+            )
+    except Exception as e:
+        click.echo(f"Inspect failed: {e}", err=True)
+        sys.exit(1)
+
+
+@main.command("export-gc")
+@click.argument("bundle_uri")
+@click.option(
+    "--storage-profile",
+    default=None,
+    help="Storage profile name for S3 credentials",
+)
+@click.option(
+    "--orphan-ttl",
+    default=3600,
+    type=int,
+    help="Minimum age (seconds) before an orphan prefix is collectable",
+)
+@click.option(
+    "--yes",
+    "confirmed",
+    is_flag=True,
+    default=False,
+    help="Actually delete orphans (default is a dry run)",
+)
+def export_gc(
+    bundle_uri: str,
+    storage_profile: str | None,
+    orphan_ttl: int,
+    confirmed: bool,
+):
+    """Collect orphaned bundle prefixes on S3 (dry-run by default).
+
+    Only prefixes that look like bundle IDs, have no manifest, are older
+    than --orphan-ttl, and are not lease-protected are deleted.
+    """
+    try:
+        from tributo.exporting.gc import BundleGarbageCollector
+
+        collector = BundleGarbageCollector()
+        result = collector.collect(
+            bundle_uri,
+            storage_profile=storage_profile,
+            orphan_ttl_seconds=orphan_ttl,
+            dry_run=not confirmed,
+        )
+        click.echo(f"Scanned:       {result['scanned']}")
+        click.echo(f"Orphans found: {result['orphans_found']}")
+        click.echo(f"Deleted:       {result['deleted']}")
+        for err in result["errors"]:
+            click.echo(f"  error: {err}", err=True)
+        if not confirmed:
+            click.echo("Dry-run — pass --yes to delete.")
+    except Exception as e:
+        click.echo(f"GC failed: {e}", err=True)
         sys.exit(1)
 
 
