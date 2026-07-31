@@ -6,7 +6,7 @@ from typing import ClassVar, Mapping
 
 from pydantic import BaseModel, ConfigDict
 
-from tributo.training.exporters.models import (
+from tributo.exporting.models import (
     ExportSource,
     FailureInfo,
     ResolvedArtifact,

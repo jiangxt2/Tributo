@@ -138,7 +138,7 @@ class BundleOutputConfig(BaseModel):
                 for d in t.depends_on:
                     if d == t.name:
                         raise ValueError(f"target {t.name!r} cannot depend on itself")
-            for role_name, target_name in self.roles.items():
+            for role_name, _target_name in self.roles.items():
                 _validate_safe_name(role_name, "role name")
                 # Roles may reference implicit targets (upstream_requirements)
                 # that the planner resolves — skip the exists-in-targets check.

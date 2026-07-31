@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import datetime
 import hashlib
+import json
 import logging
 import shutil
 import tempfile
@@ -18,25 +19,26 @@ import uuid
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from tributo._common.storage_profiles import StorageProfileResolver
 from tributo.exceptions import BundleExportError, PostPublishCallbackError
-from tributo.training.exporters.manager import ExportManager
-from tributo.training.exporters.manifest import (
+from tributo.exporting.executor import ExportManager
+from tributo.exporting.manifest import (
+    ManifestExecutionNode,
     ManifestSchemaRegistry,
     ManifestSourceInfo,
 )
-from tributo.training.exporters.models import (
+from tributo.exporting.models import (
     BundleOutputConfig,
     BundleResult,
     ExportSource,
     PublishedBundle,
 )
-from tributo.training.exporters.planner import ExportPlanner
-from tributo.training.exporters.protocols import SourceProvider
-from tributo.training.exporters.publisher import Publisher
-from tributo.training.exporters.registries import (
+from tributo.exporting.planner import ExportPlanner
+from tributo.exporting.protocols import SourceProvider
+from tributo.exporting.publisher import Publisher
+from tributo.exporting.registries import (
     ExportRegistry,
     SourceProviderRegistry,
     ValidatorRegistry,
@@ -90,15 +92,19 @@ class BundleExportService:
         validator_registry: ValidatorRegistry | None = None,
         storage_resolver: StorageProfileResolver | None = None,
         manifest_registry: ManifestSchemaRegistry | None = None,
+        repository: Any | None = None,
+        operation_store: Any | None = None,
     ) -> None:
         self._exports = export_registry or ExportRegistry()
         self._providers = source_provider_registry or SourceProviderRegistry()
         self._validators = validator_registry or ValidatorRegistry()
         self._storage_resolver = storage_resolver or StorageProfileResolver()
         self._manifest_registry = manifest_registry or ManifestSchemaRegistry()
+        self._repository = repository
+        self._operation_store = operation_store
 
         # Register built-in schema readers.
-        from tributo.training.exporters.manifest import (
+        from tributo.exporting.manifest import (
             _read_manifest_v1,
             _read_manifest_v2,
         )
@@ -113,7 +119,7 @@ class BundleExportService:
             pass
 
         # Register built-in validators.
-        from tributo.training.exporters.validators import StructureValidator
+        from tributo.exporting.validators import StructureValidator
 
         try:
             self._validators.register(StructureValidator)
@@ -213,7 +219,63 @@ class BundleExportService:
                 roles=config.roles,
             )
 
-            # Phase 5: Callback (before staging cleanup).
+            # Phase 5: Compute bundle_digest and record execution.
+            from tributo.exporting.manifest import compute_bundle_digest
+
+            bundle_digest = compute_bundle_digest(
+                artifacts=published.result.artifacts,
+                roles=published.result.roles,
+                exporter_options={
+                    nr.node_id: {} for nr in execution.node_results
+                    if nr.exporter_id
+                },
+            )
+
+            # Write execution record (when OperationStore is available).
+            if self._operation_store is not None:
+                from tributo.exporting.records import ExecutionRecord
+
+                record = ExecutionRecord(
+                    execution_id=execution_id,
+                    bundle_id=bundle_id,
+                    bundle_digest=bundle_digest,
+                    status=published.result.status,
+                    source_kind=source.source_kind,
+                    source_fingerprint=source.source_fingerprint,
+                    duration_ms=sum(
+                        nr.duration_ms for nr in execution.node_results
+                    ),
+                    nodes=tuple(
+                        ManifestExecutionNode(
+                            node_id=nr.node_id,
+                            target_name=nr.target_name,
+                            exporter_id=nr.exporter_id,
+                            status=nr.status,
+                            required=nr.required,
+                            implicit=nr.node_id.startswith("_implicit__"),
+                            artifact_ref=nr.artifact_ref,
+                            failure=nr.failure,
+                            duration_ms=nr.duration_ms,
+                        )
+                        for nr in execution.node_results
+                    ),
+                    roles=published.result.roles,
+                    tributo_version=tributo_version,
+                )
+                self._operation_store.record_execution(record)
+
+            # Phase 6: Post-publish hooks.
+            if self._repository is not None and hasattr(self, "_hooks_runner"):
+                manifest_dict = json.loads(
+                    Path(published.result.manifest_uri).read_bytes()
+                )
+                self._hooks_runner.run(
+                    canonical_uri=published.result.canonical_uri,
+                    manifest=manifest_dict,
+                    manifest_sha256=published.result.manifest_sha256,
+                )
+
+            # Phase 7: Callback (before staging cleanup).
             if callback is not None:
                 try:
                     callback(published)

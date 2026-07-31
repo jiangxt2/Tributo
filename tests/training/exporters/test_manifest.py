@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from tributo.training.exporters.manifest import (
+from tributo.exporting.manifest import (
     ExportManifest,
     ManifestExecution,
     ManifestExecutionNode,
@@ -16,7 +16,7 @@ from tributo.training.exporters.manifest import (
     ManifestSourceInfo,
     _read_manifest_v1,
 )
-from tributo.training.exporters.models import (
+from tributo.exporting.models import (
     ArtifactFile,
     LogicalArtifact,
     ProducerInfo,

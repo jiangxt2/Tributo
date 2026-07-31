@@ -12,7 +12,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from tributo.training.exporters.models import FailureInfo, LogicalArtifact
+from tributo.exporting.models import FailureInfo, LogicalArtifact
 from tributo.util.annotations import DeveloperAPI, PublicAPI
 
 # ── Data models ────────────────────────────────────────────────────────────────
@@ -147,10 +147,11 @@ def resolve_repository(
     - everything else → ``LocalBundleRepository``
     """
     if uri.startswith("s3://"):
-        from tributo.training.exporters.stores.s3_repo import S3BundleRepository
+        raise NotImplementedError(
+            "S3BundleRepository is not yet implemented. "
+            "Use a local path for now."
+        )
 
-        return S3BundleRepository(storage_profile=storage_profile)
-
-    from tributo.training.exporters.stores.local_repo import LocalBundleRepository
+    from tributo.integrations.storage.local import LocalBundleRepository
 
     return LocalBundleRepository()

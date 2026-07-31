@@ -14,7 +14,7 @@ from typing import Any, ClassVar, Generator
 
 from pydantic import BaseModel, ConfigDict
 
-from tributo.training.exporters.models import ExportSource
+from tributo.exporting.models import ExportSource
 from tributo.util.annotations import PublicAPI
 
 logger = logging.getLogger(__name__)

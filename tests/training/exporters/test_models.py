@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from tributo.training.exporters.models import (
+from tributo.exporting.models import (
     AliasConfig,
     ArtifactDraft,
     ArtifactFile,
@@ -388,7 +388,7 @@ class TestExportContext:
         from pathlib import Path
 
         ctx = __import__(
-            "tributo.training.exporters.models", fromlist=["ExportContext"]
+            "tributo.exporting.models", fromlist=["ExportContext"]
         ).ExportContext(
             execution_id="exec-1",
             node_id="node-1",

@@ -8,12 +8,11 @@ P0 defines the data models and the ``OperationStore`` protocol.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from tributo.training.exporters.manifest import ManifestExecutionNode
-from tributo.training.exporters.models import FailureInfo
+from tributo.exporting.manifest import ManifestExecutionNode
 from tributo.util.annotations import DeveloperAPI, PublicAPI
 
 # ── Data models ────────────────────────────────────────────────────────────────

@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from tributo.training.exporters.manifest import ManifestSourceInfo
-from tributo.training.exporters.models import (
+from tributo.exporting.manifest import ManifestSourceInfo
+from tributo.exporting.models import (
     AliasConfig,
     ArtifactFile,
     ArtifactRef,
@@ -17,7 +17,7 @@ from tributo.training.exporters.models import (
     NodeResult,
     ProducerInfo,
 )
-from tributo.training.exporters.publisher import Publisher
+from tributo.exporting.publisher import Publisher
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 

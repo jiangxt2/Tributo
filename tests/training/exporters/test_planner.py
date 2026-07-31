@@ -8,7 +8,7 @@ import pytest
 from pydantic import BaseModel
 
 from tributo.exceptions import JobConfigurationError
-from tributo.training.exporters.models import (
+from tributo.exporting.models import (
     BundleOutputConfig,
     ExportSource,
     ExportTarget,
@@ -17,8 +17,8 @@ from tributo.training.exporters.models import (
     UpstreamRequirement,
     ValidatorBinding,
 )
-from tributo.training.exporters.planner import ExportPlanner
-from tributo.training.exporters.registries import (
+from tributo.exporting.planner import ExportPlanner
+from tributo.exporting.registries import (
     ExportRegistry,
     ValidatorRegistry,
 )

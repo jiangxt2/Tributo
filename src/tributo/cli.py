@@ -213,11 +213,11 @@ def export(
 ):
     """Export a trained model to one or more formats as a bundle."""
     try:
-        from tributo.training.exporters.models import (
+        from tributo.exporting.models import (
             BundleOutputConfig,
             ExportTarget,
         )
-        from tributo.training.exporters.service import BundleExportService
+        from tributo.exporting.service import BundleExportService
 
         # Parse targets.
         target_list = [
@@ -258,7 +258,7 @@ def export(
             )
         # Local checkpoint paths use RayXGBoostSourceProvider.
 
-        from tributo.training.exporters.sources.ray_xgboost import (
+        from tributo.integrations.sources.ray_xgboost import (
             RayXGBoostSourceProvider,
         )
 

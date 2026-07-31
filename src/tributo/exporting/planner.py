@@ -11,14 +11,14 @@ from collections import deque
 from typing import Any
 
 from tributo.exceptions import JobConfigurationError
-from tributo.training.exporters.models import (
+from tributo.exporting.models import (
     BundleOutputConfig,
     ExportSource,
     ExportTarget,
     PlannedTarget,
     SupportRequest,
 )
-from tributo.training.exporters.registries import (
+from tributo.exporting.registries import (
     ExportRegistry,
     ValidatorRegistry,
     select_candidate,

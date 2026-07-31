@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 
 from tributo.exceptions import JobExecutionError
-from tributo.training.exporters.models import (
+from tributo.exporting.models import (
     ArtifactDraft,
     ArtifactFile,
     ArtifactRef,
@@ -26,9 +26,9 @@ from tributo.training.exporters.models import (
     ResolvedArtifact,
     ValidationResult,
 )
-from tributo.training.exporters.planner import ExportPlan
-from tributo.training.exporters.protocols import ModelExporter
-from tributo.training.exporters.registries import (
+from tributo.exporting.planner import ExportPlan
+from tributo.exporting.protocols import ModelExporter
+from tributo.exporting.registries import (
     ExportRegistry,
     ValidatorRegistry,
 )

@@ -5,7 +5,6 @@ Requires ``xgboost`` and ``onnxmltools``.  Skipped when not installed.
 
 from __future__ import annotations
 
-import json
 import shutil
 import tempfile
 from pathlib import Path
@@ -41,8 +40,8 @@ class TestExporterSupports:
 
     def test_supports_xgboost_result(self) -> None:
         """XGBoostONNXExporter.supports() accepts xgboost_result."""
-        from tributo.training.exporters.models import SupportRequest
-        from tributo.training.exporters.xgboost_onnx_exporter import (
+        from tributo.exporting.models import SupportRequest
+        from tributo.integrations.exporters.xgboost_onnx import (
             XGBoostONNXExporter,
         )
 
@@ -54,8 +53,8 @@ class TestExporterSupports:
 
     def test_rejects_unknown_source_kind(self) -> None:
         """XGBoostONNXExporter.supports() rejects unknown kinds."""
-        from tributo.training.exporters.models import SupportRequest
-        from tributo.training.exporters.xgboost_onnx_exporter import (
+        from tributo.exporting.models import SupportRequest
+        from tributo.integrations.exporters.xgboost_onnx import (
             XGBoostONNXExporter,
         )
 
@@ -68,7 +67,7 @@ class TestExporterSupports:
 
     def test_classvars_are_correct(self) -> None:
         """Verify XGBoostONNXExporter declares correct metadata."""
-        from tributo.training.exporters.xgboost_onnx_exporter import (
+        from tributo.integrations.exporters.xgboost_onnx import (
             XGBoostONNXExporter,
         )
 
@@ -87,15 +86,12 @@ class TestExportPipelineWithRealExporter:
     @pytest.mark.slow
     def test_xgboost_to_onnx_local_bundle(self) -> None:
         """Train tiny XGBoost → export to ONNX → verify bundle exists."""
-        from tributo.training.exporters.models import (
+        from tributo.exporting.models import (
             BundleOutputConfig,
             ExportSource,
             ExportTarget,
         )
-        from tributo.training.exporters.service import BundleExportService
-        from tributo.training.exporters.xgboost_onnx_exporter import (
-            XGBoostONNXExporter,
-        )
+        from tributo.exporting.service import BundleExportService
 
         booster = _train_tiny_booster()
         tmpdir = Path(tempfile.mkdtemp(prefix="tributo-e2e-"))

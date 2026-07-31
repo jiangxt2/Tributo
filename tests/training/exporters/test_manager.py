@@ -7,8 +7,8 @@ from typing import Any, ClassVar, Mapping
 
 from pydantic import BaseModel
 
-from tributo.training.exporters.manager import ExportManager
-from tributo.training.exporters.models import (
+from tributo.exporting.executor import ExportManager
+from tributo.exporting.models import (
     ArtifactDraft,
     BundleOutputConfig,
     DraftFile,
@@ -23,8 +23,8 @@ from tributo.training.exporters.models import (
     ValidationResult,
     ValidatorBinding,
 )
-from tributo.training.exporters.planner import ExportPlanner
-from tributo.training.exporters.registries import (
+from tributo.exporting.planner import ExportPlanner
+from tributo.exporting.registries import (
     ExportRegistry,
     ValidatorRegistry,
 )

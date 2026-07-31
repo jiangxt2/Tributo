@@ -6,14 +6,14 @@ from pathlib import Path
 
 import pytest
 
-from tributo.training.exporters.bundle_reader import BundleReader, ReaderResourceLimits
-from tributo.training.exporters.manifest import ManifestSourceInfo
-from tributo.training.exporters.models import (
+from tributo.exporting.bundle_reader import BundleReader, ReaderResourceLimits
+from tributo.exporting.manifest import ManifestSourceInfo
+from tributo.exporting.models import (
     ArtifactFile,
     LogicalArtifact,
     ProducerInfo,
 )
-from tributo.training.exporters.publisher import Publisher
+from tributo.exporting.publisher import Publisher
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -51,7 +51,7 @@ def _create_test_bundle(tmp_path: Path) -> tuple[Path, str, LogicalArtifact]:
         producer=ProducerInfo(exporter_id="test-v1"),
     )
 
-    from tributo.training.exporters.models import (
+    from tributo.exporting.models import (
         ArtifactRef,
         ExportExecutionResult,
         NodeResult,

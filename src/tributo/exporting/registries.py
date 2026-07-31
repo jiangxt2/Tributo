@@ -17,7 +17,7 @@ import logging
 from typing import Any
 
 from tributo.exceptions import JobConfigurationError
-from tributo.training.exporters.models import (
+from tributo.exporting.models import (
     ExportTarget,
     PlannedTarget,
     PluginLoadDiagnostic,
@@ -25,7 +25,7 @@ from tributo.training.exporters.models import (
     SupportResult,
     ValidatorBinding,
 )
-from tributo.training.exporters.protocols import (
+from tributo.exporting.protocols import (
     ExportValidator,
     ModelExporter,
     ModelFactory,

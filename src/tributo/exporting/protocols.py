@@ -11,7 +11,7 @@ from typing import Any, ClassVar, Mapping, Protocol, runtime_checkable
 
 from pydantic import BaseModel
 
-from tributo.training.exporters.models import (
+from tributo.exporting.models import (
     ArtifactDraft,
     ExportContext,
     ExportSource,
@@ -115,7 +115,7 @@ class SourceProvider(Protocol):
     def open_source(
         self,
         result: Any,
-        config: BaseModel,
+        config: BaseModel | None = None,
     ) -> Any:  # ContextManager[ExportSource]
         ...
 

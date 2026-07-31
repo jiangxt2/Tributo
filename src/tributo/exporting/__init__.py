@@ -20,11 +20,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from tributo.training.exporters.models import (
+from tributo.exporting.models import (
     BundleOutputConfig,
     ExportTarget,
 )
-from tributo.training.exporters.repository import BundleRef
+from tributo.exporting.repository import BundleRef
 from tributo.util.annotations import PublicAPI
 
 # ── Public types ───────────────────────────────────────────────────────────────
@@ -53,8 +53,8 @@ def export(
     Returns:
         ``BundleRef`` — an immutable reference to the committed bundle.
     """
-    from tributo.training.exporters.models import ExportSource
-    from tributo.training.exporters.service import BundleExportService
+    from tributo.exporting.models import ExportSource
+    from tributo.exporting.service import BundleExportService
 
     if not isinstance(source, ExportSource):
         raise TypeError(
@@ -85,7 +85,7 @@ def load_bundle(ref: BundleRef | str) -> dict[str, Any]:
     Returns:
         The manifest as a JSON-serialisable dict.
     """
-    from tributo.training.exporters.bundle_reader import BundleReader
+    from tributo.exporting.bundle_reader import BundleReader
 
     reader = BundleReader()
     if isinstance(ref, BundleRef):
@@ -100,7 +100,8 @@ def load_bundle(ref: BundleRef | str) -> dict[str, Any]:
 
     # Verify manifest integrity when a BundleRef was provided.
     if expected_sha256 is not None:
-        import hashlib, json
+        import hashlib
+        import json
         canonical = json.dumps(
             manifest_dict, sort_keys=True, separators=(",", ":")
         ).encode("utf-8")

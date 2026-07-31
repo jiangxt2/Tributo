@@ -12,15 +12,15 @@ import logging
 import os
 import shutil
 from pathlib import Path
+from typing import Any
 
-from tributo.training.exporters.repository import (
+from tributo.exporting.models import FailureInfo
+from tributo.exporting.repository import (
     AliasUpdateResult,
     BundleRef,
-    BundleRepository,
     CommitResult,
     UncommittedBundle,
 )
-from tributo.training.exporters.models import FailureInfo
 from tributo.util.annotations import PublicAPI
 
 logger = logging.getLogger(__name__)

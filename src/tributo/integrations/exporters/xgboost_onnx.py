@@ -8,12 +8,11 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
 from typing import Any, ClassVar, Mapping
 
 from pydantic import BaseModel
 
-from tributo.training.exporters.models import (
+from tributo.exporting.models import (
     ArtifactDraft,
     DraftFile,
     ExportContext,
@@ -25,7 +24,7 @@ from tributo.training.exporters.models import (
     SupportResult,
     ValidatorBinding,
 )
-from tributo.training.exporters.options import XGBoostONNXOptions
+from tributo.exporting.options import XGBoostONNXOptions
 from tributo.util.annotations import PublicAPI
 
 logger = logging.getLogger(__name__)
@@ -158,13 +157,11 @@ class XGBoostONNXExporter:
         output_path.write_bytes(onnx_model.SerializeToString())
         logger.info("XGBoost ONNX model written to %s", output_path)
 
-        # Produce artifact draft.
-        file_hash = _sha256_file(output_path)
-        file_size = output_path.stat().st_size
+        # Produce artifact draft.  DraftFile only carries relative_path +
+        # role; the ExportManager re-hashes every file from disk and
+        # produces the trusted ArtifactFile with sha256/size_bytes.
         draft_file = DraftFile(
             relative_path="model.onnx",
-            sha256=file_hash,
-            size_bytes=file_size,
             role="model",
         )
 
@@ -188,17 +185,3 @@ class XGBoostONNXExporter:
             ),
             derived_from=(),
         )
-
-
-def _sha256_file(path: Path) -> str:
-    """Compute SHA-256 hex digest of a single file."""
-    import hashlib
-
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        while True:
-            chunk = f.read(1 << 20)
-            if not chunk:
-                break
-            h.update(chunk)
-    return h.hexdigest()

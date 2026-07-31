@@ -15,7 +15,7 @@ from typing import Any, ClassVar, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from tributo.training.exporters.models import (
+from tributo.exporting.models import (
     ExportSource,
     FailureInfo,
     ResolvedArtifact,

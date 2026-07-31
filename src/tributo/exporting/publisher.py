@@ -25,7 +25,7 @@ from tributo._common.storage import (
     parse_s3_url,
 )
 from tributo._common.storage_profiles import StorageProfileResolver
-from tributo.training.exporters.manifest import (
+from tributo.exporting.manifest import (
     ExportManifest,
     ManifestExecution,
     ManifestExecutionNode,
@@ -33,7 +33,7 @@ from tributo.training.exporters.manifest import (
     ManifestSignature,
     ManifestSourceInfo,
 )
-from tributo.training.exporters.models import (
+from tributo.exporting.models import (
     AliasConfig,
     BundleResult,
     ExportExecutionResult,
@@ -629,7 +629,7 @@ class Publisher:
         self._storage_resolver = storage_resolver or StorageProfileResolver()
         self._manifest_registry = manifest_registry or ManifestSchemaRegistry()
         # Register built-in v1 reader.
-        from tributo.training.exporters.manifest import _read_manifest_v1
+        from tributo.exporting.manifest import _read_manifest_v1
 
         try:
             self._manifest_registry.register(1, _read_manifest_v1)
@@ -794,17 +794,53 @@ class Publisher:
                 alias_path = alias_dir / f"{alias_config.name}.json"
                 alias_uri = str(alias_path)
 
-                alias_data = {
-                    "manifest_uri": manifest_uri,
-                    "manifest_sha256": manifest_sha256,
-                    "bundle_id": bundle_id,
-                    "created_at": manifest.created_at.isoformat(),
-                }
-                alias_bytes = json.dumps(alias_data, indent=2).encode("utf-8")
-                tmp_path = alias_path.with_suffix(".tmp")
-                tmp_path.write_bytes(alias_bytes)
-                os.replace(str(tmp_path), str(alias_path))
-                alias_status = "updated"
+                created_at_str = manifest.created_at.isoformat()
+
+                # Policy checks (mirror S3 _update_alias_s3).
+                if alias_path.exists():
+                    existing = json.loads(alias_path.read_bytes())
+                    if alias_config.policy == "compare_and_swap":
+                        if alias_config.expected_manifest_sha256 is None:
+                            alias_status = "failed"
+                            alias_failure = FailureInfo(
+                                code="ALIAS_EXISTS",
+                                category="publish",
+                                message="CAS create-only but alias already exists",
+                            )
+                        else:
+                            current = existing.get("manifest_sha256", "")
+                            if current != alias_config.expected_manifest_sha256:
+                                alias_status = "failed"
+                                alias_failure = FailureInfo(
+                                    code="CAS_MISMATCH",
+                                    category="publish",
+                                    message="Expected manifest digest does not match",
+                                )
+                            else:
+                                # CAS matches — proceed with update.
+                                alias_status = None  # signal to write
+                    elif alias_config.policy == "newer":
+                        existing_ts = existing.get("created_at", "")
+                        if existing_ts > created_at_str:
+                            alias_status = "unchanged"
+                        else:
+                            alias_status = None  # signal to write
+                else:
+                    # Alias does not exist yet.
+                    alias_status = None  # signal to write
+
+                if alias_status is None:
+                    alias_data = {
+                        "manifest_uri": manifest_uri,
+                        "manifest_sha256": manifest_sha256,
+                        "bundle_id": bundle_id,
+                        "created_at": created_at_str,
+                    }
+                    alias_bytes = json.dumps(alias_data, indent=2).encode("utf-8")
+                    tmp_path = alias_path.with_suffix(".tmp")
+                    tmp_path.write_bytes(alias_bytes)
+                    os.replace(str(tmp_path), str(alias_path))
+                    alias_status = "updated"
 
         bundle_result = BundleResult(
             bundle_id=bundle_id,

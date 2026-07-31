@@ -19,11 +19,11 @@ from tributo._common.storage import (
     parse_s3_url,
 )
 from tributo._common.storage_profiles import StorageProfileResolver
-from tributo.training.exporters.manifest import (
+from tributo.exporting.manifest import (
     ExportManifest,
     ManifestSchemaRegistry,
 )
-from tributo.training.exporters.models import (
+from tributo.exporting.models import (
     LogicalArtifact,
     ResolvedArtifact,
 )
@@ -76,7 +76,7 @@ class BundleReader:
         )
 
         self._manifest_registry = manifest_registry or ManifestSchemaRegistry()
-        from tributo.training.exporters.manifest import _read_manifest_v1
+        from tributo.exporting.manifest import _read_manifest_v1
 
         try:
             self._manifest_registry.register(1, _read_manifest_v1)

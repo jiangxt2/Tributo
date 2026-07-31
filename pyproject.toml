@@ -121,13 +121,13 @@ pu = "tributo.training.pu_trainer"
 bge_small_zh = "tributo.embeddings.registry"
 
 [project.entry-points."tributo.exporters"]
-xgboost-onnx-v1 = "tributo.training.exporters.xgboost_onnx_exporter:XGBoostONNXExporter"
+xgboost-onnx-v1 = "tributo.integrations.exporters.xgboost_onnx:XGBoostONNXExporter"
 
 [project.entry-points."tributo.source_providers"]
-ray-xgboost-v1 = "tributo.training.exporters.sources.ray_xgboost:RayXGBoostSourceProvider"
+ray-xgboost-v1 = "tributo.integrations.sources.ray_xgboost:RayXGBoostSourceProvider"
 
 [project.entry-points."tributo.validators"]
-onnx-runtime-v1 = "tributo.training.exporters.onnx_runtime_validator:ONNXRuntimeValidator"
+onnx-runtime-v1 = "tributo.integrations.validators.onnx_runtime:ONNXRuntimeValidator"
 
 [project.entry-points."tributo.model_flavors"]
 
