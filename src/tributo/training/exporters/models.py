@@ -140,10 +140,9 @@ class BundleOutputConfig(BaseModel):
                         raise ValueError(f"target {t.name!r} cannot depend on itself")
             for role_name, target_name in self.roles.items():
                 _validate_safe_name(role_name, "role name")
-                if target_name not in names:
-                    raise ValueError(
-                        f"role {role_name!r} references unknown target {target_name!r}"
-                    )
+                # Roles may reference implicit targets (upstream_requirements)
+                # that the planner resolves — skip the exists-in-targets check.
+                # The planner validates that all role targets resolve at plan time.
         if self.alias is not None:
             if (
                 self.alias.policy == "newer"

@@ -318,7 +318,7 @@ class TestLocalPublish:
 
         assert published.result.roles == {"inference": "fp32"}
 
-    def test_alias_not_requested_for_local(self, tmp_path: Path) -> None:
+    def test_alias_written_for_local(self, tmp_path: Path) -> None:
         staging = tmp_path / "staging"
         dest = tmp_path / "dest"
         artifact = _make_logical_artifact("fp32")
@@ -335,7 +335,7 @@ class TestLocalPublish:
         )
 
         publisher = Publisher()
-        # alias with local URI should not attempt update.
+        # alias with local URI should write alias file.
         published = publisher.publish(
             execution=execution,
             staging_root=staging,
@@ -347,7 +347,11 @@ class TestLocalPublish:
             alias_config=AliasConfig(name="latest", policy="newer"),
         )
 
-        assert published.result.alias_status == "not_requested"
+        assert published.result.alias_status == "updated"
+        assert published.result.alias_uri is not None
+        # Verify alias file was written.
+        alias_path = Path(published.result.alias_uri)  # type: ignore[arg-type]
+        assert alias_path.is_file()
 
 
 # ── S3 publish tests (botocore Stubber) ──────────────────────────────────────

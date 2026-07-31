@@ -46,6 +46,7 @@ class XGBoostONNXExporter:
     options_model: ClassVar[type[BaseModel]] = XGBoostONNXOptions
     validator_bindings: ClassVar[tuple[ValidatorBinding, ...]] = (
         ValidatorBinding(validator_id="structure-v1", required=True),
+        ValidatorBinding(validator_id="onnx-runtime-v1", required=False),
     )
     mutates_source: ClassVar[bool] = True
     upstream_requirements: ClassVar[tuple[Any, ...]] = ()
@@ -115,12 +116,26 @@ class XGBoostONNXExporter:
         booster.feature_names = [f"f{i}" for i in range(n_features)]
 
         try:
-            # Wrap booster in XGBClassifier (required by onnxmltools shape calculator).
-            wrapper = xgboost.XGBClassifier()
-            wrapper._Booster = booster  # noqa: SLF001
-            n_classes = int(booster.attr("num_class") or 0) or 2
-            wrapper.__dict__["n_classes_"] = n_classes
-            wrapper.__dict__["classes_"] = np.arange(n_classes)
+            # Choose wrapper based on objective type.
+            # Classifier objectives have num_class > 1; regression models
+            # (reg:squarederror, reg:logistic, etc.) need XGBRegressor.
+            num_class_raw = booster.attr("num_class")
+            objective = booster.attr("objective") or ""
+            is_regression = (
+                num_class_raw is None
+                or int(num_class_raw or 0) <= 1
+                or objective.startswith("reg:")
+            )
+
+            if is_regression:
+                wrapper = xgboost.XGBRegressor()
+                wrapper._Booster = booster  # noqa: SLF001
+            else:
+                wrapper = xgboost.XGBClassifier()
+                wrapper._Booster = booster  # noqa: SLF001
+                n_classes = int(num_class_raw or 0) or 2
+                wrapper.__dict__["n_classes_"] = n_classes
+                wrapper.__dict__["classes_"] = np.arange(n_classes)
 
             initial_types = [("float_input", FloatTensorType([None, n_features]))]
             opset = target.typed_options.get("opset", 12)

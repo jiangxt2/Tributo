@@ -783,9 +783,28 @@ class Publisher:
             # Use the sha256 from the existing (idempotent) or newly written manifest.
             manifest_sha256 = actual_manifest_sha256
 
+            # Local alias (atomic write).
             alias_uri = None
             alias_status = "not_requested"
             alias_failure = None
+
+            if alias_config is not None:
+                alias_dir = Path(bundle_uri) / "aliases"
+                alias_dir.mkdir(parents=True, exist_ok=True)
+                alias_path = alias_dir / f"{alias_config.name}.json"
+                alias_uri = str(alias_path)
+
+                alias_data = {
+                    "manifest_uri": manifest_uri,
+                    "manifest_sha256": manifest_sha256,
+                    "bundle_id": bundle_id,
+                    "created_at": manifest.created_at.isoformat(),
+                }
+                alias_bytes = json.dumps(alias_data, indent=2).encode("utf-8")
+                tmp_path = alias_path.with_suffix(".tmp")
+                tmp_path.write_bytes(alias_bytes)
+                os.replace(str(tmp_path), str(alias_path))
+                alias_status = "updated"
 
         bundle_result = BundleResult(
             bundle_id=bundle_id,

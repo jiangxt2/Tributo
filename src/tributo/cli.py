@@ -247,17 +247,17 @@ def export(
         )
 
         # Resolve source provider.
-        source_kind = "xgboost_result"  # default for local checkpoint paths
         source_uri = source
 
         if source.startswith("ray://"):
-            source_kind = "xgboost_result"
             source_uri = source[6:]  # strip ray:// prefix
         elif source.startswith("hf://"):
-            source_kind = "huggingface"
-            source_uri = source[5:]  # strip hf:// prefix
+            raise click.BadParameter(
+                "HuggingFace source (hf://) is not yet supported. "
+                "Use a local checkpoint path or ray://<path> instead."
+            )
+        # Local checkpoint paths use RayXGBoostSourceProvider.
 
-        # For now, support local checkpoint paths via RayXGBoostSourceProvider.
         from tributo.training.exporters.sources.ray_xgboost import (
             RayXGBoostSourceProvider,
         )

@@ -53,27 +53,20 @@ def export(
     Returns:
         ``BundleRef`` — an immutable reference to the committed bundle.
     """
+    from tributo.training.exporters.models import ExportSource
     from tributo.training.exporters.service import BundleExportService
 
-    service = BundleExportService()
-    # If *source* is already an ExportSource, use it directly.
-    from tributo.training.exporters.models import ExportSource
-
-    if isinstance(source, ExportSource):
-        export_source = source
-        provider = None
-    else:
-        # Auto-wrap raw model objects.
-        export_source = ExportSource(
-            source_kind="raw",
-            model_object=source,
+    if not isinstance(source, ExportSource):
+        raise TypeError(
+            f"source must be an ExportSource, got {type(source).__name__}. "
+            "Use a SourceProvider to create one (e.g. RayXGBoostSourceProvider)."
         )
-        provider = None
 
+    service = BundleExportService()
     result = service.export_bundle(
-        source=export_source,
+        source=source,
         config=spec,
-        provider=provider,
+        tributo_version=_get_tributo_version(),
     )
     return BundleRef(
         canonical_uri=result.canonical_uri,
@@ -96,14 +89,40 @@ def load_bundle(ref: BundleRef | str) -> dict[str, Any]:
 
     reader = BundleReader()
     if isinstance(ref, BundleRef):
-        uri = ref.manifest_sha256  # Use manifest_sha256 to locate via alias
-        # For local bundles, use canonical_uri directly.
         uri = ref.canonical_uri
+        expected_sha256 = ref.manifest_sha256
     else:
         uri = ref
+        expected_sha256 = None
 
     raw = reader.read_manifest(uri)
-    return raw.model_dump(mode="json")  # type: ignore[union-attr]
+    manifest_dict = raw.model_dump(mode="json")  # type: ignore[union-attr]
+
+    # Verify manifest integrity when a BundleRef was provided.
+    if expected_sha256 is not None:
+        import hashlib, json
+        canonical = json.dumps(
+            manifest_dict, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        actual_sha256 = hashlib.sha256(canonical).hexdigest()
+        if actual_sha256 != expected_sha256:
+            raise ValueError(
+                f"Manifest integrity check failed: "
+                f"expected sha256={expected_sha256[:16]}..., "
+                f"got sha256={actual_sha256[:16]}..."
+            )
+
+    return manifest_dict
+
+
+def _get_tributo_version() -> str:
+    """Get the current tributo version string."""
+    try:
+        from importlib.metadata import version
+
+        return version("tributo")
+    except Exception:
+        return "0.0.0"
 
 
 __all__ = [

@@ -101,12 +101,13 @@ class TestExportPipelineWithRealExporter:
         tmpdir = Path(tempfile.mkdtemp(prefix="tributo-e2e-"))
         try:
             service = BundleExportService()
-            service._exports.register(XGBoostONNXExporter)  # noqa: SLF001
 
             source = ExportSource(
                 source_kind="xgboost_result",
                 model_object=booster,
-                feature_schema=list(booster.feature_names),
+                feature_schema={
+                    "feature_names": list(booster.feature_names)
+                } if booster.feature_names else {},
                 metadata={
                     "framework": "xgboost",
                     "framework_version": xgboost.__version__,
@@ -118,7 +119,6 @@ class TestExportPipelineWithRealExporter:
                 targets=[
                     ExportTarget(name="model", format="onnx", options={"opset": 12}),
                 ],
-                roles={"inference": "model"},
             )
 
             result = service.export_bundle(source=source, config=config)

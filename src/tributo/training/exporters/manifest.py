@@ -276,13 +276,27 @@ def compute_bundle_digest(
     artifact_entries: list[dict[str, Any]] = []
     for a in artifacts:
         file_entries = sorted(
-            {
-                "path": f.relative_path,
-                "sha256": f.sha256,
-                "size_bytes": f.size_bytes,
-                "role": f.role,
-            }
-            for f in a.files
+            (
+                {
+                    "path": f.relative_path,
+                    "sha256": f.sha256,
+                    "size_bytes": f.size_bytes,
+                    "role": f.role,
+                }
+                for f in a.files
+            ),
+            key=lambda d: d["path"],
+        )
+        derived_entries = sorted(
+            (
+                {
+                    "node_id": d.node_id,
+                    "artifact_name": d.artifact_name,
+                    "tree_digest": d.tree_digest,
+                }
+                for d in a.derived_from
+            ),
+            key=lambda d: (d["node_id"], d["artifact_name"]),
         )
         artifact_entries.append(
             {
@@ -291,14 +305,7 @@ def compute_bundle_digest(
                 "flavor_id": a.flavor_id,
                 "entrypoint": a.entrypoint,
                 "files": file_entries,
-                "derived_from": sorted(
-                    {
-                        "node_id": d.node_id,
-                        "artifact_name": d.artifact_name,
-                        "tree_digest": d.tree_digest,
-                    }
-                    for d in a.derived_from
-                ),
+                "derived_from": derived_entries,
             }
         )
 

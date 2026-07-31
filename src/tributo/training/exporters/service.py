@@ -43,7 +43,9 @@ from tributo.training.exporters.registries import (
 )
 from tributo.util.annotations import PublicAPI
 
-# Track whether entry-point plugins have been loaded.
+# Cache entry-point plugin classes across instances so every new
+# BundleExportService gets the full set, not just the first.
+_plugin_cache: dict[str, list[Any]] = {"exports": [], "providers": [], "validators": []}
 _plugins_loaded = False
 
 logger = logging.getLogger(__name__)
@@ -118,13 +120,10 @@ class BundleExportService:
         except Exception:
             pass
 
-        # Load entry-point plugins on first construction.
-        global _plugins_loaded
-        if not _plugins_loaded:
-            _load_entry_point_plugins(
-                self._exports, self._providers, self._validators
-            )
-            _plugins_loaded = True
+        # Load entry-point plugins (cached across instances).
+        _load_entry_point_plugins(
+            self._exports, self._providers, self._validators
+        )
 
     def export_bundle(
         self,
@@ -240,17 +239,26 @@ def _load_entry_point_plugins(
     validators: ValidatorRegistry,
 ) -> None:
     """Discover and register exporter/source-provider/validator plugins."""
-    from tributo.plugin import (
-        discover_exporter_plugins,
-        discover_source_provider_plugins,
-        discover_validator_plugins,
-    )
+    global _plugins_loaded
 
-    for cls in discover_exporter_plugins():
+    if not _plugins_loaded:
+        from tributo.plugin import (
+            discover_exporter_plugins,
+            discover_source_provider_plugins,
+            discover_validator_plugins,
+        )
+
+        _plugin_cache["exports"] = discover_exporter_plugins()
+        _plugin_cache["providers"] = discover_source_provider_plugins()
+        _plugin_cache["validators"] = discover_validator_plugins()
+        _plugins_loaded = True
+
+    # Register cached classes into this instance's registries.
+    for cls in _plugin_cache["exports"]:
         exports.register(cls)
-    for cls in discover_source_provider_plugins():
+    for cls in _plugin_cache["providers"]:
         providers.register(cls)
-    for cls in discover_validator_plugins():
+    for cls in _plugin_cache["validators"]:
         validators.register(cls)
 
 
@@ -262,13 +270,15 @@ def _make_bundle_id(
 ) -> str:
     """Generate a stable, deterministic bundle ID from a request_id.
 
-    When *started_at* is provided, it is used for the timestamp prefix
-    so that retries with the same *request_id* produce identical bundle
-    IDs.  When ``None``, uses the current time.
+    When *started_at* is provided, it includes sub-second resolution
+    (microseconds) so that retries within the same second still produce
+    the identical bundle ID.  When ``None``, uses the current time.
     """
     if started_at is not None:
-        ts = started_at.strftime("%Y%m%dT%H%M%SZ")
+        ts = started_at.strftime("%Y%m%dT%H%M%S-%f")
     else:
-        ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        ts = datetime.datetime.now(datetime.timezone.utc).strftime(
+            "%Y%m%dT%H%M%S-%f"
+        )
     digest = hashlib.sha256(request_id.encode("utf-8")).hexdigest()[:16]
     return f"{ts}-{digest}"

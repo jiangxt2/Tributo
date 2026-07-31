@@ -147,16 +147,22 @@ class ExportPlanner:
                 "Cannot plan export: targets is None (legacy mode)"
             )
 
+        # Pre-compute format of every explicit target for upstream_formats.
+        _explicit_formats: dict[str, str] = {
+            t.name: t.format for t in config.targets
+        }
+
         # Phase 1: Match each explicit target to a PlannedTarget.
         planned: dict[str, PlannedTarget] = {}
         for target in config.targets:
-            # Populate upstream_formats from already-planned explicit deps
-            # so that artifact-to-artifact exporters (e.g. quantizer) can
-            # check whether their upstream requirements are satisfied.
+            # Populate upstream_formats from all explicit deps (not just
+            # already-planned ones) so that artifact-to-artifact exporters
+            # (e.g. quantizer) can check whether their upstream
+            # requirements are satisfied regardless of declaration order.
             upstream_formats = tuple(
-                planned[d].target.format
+                _explicit_formats[d]
                 for d in target.depends_on
-                if d in planned
+                if d in _explicit_formats
             )
             request = SupportRequest(
                 source_kind=source.source_kind,
@@ -212,6 +218,9 @@ class ExportPlanner:
                 existing = [
                     n for n in implicit_nodes if n.target.name == implicit_name
                 ]
+                # Build from the CURRENT depends_on (may have been rewritten
+                # by a previous iteration in this same Phase 2 loop).
+                current_deps = planned[target.name].target.depends_on
                 if existing:
                     # Rewrite the dependent's depends_on to point at the
                     # shared implicit node.
@@ -221,7 +230,7 @@ class ExportPlanner:
                         required=target.required,
                         depends_on=tuple(
                             implicit_name if d == dep_name else d
-                            for d in target.depends_on
+                            for d in current_deps
                         ),
                         options=target.options,
                         validation=target.validation,
@@ -275,9 +284,11 @@ class ExportPlanner:
 
                 # Rewrite the dependent's depends_on to point at the
                 # implicit node name instead of the original dep name.
+                # Use current_deps (may have been rewritten by a prior
+                # dep in this same loop).
                 new_deps = tuple(
                     implicit_name if d == dep_name else d
-                    for d in target.depends_on
+                    for d in current_deps
                 )
                 new_target = ExportTarget(
                     name=target.name,

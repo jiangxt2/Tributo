@@ -101,13 +101,14 @@ class TestBundleOutputConfig:
                 ],
             )
 
-    def test_roles_unknown_target(self) -> None:
-        with pytest.raises(ValidationError, match="references unknown target"):
-            BundleOutputConfig(
-                bundle_uri="s3://bucket/model",
-                targets=[ExportTarget(name="a", format="onnx")],
-                roles={"inference": "b"},
-            )
+    def test_roles_implicit_allowed(self) -> None:
+        """Roles may reference names resolved by upstream_requirements."""
+        cfg = BundleOutputConfig(
+            bundle_uri="s3://bucket/model",
+            targets=[ExportTarget(name="a", format="onnx")],
+            roles={"inference": "b"},
+        )
+        assert cfg.roles == {"inference": "b"}
 
     def test_alias_newer_rejects_expected_sha256(self) -> None:
         with pytest.raises(ValidationError, match="policy='newer'"):

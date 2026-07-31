@@ -111,8 +111,8 @@ class RayXGBoostSourceProvider:
         # Extract feature names.
         feature_names = booster.feature_names
         n_features = len(feature_names) if feature_names else 0
-        feature_schema: list[str] | None = (
-            list(feature_names) if feature_names else None
+        feature_schema: dict[str, Any] = (
+            {"feature_names": list(feature_names)} if feature_names else {}
         )
 
         source = ExportSource(
@@ -120,7 +120,6 @@ class RayXGBoostSourceProvider:
             model_object=booster,
             architecture_id="xgboost",
             feature_schema=feature_schema,
-            sample_inputs=None,
             metadata={
                 "framework": "xgboost",
                 "framework_version": xgboost.__version__,
