@@ -122,9 +122,15 @@ bge_small_zh = "tributo.embeddings.registry"
 
 [project.entry-points."tributo.exporters"]
 xgboost-onnx-v1 = "tributo.integrations.exporters.xgboost_onnx:XGBoostONNXExporter"
+xgboost-native-v1 = "tributo.integrations.exporters.xgboost_native:XGBoostNativeExporter"
+torch-safetensors-v1 = "tributo.integrations.exporters.torch_safetensors:TorchSafetensorsExporter"
+torch-onnx-v1 = "tributo.integrations.exporters.torch_onnx:TorchONNXExporter"
+torch-export-v1 = "tributo.integrations.exporters.torch_export:TorchExportExporter"
+hf-onnx-v1 = "tributo.integrations.exporters.hf_onnx:HuggingFaceONNXExporter"
 
 [project.entry-points."tributo.source_providers"]
 ray-xgboost-v1 = "tributo.integrations.sources.ray_xgboost:RayXGBoostSourceProvider"
+ray-dnn-v1 = "tributo.integrations.sources.ray_dnn:RayDnnSourceProvider"
 
 [project.entry-points."tributo.validators"]
 onnx-runtime-v1 = "tributo.integrations.validators.onnx_runtime:ONNXRuntimeValidator"
@@ -132,6 +138,11 @@ onnx-runtime-v1 = "tributo.integrations.validators.onnx_runtime:ONNXRuntimeValid
 [project.entry-points."tributo.model_flavors"]
 
 [project.entry-points."tributo.model_factories"]
+
+[project.entry-points."tributo.hooks"]
+mlflow-registry-v1 = "tributo.integrations.hooks.mlflow_hook:MLflowPostPublishHook"
+
+[project.entry-points."tributo.tensorrt_plugins"]
 
 [build-system]
 requires = ["hatchling"]

@@ -136,4 +136,9 @@ __all__ = [
     "ExportTarget",
     "export",
     "load_bundle",
+    "generate_signing_key",
+    "BundleSigner",
+    "BundleVerifier",
+    "ProvenanceBuilder",
+    "AsyncBundleExportService",
 ]
