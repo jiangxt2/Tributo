@@ -176,10 +176,7 @@ class BaseTrainer(ABC):
         # legacy export_model path (instead of export_artifacts).  The
         # export_artifacts default delegates to export_model, so existing
         # subclasses keep working — this is a gentle nudge, not a break.
-        if (
-            "export_model" in cls.__dict__
-            and "export_artifacts" not in cls.__dict__
-        ):
+        if "export_model" in cls.__dict__ and "export_artifacts" not in cls.__dict__:
             warnings.warn(
                 f"{cls.__name__} overrides export_model() — "
                 "export_artifacts() is the preferred hook. "
@@ -188,23 +185,7 @@ class BaseTrainer(ABC):
                 stacklevel=2,
             )
 
-    @abstractmethod
-    def export_artifacts(self, checkpoint: Any, output_path: str) -> None:
-        """Export training artifacts to the given path.
-
-        Subclasses implement this instead of the legacy ``export_model``.
-        The default implementation delegates to ``export_model``, so
-        existing subclasses continue to work without changes.
-
-        Args:
-            checkpoint: The checkpoint or model object returned by
-                ``training_loop``.
-            output_path: Export destination (local path or S3 URI).
-        """
-
-    def _export_artifacts_default(
-        self, checkpoint: Any, output_path: str
-    ) -> None:
+    def _export_artifacts_default(self, checkpoint: Any, output_path: str) -> None:
         """Default artifact-export dispatch."""
         if type(self).export_artifacts is not BaseTrainer.export_artifacts:
             self.export_artifacts(checkpoint, output_path)
@@ -216,7 +197,6 @@ class BaseTrainer(ABC):
                 "no artifact will be exported.",
                 type(self).__name__,
             )
-        self.export_model(checkpoint, output_path)
 
     def export_model(self, checkpoint: Any, output_path: str) -> None:  # noqa: B027
         """Export the model to the given path.
@@ -351,8 +331,8 @@ class BaseTrainer(ABC):
             checkpoint: The training result (Ray Result or raw model).
             bundle_config: A ``BundleOutputConfig`` with non-empty targets.
         """
-        from tributo.exporting.service import BundleExportService
         from tributo.exporting.registries import SourceProviderRegistry
+        from tributo.exporting.service import BundleExportService
 
         # Resolve the source provider for this trainer type.
         provider_registry = SourceProviderRegistry()
@@ -373,19 +353,25 @@ class BaseTrainer(ABC):
             )
 
         # Populate summary from bundle result.
-        self._summary.update({
-            "bundle_id": result.bundle_id,
-            "canonical_uri": result.canonical_uri,
-            "manifest_sha256": result.manifest_sha256,
-            "artifacts": [
-                {"name": a.name, "format": a.format, "tree_digest": a.tree_digest}
-                for a in result.artifacts
-            ],
-            "node_results": [
-                {"node_id": nr.node_id, "status": nr.status, "target_name": nr.target_name}
-                for nr in result.node_results
-            ],
-        })
+        self._summary.update(
+            {
+                "bundle_id": result.bundle_id,
+                "canonical_uri": result.canonical_uri,
+                "manifest_sha256": result.manifest_sha256,
+                "artifacts": [
+                    {"name": a.name, "format": a.format, "tree_digest": a.tree_digest}
+                    for a in result.artifacts
+                ],
+                "node_results": [
+                    {
+                        "node_id": nr.node_id,
+                        "status": nr.status,
+                        "target_name": nr.target_name,
+                    }
+                    for nr in result.node_results
+                ],
+            }
+        )
 
     @staticmethod
     def _get_trainer_type() -> str:
@@ -401,6 +387,7 @@ class BaseTrainer(ABC):
         """Return the current tributo version string."""
         try:
             from importlib.metadata import version
+
             return version("tributo")
         except Exception:
             return "0.0.0"
