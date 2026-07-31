@@ -256,7 +256,11 @@ class BundleExportService:
             # skips when mlflow is not installed).
             from tributo.exporting.hooks import PublicationRunner
 
-            manifest_dict = _build_manifest_dict(published.result)
+            manifest_dict = _build_manifest_dict(
+                published.result,
+                config.storage_profile,
+                self._storage_resolver,
+            )
 
             # Load hooks from entry points and build runner.
             hooks_entries = _discover_hook_plugins()
@@ -271,6 +275,9 @@ class BundleExportService:
                     canonical_uri=published.result.canonical_uri,
                     manifest=manifest_dict,
                     manifest_sha256=published.result.manifest_sha256,
+                    # Valid only during the staging window — hooks run
+                    # before Phase 7 (callback) and staging cleanup.
+                    local_bundle_dir=str(published.local_bundle_dir),
                 )
 
                 # Record publication attempts (when OperationStore is available).
@@ -379,18 +386,39 @@ def _make_execution_id(request_id: str) -> str:
     return f"exec-{digest[:12]}"
 
 
-def _build_manifest_dict(result: BundleResult) -> dict[str, Any]:
+def _build_manifest_dict(
+    result: BundleResult,
+    storage_profile: str | None = None,
+    resolver: StorageProfileResolver | None = None,
+) -> dict[str, Any]:
     """Build a JSON-serialisable manifest dict from a BundleResult.
 
     Works for both local and S3 manifest URIs — reads from the S3 manifest
     when the URI starts with ``s3://``, otherwise reads from the local path.
+
+    Args:
+        result: The published bundle result.
+        storage_profile: S3 storage profile for the manifest read; the
+            profile's endpoint / credentials / path-style addressing are
+            used instead of the default boto3 chain (required for
+            S3-compatible stores like MinIO).
+        resolver: Profile resolver (defaults to ``StorageProfileResolver``).
     """
     manifest_uri = result.manifest_uri
     if manifest_uri.startswith("s3://"):
         from tributo._common.storage import get_boto3_client, parse_s3_url
 
+        profile = (resolver or StorageProfileResolver()).resolve(storage_profile)
+        client = get_boto3_client(
+            endpoint=profile.endpoint,
+            access_key_id=profile.access_key_id,
+            secret_access_key=profile.secret_access_key,
+            region=profile.region,
+            use_ssl=profile.use_ssl,
+            path_style=profile.path_style,
+            profile_name=profile.profile_name,
+        )
         bucket, key = parse_s3_url(manifest_uri)
-        client = get_boto3_client()
         resp = client.get_object(Bucket=bucket, Key=key)
         raw: bytes = resp["Body"].read()
         data: dict[str, Any] = json.loads(raw.decode("utf-8"))

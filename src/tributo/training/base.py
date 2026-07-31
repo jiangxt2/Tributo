@@ -240,7 +240,9 @@ class BaseTrainer(ABC):
                 export is routed through the new bundle pipeline.
 
         Returns:
-            A summary dict, containing at minimum ``{"status": "succeeded"}``.
+            A summary dict, containing at minimum ``{"status":
+            "succeeded" | "partial"}`` — a partial bundle is still a
+            successful run, but the summary marks it ``partial``.
         """
         self._summary: dict[str, Any] = {"status": "succeeded"}
 
@@ -352,9 +354,11 @@ class BaseTrainer(ABC):
                 tributo_version=self._get_tributo_version(),
             )
 
-        # Populate summary from bundle result.
+        # Populate summary from bundle result.  A partial bundle is still
+        # a successful run — the summary marks it ``partial``.
         self._summary.update(
             {
+                "status": result.status,
                 "bundle_id": result.bundle_id,
                 "canonical_uri": result.canonical_uri,
                 "manifest_sha256": result.manifest_sha256,

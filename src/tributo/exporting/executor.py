@@ -12,7 +12,7 @@ import logging
 import time
 from pathlib import Path
 
-from tributo.exceptions import JobExecutionError
+from tributo.exceptions import JobExecutionError, SessionFatalError
 from tributo.exporting.errors import sanitize_error_message
 from tributo.exporting.models import (
     ArtifactDraft,
@@ -61,9 +61,12 @@ def _materialize_artifact(
     file from disk.  Also validates that ``draft.name`` is safe for use in
     filesystem paths (no ``/`` or ``..`` components).
     """
-    # Guard against hostile draft.name (path traversal).
+    # Guard against hostile draft.name (path traversal).  Integrity
+    # violations are session-fatal: they cancel all remaining nodes
+    # regardless of the failing node's required flag (plan: staging/path
+    # integrity violations are session-fatal errors).
     if "/" in draft.name or "\\" in draft.name or draft.name in (".", ".."):
-        raise JobExecutionError(
+        raise SessionFatalError(
             f"Exporter {draft.producer.exporter_id!r} returned unsafe "
             f"artifact name {draft.name!r}"
         )
@@ -74,17 +77,17 @@ def _materialize_artifact(
     for df in draft.files:
         fp = (artifact_dir / df.relative_path).resolve()
         if not fp.is_relative_to(artifact_dir.resolve()):
-            raise JobExecutionError(
+            raise SessionFatalError(
                 f"Exporter {draft.producer.exporter_id!r} wrote file outside "
                 f"artifact_dir: {df.relative_path!r}"
             )
         if not fp.is_file():
-            raise JobExecutionError(
+            raise SessionFatalError(
                 f"Exporter {draft.producer.exporter_id!r} declared "
                 f"{df.relative_path!r} but file does not exist"
             )
         if df.relative_path in seen_paths:
-            raise JobExecutionError(
+            raise SessionFatalError(
                 f"Duplicate relative_path in draft: {df.relative_path!r}"
             )
         seen_paths.add(df.relative_path)
@@ -106,7 +109,7 @@ def _materialize_artifact(
         if fp.is_file():
             rel = str(fp.relative_to(artifact_dir))
             if rel not in declared:
-                raise JobExecutionError(
+                raise SessionFatalError(
                     f"Exporter wrote undeclared file: {rel!r} — "
                     "all output files must appear in ArtifactDraft.files"
                 )
@@ -174,6 +177,7 @@ class ExportManager:
         staged_descriptors: dict[str, LogicalArtifact] = {}
         execution_started = False
         terminal = False
+        session_fatal = False
 
         for node in plan.nodes:
             node_id = node.target.name
@@ -351,8 +355,12 @@ class ExportManager:
                     duration_ms=duration_ms,
                 )
 
-                if is_required:
+                # Session-fatal errors (integrity violations) cancel the
+                # remaining DAG even when the failing node is optional,
+                # and force the overall result to ``failed``.
+                if is_required or isinstance(exc, SessionFatalError):
                     terminal = True
+                    session_fatal = session_fatal or isinstance(exc, SessionFatalError)
 
         # Compute overall status.
         all_explicit = [
@@ -360,7 +368,10 @@ class ExportManager:
             for nr in node_results.values()
             if nr.node_id in {t.name for t in plan.explicit_targets}
         ]
-        if not execution_started:
+        if session_fatal or not execution_started:
+            # Session-fatal failures always yield ``failed`` — the
+            # remaining DAG was cancelled even if the failing node was
+            # optional (plan: session-fatal semantics).
             overall = "failed"
         elif any(
             nr.status in ("failed", "blocked") and nr.required for nr in all_explicit

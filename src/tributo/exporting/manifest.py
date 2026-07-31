@@ -85,11 +85,11 @@ class ManifestExecution(BaseModel):
 
 @PublicAPI(stability="beta")
 class ExportManifest(BaseModel):
-    """Canonical manifest for a published model bundle (schema v2).
+    """Canonical manifest for a published model bundle (schema v1).
 
-    v2 adds ``artifact_kind`` on ``LogicalArtifact`` so that consumers
-    can distinguish model files from reports, diagnostics, and graph
-    snapshots without inspecting file contents.
+    Artifacts carry ``artifact_kind`` so that consumers can distinguish
+    model files from reports, diagnostics, and graph snapshots without
+    inspecting file contents.
 
     The manifest is written last during publish and serves as the
     single integrity anchor: its SHA-256 digest is the ``manifest_sha256``
@@ -98,7 +98,7 @@ class ExportManifest(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: int = Field(default=2, ge=1)
+    schema_version: int = Field(default=1, ge=1)
     bundle_id: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     status: str = Field(pattern=r"^(succeeded|partial)$")

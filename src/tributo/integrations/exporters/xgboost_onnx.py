@@ -144,17 +144,16 @@ class XGBoostONNXExporter:
         booster.feature_names = [f"f{i}" for i in range(n_features)]
 
         try:
-            # Choose wrapper based on objective type.
+            # Choose wrapper based on objective type.  Only binary:* /
+            # multi:* reach this point — everything else is rejected at
+            # plan time by supports() (numeric-feature classification
+            # only, per the plan's first-phase scope).
             # binary:* → binary classification (XGBClassifier, n_classes=2)
             # multi:*  → multi-class classification
-            # reg:logistic → binary classification (outputs sigmoid probability)
-            # reg:squarederror, reg:absoluteerror, … → regression
             num_class_raw = booster.attr("num_class")
             objective = booster.attr("objective") or ""
-            is_classification = (
-                objective.startswith("binary:")
-                or objective.startswith("multi:")
-                or objective == "reg:logistic"
+            is_classification = objective.startswith("binary:") or objective.startswith(
+                "multi:"
             )
 
             if is_classification:

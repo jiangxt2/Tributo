@@ -48,6 +48,7 @@ class PostPublishHook(Protocol):
         canonical_uri: str,
         manifest: dict[str, Any],
         options: dict[str, Any] | None = None,
+        local_bundle_dir: str | None = None,
     ) -> HookReceipt:
         """Execute the hook.
 
@@ -55,6 +56,12 @@ class PostPublishHook(Protocol):
             canonical_uri: The bundle's canonical URI.
             manifest: The committed manifest as a JSON dict.
             options: Hook-specific configuration.
+            local_bundle_dir: Local bundle directory, valid only during
+                the staging window (hooks run before staging cleanup).
+                Hooks must verify the directory actually holds a bundle
+                (``manifest.json``) before relying on it — for S3-only
+                publishes the staging layout is ``nodes/<id>/artifact/...``,
+                not a bundle layout.
 
         Returns:
             A ``HookReceipt`` describing the outcome.
@@ -92,20 +99,31 @@ class PublicationRunner:
         canonical_uri: str,
         manifest: dict[str, Any],
         manifest_sha256: str,
+        local_bundle_dir: str | None = None,
     ) -> list[HookReceipt]:
         """Execute all hooks.
 
         Args:
             canonical_uri: The bundle URI.
             manifest: The manifest dict.
-            manifest_sha256: SHA-256 of the manifest.
+            manifest_sha256: SHA-256 of the manifest — the canonical JSON
+                digest computed by the Publisher (the same value stored
+                in ``BundleResult`` and S3 metadata).
+            local_bundle_dir: Local bundle directory, valid only during
+                the staging window (see ``PostPublishHook.execute``).
 
         Returns:
             Receipts for every hook that ran.
         """
+        # The manifest JSON on disk carries no ``_manifest_sha256`` key —
+        # surface the publisher's canonical digest so hooks that read it
+        # (e.g. the MLflow hook) report the value consumers verify
+        # against, not a re-computed fallback.
+        manifest["_manifest_sha256"] = manifest_sha256
+
         receipts: list[HookReceipt] = []
         for hook, options, required in self._hooks:
-            receipt = hook.execute(canonical_uri, manifest, options)
+            receipt = hook.execute(canonical_uri, manifest, options, local_bundle_dir)
             receipts.append(receipt)
             if receipt.status == "failed" and required:
                 raise RuntimeError(

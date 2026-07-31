@@ -29,6 +29,17 @@ class JobExecutionError(TributoError):
 
 
 @PublicAPI(stability="stable")
+class SessionFatalError(JobExecutionError):
+    """Raised when an error is fatal to the whole export session.
+
+    Session-fatal errors (staging/path integrity violations, source
+    recovery failures) cancel all remaining DAG nodes regardless of
+    whether the failing node is required — the plan requires these
+    errors to be classified distinctly from per-node failures.
+    """
+
+
+@PublicAPI(stability="stable")
 class JobConfigurationError(TributoError):
     """Raised when job configuration is invalid."""
 
