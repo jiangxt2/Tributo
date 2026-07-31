@@ -137,6 +137,14 @@ class BaseTrainer(ABC):
                 ``training_loop``.
             output_path: Export destination (local path or S3 URI).
         """
+        # Detect the no-op path: if neither export_artifacts nor export_model
+        # was overridden by the subclass, warn the user.
+        if type(self).export_model is BaseTrainer.export_model:
+            logger.warning(
+                "%s does not override export_artifacts() or export_model(); "
+                "no artifact will be exported.",
+                type(self).__name__,
+            )
         self.export_model(checkpoint, output_path)
 
     def export_model(self, checkpoint: Any, output_path: str) -> None:  # noqa: B027

@@ -215,10 +215,16 @@ class Pipeline:
                 f"{actual.artifact_kind!r} but consumer expects "
                 f"{expected.artifact_kind!r}."
             )
-        # Schema compatibility check: expected schema keys must be a
-        # subset of the actual schema keys (consumer requires less than
-        # or equal to what producer provides).
-        if expected.schema is not None and actual.schema is not None:
+        # Schema compatibility check: consumer's expected schema keys must
+        # each be present in the producer's actual schema with matching types.
+        if expected.schema is not None:
+            if actual.schema is None:
+                raise JobConfigurationError(
+                    f"Schema mismatch on {consumer_name!r}.{port_name!r}: "
+                    f"producer {producer_name!r} does not declare a schema "
+                    f"but consumer expects schema keys "
+                    f"{sorted(expected.schema)}."
+                )
             for key, expected_type in expected.schema.items():
                 actual_type = actual.schema.get(key)
                 if actual_type is None:
@@ -226,6 +232,13 @@ class Pipeline:
                         f"Schema mismatch on {consumer_name!r}.{port_name!r}: "
                         f"producer {producer_name!r} does not provide field "
                         f"{key!r} (expected type {expected_type!r})."
+                    )
+                if actual_type != expected_type:
+                    raise JobConfigurationError(
+                        f"Schema type mismatch on {consumer_name!r}.{port_name!r}."
+                        f"{key!r}: producer {producer_name!r} declares "
+                        f"{actual_type!r} but consumer expects "
+                        f"{expected_type!r}."
                     )
 
     def run(self, initial_data: dict[str, Any]) -> dict[str, Any]:
@@ -258,26 +271,32 @@ class Pipeline:
                 "Running pipeline step %r (algorithm=%r)", step_name, step.algorithm
             )
 
-            # Resolve inputs from upstream steps.
+            # Resolve inputs: root steps get initial_data, others get
+            # upstream outputs via InputBinding references.
             resolved_inputs: dict[str, Any] = {}
-            for port_name, binding in step.inputs.items():
-                upstream_outputs = outputs.get(binding.source.producer_step, {})
-                resolved_inputs[port_name] = upstream_outputs.get(
-                    binding.source.output_port
-                )
+            if step.inputs:
+                for port_name, binding in step.inputs.items():
+                    upstream_outputs = outputs.get(binding.source.producer_step, {})
+                    resolved_inputs[port_name] = upstream_outputs.get(
+                        binding.source.output_port
+                    )
+            else:
+                resolved_inputs = dict(initial_data)
 
-            # Run the algorithm.
+            # Run the algorithm.  Inject resolved_inputs into a copy of
+            # the step config BEFORE constructing the trainer so that
+            # config validation / dataset loading sees the injected key.
             from tributo.training.registry import get_trainer
 
             spec = get_trainer(step.algorithm)
+            step_config = dict(step.config)
+            step_config["_pipeline_inputs"] = resolved_inputs
             trainer_cls = spec.trainer_cls
             trainer = trainer_cls(
                 datasets={},  # pipeline steps receive resolved inputs
-                config=step.config,
+                config=step_config,
             )
 
-            # Inject resolved inputs into trainer config for the step.
-            trainer.config["_pipeline_inputs"] = resolved_inputs
             trainer.setup()
             result = trainer.training_loop()
 

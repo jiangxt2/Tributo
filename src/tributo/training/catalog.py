@@ -71,13 +71,20 @@ class AlgorithmCatalog:
         snapshot = self._registry.snapshot()
         self._validate_integrity(snapshot)
 
-        # Normalise capabilities to a tuple for consistent iteration.
+        # Normalise capabilities to a tuple of Capability enums for
+        # consistent iteration.  Plain strings (natural for str-Enum)
+        # are coerced so that `catalog.list(capabilities="tunable")`
+        # works as expected.
+        cap_set: tuple[Capability, ...] = ()
         if isinstance(capabilities, Capability):
-            cap_set: tuple[Capability, ...] = (capabilities,)
+            cap_set = (capabilities,)
+        elif isinstance(capabilities, str):
+            cap_set = (Capability(capabilities),)
         elif capabilities is not None:
-            cap_set = capabilities
-        else:
-            cap_set = ()
+            # Accept (Capability, ...) or list of strings/instances.
+            cap_set = tuple(
+                Capability(c) if isinstance(c, str) else c for c in capabilities
+            )
 
         results: list[str] = []
         for name, spec in snapshot.items():

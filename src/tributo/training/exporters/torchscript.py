@@ -79,9 +79,15 @@ class TorchScriptExporter:
                 "torch.jit.script failed for %s, falling back to trace.",
                 type(model).__name__,
             )
-            sample_inputs = source.sample_inputs.get("inputs")
-            if sample_inputs is not None:
-                scripted = torch.jit.trace(model, sample_inputs)
+            # source.sample_inputs is {feature_name: numpy_array} — same
+            # convention as the ONNX exporter.  Pass values as a tuple for
+            # models with multiple inputs, or the single array for one input.
+            sample_vals = list(source.sample_inputs.values())
+            if sample_vals:
+                trace_input = (
+                    sample_vals[0] if len(sample_vals) == 1 else tuple(sample_vals)
+                )
+                scripted = torch.jit.trace(model, trace_input)
             else:
                 raise RuntimeError(
                     "torch.jit.trace requires sample_inputs, but "

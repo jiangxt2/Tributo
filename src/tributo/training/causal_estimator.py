@@ -135,15 +135,23 @@ class BaseCausalEstimator(BaseTrainer):
     def _load_data(self) -> ray.data.Dataset:
         """Load the dataset from the configured source.
 
+        Uses the framework's canonical ``load_ray_dataset_from_source``
+        which validates against the ``SourceConfig`` discriminated union
+        (``{"type": "parquet", "path": "s3://...", "s3": {...}}``).
+
         Returns:
             A ``ray.data.Dataset`` for causal analysis.
         """
-        from tributo.data import get_connector
+        from tributo.training.data_loader import load_ray_dataset_from_source
 
-        source = self.config.get("data", {}).get("source", {})
-        connector_name = source.get("format", "parquet")
-        connector = get_connector(connector_name)
-        return connector.read(**source.get("read_options", {}))
+        source = self.config.get("data", {}).get("source")
+        if source is None:
+            raise ValueError(
+                f"{type(self).__name__}: config must contain a "
+                f"'data.source' section (e.g. "
+                f'{{"type": "parquet", "path": "s3://bucket/data.parquet"}}).'
+            )
+        return load_ray_dataset_from_source(source)
 
     # -- causal phases ---------------------------------------------------------
 
@@ -256,8 +264,10 @@ class BaseCausalEstimator(BaseTrainer):
                 RefutationResult}`` from ``training_loop()``.
             output_path: Destination path for the report.
         """
-        import json
         from dataclasses import asdict
+        from pathlib import Path
+
+        from tributo._common.storage import write_json
 
         effect: CausalEffect = checkpoint["effect"]
         refutation: RefutationResult = checkpoint["refutation"]
@@ -270,7 +280,10 @@ class BaseCausalEstimator(BaseTrainer):
             "refutation": asdict(refutation),
         }
 
-        out_file = output_path.rstrip("/") + "/causal_report.json"
-        with open(out_file, "w", encoding="utf-8") as f:
-            json.dump(report, f, indent=2, ensure_ascii=False, default=str)
+        # Use the framework's write_json which handles s3://, file://, and
+        # local paths.  For local paths, ensure the parent directory exists.
+        if not output_path.startswith("s3://"):
+            Path(output_path).mkdir(parents=True, exist_ok=True)
+        out_file = str(Path(output_path) / "causal_report.json")
+        write_json(out_file, report)
         logger.info("Causal report written to %s", out_file)

@@ -48,6 +48,10 @@ class KafkaStreamSource(StreamSource):
         self._batch_size: int = 64
         self._config: dict[str, Any] = {}
         self._closed: bool = False
+        # Track the last successfully yielded message per partition so
+        # commit() only advances offsets for records that were actually
+        # processed (at-least-once semantics).
+        self._committable: list[Any] = []  # confluent_kafka Message objects
 
     # -- StreamSource interface -----------------------------------------------
 
@@ -107,6 +111,7 @@ class KafkaStreamSource(StreamSource):
             raise RuntimeError("KafkaStreamSource not open — call open() first.")
 
         batch: list[dict[str, Any]] = []
+        committable: list[Any] = []
         while len(batch) < self._batch_size:
             msg = self._consumer.poll(timeout=timeout_ms / 1000.0)
             if msg is None:
@@ -115,35 +120,63 @@ class KafkaStreamSource(StreamSource):
                 logger.warning("Kafka message error: %s", msg.error())
                 continue
 
+            # Guard against tombstone / null-value records.
+            raw_value = msg.value()
+            if raw_value is None:
+                logger.debug("Skipping tombstone (null-value) Kafka message")
+                continue
+
             import json
 
             try:
-                value = json.loads(msg.value().decode("utf-8"))
+                value = json.loads(raw_value.decode("utf-8"))
             except (json.JSONDecodeError, UnicodeDecodeError) as exc:
                 logger.warning("Failed to decode Kafka message: %s", exc)
                 continue
+
+            # Skip non-dict records (scalars, lists).
+            if not isinstance(value, dict):
+                logger.warning(
+                    "Skipping non-dict Kafka record (type=%s)", type(value).__name__
+                )
+                continue
+
             batch.append(value)
+            committable.append(msg)  # only commit messages we actually yielded
 
         if not batch:
             return
 
         # Transpose list-of-dicts → dict-of-lists (columnar batch).
-        keys = batch[0].keys()
-        column_batch = {k: [row.get(k) for row in batch] for k in keys}
+        # Collect union of all keys in the batch (not just first record's).
+        all_keys: set[str] = set()
+        for row in batch:
+            all_keys.update(row.keys())
+        column_batch = {k: [row.get(k) for row in batch] for k in all_keys}
+        self._committable = committable
         yield column_batch
 
     def commit(self) -> None:
-        """Commit the current offset synchronously.
+        """Commit offsets only for the last successfully yielded batch.
 
-        Called after the inference result has been accepted by the
-        durable sink (at-least-once guarantee).
+        Uses per-message commit to advance offsets only for records
+        that were actually returned by ``poll()`` and accepted by the
+        caller (at-least-once semantics).  Skipped / errored / tombstone
+        records are never committed — they will be re-delivered on the
+        next poll cycle.
         """
         if self._consumer is None:
             return
-        try:
-            self._consumer.commit(asynchronous=False)
-        except Exception as exc:
-            logger.warning("Kafka commit failed: %s", exc)
+        committed = 0
+        for msg in self._committable:
+            try:
+                self._consumer.commit(message=msg, asynchronous=False)
+                committed += 1
+            except Exception as exc:
+                logger.warning("Kafka commit failed for message: %s", exc)
+        self._committable.clear()
+        if committed:
+            logger.debug("Committed %d Kafka offset(s)", committed)
 
     def close(self) -> None:
         """Gracefully close the Kafka consumer."""

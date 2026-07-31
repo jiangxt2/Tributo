@@ -90,9 +90,9 @@ class GraphDataBundle:
                 "schema": {"is_directed": True, "max_nodes": 100_000},
             })
         """
-        from tributo.data.parquet import ParquetConnector
+        from tributo.data.parquet import ParquetDataConnector
 
-        connector = ParquetConnector()
+        connector = ParquetDataConnector()
         node_path: str = config["node_features_path"]
         edge_path: str = config["edge_index_path"]
 
@@ -114,12 +114,16 @@ class GraphDataBundle:
         metadata: dict[str, Any] = {}
         try:
             metadata["num_nodes"] = node_features.count()
-        except Exception:
-            metadata["num_nodes"] = -1
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to count node features from {node_path!r}: {exc}"
+            ) from exc
         try:
             metadata["num_edges"] = edge_index.count()
-        except Exception:
-            metadata["num_edges"] = -1
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to count edge index from {edge_path!r}: {exc}"
+            ) from exc
 
         return cls(
             node_features=node_features,
