@@ -88,7 +88,8 @@ embeddings = [
     "daft>=0.7.0,<0.8.0",
 ]
 identity = [
-    "tributo[data,model-export-torch]",
+    "tributo[data,model-export]",
+    "torch>=2.0.0",
     "onnxruntime>=1.20.0",
 ]
 streaming = [

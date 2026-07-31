@@ -101,14 +101,10 @@ class AsyncBundleExportService:
         self._max_workers = max_workers
 
         # Register built-in schema readers.
-        from tributo.exporting.manifest import _read_manifest_v1, _read_manifest_v2
+        from tributo.exporting.manifest import _read_manifest_v1
 
         try:
             self._manifest_registry.register(1, _read_manifest_v1)
-        except ValueError:
-            pass
-        try:
-            self._manifest_registry.register(2, _read_manifest_v2)
         except ValueError:
             pass
 

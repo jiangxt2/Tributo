@@ -79,16 +79,12 @@ class BundleReader:
         )
 
         self._manifest_registry = manifest_registry or ManifestSchemaRegistry()
-        from tributo.exporting.manifest import (
-            _read_manifest_v1,
-            _read_manifest_v2,
-        )
+        from tributo.exporting.manifest import _read_manifest_v1
 
-        for version, reader in ((1, _read_manifest_v1), (2, _read_manifest_v2)):
-            try:
-                self._manifest_registry.register(version, reader)
-            except ValueError:
-                pass
+        try:
+            self._manifest_registry.register(1, _read_manifest_v1)
+        except ValueError:
+            pass
 
     def read_manifest(
         self,
@@ -350,6 +346,9 @@ def _s3_client(resolver: StorageProfileResolver, storage_profile: str | None) ->
         access_key_id=profile.access_key_id,
         secret_access_key=profile.secret_access_key,
         region=profile.region,
+        use_ssl=profile.use_ssl,
+        path_style=profile.path_style,
+        profile_name=profile.profile_name,
     )
 
 
