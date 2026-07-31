@@ -11,7 +11,7 @@ import json
 import logging
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, ClassVar, Generator
+from typing import Any, ClassVar, Generator, cast
 
 from pydantic import BaseModel, ConfigDict
 
@@ -97,7 +97,9 @@ class RayXGBoostSourceProvider:
         else:
             # Ray XGBoostCheckpoint.
             xgb_checkpoint = XGBoostCheckpoint.from_directory(checkpoint.to_directory())
-            booster = xgb_checkpoint.get_model()
+            # get_model() is a runtime method not present in the ray.train
+            # type stubs — cast to Any to access it.
+            booster = cast(Any, xgb_checkpoint).get_model()
 
         # Compute source fingerprint.
         model_dump = booster.save_raw()

@@ -162,6 +162,42 @@ class RayDnnSourceProvider:
         yield source
 
 
+def _features_from_config(config: dict[str, Any]) -> list[Any]:
+    """Build DNN feature columns from a ``model_config.json`` ``features`` list.
+
+    Each entry is either a sparse column (``vocab_size``) or a dense
+    column (``dimension``)::
+
+        {"features": [
+            {"name": "user_id", "vocab_size": 1000, "embedding_dim": 8},
+            {"name": "age", "dimension": 1, "norm": "standard"},
+        ], "dnn_hidden_units": [256, 128, 64], "dnn_dropout": 0.1}
+
+    Raises ValueError when the feature list is missing or malformed.
+    """
+    from tributo.training.features.column_types import DenseFeat, SparseFeat
+
+    raw = config.get("features")
+    if not isinstance(raw, list) or not raw:
+        raise ValueError(
+            "DNN reconstruction requires 'features' in model_config.json "
+            "(list of sparse/dense column definitions)"
+        )
+    columns: list[Any] = []
+    for entry in raw:
+        if not isinstance(entry, dict) or "name" not in entry:
+            raise ValueError(f"Invalid feature column definition: {entry!r}")
+        if "vocab_size" in entry:
+            fields = SparseFeat.__dataclass_fields__
+            columns.append(
+                SparseFeat(**{k: v for k, v in entry.items() if k in fields})
+            )
+        else:
+            fields = DenseFeat.__dataclass_fields__
+            columns.append(DenseFeat(**{k: v for k, v in entry.items() if k in fields}))
+    return columns
+
+
 def _read_model_config(ckpt_dir: Path) -> tuple[dict[str, Any], str | None]:
     """Read ``model_config.json`` and return ``(config, architecture_id)``."""
     config_path = ckpt_dir / "model_config.json"
@@ -186,13 +222,12 @@ def _reconstruct_model(
     """
 
     if architecture_id == "dnn":
-        from tributo.training.models.dnn import DNN
+        from tributo.training.models.dnn import DNNModel
 
-        model = DNN(
-            input_dim=config.get("input_dim", 1),
-            hidden_dims=config.get("hidden_dims", [64, 32]),
-            output_dim=config.get("output_dim", 1),
-            dropout=config.get("dropout", 0.0),
+        model = DNNModel(
+            features=_features_from_config(config),
+            dnn_hidden_units=config.get("dnn_hidden_units"),
+            dnn_dropout=config.get("dnn_dropout", 0.0),
         )
         model.load_state_dict(state_dict)
         return model

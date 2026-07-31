@@ -30,6 +30,13 @@ logger = logging.getLogger(__name__)
 # ── Pydantic config models ──
 
 
+def _gain_as_float(gain: float | list[float]) -> float:
+    """Normalize an XGBoost gain value (scalar or per-class list) to float."""
+    if isinstance(gain, float):
+        return gain
+    return gain[0] if gain else 0.0
+
+
 class XGBoostDataConfig(StrictConfigModel):
     """XGBoost data configuration with training semantics.
 
@@ -563,10 +570,14 @@ def train_loop_per_worker(config: dict[str, Any]) -> None:
             score = booster.get_score(importance_type="gain")
             # score keys are the DMatrix column names (e.g. "feature_0")
             rank = 1
-            for feat, gain in sorted(score.items(), key=lambda x: -x[1]):
+            for feat, gain in sorted(
+                score.items(), key=lambda x: -_gain_as_float(x[1])
+            ):
                 report_metrics.setdefault("feat_imp_rank", []).append(rank)
                 report_metrics.setdefault("feat_imp_name", []).append(feat)
-                report_metrics.setdefault("feat_imp_score", []).append(round(gain, 6))
+                report_metrics.setdefault("feat_imp_score", []).append(
+                    round(_gain_as_float(gain), 6)
+                )
                 rank += 1
         except Exception:
             import logging as _log
