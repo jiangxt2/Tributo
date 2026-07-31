@@ -84,6 +84,9 @@ def get_boto3_client(
     access_key_id: str | None = None,
     secret_access_key: str | None = None,
     region: str | None = None,
+    use_ssl: bool = True,
+    path_style: bool = False,
+    profile_name: str | None = None,
 ) -> Any:
     """Create a boto3 S3 client with unified credential resolution.
 
@@ -95,16 +98,27 @@ def get_boto3_client(
         access_key_id: AWS Access Key ID.
         secret_access_key: AWS Secret Access Key.
         region: AWS region.
+        use_ssl: Require TLS.  When False and *endpoint* is ``https://``,
+            the endpoint is downgraded to ``http://`` (many local
+            S3-compatible stores only expose plain HTTP).
+        path_style: Use path-style addressing (``endpoint/bucket/key``),
+            required by MinIO and other S3-compatible stores.
+        profile_name: boto3 named profile for credentials.
 
     Returns:
         A boto3 S3 client instance.
     """
     import boto3
+    from botocore.config import Config
 
-    kwargs: dict[str, str] = {}
+    kwargs: dict[str, Any] = {}
     resolved_endpoint = resolve_endpoint(endpoint)
     if resolved_endpoint:
-        kwargs["endpoint_url"] = resolved_endpoint
+        # TLS control: downgrade https endpoints when TLS is disabled.
+        if not use_ssl and resolved_endpoint.startswith("https://"):
+            kwargs["endpoint_url"] = "http://" + resolved_endpoint[len("https://") :]
+        else:
+            kwargs["endpoint_url"] = resolved_endpoint
     resolved_key_id = resolve_access_key_id(access_key_id)
     if resolved_key_id:
         kwargs["aws_access_key_id"] = resolved_key_id
@@ -115,6 +129,12 @@ def get_boto3_client(
     if resolved_region:
         kwargs["region_name"] = resolved_region
 
+    if path_style:
+        kwargs["config"] = Config(s3={"addressing_style": "path"})
+
+    if profile_name:
+        session = boto3.Session(profile_name=profile_name)
+        return session.client("s3", **kwargs)
     return boto3.client("s3", **kwargs)
 
 

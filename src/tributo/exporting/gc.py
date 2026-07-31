@@ -160,6 +160,9 @@ def _make_client(resolver: StorageProfileResolver, storage_profile: str | None) 
         access_key_id=profile.access_key_id,
         secret_access_key=profile.secret_access_key,
         region=profile.region,
+        use_ssl=profile.use_ssl,
+        path_style=profile.path_style,
+        profile_name=profile.profile_name,
     )
 
 
