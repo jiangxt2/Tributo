@@ -2,7 +2,10 @@
 
 Extends the legacy ``TrainerSpec`` with three semantic groups of fields:
 
-* **capabilities** — what the algorithm *can do* (lifecycle actions, resource hints).
+* **execution_kind** — what lifecycle shape the algorithm follows
+  (``TRAIN`` / ``ESTIMATE`` / ``TRANSFORM``).
+* **capabilities** — what infrastructure features the algorithm supports
+  (``TUNABLE`` / ``EXPORTABLE`` / ``DISTRIBUTED`` / ``INCREMENTAL``).
 * **problem_types** — what ML problems it *solves* (classification, ranking, etc.).
 * **data_contract** — what data shape it *expects and produces*.
 
@@ -14,6 +17,14 @@ Phase 3 adds:
 * **deep immutability** — all container fields are recursively frozen via
   ``deep_freeze`` so that a ``Catalog`` snapshot cannot be mutated back
   into the ``Registry``.
+
+Phase 4 (algorithm extensibility) adds:
+
+* **execution kind** — ``ExecutionKind`` orthogonal to data modality and
+  problem type; determines lifecycle skeleton.
+* **capability tags** — Composable ``Capability`` flags that let
+  ``TuneRunner``, ``BundleExportService``, and other infrastructure
+  components gate their behaviour without hard-coding trainer subclasses.
 
 Backward-compatible: ``TrainerSpec`` is a pure type alias in ``base.py``.
 """
@@ -53,6 +64,15 @@ class ProblemType(str, Enum):
     ANOMALY_DETECTION = "anomaly_detection"
     CLUSTERING = "clustering"
     PU_LEARNING = "pu_learning"
+    # -- graph learning --------------------------------------------------------
+    NODE_CLASSIFICATION = "node_classification"
+    LINK_PREDICTION = "link_prediction"
+    GRAPH_CLASSIFICATION = "graph_classification"
+    # -- causal inference ------------------------------------------------------
+    CAUSAL_EFFECT_ESTIMATION = "causal_effect_estimation"
+    # -- user analytics --------------------------------------------------------
+    USER_CHURN_PREDICTION = "user_churn_prediction"
+    USER_PROFILING = "user_profiling"
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +149,51 @@ class DataLoadingMode(str, Enum):
     LEGACY_DRIVER = "legacy_driver"
     CANONICAL_DRIVER = "canonical_driver"
     CANONICAL_TRAINER = "canonical_trainer"
+
+
+# ---------------------------------------------------------------------------
+# Execution kind (lifecycle skeleton)
+# ---------------------------------------------------------------------------
+
+
+@PublicAPI(stability="beta")
+class ExecutionKind(str, Enum):
+    """Execution mode — describes the algorithm's lifecycle shape.
+
+    Orthogonal to ``ProblemType`` (semantic task) and ``data_modality``
+    (data shape). Infrastructure components gate their behaviour on
+    ``execution_kind`` without hard-coding trainer subclasses.
+
+    ``TRAIN`` — ``setup → training_loop → export`` (existing three algorithms).
+    ``ESTIMATE`` — ``identify → estimate → refute`` (causal inference).
+    ``TRANSFORM`` — stateless transformation (feature engineering steps).
+    """
+
+    TRAIN = "train"
+    ESTIMATE = "estimate"
+    TRANSFORM = "transform"
+
+
+# ---------------------------------------------------------------------------
+# Capability tags (composable, non-exclusive)
+# ---------------------------------------------------------------------------
+
+
+@PublicAPI(stability="beta")
+class Capability(str, Enum):
+    """Algorithm capability tags — composable flags, not mutually exclusive.
+
+    Each tag gates a specific infrastructure feature:
+    ``TUNABLE`` — supports ``TuneRunner`` hyperparameter search.
+    ``EXPORTABLE`` — produces a serialisable artifact.
+    ``DISTRIBUTED`` — supports multi-worker distributed execution.
+    ``INCREMENTAL`` — supports incremental / online updates.
+    """
+
+    TUNABLE = "tunable"
+    EXPORTABLE = "exportable"
+    DISTRIBUTED = "distributed"
+    INCREMENTAL = "incremental"
 
 
 # ---------------------------------------------------------------------------
@@ -210,6 +275,9 @@ class AlgorithmSpec:
         input_schema: Expected input feature description.
         output_schema: Expected output format description.
         config_model: Pydantic model for config validation.
+        execution_kind: Lifecycle skeleton (``TRAIN`` / ``ESTIMATE`` / ``TRANSFORM``).
+        capabilities: Composable infrastructure feature flags
+            (``TUNABLE`` / ``EXPORTABLE`` / ``DISTRIBUTED`` / ``INCREMENTAL``).
         status: Lifecycle stage.
         deprecated_since: Version when deprecated (e.g. ``"0.4.0"``).
         replacement: Name of the replacement algorithm.
@@ -241,6 +309,10 @@ class AlgorithmSpec:
     output_schema: DataContract | None = None
     config_model: type[BaseModel] | None = None
 
+    # -- execution kind & capabilities (Phase 4: algorithm extensibility) ------
+    execution_kind: ExecutionKind = ExecutionKind.TRAIN
+    capabilities: tuple[Capability, ...] = (Capability.TUNABLE, Capability.EXPORTABLE)
+
     # -- lifecycle -------------------------------------------------------------
     status: AlgorithmStatus = AlgorithmStatus.READY
     deprecated_since: str | None = None
@@ -256,6 +328,7 @@ class AlgorithmSpec:
         object.__setattr__(self, "problem_types", tuple(self.problem_types))
         object.__setattr__(self, "data_modality", tuple(self.data_modality))
         object.__setattr__(self, "tags", tuple(self.tags))
+        object.__setattr__(self, "capabilities", tuple(self.capabilities))
 
         # ── lifecycle invariants ──
         if self.status == AlgorithmStatus.DEPRECATED:

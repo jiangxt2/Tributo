@@ -1,9 +1,14 @@
 """Base trainer and registration spec.
 
 ``BaseTrainer`` uses the Template Method pattern — subclasses only need to
-implement ``setup``, ``training_loop``, and ``export_model``.  An optional
-callback mechanism supports integration with experiment trackers such as
-MLflow.
+implement ``setup``, ``training_loop``, and ``export_model`` (or the newer
+``export_artifacts`` for non-model outputs).  An optional callback mechanism
+supports integration with experiment trackers such as MLflow.
+
+.. deprecated:: 0.5.0
+    Override ``export_artifacts()`` instead of ``export_model()``.
+    ``export_model()`` is kept as a backward-compatible alias with a
+    no-op default implementation.
 """
 
 from __future__ import annotations
@@ -40,6 +45,7 @@ class TrainerCallback(Protocol):
     def on_setup_start(self, trainer: BaseTrainer) -> None: ...
     def on_training_end(self, trainer: BaseTrainer, result: Any) -> None: ...
     def on_export_end(self, trainer: BaseTrainer, output_path: str) -> None: ...
+    def on_artifacts_exported(self, trainer: BaseTrainer, output_path: str) -> None: ...
     def on_run_complete(
         self, trainer: BaseTrainer, summary: dict[str, Any]
     ) -> None: ...
@@ -48,12 +54,17 @@ class TrainerCallback(Protocol):
 
 @PublicAPI(stability="beta")
 class BaseTrainer(ABC):
-    """Base class for trainers — ``setup → training_loop → export_model``.
+    """Base class for trainers — ``setup → training_loop → export_artifacts``.
 
-    Subclasses must implement three abstract methods:
+    Subclasses must implement two abstract methods:
     - ``setup()``: Initialise model, optimizer, data preprocessing, etc.
     - ``training_loop()``: Run training, return a checkpoint or model object.
-    - ``export_model()``: Export the model to the given path.
+
+    For artifact export, subclasses should override ``export_artifacts()``
+    (the new extension point).  ``export_model()`` is kept for backward
+    compatibility — its default no-op implementation is called by
+    ``export_artifacts()`` when the subclass only overrides the legacy
+    ``export_model()`` method.
 
     The base class provides ``run()`` as a Template Method that orchestrates
     the three steps in order.
@@ -74,7 +85,8 @@ class BaseTrainer(ABC):
             Currently supported keys:
             - ``callbacks``: ``list[TrainerCallback]`` — callback objects
               implementing the lifecycle methods (``on_setup_start``,
-              ``on_training_end``, ``on_export_end``, ``on_run_complete``,
+              ``on_training_end``, ``on_export_end``,
+              ``on_artifacts_exported``, ``on_run_complete``,
               ``on_run_error``).
     """
 
@@ -110,24 +122,49 @@ class BaseTrainer(ABC):
     def training_loop(self) -> Any:
         """Run training and return a checkpoint or model object."""
 
-    @abstractmethod
-    def export_model(self, checkpoint: Any, output_path: str) -> None:
-        """Export the model to the given path.
+    # -- artifact export (Phase 4: algorithm extensibility) --------------------
+
+    def export_artifacts(self, checkpoint: Any, output_path: str) -> None:
+        """Export training artifacts to *output_path*.
+
+        The default implementation delegates to ``export_model()`` for
+        backward compatibility.  Subclasses that produce non-model
+        artifacts (reports, diagnostics, graph snapshots) should override
+        this method directly.
 
         Args:
             checkpoint: The checkpoint or model object returned by
                 ``training_loop``.
             output_path: Export destination (local path or S3 URI).
         """
+        self.export_model(checkpoint, output_path)
 
-    def run(self, output_path: str) -> dict[str, Any]:
-        """Template Method: ``setup → training_loop → export_model``.
+    def export_model(self, checkpoint: Any, output_path: str) -> None:  # noqa: B027
+        """Export the model to the given path.
 
-        Subclasses should write their actual results into ``self._summary``
-        inside ``export_model``; this method returns that dict.
+        .. deprecated:: 0.5.0
+            Override ``export_artifacts()`` instead.  This method is kept
+            as a backward-compatible alias — the default implementation
+            is a no-op.
 
         Args:
-            output_path: Model export path.
+            checkpoint: The checkpoint or model object returned by
+                ``training_loop``.
+            output_path: Export destination (local path or S3 URI).
+        """
+        pass
+
+    # -- Template Method -------------------------------------------------------
+
+    def run(self, output_path: str) -> dict[str, Any]:
+        """Template Method: ``setup → training_loop → export_artifacts``.
+
+        Subclasses should write their actual results into ``self._summary``
+        inside ``export_artifacts`` (or the legacy ``export_model``); this
+        method returns that dict.
+
+        Args:
+            output_path: Artifact export path.
 
         Returns:
             A summary dict, containing at minimum ``{"status": "succeeded"}``.
@@ -151,14 +188,21 @@ class BaseTrainer(ABC):
                 except Exception as e:
                     logger.warning("Callback on_training_end failed: %s", e)
 
-            self.export_model(checkpoint, output_path)
+            self.export_artifacts(checkpoint, output_path)
 
-            # Fire on_export_end
+            # Fire on_export_end (legacy — retained for backward compat)
             for cb in self._callbacks:
                 try:
                     cb.on_export_end(self, output_path)
                 except Exception as e:
                     logger.warning("Callback on_export_end failed: %s", e)
+
+            # Fire on_artifacts_exported (new extension point)
+            for cb in self._callbacks:
+                try:
+                    cb.on_artifacts_exported(self, output_path)
+                except Exception as e:
+                    logger.warning("Callback on_artifacts_exported failed: %s", e)
 
             logger.info("%s training completed.", type(self).__name__)
 
