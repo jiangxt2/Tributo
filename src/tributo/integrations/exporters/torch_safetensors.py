@@ -83,9 +83,7 @@ class TorchSafetensorsExporter:
 
         model = source.model_object
         if not isinstance(model, torch.nn.Module):
-            raise TypeError(
-                f"Expected torch.nn.Module, got {type(model).__name__}"
-            )
+            raise TypeError(f"Expected torch.nn.Module, got {type(model).__name__}")
 
         max_shard_str = target.typed_options.get("max_shard_size", "5GB")
         max_shard_bytes = _parse_size_str(max_shard_str)
@@ -93,9 +91,7 @@ class TorchSafetensorsExporter:
         state_dict = model.state_dict()
         total_params = sum(p.numel() for p in state_dict.values())
         # Estimate tensor bytes: default float32 → 4 bytes/param.
-        total_bytes = sum(
-            p.numel() * p.element_size() for p in state_dict.values()
-        )
+        total_bytes = sum(p.numel() * p.element_size() for p in state_dict.values())
 
         files: list[DraftFile] = []
 
@@ -103,9 +99,7 @@ class TorchSafetensorsExporter:
             # Single-file export.
             output_path = context.artifact_dir / "model.safetensors"
             save_file(state_dict, str(output_path))
-            files.append(
-                DraftFile(relative_path="model.safetensors", role="model")
-            )
+            files.append(DraftFile(relative_path="model.safetensors", role="model"))
         else:
             # Sharded export.
             shards = _shard_state_dict(state_dict, max_shard_bytes)
@@ -117,9 +111,7 @@ class TorchSafetensorsExporter:
                 shard_name = f"model-{i:05d}-of-{len(shards):05d}.safetensors"
                 shard_path = context.artifact_dir / shard_name
                 save_file(shard, str(shard_path))
-                files.append(
-                    DraftFile(relative_path=shard_name, role="model")
-                )
+                files.append(DraftFile(relative_path=shard_name, role="model"))
                 for key in shard:
                     index_data["weight_map"][key] = shard_name
 
@@ -127,18 +119,14 @@ class TorchSafetensorsExporter:
             index_path = context.artifact_dir / "model.safetensors.index.json"
             index_path.write_text(json.dumps(index_data, indent=2))
             files.append(
-                DraftFile(
-                    relative_path="model.safetensors.index.json", role="config"
-                )
+                DraftFile(relative_path="model.safetensors.index.json", role="config")
             )
 
         # Save model config for reconstruction.
         if source.model_config_data:
             config_path = context.artifact_dir / "config.json"
             config_path.write_text(json.dumps(source.model_config_data, indent=2))
-            files.append(
-                DraftFile(relative_path="config.json", role="config")
-            )
+            files.append(DraftFile(relative_path="config.json", role="config"))
 
         logger.info(
             "Safetensors exported: %d params, %d files",
@@ -213,6 +201,7 @@ def _shard_state_dict(
 def _get_safetensors_version() -> str:
     try:
         import safetensors
+
         return getattr(safetensors, "__version__", "unknown")
     except ImportError:
         return "unknown"

@@ -16,7 +16,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from tributo.util.annotations import PublicAPI
 
-
 # ── ProvenanceRecord ────────────────────────────────────────────────────────────
 
 

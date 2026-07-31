@@ -88,13 +88,28 @@ class RayDnnSourceProvider:
 
         # Try loading model.
         model = None
-        architecture_id: str | None = None
-        model_config_data: dict[str, Any] = {}
+        model_config_data, architecture_id = _read_model_config(ckpt_dir)
 
         # Check for full model checkpoint.
         model_pt_path = ckpt_dir / "model.pt"
         if model_pt_path.exists():
-            model = torch.load(model_pt_path, map_location="cpu", weights_only=True)
+            loaded = torch.load(model_pt_path, map_location="cpu", weights_only=True)
+            if isinstance(loaded, dict):
+                # DNN trainers save ``model.state_dict()`` into model.pt —
+                # a bare state_dict cannot be exported directly.  Reconstruct
+                # the model skeleton when an architecture is registered,
+                # otherwise reject explicitly instead of passing a raw dict
+                # down to exporters.
+                if architecture_id is None:
+                    raise ValueError(
+                        "model.pt contains a state_dict but model_config.json "
+                        "is missing or has no architecture_id — cannot "
+                        "reconstruct.  Provide a model_config.json with "
+                        "architecture_id, or save a full nn.Module checkpoint."
+                    )
+                model = _reconstruct_model(architecture_id, model_config_data, loaded)
+            else:
+                model = loaded
         else:
             # Check for state_dict only.
             state_dict_path = ckpt_dir / "state_dict.pt"
@@ -102,27 +117,19 @@ class RayDnnSourceProvider:
                 state_dict = torch.load(
                     state_dict_path, map_location="cpu", weights_only=True
                 )
-                # Attempt model reconstruction from config.
-                config_path = ckpt_dir / "model_config.json"
-                if config_path.exists():
-                    model_config_data = json.loads(config_path.read_text())
-                    architecture_id = model_config_data.get("architecture_id")
-                    if architecture_id is not None:
-                        model = _reconstruct_model(
-                            architecture_id, model_config_data, state_dict
-                        )
-                if model is None:
+                if architecture_id is None:
                     raise ValueError(
                         "Checkpoint contains state_dict but model_config.json is "
                         "missing or has no architecture_id.  Provide a "
                         "model_config.json with architecture_id to enable model "
                         "reconstruction, or use a full model checkpoint (model.pt)."
                     )
+                model = _reconstruct_model(
+                    architecture_id, model_config_data, state_dict
+                )
 
         if model is None:
-            raise FileNotFoundError(
-                f"No model checkpoint found in {ckpt_dir}"
-            )
+            raise FileNotFoundError(f"No model checkpoint found in {ckpt_dir}")
 
         # Extract metadata.
         metrics_path = ckpt_dir / "metrics.json"
@@ -155,6 +162,15 @@ class RayDnnSourceProvider:
         yield source
 
 
+def _read_model_config(ckpt_dir: Path) -> tuple[dict[str, Any], str | None]:
+    """Read ``model_config.json`` and return ``(config, architecture_id)``."""
+    config_path = ckpt_dir / "model_config.json"
+    if config_path.exists():
+        config = json.loads(config_path.read_text())
+        return config, config.get("architecture_id")
+    return {}, None
+
+
 def _reconstruct_model(
     architecture_id: str,
     config: dict[str, Any],
@@ -164,8 +180,10 @@ def _reconstruct_model(
 
     For known built-in architectures (DNN), construct directly.
     For third-party architectures, use ModelFactoryRegistry.
+
+    Raises ValueError with a clear message when reconstruction fails —
+    never returns the bare state_dict as a model.
     """
-    import torch
 
     if architecture_id == "dnn":
         from tributo.training.models.dnn import DNN
@@ -189,9 +207,9 @@ def _reconstruct_model(
         model = factory.build(config)
         model.load_state_dict(state_dict)
         return model
-    except Exception:
-        logger.debug(
-            "ModelFactory for %r not available — returning state_dict as-is",
-            architecture_id,
-        )
-        return state_dict
+    except Exception as exc:
+        raise ValueError(
+            f"Cannot reconstruct model for architecture_id {architecture_id!r}: "
+            f"{exc}.  Register the architecture in ModelFactoryRegistry, or "
+            "provide a full nn.Module checkpoint (model.pt)."
+        ) from exc

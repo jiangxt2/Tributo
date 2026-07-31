@@ -91,7 +91,6 @@ class BundleExportService:
         validator_registry: ValidatorRegistry | None = None,
         storage_resolver: StorageProfileResolver | None = None,
         manifest_registry: ManifestSchemaRegistry | None = None,
-        repository: Any | None = None,
         operation_store: Any | None = None,
     ) -> None:
         self._exports = export_registry or ExportRegistry()
@@ -99,7 +98,6 @@ class BundleExportService:
         self._validators = validator_registry or ValidatorRegistry()
         self._storage_resolver = storage_resolver or StorageProfileResolver()
         self._manifest_registry = manifest_registry or ManifestSchemaRegistry()
-        self._repository = repository
         self._operation_store = operation_store
         self._hooks_runner: Any = None  # Lazily initialized in export_bundle.
 
@@ -138,7 +136,6 @@ class BundleExportService:
         callback: Callable[[PublishedBundle], None] | None = None,
         raise_on_callback_error: bool = False,
         tributo_version: str = "0.0.0",
-        repository: Any | None = None,
     ) -> BundleResult:
         """Export a bundle from a resolved source.
 
@@ -164,9 +161,9 @@ class BundleExportService:
 
         # Generate stable IDs. bundle_id is derived solely from request_id
         # so retries with the same request_id produce the identical bundle_id
-        # (per the plan's idempotency design).
+        # and execution_id (per the plan's idempotency design).
         request_id = config.request_id or uuid.uuid4().hex
-        execution_id = f"exec-{uuid.uuid4().hex[:12]}"
+        execution_id = _make_execution_id(request_id)
         bundle_id = _make_bundle_id(request_id)
 
         planner = ExportPlanner(self._exports, self._validators)
@@ -203,10 +200,12 @@ class BundleExportService:
             )
 
             # Phase 4: Publish.
+            if config.bundle_uri is None:
+                raise ValueError("bundle_uri is required for publishing")
             published = publisher.publish(
                 execution=execution,
                 staging_root=staging,
-                bundle_uri=config.bundle_uri,  # type: ignore[arg-type]
+                bundle_uri=config.bundle_uri,
                 bundle_id=bundle_id,
                 execution_id=execution_id,
                 tributo_version=tributo_version,
@@ -258,27 +257,44 @@ class BundleExportService:
                 )
                 self._operation_store.record_execution(record)
 
-            # Phase 6: Post-publish hooks.
-            if self._repository is not None:
-                # Build manifest dict from published result.
-                from tributo.exporting.hooks import PublicationRunner
+            # Phase 6: Post-publish hooks.  Hooks are pure functions of the
+            # published bundle (canonical_uri + manifest) and always run —
+            # each hook decides whether it applies (e.g. MLflow log_artifacts
+            # skips when mlflow is not installed).
+            from tributo.exporting.hooks import PublicationRunner
 
-                manifest_dict = _build_manifest_dict(published.result)
+            manifest_dict = _build_manifest_dict(published.result)
 
-                # Load hooks from entry points and build runner.
-                hooks_entries = _discover_hook_plugins()
-                if hooks_entries:
-                    hooks_list: list[tuple[Any, dict[str, Any], bool]] = [
-                        (h(), {}, False) for h in hooks_entries
-                    ]
-                    self._hooks_runner = PublicationRunner(hooks_list)
+            # Load hooks from entry points and build runner.
+            hooks_entries = _discover_hook_plugins()
+            if hooks_entries:
+                hooks_list: list[tuple[Any, dict[str, Any], bool]] = [
+                    (h(), {}, False) for h in hooks_entries
+                ]
+                self._hooks_runner = PublicationRunner(hooks_list)
 
-                if self._hooks_runner is not None:
-                    self._hooks_runner.run(
-                        canonical_uri=published.result.canonical_uri,
-                        manifest=manifest_dict,
-                        manifest_sha256=published.result.manifest_sha256,
-                    )
+            if self._hooks_runner is not None:
+                receipts = self._hooks_runner.run(
+                    canonical_uri=published.result.canonical_uri,
+                    manifest=manifest_dict,
+                    manifest_sha256=published.result.manifest_sha256,
+                )
+
+                # Record publication attempts (when OperationStore is available).
+                if self._operation_store is not None:
+                    from tributo.exporting.records import PublicationAttempt
+
+                    for receipt in receipts:
+                        attempt = PublicationAttempt(
+                            attempt_id=uuid.uuid4().hex,
+                            bundle_digest=bundle_digest,
+                            hook_id=receipt.hook_id,
+                            status=receipt.status,
+                            retryable=receipt.retryable,
+                            idempotency_key=receipt.idempotency_key,
+                            error=receipt.error,
+                        )
+                        self._operation_store.record_publication_attempt(attempt)
 
             # Phase 7: Callback (before staging cleanup).
             if callback is not None:
@@ -315,18 +331,36 @@ def _load_entry_point_plugins(
             discover_validator_plugins,
         )
 
-        _plugin_cache["exports"] = discover_exporter_plugins()
-        _plugin_cache["providers"] = discover_source_provider_plugins()
-        _plugin_cache["validators"] = discover_validator_plugins()
+        # Collect discovery failures into registry diagnostics so they are
+        # queryable via ``registry.diagnostics()``, not just logged.
+        export_diags: list[Any] = []
+        provider_diags: list[Any] = []
+        validator_diags: list[Any] = []
+        _plugin_cache["exports"] = discover_exporter_plugins(diagnostics=export_diags)
+        _plugin_cache["providers"] = discover_source_provider_plugins(
+            diagnostics=provider_diags
+        )
+        _plugin_cache["validators"] = discover_validator_plugins(
+            diagnostics=validator_diags
+        )
+        _plugin_cache["export_diags"] = export_diags
+        _plugin_cache["provider_diags"] = provider_diags
+        _plugin_cache["validator_diags"] = validator_diags
         _plugins_loaded = True
 
-    # Register cached classes into this instance's registries.
+    # Register cached classes + diagnostics into this instance's registries.
     for cls in _plugin_cache["exports"]:
         exports.register(cls)
+    for d in _plugin_cache["export_diags"]:
+        exports.record_diagnostic(d)
     for cls in _plugin_cache["providers"]:
         providers.register(cls)
+    for d in _plugin_cache["provider_diags"]:
+        providers.record_diagnostic(d)
     for cls in _plugin_cache["validators"]:
         validators.register(cls)
+    for d in _plugin_cache["validator_diags"]:
+        validators.record_diagnostic(d)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -342,6 +376,16 @@ def _make_bundle_id(request_id: str) -> str:
     return f"bundle-{digest[:32]}"
 
 
+def _make_execution_id(request_id: str) -> str:
+    """Generate a deterministic execution ID derived from the request_id.
+
+    Same request_id (idempotent retry) produces the same execution_id,
+    keeping the manifest stable across retries.
+    """
+    digest = hashlib.sha256(request_id.encode("utf-8")).hexdigest()
+    return f"exec-{digest[:12]}"
+
+
 def _build_manifest_dict(result: BundleResult) -> dict[str, Any]:
     """Build a JSON-serialisable manifest dict from a BundleResult.
 
@@ -355,9 +399,11 @@ def _build_manifest_dict(result: BundleResult) -> dict[str, Any]:
         bucket, key = parse_s3_url(manifest_uri)
         client = get_boto3_client()
         resp = client.get_object(Bucket=bucket, Key=key)
-        raw = resp["Body"].read()
-        return json.loads(raw.decode("utf-8"))  # type: ignore[no-any-return]
-    return json.loads(Path(manifest_uri).read_bytes())  # type: ignore[no-any-return]
+        raw: bytes = resp["Body"].read()
+        data: dict[str, Any] = json.loads(raw.decode("utf-8"))
+        return data
+    local_data: dict[str, Any] = json.loads(Path(manifest_uri).read_bytes())
+    return local_data
 
 
 _hook_plugins_cache: list[Any] | None = None

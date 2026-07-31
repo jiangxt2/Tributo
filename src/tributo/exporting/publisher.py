@@ -113,7 +113,7 @@ def _s3_put_json(
         Body=body.encode("utf-8"),
         ContentType="application/json",
         **extra,
-    )  # type: ignore[no-any-return]
+    )
 
 
 def _s3_put_bytes(
@@ -139,7 +139,7 @@ def _s3_put_bytes(
         Body=data,
         ContentType=content_type,
         **extra,
-    )  # type: ignore[no-any-return]
+    )
 
 
 def _s3_get_json(client: Any, bucket: str, key: str) -> Any:
@@ -148,6 +148,18 @@ def _s3_get_json(client: Any, bucket: str, key: str) -> Any:
         resp = client.get_object(Bucket=bucket, Key=key)
         raw: bytes = resp["Body"].read()
         return json.loads(raw.decode("utf-8"))
+    except client.exceptions.ClientError as exc:
+        if exc.response["Error"]["Code"] == "NoSuchKey":
+            return None
+        raise
+
+
+def _s3_get_bytes(client: Any, bucket: str, key: str) -> bytes | None:
+    """Read an object's body as bytes, or None if not found."""
+    try:
+        resp = client.get_object(Bucket=bucket, Key=key)
+        body: bytes = resp["Body"].read()
+        return body
     except client.exceptions.ClientError as exc:
         if exc.response["Error"]["Code"] == "NoSuchKey":
             return None
@@ -450,6 +462,31 @@ def _s3_upload_artifact_files(
     return keys
 
 
+def _manifest_logically_equal(existing_bytes: bytes, new_bytes: bytes) -> bool:
+    """Compare two manifests ignoring per-run advisory fields.
+
+    Idempotent retries of the same request rebuild the manifest with fresh
+    ``created_at``, node ``duration_ms``, and validation metrics.  The
+    logical bundle content (artifacts, tree digests, roles, source info)
+    must match.
+    """
+
+    def normalize(raw: bytes) -> Any:
+        data = json.loads(raw.decode("utf-8"))
+        data.pop("created_at", None)
+        for node in data.get("execution", {}).get("nodes", []):
+            node.pop("duration_ms", None)
+        for art in data.get("artifacts", []):
+            for v in art.get("validation", []):
+                v.pop("metrics", None)
+        return data
+
+    try:
+        return bool(normalize(existing_bytes) == normalize(new_bytes))
+    except (json.JSONDecodeError, TypeError):
+        return False
+
+
 def _s3_publish(
     *,
     client: Any,
@@ -474,13 +511,19 @@ def _s3_publish(
     logger.info("Acquired publish lease %s", lease_key)
 
     try:
-        # Phase 2: Upload all artifact files.
+        # Phase 2: Upload all artifact files.  The lease is renewed at
+        # half-TTL intervals so a long upload cannot be taken over by
+        # another publisher or the orphan GC mid-flight.
         uploaded_keys: list[str] = []
+        renew_at = time.time() + _LEASE_TTL_SECONDS / 2
         for artifact in manifest.artifacts:
             keys = _s3_upload_artifact_files(
                 client, bucket, bundle_prefix, artifact, staging_root
             )
             uploaded_keys.extend(keys)
+            if time.time() >= renew_at:
+                _s3_lease_acquire(client, bucket, leases_prefix, bundle_id, owner)
+                renew_at = time.time() + _LEASE_TTL_SECONDS / 2
 
         # Phase 3: Write manifest-last with If-None-Match.
         manifest_key = f"{bundle_prefix}manifest.json"
@@ -495,9 +538,26 @@ def _s3_publish(
                     manifest_key,
                 )
             else:
-                raise RuntimeError(
-                    f"Manifest s3://{bucket}/{manifest_key} exists but differs — collision"
-                )
+                # A retry of the same request re-runs the DAG and rebuilds
+                # the manifest with fresh advisory fields (created_at, node
+                # duration_ms, validation metrics), so byte-level shas may
+                # differ even for the same logical publish.  Fall back to a
+                # logical comparison (mirrors the local publish's semantic
+                # check on bundle_id + artifact tree digests).
+                existing_body = _s3_get_bytes(client, bucket, manifest_key)
+                if existing_body is not None and _manifest_logically_equal(
+                    existing_body, manifest_bytes
+                ):
+                    logger.info(
+                        "Manifest s3://%s/%s logically identical — idempotent",
+                        bucket,
+                        manifest_key,
+                    )
+                else:
+                    raise RuntimeError(
+                        f"Manifest s3://{bucket}/{manifest_key} exists but "
+                        "differs — collision"
+                    )
         else:
             metadata = {"tributo-sha256": manifest_sha256}
             _s3_put_bytes(
@@ -662,6 +722,28 @@ class Publisher:
 
         effective_roles = roles if roles is not None else execution.roles
 
+        # Roles must reference publishable explicit artifacts that succeeded
+        # (plan: "Publisher 校验 role 必须引用 publish=True && status=succeeded
+        # 的显式 artifact；否则整个发布失败").
+        node_by_name = {nr.target_name: nr for nr in execution.node_results}
+        for role_name, target_name in effective_roles.items():
+            nr = node_by_name.get(target_name)
+            if nr is None:
+                raise ValueError(
+                    f"Role {role_name!r} references unknown target {target_name!r}"
+                )
+            if not nr.publish:
+                raise ValueError(
+                    f"Role {role_name!r} references non-publishable target "
+                    f"{target_name!r} (implicit nodes cannot be roles)"
+                )
+            if nr.status != "succeeded":
+                raise ValueError(
+                    f"Role {role_name!r} references target {target_name!r} "
+                    f"with status {nr.status!r}; roles must reference "
+                    "succeeded artifacts"
+                )
+
         # Build manifest.
         published_artifacts: list[LogicalArtifact] = []
         has_failed_optional = False
@@ -767,7 +849,9 @@ class Publisher:
 
         else:
             # Local publish — strip file:// prefix if present.
-            local_uri = bundle_uri[7:] if bundle_uri.startswith("file://") else bundle_uri
+            local_uri = (
+                bundle_uri[7:] if bundle_uri.startswith("file://") else bundle_uri
+            )
             bundle_dir = Path(local_uri) / bundle_id
             final_dir, actual_manifest_sha256 = _local_publish(
                 bundle_dir=bundle_dir,
@@ -800,7 +884,24 @@ class Publisher:
                 should_write = True
 
                 # Policy checks (mirror S3 _update_alias_s3).
-                if alias_path.exists():
+                if not alias_path.exists():
+                    # CAS with expected digest requires the alias to already
+                    # exist — nothing to compare against, so this is an error
+                    # (same ALIAS_NOT_FOUND semantics as the S3 path).
+                    if (
+                        alias_config.policy == "compare_and_swap"
+                        and alias_config.expected_manifest_sha256
+                    ):
+                        alias_status = "failed"
+                        alias_failure = FailureInfo(
+                            code="ALIAS_NOT_FOUND",
+                            category="publish",
+                            message=(
+                                "CAS with expected digest but alias does not exist"
+                            ),
+                        )
+                        should_write = False
+                else:
                     existing = json.loads(alias_path.read_bytes())
                     if alias_config.policy == "compare_and_swap":
                         if alias_config.expected_manifest_sha256 is None:

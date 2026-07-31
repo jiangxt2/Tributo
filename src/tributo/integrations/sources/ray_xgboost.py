@@ -7,6 +7,7 @@ into an ``ExportSource`` that the export pipeline can consume.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 from contextlib import contextmanager
 from pathlib import Path
@@ -120,10 +121,28 @@ class RayXGBoostSourceProvider:
                 "framework": "xgboost",
                 "framework_version": xgboost.__version__,
                 "n_features": n_features,
+                "objective": _booster_objective(booster),
+                "has_categorical_features": any(
+                    ft and ft.startswith("c") for ft in (booster.feature_types or [])
+                ),
             },
             source_fingerprint=fingerprint,
         )
         yield source
+
+
+def _booster_objective(booster: Any) -> str:
+    """Extract the objective name from the booster's learner config.
+
+    The objective lives in the learner config (``booster.save_config()``),
+    not in the string attributes — ``booster.attr("objective")`` is None
+    unless the user explicitly set it with ``set_attr``.
+    """
+    try:
+        config = json.loads(booster.save_config())
+        return str(config.get("learner", {}).get("objective", {}).get("name", ""))
+    except Exception:
+        return ""
 
 
 def _path_to_checkpoint(path: Path) -> Path:

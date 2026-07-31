@@ -11,7 +11,7 @@ import json
 import logging
 from typing import Any, ClassVar, Mapping
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 from tributo.exporting.models import (
     ArtifactDraft,
@@ -72,6 +72,7 @@ class TorchExportExporter:
             )
         try:
             import torch  # noqa: F401
+
             if not hasattr(torch, "export"):
                 return SupportResult(
                     supported=False,
@@ -99,9 +100,7 @@ class TorchExportExporter:
 
         model = source.model_object
         if not isinstance(model, torch.nn.Module):
-            raise TypeError(
-                f"Expected torch.nn.Module, got {type(model).__name__}"
-            )
+            raise TypeError(f"Expected torch.nn.Module, got {type(model).__name__}")
 
         # Prepare example inputs.
         example_inputs = _build_example_inputs(source, model)
@@ -115,19 +114,24 @@ class TorchExportExporter:
             ep = torch.export.export(
                 model,
                 example_inputs,
-                dynamic_shapes=_build_dynamic_shapes(example_inputs) if dynamic_shapes else None,
+                dynamic_shapes=_build_dynamic_shapes(example_inputs)
+                if dynamic_shapes
+                else None,
                 strict=strict,
             )
         except Exception as exc:
             # Fallback to non-strict.
             if strict and "constraint" in str(exc).lower():
                 logger.info(
-                    "torch.export strict mode failed, retrying with strict=False: %s", exc
+                    "torch.export strict mode failed, retrying with strict=False: %s",
+                    exc,
                 )
                 ep = torch.export.export(
                     model,
                     example_inputs,
-                    dynamic_shapes=_build_dynamic_shapes(example_inputs) if dynamic_shapes else None,
+                    dynamic_shapes=_build_dynamic_shapes(example_inputs)
+                    if dynamic_shapes
+                    else None,
                     strict=False,
                 )
             else:
@@ -171,7 +175,8 @@ class TorchExportExporter:
                     "torch": torch.__version__,
                 },
                 effective_options={
-                    k: v for k, v in target.typed_options.items()
+                    k: v
+                    for k, v in target.typed_options.items()
                     if k not in ("dynamic_shapes", "strict")
                 },
             ),
@@ -200,7 +205,12 @@ def _build_example_inputs(source: ExportSource, model: Any) -> tuple[Any, ...]:
     try:
         first_param = next(model.parameters())
         batch_size = 1
-        input_shape = (batch_size, first_param.shape[1] if len(first_param.shape) > 1 else first_param.shape[0])
+        input_shape = (
+            batch_size,
+            first_param.shape[1]
+            if len(first_param.shape) > 1
+            else first_param.shape[0],
+        )
         return (torch.randn(input_shape),)
     except (StopIteration, AttributeError):
         return (torch.randn(1, 64),)
@@ -229,11 +239,13 @@ def _describe_inputs(inputs: tuple[Any, ...]) -> list[dict[str, Any]]:
     desc = []
     for i, inp in enumerate(inputs):
         if hasattr(inp, "shape"):
-            desc.append({
-                "index": i,
-                "shape": list(inp.shape),
-                "dtype": str(inp.dtype),
-            })
+            desc.append(
+                {
+                    "index": i,
+                    "shape": list(inp.shape),
+                    "dtype": str(inp.dtype),
+                }
+            )
         else:
             desc.append({"index": i, "type": type(inp).__name__})
     return desc

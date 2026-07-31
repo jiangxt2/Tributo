@@ -22,9 +22,9 @@ from typing import Any
 
 from tributo.exporting.models import (
     BundleOutputConfig,
+    BundleRef,
     ExportTarget,
 )
-from tributo.exporting.repository import BundleRef
 from tributo.util.annotations import PublicAPI
 
 # ── Public types ───────────────────────────────────────────────────────────────
@@ -65,6 +65,10 @@ def export(
             "Use a SourceProvider to create one (e.g. RayXGBoostSourceProvider)."
         )
 
+    # The function-level storage_profile overrides the config-level one.
+    if storage_profile is not None:
+        spec = spec.model_copy(update={"storage_profile": storage_profile})
+
     service = BundleExportService()
     result = service.export_bundle(
         source=source,
@@ -99,7 +103,7 @@ def load_bundle(ref: BundleRef | str) -> dict[str, Any]:
         expected_sha256 = None
 
     raw = reader.read_manifest(uri)
-    manifest_dict = raw.model_dump(mode="json")  # type: ignore[union-attr]
+    manifest_dict: dict[str, Any] = raw.model_dump(mode="json")
 
     # Verify manifest integrity when a BundleRef was provided.
     if expected_sha256 is not None:
@@ -164,8 +168,10 @@ def __getattr__(name: str) -> Any:
         return _get_signing()[1]
     if name == "ProvenanceBuilder":
         from tributo.exporting.provenance import ProvenanceBuilder as _pb
+
         return _pb
     if name == "AsyncBundleExportService":
         from tributo.exporting.async_service import AsyncBundleExportService as _aes
+
         return _aes
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

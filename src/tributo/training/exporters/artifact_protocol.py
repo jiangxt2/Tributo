@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import ClassVar, Mapping, Protocol, runtime_checkable
 
-from tributo.training.exporters.models import (
+from tributo.exporting.models import (
     ArtifactDraft,
     ExportContext,
     ExportSource,

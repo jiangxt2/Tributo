@@ -9,7 +9,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
+import shutil
 import tempfile
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Generator
@@ -193,8 +196,6 @@ class BundleReader:
             yield ra
         finally:
             if is_temp and artifact_dir.exists():
-                import shutil
-
                 shutil.rmtree(artifact_dir, ignore_errors=True)
 
     # ── Internal helpers ──────────────────────────────────────────────────
@@ -258,7 +259,17 @@ class BundleReader:
         artifact: LogicalArtifact,
         storage_profile: str | None,
     ) -> Path:
-        """Download artifact files from S3 to a local cache directory."""
+        """Download artifact files from S3 to a local cache directory.
+
+        Downloads fill the shared cache (keyed by tree_digest) atomically —
+        write-to-temp-then-rename — and the returned directory is a fresh
+        per-context copy.  Consumers may delete their copy on exit without
+        invalidating the shared cache for other contexts.
+
+        Resource limits are enforced pre-download: the manifest carries
+        declared sizes, and each object is HEAD-checked so a lying or
+        mutated remote object is rejected before any bytes are fetched.
+        """
         bucket, _key = parse_s3_url(manifest.canonical_uri)
         artifact_prefix = f"{_key.rstrip('/')}/artifacts/{artifact.name}/"
 
@@ -267,6 +278,7 @@ class BundleReader:
         cache_root.mkdir(parents=True, exist_ok=True)
 
         client = _s3_client(self._storage_resolver, storage_profile)
+        expected_sizes = {af.relative_path: af.size_bytes for af in artifact.files}
 
         for af in artifact.files:
             s3_key = f"{artifact_prefix}{af.relative_path}"
@@ -274,9 +286,38 @@ class BundleReader:
             local_path.parent.mkdir(parents=True, exist_ok=True)
 
             if not local_path.exists():
-                client.download_file(bucket, s3_key, str(local_path))
+                # HEAD pre-check: verify the remote size matches the manifest
+                # before downloading.
+                head = client.head_object(Bucket=bucket, Key=s3_key)
+                remote_size = head.get("ContentLength", 0)
+                expected = expected_sizes.get(af.relative_path)
+                if expected is not None and remote_size != expected:
+                    raise ValueError(
+                        f"S3 object {s3_key} size {remote_size} does not "
+                        f"match manifest size {expected}"
+                    )
+                if remote_size > self._limits.max_single_file_bytes:
+                    raise ValueError(
+                        f"S3 object {s3_key} size {remote_size} exceeds "
+                        f"limit {self._limits.max_single_file_bytes}"
+                    )
 
-        return cache_root
+                # Atomic cache fill: download to temp, then rename.
+                tmp_path = local_path.with_name(
+                    f"{local_path.name}.tmp-{uuid.uuid4().hex[:8]}"
+                )
+                try:
+                    client.download_file(bucket, s3_key, str(tmp_path))
+                    os.replace(str(tmp_path), str(local_path))
+                finally:
+                    if tmp_path.exists():
+                        tmp_path.unlink(missing_ok=True)
+
+        # Fresh per-context copy of the shared cache.
+        context_root = Path(tempfile.mkdtemp(prefix="tributo-bundle-artifact-"))
+        context_dir = context_root / "artifact"
+        shutil.copytree(cache_root, context_dir)
+        return context_dir
 
     def _enforce_limits(self, artifact: LogicalArtifact) -> None:
         """Check artifact against configured resource limits."""

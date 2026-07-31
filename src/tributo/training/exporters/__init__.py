@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib
 import warnings
+from typing import Any
 
 from tributo.training.exporters.artifact_protocol import (
     ARTIFACT_KIND_DIAGNOSTICS,
@@ -40,7 +41,7 @@ __all__ = [
 ]
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
     if name in __all__:
         return globals()[name]
     warnings.warn(

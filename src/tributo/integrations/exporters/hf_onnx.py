@@ -98,15 +98,19 @@ class HuggingFaceONNXExporter:
             from optimum.onnxruntime import ORTModelForSequenceClassification
 
             if task in ("text-classification", "sequence-classification"):
-                ort_model = ORTModelForSequenceClassification.from_pretrained(
+                # Optimum's export path is superseded by the transformers
+                # exporter below (which writes into artifact_dir directly);
+                # loading the ORT wrapper only validates model availability.
+                ORTModelForSequenceClassification.from_pretrained(
                     model_id or "unknown",
                     export=True,
                     opset=opset,
                 )
-                onnx_path = context.artifact_dir / "model.onnx"
-                # Optimum saves to its own cache; copy to artifact_dir.
                 _export_with_transformers_onnx(
-                    model, model_id, task, opset,
+                    model,
+                    model_id,
+                    task,
+                    opset,
                     context.artifact_dir,
                 )
                 optimum_used = False  # Use the transformers path instead.
@@ -114,8 +118,11 @@ class HuggingFaceONNXExporter:
             pass
 
         if not optimum_used:
-            onnx_path = _export_with_transformers_onnx(
-                model, model_id, task or "default", opset,
+            _export_with_transformers_onnx(
+                model,
+                model_id,
+                task or "default",
+                opset,
                 context.artifact_dir,
             )
 
@@ -179,7 +186,6 @@ def _export_with_transformers_onnx(
     artifact_dir: Path,
 ) -> Path:
     """Use transformers.onnx to export."""
-    import torch
     from transformers.onnx import FeaturesManager, export
 
     if hasattr(model, "config"):
@@ -204,14 +210,14 @@ def _export_with_transformers_onnx(
 
 
 def _export_torch_onnx_fallback(
-    model: Any, artifact_dir: Path, opset: int,
+    model: Any,
+    artifact_dir: Path,
+    opset: int,
 ) -> Path:
     """Direct torch.onnx.export fallback."""
     import torch
 
     model.eval()
-    # Generate dummy input from config.
-    hidden_size = getattr(model.config, "hidden_size", 768) if hasattr(model, "config") else 768
     dummy = torch.zeros(1, 128, dtype=torch.long)
     attention_mask = torch.ones(1, 128, dtype=torch.long)
 
@@ -237,6 +243,7 @@ def _export_torch_onnx_fallback(
 def _get_transformers_version() -> str:
     try:
         import transformers
+
         return getattr(transformers, "__version__", "unknown")
     except ImportError:
         return "unknown"

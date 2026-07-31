@@ -95,13 +95,7 @@ class ExportTarget(BaseModel):
     @field_validator("name")
     @classmethod
     def _check_name(cls, v: str) -> str:
-        result = _validate_safe_name(v, "target name")
-        if result.startswith("_"):
-            raise ValueError(
-                f"target name {v!r} must not start with '_' "
-                "(reserved for implicit planner-generated nodes)"
-            )
-        return result
+        return _validate_safe_name(v, "target name")
 
 
 @PublicAPI(stability="beta")
@@ -141,6 +135,12 @@ class BundleOutputConfig(BaseModel):
             if len(names) != len(self.targets):
                 raise ValueError("target names must be unique")
             for t in self.targets:
+                if t.name.startswith("_"):
+                    raise ValueError(
+                        f"target name {t.name!r} must not start with '_' "
+                        "(reserved for implicit planner-generated nodes)"
+                    )
+            for t in self.targets:
                 for d in t.depends_on:
                     if d == t.name:
                         raise ValueError(f"target {t.name!r} cannot depend on itself")
@@ -165,6 +165,13 @@ class BundleOutputConfig(BaseModel):
         if v is None:
             return v
         if v.startswith("s3://") and len(v) > 5:
+            # Reject persisted URIs carrying credentials or query/fragment
+            # (plan: "拒绝带凭证或签名 query 的持久化 URI").
+            rest = v[5:]
+            if "@" in rest:
+                raise ValueError("s3:// URI must not contain credentials")
+            if "?" in rest or "#" in rest:
+                raise ValueError("s3:// URI must not contain query or fragment")
             return v
         if v.startswith("file://"):
             path = v[7:]
@@ -423,6 +430,22 @@ class BundleResult(BaseModel):
         pattern=r"^(not_requested|updated|unchanged|failed)$",
     )
     alias_failure: FailureInfo | None = None
+
+
+@PublicAPI(stability="beta")
+class BundleRef(BaseModel):
+    """Immutable reference to a committed bundle.
+
+    This is the stable handle that callers keep — it never changes after
+    commit and can be passed to ``load_bundle()`` without needing to know
+    the storage backend.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    canonical_uri: str
+    bundle_id: str
+    manifest_sha256: str
 
 
 @DeveloperAPI

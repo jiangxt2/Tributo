@@ -88,9 +88,7 @@ class TorchONNXExporter:
 
         model = source.model_object
         if not isinstance(model, torch.nn.Module):
-            raise TypeError(
-                f"Expected torch.nn.Module, got {type(model).__name__}"
-            )
+            raise TypeError(f"Expected torch.nn.Module, got {type(model).__name__}")
 
         # Save training state for restoration (mutates_source=False guarantee).
         was_training = model.training
@@ -106,92 +104,117 @@ class TorchONNXExporter:
         sample_inputs = _resolve_sample_inputs(source, model)
         output_names = ["output"]
 
-        # ── Dynamo path (PyTorch >= 2.1) ──
-        if dynamo:
-            try:
-                if hasattr(torch.onnx, "dynamo_export"):
-                    export_options = torch.onnx.ExportOptions(
-                        dynamic_shapes=True,
-                        onnx_registry=None,
+        # Tracks which path actually ran — the dynamo path may fall back
+        # to legacy export at runtime, and the manifest must record the
+        # path that was really used.
+        used_dynamo = False
+
+        try:
+            # ── Dynamo path (PyTorch >= 2.1) ──
+            if dynamo:
+                try:
+                    if hasattr(torch.onnx, "dynamo_export"):
+                        export_options = torch.onnx.ExportOptions(
+                            dynamic_shapes=True,
+                            onnx_registry=None,
+                        )
+                        onnx_program = torch.onnx.dynamo_export(
+                            model,
+                            *sample_inputs,
+                            export_options=export_options,
+                        )
+                        output_path = context.artifact_dir / "model.onnx"
+                        onnx_program.save(
+                            str(output_path),
+                            **(
+                                {"external_weights_path": "model_weights.bin"}
+                                if external_data
+                                else {}
+                            ),
+                        )
+                        used_dynamo = True
+                        logger.info(
+                            "ONNX model exported via dynamo_export to %s",
+                            output_path,
+                        )
+                    else:
+                        # No dynamo_export available — fall through to legacy.
+                        raise NotImplementedError(
+                            "torch.onnx.dynamo_export not available"
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        "torch.onnx.dynamo_export failed: %s — falling back to legacy export(dynamo=False)",
+                        exc,
                     )
-                    onnx_program = torch.onnx.dynamo_export(
+                    output_path = self._legacy_export(
                         model,
-                        *sample_inputs,
-                        export_options=export_options,
+                        sample_inputs,
+                        input_names,
+                        output_names,
+                        opset,
+                        context.artifact_dir,
+                        external_data,
+                        use_dynamo=False,
                     )
-                    output_path = context.artifact_dir / "model.onnx"
-                    onnx_program.save(
-                        str(output_path),
-                        **(
-                            {"external_weights_path": "model_weights.bin"}
-                            if external_data
-                            else {}
-                        ),
-                    )
-                    logger.info(
-                        "ONNX model exported via dynamo_export to %s",
-                        output_path,
-                    )
-                else:
-                    # No dynamo_export available — fall through to legacy.
-                    raise NotImplementedError("torch.onnx.dynamo_export not available")
-            except Exception as exc:
-                logger.warning(
-                    "torch.onnx.dynamo_export failed: %s — falling back to legacy export(dynamo=False)",
-                    exc,
-                )
+            else:
+                # Legacy torch.onnx.export path — classic tracing backend.
                 output_path = self._legacy_export(
-                    model, sample_inputs, input_names, output_names,
-                    opset, context.artifact_dir, external_data, use_dynamo=False,
+                    model,
+                    sample_inputs,
+                    input_names,
+                    output_names,
+                    opset,
+                    context.artifact_dir,
+                    external_data,
+                    use_dynamo=False,
                 )
-        else:
-            # Legacy torch.onnx.export path — classic tracing backend.
-            output_path = self._legacy_export(
-                model, sample_inputs, input_names, output_names,
-                opset, context.artifact_dir, external_data, use_dynamo=False,
-            )
 
-        # Determine which files were produced.
-        files: list[DraftFile] = [DraftFile(relative_path="model.onnx", role="model")]
-        if external_data:
-            weights_path = context.artifact_dir / "model_weights.bin"
-            if weights_path.exists():
+            # Determine which files were produced.
+            files: list[DraftFile] = [
+                DraftFile(relative_path="model.onnx", role="model")
+            ]
+            if external_data:
+                weights_path = context.artifact_dir / "model_weights.bin"
+                if weights_path.exists():
+                    files.append(
+                        DraftFile(relative_path="model_weights.bin", role="aux")
+                    )
+
+            # Save model config for reconstruction.
+            if source.model_config_data:
+                config_path = context.artifact_dir / "model_config.json"
+                config_path.write_text(
+                    json.dumps(source.model_config_data, indent=2, ensure_ascii=False)
+                )
                 files.append(
-                    DraftFile(relative_path="model_weights.bin", role="aux")
+                    DraftFile(relative_path="model_config.json", role="config")
                 )
 
-        # Save model config for reconstruction.
-        if source.model_config_data:
-            config_path = context.artifact_dir / "model_config.json"
-            config_path.write_text(
-                json.dumps(source.model_config_data, indent=2, ensure_ascii=False)
+            return ArtifactDraft(
+                name=target.target.name,
+                format="onnx",
+                flavor_id="onnx-runtime-v1",
+                variant="dynamo" if used_dynamo else "legacy",
+                files=tuple(files),
+                entrypoint="model.onnx",
+                producer=ProducerInfo(
+                    exporter_id=self.exporter_id,
+                    framework_versions={
+                        "torch": torch.__version__,
+                    },
+                    effective_options={
+                        "opset": opset,
+                        "dynamo": used_dynamo,
+                        "external_data": external_data,
+                    },
+                ),
+                derived_from=(),
             )
-            files.append(DraftFile(relative_path="model_config.json", role="config"))
-
-        # Restore original training state.
-        if was_training:
-            model.train()
-
-        return ArtifactDraft(
-            name=target.target.name,
-            format="onnx",
-            flavor_id="onnx-runtime-v1",
-            variant="dynamo" if dynamo else "legacy",
-            files=tuple(files),
-            entrypoint="model.onnx",
-            producer=ProducerInfo(
-                exporter_id=self.exporter_id,
-                framework_versions={
-                    "torch": torch.__version__,
-                },
-                effective_options={
-                    "opset": opset,
-                    "dynamo": dynamo,
-                    "external_data": external_data,
-                },
-            ),
-            derived_from=(),
-        )
+        finally:
+            # Restore original training state — even if export raised.
+            if was_training:
+                model.train()
 
     @staticmethod
     def _legacy_export(
@@ -223,9 +246,7 @@ class TorchONNXExporter:
             opset_version=opset,
             input_names=input_names,
             output_names=output_names,
-            dynamic_axes={
-                name: {0: "batch_size"} for name in input_names
-            },
+            dynamic_axes={name: {0: "batch_size"} for name in input_names},
             dynamo=use_dynamo,
             export_params=True,
             do_constant_folding=True,

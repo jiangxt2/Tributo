@@ -162,14 +162,25 @@ class ExportPlanner:
                 for d in target.depends_on
                 if d in _explicit_formats
             )
+            # A non-explicit dep matched by a candidate's upstream_requirement
+            # will be injected by Phase 2 — surface its declared format now so
+            # transform exporters can be selected in Phase 1.
+            candidates = self._exports.list_candidates(
+                source_kind=source.source_kind,
+                output_format=target.format,
+            )
+            for c in candidates:
+                for req in getattr(c, "upstream_requirements", ()):
+                    if (
+                        req.name in target.depends_on
+                        and req.name not in _explicit_formats
+                        and req.format not in upstream_formats
+                    ):
+                        upstream_formats += (req.format,)
             request = SupportRequest(
                 source_kind=source.source_kind,
                 source_metadata=source.metadata,
                 upstream_formats=upstream_formats,
-            )
-            candidates = self._exports.list_candidates(
-                source_kind=source.source_kind,
-                output_format=target.format,
             )
             if not candidates:
                 raise JobConfigurationError(
@@ -305,12 +316,20 @@ class ExportPlanner:
         for n in implicit_nodes:
             all_nodes[n.target.name] = n
 
-        # Phase 3: Validate role → target references.
+        # Phase 3: Validate role → target references.  Roles must reference
+        # explicit (non-implicit) targets — implicit nodes are planner-internal
+        # and cannot be published as roles.
         for role_name, target_name in config.roles.items():
             if target_name not in all_nodes:
                 raise JobConfigurationError(
                     f"Role {role_name!r} references target {target_name!r} "
                     f"which does not exist. Available targets: {sorted(all_nodes)}"
+                )
+            if all_nodes[target_name].implicit:
+                raise JobConfigurationError(
+                    f"Role {role_name!r} cannot reference implicit target "
+                    f"{target_name!r} — roles must reference explicit "
+                    "publishable artifacts"
                 )
 
         # Phase 4: Topological sort (Kahn's algorithm).

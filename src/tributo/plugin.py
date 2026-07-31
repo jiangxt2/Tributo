@@ -36,9 +36,41 @@ from __future__ import annotations
 import logging
 import os
 from importlib.metadata import entry_points
-from typing import Any
+from typing import Any, TypeGuard
+
+from tributo.exporting.models import PluginLoadDiagnostic
+from tributo.exporting.protocols import (
+    ExportValidator,
+    ModelExporter,
+    ModelFactory,
+    SourceProvider,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _record_diagnostic(
+    diagnostics: list[PluginLoadDiagnostic] | None,
+    group: str,
+    entry_point_name: str,
+    reason: str,
+    error_type: str | None = None,
+) -> None:
+    """Record a non-fatal plugin loading issue when a sink is provided.
+
+    Sinks are the registries' diagnostics lists — the plan requires
+    plugin import/type/api-version failures to be queryable via
+    ``registry.diagnostics()``, not just logged.
+    """
+    if diagnostics is not None:
+        diagnostics.append(
+            PluginLoadDiagnostic(
+                group=group,
+                entry_point_name=entry_point_name,
+                reason=reason,
+                error_type=error_type,
+            )
+        )
 
 
 def _get_enabled_plugins() -> set[str] | None:
@@ -186,8 +218,12 @@ def discover_model_plugins() -> list[Any]:
 
 
 def _iter_entry_points(group: str) -> Any:
-    """Iterate over entry points for *group*."""
-    eps = entry_points(group=group)
+    """Iterate over entry points for *group*, sorted by name.
+
+    Deterministic order makes plugin loading (and any resulting
+    candidate ordering) reproducible across runs.
+    """
+    eps = sorted(entry_points(group=group), key=lambda ep: ep.name)
     yield from eps
 
 
@@ -202,11 +238,15 @@ def _validate_api_version(obj: Any, expected: int) -> bool:
     return av == expected
 
 
-def discover_exporter_plugins() -> list[Any]:
+def discover_exporter_plugins(
+    diagnostics: list[PluginLoadDiagnostic] | None = None,
+) -> list[Any]:
     """Discover third-party exporters registered as ``tributo.exporters``.
 
     Each entry point must point to a ``ModelExporter`` class with
-    ``api_version == 1``.
+    ``api_version == 1``.  When *diagnostics* (a list) is provided,
+    import/type/api-version/name failures are appended to it so they can
+    be queried via ``ExportRegistry.diagnostics()``.
     """
     enabled = _get_enabled_plugins()
     classes: list[Any] = []
@@ -219,12 +259,19 @@ def discover_exporter_plugins() -> list[Any]:
             continue
         try:
             cls = ep.load()
-        except Exception:
+        except Exception as exc:
             logger.warning(
                 "Failed to load exporter plugin %r (%s)",
                 ep.name,
                 ep.value,
                 exc_info=True,
+            )
+            _record_diagnostic(
+                diagnostics,
+                "tributo.exporters",
+                ep.name,
+                f"Failed to load entry point: {exc}",
+                error_type=type(exc).__name__,
             )
             continue
 
@@ -234,6 +281,13 @@ def discover_exporter_plugins() -> list[Any]:
                 ep.name,
                 cls,
             )
+            _record_diagnostic(
+                diagnostics,
+                "tributo.exporters",
+                ep.name,
+                f"Not a ModelExporter class (got {cls!r})",
+                error_type=type(cls).__name__,
+            )
             continue
         if not _validate_api_version(cls, 1):
             logger.warning(
@@ -241,12 +295,24 @@ def discover_exporter_plugins() -> list[Any]:
                 ep.name,
                 getattr(cls, "api_version", None),
             )
+            _record_diagnostic(
+                diagnostics,
+                "tributo.exporters",
+                ep.name,
+                f"Unsupported api_version {getattr(cls, 'api_version', None)!r}",
+            )
             continue
         if ep.name != cls.exporter_id:
             logger.warning(
                 "Exporter plugin entry-point name %r != exporter_id %r; skipping.",
                 ep.name,
                 cls.exporter_id,
+            )
+            _record_diagnostic(
+                diagnostics,
+                "tributo.exporters",
+                ep.name,
+                f"Entry-point name {ep.name!r} != exporter_id {cls.exporter_id!r}",
             )
             continue
 
@@ -256,7 +322,7 @@ def discover_exporter_plugins() -> list[Any]:
     return classes
 
 
-def _looks_like_exporter(cls: type) -> bool:
+def _looks_like_exporter(cls: type) -> TypeGuard[type[ModelExporter]]:
     """Check structural conformance to ModelExporter without issubclass.
 
     Uses manual attribute checks because ``@runtime_checkable`` protocols
@@ -274,13 +340,13 @@ def _looks_like_exporter(cls: type) -> bool:
     return all(hasattr(cls, a) for a in required_attrs)
 
 
-def _looks_like_source_provider(cls: type) -> bool:
+def _looks_like_source_provider(cls: type) -> TypeGuard[type[SourceProvider]]:
     """Check structural conformance to SourceProvider without issubclass."""
     required_attrs = ("api_version", "provider_id", "trainer_type", "priority")
     return all(hasattr(cls, a) for a in required_attrs)
 
 
-def _looks_like_validator(cls: type) -> bool:
+def _looks_like_validator(cls: type) -> TypeGuard[type[ExportValidator]]:
     """Check structural conformance to ExportValidator without issubclass."""
     required_attrs = ("api_version", "validator_id", "options_model")
     return all(hasattr(cls, a) for a in required_attrs)
@@ -291,13 +357,19 @@ def _looks_like_flavor(cls: type) -> bool:
     return hasattr(cls, "flavor_id") and hasattr(cls, "api_version")
 
 
-def _looks_like_factory(cls: type) -> bool:
+def _looks_like_factory(cls: type) -> TypeGuard[type[ModelFactory]]:
     """Check structural conformance to ModelFactory without issubclass."""
     return hasattr(cls, "architecture_id") and hasattr(cls, "api_version")
 
 
-def discover_source_provider_plugins() -> list[Any]:
-    """Discover third-party source providers as ``tributo.source_providers``."""
+def discover_source_provider_plugins(
+    diagnostics: list[PluginLoadDiagnostic] | None = None,
+) -> list[Any]:
+    """Discover third-party source providers as ``tributo.source_providers``.
+
+    When *diagnostics* (a list) is provided, load/type/api-version/name
+    failures are appended for ``SourceProviderRegistry.diagnostics()``.
+    """
 
     enabled = _get_enabled_plugins()
     classes: list[Any] = []
@@ -308,12 +380,19 @@ def discover_source_provider_plugins() -> list[Any]:
             continue
         try:
             cls = ep.load()
-        except Exception:
+        except Exception as exc:
             logger.warning(
                 "Failed to load source provider plugin %r (%s)",
                 ep.name,
                 ep.value,
                 exc_info=True,
+            )
+            _record_diagnostic(
+                diagnostics,
+                "tributo.source_providers",
+                ep.name,
+                f"Failed to load entry point: {exc}",
+                error_type=type(exc).__name__,
             )
             continue
 
@@ -323,6 +402,13 @@ def discover_source_provider_plugins() -> list[Any]:
                 ep.name,
                 cls,
             )
+            _record_diagnostic(
+                diagnostics,
+                "tributo.source_providers",
+                ep.name,
+                f"Not a SourceProvider subclass (got {cls!r})",
+                error_type=type(cls).__name__,
+            )
             continue
         if not _validate_api_version(cls, 1):
             logger.warning(
@@ -330,12 +416,24 @@ def discover_source_provider_plugins() -> list[Any]:
                 ep.name,
                 getattr(cls, "api_version", None),
             )
+            _record_diagnostic(
+                diagnostics,
+                "tributo.source_providers",
+                ep.name,
+                f"Unsupported api_version {getattr(cls, 'api_version', None)!r}",
+            )
             continue
         if ep.name != cls.provider_id:
             logger.warning(
                 "Source provider entry-point name %r != provider_id %r; skipping.",
                 ep.name,
                 cls.provider_id,
+            )
+            _record_diagnostic(
+                diagnostics,
+                "tributo.source_providers",
+                ep.name,
+                f"Entry-point name {ep.name!r} != provider_id {cls.provider_id!r}",
             )
             continue
 
@@ -345,8 +443,14 @@ def discover_source_provider_plugins() -> list[Any]:
     return classes
 
 
-def discover_validator_plugins() -> list[Any]:
-    """Discover third-party validators as ``tributo.validators``."""
+def discover_validator_plugins(
+    diagnostics: list[PluginLoadDiagnostic] | None = None,
+) -> list[Any]:
+    """Discover third-party validators as ``tributo.validators``.
+
+    When *diagnostics* (a list) is provided, load/type/api-version/name
+    failures are appended for ``ValidatorRegistry.diagnostics()``.
+    """
 
     enabled = _get_enabled_plugins()
     classes: list[Any] = []
@@ -357,12 +461,19 @@ def discover_validator_plugins() -> list[Any]:
             continue
         try:
             cls = ep.load()
-        except Exception:
+        except Exception as exc:
             logger.warning(
                 "Failed to load validator plugin %r (%s)",
                 ep.name,
                 ep.value,
                 exc_info=True,
+            )
+            _record_diagnostic(
+                diagnostics,
+                "tributo.validators",
+                ep.name,
+                f"Failed to load entry point: {exc}",
+                error_type=type(exc).__name__,
             )
             continue
 
@@ -372,6 +483,13 @@ def discover_validator_plugins() -> list[Any]:
                 ep.name,
                 cls,
             )
+            _record_diagnostic(
+                diagnostics,
+                "tributo.validators",
+                ep.name,
+                f"Not an ExportValidator subclass (got {cls!r})",
+                error_type=type(cls).__name__,
+            )
             continue
         if not _validate_api_version(cls, 1):
             logger.warning(
@@ -379,12 +497,24 @@ def discover_validator_plugins() -> list[Any]:
                 ep.name,
                 getattr(cls, "api_version", None),
             )
+            _record_diagnostic(
+                diagnostics,
+                "tributo.validators",
+                ep.name,
+                f"Unsupported api_version {getattr(cls, 'api_version', None)!r}",
+            )
             continue
         if ep.name != cls.validator_id:
             logger.warning(
                 "Validator entry-point name %r != validator_id %r; skipping.",
                 ep.name,
                 cls.validator_id,
+            )
+            _record_diagnostic(
+                diagnostics,
+                "tributo.validators",
+                ep.name,
+                f"Entry-point name {ep.name!r} != validator_id {cls.validator_id!r}",
             )
             continue
 

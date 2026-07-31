@@ -52,7 +52,13 @@ class XGBoostONNXExporter:
 
     @classmethod
     def supports(cls, request: SupportRequest) -> SupportResult:
-        """Check whether the source is an XGBoost booster."""
+        """Check whether the source is an XGBoost booster.
+
+        ONNX export is only supported for numeric-feature classification
+        (``binary:*`` / ``multi:*`` objectives).  Regression, ranking,
+        count, survival, custom objectives and categorical features are
+        rejected at plan time — before any work starts.
+        """
         if request.source_kind != "xgboost_result":
             return SupportResult(
                 supported=False,
@@ -69,6 +75,36 @@ class XGBoostONNXExporter:
                 code="MISSING_DEPENDENCY",
                 reason=f"onnxmltools/xgboost not available: {exc}",
                 missing_dependencies=("onnxmltools", "xgboost"),
+            )
+        if request.source_metadata.get("has_categorical_features"):
+            return SupportResult(
+                supported=False,
+                code="CATEGORICAL_FEATURES",
+                reason=(
+                    "ONNX export only supports numeric features; the source "
+                    "has categorical feature types"
+                ),
+            )
+        objective = request.source_metadata.get("objective", "")
+        if not objective:
+            return SupportResult(
+                supported=False,
+                code="UNKNOWN_OBJECTIVE",
+                reason=(
+                    "Cannot verify the XGBoost objective; ONNX export is "
+                    "only supported for numeric-feature classification "
+                    "(binary:* / multi:*)"
+                ),
+            )
+        if not (objective.startswith("binary:") or objective.startswith("multi:")):
+            return SupportResult(
+                supported=False,
+                code="UNSUPPORTED_OBJECTIVE",
+                reason=(
+                    f"Objective {objective!r} is not supported for ONNX "
+                    "export; only binary:* / multi:* classification with "
+                    "numeric features is supported at plan time"
+                ),
             )
         return SupportResult(supported=True, code="OK")
 
@@ -145,6 +181,15 @@ class XGBoostONNXExporter:
         meta = onnx_model.metadata_props.add()
         meta.key = "feature_names"
         meta.value = feature_names_json
+
+        # Normalise for deterministic bytes: onnxmltools stamps a random
+        # UUID into model.graph.name (and doc_strings), which would make
+        # every export of the same booster byte-different — breaking the
+        # bundle idempotency contract (same request → same artifact).
+        onnx_model.graph.name = "xgboost-onnx"
+        onnx_model.doc_string = ""
+        for node in onnx_model.graph.node:
+            node.doc_string = ""
 
         # Write ONNX file.
         output_path = context.artifact_dir / "model.onnx"

@@ -106,9 +106,7 @@ class JsonFileOperationStore:
 # ── Helpers ──────────────────────────────────────────────────────────────────────
 
 
-def _atomic_write_json(
-    fpath: Path, data: dict[str, Any], lock: threading.Lock
-) -> None:
+def _atomic_write_json(fpath: Path, data: dict[str, Any], lock: threading.Lock) -> None:
     """Write JSON data atomically via tmp-file + rename."""
     tmp_path = fpath.with_suffix(".tmp")
     payload = json.dumps(data, sort_keys=True, indent=2, ensure_ascii=False)

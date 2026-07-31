@@ -10,7 +10,6 @@ GC never touches ``.leases/``, ``aliases/``, or any reserved prefix.
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 import uuid
@@ -167,35 +166,35 @@ def _make_client(resolver: StorageProfileResolver, storage_profile: str | None) 
 def _acquire_gc_lease(
     client: Any, bucket: str, store_prefix: str, bundle_prefix: str, owner: str
 ) -> str | None:
-    """Try to acquire a short-lived GC lease for *bundle_prefix*.
+    """Acquire the publish lease for *bundle_id* (same key as the Publisher).
 
-    Uses the same ``.leases/`` location as the Publisher to ensure mutual
-    exclusion — if a publisher holds a lease on this bundle_id, GC cannot
-    delete it.
+    Using the same ``{store_prefix}.leases/{bundle_id}.json`` key as the
+    Publisher gives true mutual exclusion:
+    - A fresh publisher lease blocks GC entirely.
+    - An expired lease is taken over via CAS (ETag If-Match) — matching
+      the plan's "TTL GC 先 CAS 接管过期 lease" requirement.
 
-    Returns the lease key if acquired, or ``None`` if a concurrent process
-    holds the lease.
+    Returns the lease key if acquired, or ``None`` if a concurrent
+    publisher holds a live lease.
     """
+    from tributo.exporting.publisher import _s3_lease_acquire
+
     # Extract bundle_id from the bundle prefix.
     bundle_id = bundle_prefix.rstrip("/").split("/")[-1]
-    lease_key = f"{store_prefix}.leases/gc-{bundle_id}.json"
-    now = time.time()
-    lease_data = {"owner": owner, "created_at": now, "action": "gc"}
-
+    leases_prefix = f"{store_prefix}.leases/"
     try:
-        client.put_object(
-            Bucket=bucket,
-            Key=lease_key,
-            Body=json.dumps(lease_data).encode("utf-8"),
-            ContentType="application/json",
-            IfNoneMatch="*",
+        lease_key, _ = _s3_lease_acquire(
+            client,
+            bucket,
+            leases_prefix,
+            bundle_id,
+            owner,
+            ttl=_GC_LEASE_TTL,
         )
         return lease_key
-    except client.exceptions.ClientError as exc:
-        if exc.response["Error"]["Code"] == "PreconditionFailed":
-            logger.debug("GC lease for %s already held", lease_key)
-            return None
-        raise
+    except RuntimeError:
+        # Lease held by a live publisher until its TTL — skip this bundle.
+        return None
 
 
 def _release_gc_lease(client: Any, bucket: str, lease_key: str) -> None:
@@ -207,20 +206,22 @@ def _release_gc_lease(client: Any, bucket: str, lease_key: str) -> None:
 
 
 def _looks_like_bundle_id(name: str) -> bool:
-    """Return True if *name* matches the bundle ID format (bundle-<hex>).
+    """Return True if *name* matches the bundle ID format (bundle-<32 hex>).
 
+    Real bundle IDs are exactly 39 characters: ``"bundle-"`` + 32 hex
+    digits (see ``_make_bundle_id`` in ``tributo.exporting.service``).
     Prevents GC from scanning/deleting non-bundle prefixes.
     """
-    return name.startswith("bundle-") and len(name) >= 40 and all(
-        c in "0123456789abcdef-" for c in name
-    )
+    if not name.startswith("bundle-") or len(name) != 39:
+        return False
+    return all(c in "0123456789abcdef" for c in name[7:])
 
 
 def _check_orphan_age(client: Any, bucket: str, prefix: str, ttl_seconds: int) -> bool:
     """Check if all objects under *prefix* are older than *ttl_seconds*."""
     now = time.time()
     paginator = client.get_paginator("list_objects_v2")
-    for page in paginator.paginate(Bucket=bucket, Prefix=prefix, MaxKeys=10):
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
         for obj in page.get("Contents", []):
             last_modified = obj["LastModified"].timestamp()
             if now - last_modified < ttl_seconds:

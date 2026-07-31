@@ -11,8 +11,7 @@ import json
 import logging
 from typing import Any, ClassVar, Mapping
 
-from tributo.training.exporters.artifact_protocol import ARTIFACT_KIND_REPORT
-from tributo.training.exporters.models import (
+from tributo.exporting.models import (
     ArtifactDraft,
     DraftFile,
     ExportContext,
@@ -21,6 +20,7 @@ from tributo.training.exporters.models import (
     ProducerInfo,
     ResolvedArtifact,
 )
+from tributo.training.exporters.artifact_protocol import ARTIFACT_KIND_REPORT
 from tributo.util.annotations import PublicAPI
 
 logger = logging.getLogger(__name__)

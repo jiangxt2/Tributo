@@ -11,22 +11,18 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
-import datetime
-import hashlib
-import json
 import logging
 import shutil
 import tempfile
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Generator
+from typing import Any, Generator
 
 from tributo._common.storage_profiles import StorageProfileResolver
-from tributo.exceptions import BundleExportError, PostPublishCallbackError
+from tributo.exceptions import BundleExportError
 from tributo.exporting.executor import ExportManager
 from tributo.exporting.manifest import (
-    ManifestExecutionNode,
     ManifestSchemaRegistry,
     ManifestSourceInfo,
 )
@@ -34,7 +30,6 @@ from tributo.exporting.models import (
     BundleOutputConfig,
     BundleResult,
     ExportSource,
-    PublishedBundle,
 )
 from tributo.exporting.planner import ExportPlanner
 from tributo.exporting.protocols import SourceProvider
@@ -58,13 +53,22 @@ def _staging_area() -> Generator[Path, None, None]:
         shutil.rmtree(staging, ignore_errors=True)
 
 
-def _make_bundle_id(request_id: str, started_at: datetime.datetime | None = None) -> str:
-    if started_at is not None:
-        ts = started_at.strftime("%Y%m%dT%H%M%S-%f")
-    else:
-        ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S-%f")
-    digest = hashlib.sha256(request_id.encode("utf-8")).hexdigest()[:16]
-    return f"{ts}-{digest}"
+def _make_bundle_id(request_id: str) -> str:
+    """Deterministic bundle ID derived solely from request_id.
+
+    Identical to the sync ``BundleExportService`` derivation — idempotent
+    retries reuse the same bundle ID.
+    """
+    from tributo.exporting.service import _make_bundle_id as _service_bundle_id
+
+    return _service_bundle_id(request_id)
+
+
+def _make_execution_id(request_id: str) -> str:
+    """Deterministic execution ID derived solely from request_id."""
+    from tributo.exporting.service import _make_execution_id as _service_exec_id
+
+    return _service_exec_id(request_id)
 
 
 @PublicAPI(stability="alpha")
@@ -138,10 +142,9 @@ class AsyncBundleExportService:
         if config.targets is None:
             raise ValueError("AsyncBundleExportService requires targets")
 
-        started_at = datetime.datetime.now(datetime.timezone.utc)
         request_id = config.request_id or uuid.uuid4().hex
-        execution_id = f"exec-{uuid.uuid4().hex[:12]}"
-        bundle_id = _make_bundle_id(request_id, started_at)
+        execution_id = _make_execution_id(request_id)
+        bundle_id = _make_bundle_id(request_id)
 
         planner = ExportPlanner(self._exports, self._validators)
         manager = ExportManager(self._exports, self._validators)
@@ -187,19 +190,19 @@ class AsyncBundleExportService:
 
                 published = await loop.run_in_executor(
                     executor,
-                lambda: publisher.publish(
-                    execution=execution,
-                    staging_root=staging,
-                    bundle_uri=config.bundle_uri or "",
-                    bundle_id=bundle_id,
-                    execution_id=execution_id,
-                    tributo_version=tributo_version,
-                    source_info=source_info,
-                    storage_profile=config.storage_profile,
-                    alias_config=config.alias,
-                    roles=config.roles,
-                ),
-            )
+                    lambda: publisher.publish(
+                        execution=execution,
+                        staging_root=staging,
+                        bundle_uri=config.bundle_uri or "",
+                        bundle_id=bundle_id,
+                        execution_id=execution_id,
+                        tributo_version=tributo_version,
+                        source_info=source_info,
+                        storage_profile=config.storage_profile,
+                        alias_config=config.alias,
+                        roles=config.roles,
+                    ),
+                )
 
             return published.result
 

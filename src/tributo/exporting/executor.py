@@ -227,7 +227,7 @@ class ExportManager:
 
                 # -- Instantiate exporter --
                 exporter_cls = self._exports.get(node.exporter_id)
-                exporter: ModelExporter = exporter_cls()  # type: ignore[call-arg]
+                exporter: ModelExporter = exporter_cls()
 
                 # -- Collect upstream resolved artifacts --
                 upstream: dict[str, ResolvedArtifact] = {
@@ -236,6 +236,29 @@ class ExportManager:
 
                 # -- Run export --
                 draft = exporter.export(context, source, upstream, node)
+
+                # -- Stamp lineage: derived_from references the upstream
+                # artifacts actually consumed (resolved by dependency name).
+                # Exporters may leave derived_from empty; the executor fills
+                # it so every manifest derived_from resolves (plan §验收).
+                if node.target.depends_on:
+                    draft = draft.model_copy(
+                        update={
+                            "derived_from": tuple(
+                                ArtifactRef(
+                                    node_id=dep,
+                                    artifact_name=resolved_artifacts[
+                                        dep
+                                    ].descriptor.name,
+                                    tree_digest=resolved_artifacts[
+                                        dep
+                                    ].descriptor.tree_digest,
+                                )
+                                for dep in node.target.depends_on
+                                if dep in resolved_artifacts
+                            )
+                        }
+                    )
 
                 # -- Materialise (re-hash) --
                 artifact = _materialize_artifact(draft, artifact_dir, node_id)
@@ -247,7 +270,7 @@ class ExportManager:
                 for vb in node.validator_bindings:
                     try:
                         validator_cls = self._validators.get(vb.validator_id)
-                        validator = validator_cls()  # type: ignore[call-arg]
+                        validator = validator_cls()
                         opts = validator_cls.options_model(**vb.default_options)
                         vr = validator.validate(source, ra, upstream, opts)
                         validation_results.append(vr)
@@ -339,8 +362,7 @@ class ExportManager:
         if not execution_started:
             overall = "failed"
         elif any(
-            nr.status in ("failed", "blocked") and nr.required
-            for nr in all_explicit
+            nr.status in ("failed", "blocked") and nr.required for nr in all_explicit
         ):
             overall = "failed"
         elif any(nr.status == "failed" for nr in all_explicit):

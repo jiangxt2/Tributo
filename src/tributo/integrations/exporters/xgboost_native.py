@@ -131,9 +131,7 @@ class XGBoostNativeExporter:
                     "xgboost": xgboost.__version__,
                 },
                 effective_options={
-                    k: v
-                    for k, v in target.typed_options.items()
-                    if k not in ("fmt",)
+                    k: v for k, v in target.typed_options.items() if k not in ("fmt",)
                 },
             ),
             derived_from=(),

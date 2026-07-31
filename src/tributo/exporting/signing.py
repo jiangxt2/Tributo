@@ -19,7 +19,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from tributo.util.annotations import PublicAPI
 
-
 # ── Signature model ──────────────────────────────────────────────────────────────
 
 
@@ -27,8 +26,9 @@ from tributo.util.annotations import PublicAPI
 class BundleSignature(BaseModel):
     """Self-describing Ed25519 signature for a bundle manifest.
 
-    Embedded alongside the manifest (``bundle_dir/manifest.sig``) so
-    verifiers can validate authenticity without external state.
+    Embedded in the bundle's ``metadata/signature.json`` (per the plan's
+    bundle directory layout) so verifiers can validate authenticity
+    without external state.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -59,7 +59,7 @@ class BundleSigner:
 
         signer = BundleSigner(private_key_bytes, key_id="prod-2024")
         sig = signer.sign(manifest_canonical_json_bytes)
-        # Write sig.model_dump_json() to manifest.sig
+        # Write sig.model_dump_json() to metadata/signature.json
     """
 
     def __init__(self, private_key_bytes: bytes, key_id: str) -> None:
@@ -88,10 +88,11 @@ class BundleSigner:
             PublicFormat,
         )
 
-        return self._private_key.public_key().public_bytes(
+        raw: bytes = self._private_key.public_key().public_bytes(
             encoding=Encoding.Raw,
             format=PublicFormat.Raw,
         )
+        return raw
 
     def sign(self, manifest_bytes: bytes) -> BundleSignature:
         """Sign *manifest_bytes* (canonical JSON) and return a ``BundleSignature``.
@@ -193,6 +194,7 @@ def generate_signing_key() -> tuple[bytes, bytes]:
     from cryptography.hazmat.primitives.asymmetric import ed25519
     from cryptography.hazmat.primitives.serialization import (
         Encoding,
+        NoEncryption,
         PrivateFormat,
         PublicFormat,
     )
@@ -201,7 +203,7 @@ def generate_signing_key() -> tuple[bytes, bytes]:
     priv_bytes = private_key.private_bytes(
         encoding=Encoding.Raw,
         format=PrivateFormat.Raw,
-        encryption_algorithm=None,
+        encryption_algorithm=NoEncryption(),
     )
     pub_bytes = private_key.public_key().public_bytes(
         encoding=Encoding.Raw,

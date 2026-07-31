@@ -51,8 +51,11 @@ class TorchONNXOptions(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    # Bundle mode defaults to the TorchDynamo exporter path (PyTorch >= 2.5
+    # recommended path per the export plan); legacy single-path export keeps
+    # its own ``dynamo=False`` default and is unaffected by this option.
     opset: int = Field(default=18, ge=12, le=21)
-    dynamo: bool = False
+    dynamo: bool = True
     external_data: bool = False
 
 
@@ -99,13 +102,13 @@ class ONNXQuantizerOptions(BaseModel):
 
 # ── Registry of known options models (for discovery / docs) ──────────────────
 
-_BUILTIN_OPTIONS: dict[str, type[BaseModel]] = {
+_BUILTIN_OPTIONS: dict[str, type[BaseModel] | None] = {
     "xgboost-native-v1": XGBoostNativeOptions,
     "xgboost-onnx-v1": XGBoostONNXOptions,
     "torch-onnx-v1": TorchONNXOptions,
     "torch-safetensors-v1": SafetensorsOptions,
     "hf-onnx-v1": HFONNXOptions,
     "onnx-quantizer-v1": ONNXQuantizerOptions,
-    "torch-export-v1": None,  # TorchExportOptions defined in integrations/exporters/torch_export.py
-    "tensorrt-v1": None,      # TensorRTOptions defined in integrations/exporters/tensorrt_plugin.py
+    # Options models defined alongside their exporters in integrations/.
+    "torch-export-v1": None,
 }

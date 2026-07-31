@@ -117,6 +117,10 @@ class ExportRegistry:
     def diagnostics(self) -> tuple[PluginLoadDiagnostic, ...]:
         return tuple(self._diagnostics)
 
+    def record_diagnostic(self, diagnostic: PluginLoadDiagnostic) -> None:
+        """Append a plugin-loading diagnostic from entry-point discovery."""
+        self._diagnostics.append(diagnostic)
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # SourceProviderRegistry
@@ -182,6 +186,10 @@ class SourceProviderRegistry:
     def diagnostics(self) -> tuple[PluginLoadDiagnostic, ...]:
         return tuple(self._diagnostics)
 
+    def record_diagnostic(self, diagnostic: PluginLoadDiagnostic) -> None:
+        """Append a plugin-loading diagnostic from entry-point discovery."""
+        self._diagnostics.append(diagnostic)
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ValidatorRegistry
@@ -224,6 +232,10 @@ class ValidatorRegistry:
 
     def diagnostics(self) -> tuple[PluginLoadDiagnostic, ...]:
         return tuple(self._diagnostics)
+
+    def record_diagnostic(self, diagnostic: PluginLoadDiagnostic) -> None:
+        """Append a plugin-loading diagnostic from entry-point discovery."""
+        self._diagnostics.append(diagnostic)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
