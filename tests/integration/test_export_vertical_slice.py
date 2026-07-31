@@ -39,7 +39,40 @@ class TestExporterSupports:
     """Verify exporter protocol conformance."""
 
     def test_supports_xgboost_result(self) -> None:
-        """XGBoostONNXExporter.supports() accepts xgboost_result."""
+        """XGBoostONNXExporter.supports() accepts numeric-feature classification."""
+        from tributo.exporting.models import SupportRequest
+        from tributo.integrations.exporters.xgboost_onnx import (
+            XGBoostONNXExporter,
+        )
+
+        cls = type(XGBoostONNXExporter())
+        result = cls.supports(
+            SupportRequest(
+                source_kind="xgboost_result",
+                source_metadata={"objective": "binary:logistic"},
+            )
+        )
+        assert result.supported is True
+
+    def test_rejects_regression_objective(self) -> None:
+        """Regression / ranking / count objectives are rejected at plan time."""
+        from tributo.exporting.models import SupportRequest
+        from tributo.integrations.exporters.xgboost_onnx import (
+            XGBoostONNXExporter,
+        )
+
+        cls = type(XGBoostONNXExporter())
+        result = cls.supports(
+            SupportRequest(
+                source_kind="xgboost_result",
+                source_metadata={"objective": "reg:squarederror"},
+            )
+        )
+        assert result.supported is False
+        assert result.code == "UNSUPPORTED_OBJECTIVE"
+
+    def test_rejects_unknown_objective(self) -> None:
+        """A missing objective cannot be verified — reject at plan time."""
         from tributo.exporting.models import SupportRequest
         from tributo.integrations.exporters.xgboost_onnx import (
             XGBoostONNXExporter,
@@ -47,7 +80,28 @@ class TestExporterSupports:
 
         cls = type(XGBoostONNXExporter())
         result = cls.supports(SupportRequest(source_kind="xgboost_result"))
-        assert result.supported is True
+        assert result.supported is False
+        assert result.code == "UNKNOWN_OBJECTIVE"
+
+    def test_rejects_categorical_features(self) -> None:
+        """Categorical feature types are rejected at plan time."""
+        from tributo.exporting.models import SupportRequest
+        from tributo.integrations.exporters.xgboost_onnx import (
+            XGBoostONNXExporter,
+        )
+
+        cls = type(XGBoostONNXExporter())
+        result = cls.supports(
+            SupportRequest(
+                source_kind="xgboost_result",
+                source_metadata={
+                    "objective": "binary:logistic",
+                    "has_categorical_features": True,
+                },
+            )
+        )
+        assert result.supported is False
+        assert result.code == "CATEGORICAL_FEATURES"
 
     def test_rejects_unknown_source_kind(self) -> None:
         """XGBoostONNXExporter.supports() rejects unknown kinds."""
