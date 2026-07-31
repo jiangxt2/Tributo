@@ -1,18 +1,30 @@
 """Regression tests for the code-review fix batch (idempotency, determinism,
-implicit-node injection, role validation, GC safety, reader isolation)."""
+implicit-node injection, role validation, GC safety, reader isolation).
+
+``integration`` marker: not part of the CI unit job.  Requires ``xgboost``
+and ``numpy`` — skipped cleanly at collection time when not installed
+(the CI unit env has neither), so the unit job never sees a collection
+error from this file.
+"""
 
 from __future__ import annotations
 
 import json
 
-import numpy as np
 import pytest
-import xgboost as xgb
 
 from tributo.exporting.models import (
     BundleOutputConfig,
     ExportTarget,
 )
+
+# Optional heavy deps — importorskip (not plain imports) so pytest skips
+# this module when they are missing instead of failing collection.
+# Imported last to avoid E402 (no further module-level imports follow).
+np = pytest.importorskip("numpy", reason="numpy not installed")
+xgb = pytest.importorskip("xgboost", reason="xgboost not installed")
+
+pytestmark = pytest.mark.integration
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
