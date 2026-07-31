@@ -46,9 +46,7 @@ class TestExporterSupports:
         )
 
         cls = type(XGBoostONNXExporter())
-        result = cls.supports(
-            SupportRequest(source_kind="xgboost_result")
-        )
+        result = cls.supports(SupportRequest(source_kind="xgboost_result"))
         assert result.supported is True
 
     def test_rejects_unknown_source_kind(self) -> None:
@@ -59,9 +57,7 @@ class TestExporterSupports:
         )
 
         cls = type(XGBoostONNXExporter())
-        result = cls.supports(
-            SupportRequest(source_kind="pytorch_result")
-        )
+        result = cls.supports(SupportRequest(source_kind="pytorch_result"))
         assert result.supported is False
         assert result.code == "UNSUPPORTED_SOURCE_KIND"
 
@@ -101,9 +97,9 @@ class TestExportPipelineWithRealExporter:
             source = ExportSource(
                 source_kind="xgboost_result",
                 model_object=booster,
-                feature_schema={
-                    "feature_names": list(booster.feature_names)
-                } if booster.feature_names else {},
+                feature_schema={"feature_names": list(booster.feature_names)}
+                if booster.feature_names
+                else {},
                 metadata={
                     "framework": "xgboost",
                     "framework_version": xgboost.__version__,

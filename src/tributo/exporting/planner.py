@@ -148,9 +148,7 @@ class ExportPlanner:
             )
 
         # Pre-compute format of every explicit target for upstream_formats.
-        _explicit_formats: dict[str, str] = {
-            t.name: t.format for t in config.targets
-        }
+        _explicit_formats: dict[str, str] = {t.name: t.format for t in config.targets}
 
         # Phase 1: Match each explicit target to a PlannedTarget.
         planned: dict[str, PlannedTarget] = {}
@@ -208,16 +206,13 @@ class ExportPlanner:
 
                 # Build implicit node options by stripping requirement keys.
                 implicit_opts: dict[str, Any] = {
-                    k: v for k, v in target.options.items()
-                    if k not in req.options
+                    k: v for k, v in target.options.items() if k not in req.options
                 }
                 oh = _options_hash(implicit_opts)
                 implicit_name = _implicit_node_id(target.name, req.format, oh)
 
                 # Check if already injected (shared implicit node).
-                existing = [
-                    n for n in implicit_nodes if n.target.name == implicit_name
-                ]
+                existing = [n for n in implicit_nodes if n.target.name == implicit_name]
                 # Build from the CURRENT depends_on (may have been rewritten
                 # by a previous iteration in this same Phase 2 loop).
                 current_deps = planned[target.name].target.depends_on
@@ -229,8 +224,7 @@ class ExportPlanner:
                         format=target.format,
                         required=target.required,
                         depends_on=tuple(
-                            implicit_name if d == dep_name else d
-                            for d in current_deps
+                            implicit_name if d == dep_name else d for d in current_deps
                         ),
                         options=target.options,
                         validation=target.validation,
@@ -287,8 +281,7 @@ class ExportPlanner:
                 # Use current_deps (may have been rewritten by a prior
                 # dep in this same loop).
                 new_deps = tuple(
-                    implicit_name if d == dep_name else d
-                    for d in current_deps
+                    implicit_name if d == dep_name else d for d in current_deps
                 )
                 new_target = ExportTarget(
                     name=target.name,

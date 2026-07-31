@@ -196,7 +196,8 @@ def stop(address: str, job_id: str):
     help="Role assignments: name=target (repeatable)",
 )
 @click.option(
-    "--json", "json_output",
+    "--json",
+    "json_output",
     is_flag=True,
     default=False,
     help="Output result as JSON",
@@ -292,6 +293,7 @@ def _get_tributo_version() -> str:
     """Get the current tributo version string."""
     try:
         from importlib.metadata import version
+
         return version("tributo")
     except Exception:
         return "0.0.0"

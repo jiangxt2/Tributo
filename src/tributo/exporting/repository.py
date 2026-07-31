@@ -148,8 +148,7 @@ def resolve_repository(
     """
     if uri.startswith("s3://"):
         raise NotImplementedError(
-            "S3BundleRepository is not yet implemented. "
-            "Use a local path for now."
+            "S3BundleRepository is not yet implemented. Use a local path for now."
         )
 
     from tributo.integrations.storage.local import LocalBundleRepository

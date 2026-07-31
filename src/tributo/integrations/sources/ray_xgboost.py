@@ -92,14 +92,10 @@ class RayXGBoostSourceProvider:
                 if ubj_path.exists():
                     booster.load_model(str(ubj_path))
                 else:
-                    raise FileNotFoundError(
-                        f"No model file found in {checkpoint_dir}"
-                    )
+                    raise FileNotFoundError(f"No model file found in {checkpoint_dir}")
         else:
             # Ray XGBoostCheckpoint.
-            xgb_checkpoint = XGBoostCheckpoint.from_directory(
-                checkpoint.to_directory()
-            )
+            xgb_checkpoint = XGBoostCheckpoint.from_directory(checkpoint.to_directory())
             booster = xgb_checkpoint.get_model()
 
         # Compute source fingerprint.

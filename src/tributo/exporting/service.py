@@ -127,9 +127,7 @@ class BundleExportService:
             pass
 
         # Load entry-point plugins (cached across instances).
-        _load_entry_point_plugins(
-            self._exports, self._providers, self._validators
-        )
+        _load_entry_point_plugins(self._exports, self._providers, self._validators)
 
     def export_bundle(
         self,
@@ -226,8 +224,7 @@ class BundleExportService:
                 artifacts=published.result.artifacts,
                 roles=published.result.roles,
                 exporter_options={
-                    nr.node_id: {} for nr in execution.node_results
-                    if nr.exporter_id
+                    nr.node_id: {} for nr in execution.node_results if nr.exporter_id
                 },
             )
 
@@ -242,9 +239,7 @@ class BundleExportService:
                     status=published.result.status,
                     source_kind=source.source_kind,
                     source_fingerprint=source.source_fingerprint,
-                    duration_ms=sum(
-                        nr.duration_ms for nr in execution.node_results
-                    ),
+                    duration_ms=sum(nr.duration_ms for nr in execution.node_results),
                     nodes=tuple(
                         ManifestExecutionNode(
                             node_id=nr.node_id,
@@ -339,8 +334,6 @@ def _make_bundle_id(
     if started_at is not None:
         ts = started_at.strftime("%Y%m%dT%H%M%S-%f")
     else:
-        ts = datetime.datetime.now(datetime.timezone.utc).strftime(
-            "%Y%m%dT%H%M%S-%f"
-        )
+        ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S-%f")
     digest = hashlib.sha256(request_id.encode("utf-8")).hexdigest()[:16]
     return f"{ts}-{digest}"

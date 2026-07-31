@@ -263,8 +263,13 @@ def _looks_like_exporter(cls: type) -> bool:
     with ClassVar members don't support ``issubclass()``.
     """
     required_attrs = (
-        "api_version", "exporter_id", "priority", "output_format",
-        "options_model", "validator_bindings", "mutates_source",
+        "api_version",
+        "exporter_id",
+        "priority",
+        "output_format",
+        "options_model",
+        "validator_bindings",
+        "mutates_source",
     )
     return all(hasattr(cls, a) for a in required_attrs)
 

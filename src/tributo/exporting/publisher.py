@@ -795,6 +795,7 @@ class Publisher:
                 alias_uri = str(alias_path)
 
                 created_at_str = manifest.created_at.isoformat()
+                should_write = True
 
                 # Policy checks (mirror S3 _update_alias_s3).
                 if alias_path.exists():
@@ -807,6 +808,7 @@ class Publisher:
                                 category="publish",
                                 message="CAS create-only but alias already exists",
                             )
+                            should_write = False
                         else:
                             current = existing.get("manifest_sha256", "")
                             if current != alias_config.expected_manifest_sha256:
@@ -816,20 +818,14 @@ class Publisher:
                                     category="publish",
                                     message="Expected manifest digest does not match",
                                 )
-                            else:
-                                # CAS matches — proceed with update.
-                                alias_status = None  # signal to write
+                                should_write = False
                     elif alias_config.policy == "newer":
                         existing_ts = existing.get("created_at", "")
                         if existing_ts > created_at_str:
                             alias_status = "unchanged"
-                        else:
-                            alias_status = None  # signal to write
-                else:
-                    # Alias does not exist yet.
-                    alias_status = None  # signal to write
+                            should_write = False
 
-                if alias_status is None:
+                if should_write:
                     alias_data = {
                         "manifest_uri": manifest_uri,
                         "manifest_sha256": manifest_sha256,

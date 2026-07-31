@@ -224,9 +224,7 @@ class BundleManifestV2(BaseModel):
         return hashlib.sha256(self.canonical_json()).hexdigest()
 
 
-def _read_manifest_v2(
-    raw: dict[str, Any], canonical_bytes: bytes
-) -> ExportManifest:
+def _read_manifest_v2(raw: dict[str, Any], canonical_bytes: bytes) -> ExportManifest:
     """Parse a v2 manifest and return it as a v1-compatible ``ExportManifest``.
 
     This allows existing v1 consumers (BundleReader, Publisher) to read
@@ -285,7 +283,7 @@ def compute_bundle_digest(
                 }
                 for f in a.files
             ),
-            key=lambda d: d["path"],
+            key=lambda d: str(d["path"]),
         )
         derived_entries = sorted(
             (
@@ -296,7 +294,7 @@ def compute_bundle_digest(
                 }
                 for d in a.derived_from
             ),
-            key=lambda d: (d["node_id"], d["artifact_name"]),
+            key=lambda d: (str(d["node_id"]), str(d["artifact_name"])),
         )
         artifact_entries.append(
             {

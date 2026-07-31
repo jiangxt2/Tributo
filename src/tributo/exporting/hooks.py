@@ -82,7 +82,9 @@ class PublicationRunner:
     collected as receipts; required-hook failures propagate immediately.
     """
 
-    def __init__(self, hooks: list[tuple[PostPublishHook, dict[str, Any], bool]]) -> None:
+    def __init__(
+        self, hooks: list[tuple[PostPublishHook, dict[str, Any], bool]]
+    ) -> None:
         self._hooks = hooks
 
     def run(

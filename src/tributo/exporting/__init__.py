@@ -30,8 +30,11 @@ from tributo.util.annotations import PublicAPI
 # ── Public types ───────────────────────────────────────────────────────────────
 
 
-#: Stable alias for ``BundleOutputConfig``.
-ExportSpec = BundleOutputConfig
+@PublicAPI(stability="beta")
+class ExportSpec(BundleOutputConfig):
+    """Stable alias for ``BundleOutputConfig`` — the export configuration."""
+
+    pass
 
 
 @PublicAPI(stability="beta")
@@ -102,6 +105,7 @@ def load_bundle(ref: BundleRef | str) -> dict[str, Any]:
     if expected_sha256 is not None:
         import hashlib
         import json
+
         canonical = json.dumps(
             manifest_dict, sort_keys=True, separators=(",", ":")
         ).encode("utf-8")

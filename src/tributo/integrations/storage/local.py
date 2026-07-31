@@ -86,9 +86,7 @@ class LocalBundleRepository:
             existing_raw = json.loads(existing_bytes)
             existing_bundle_id = existing_raw.get("bundle_id")
             existing_artifacts = existing_raw.get("artifacts", [])
-            candidate_artifacts = json.loads(bundle.manifest_bytes).get(
-                "artifacts", []
-            )
+            candidate_artifacts = json.loads(bundle.manifest_bytes).get("artifacts", [])
             existing_digests = sorted(
                 a.get("tree_digest", "") for a in existing_artifacts
             )
@@ -165,7 +163,7 @@ class LocalBundleRepository:
         manifest_path = Path(ref.canonical_uri) / "manifest.json"
         if not manifest_path.is_file():
             raise FileNotFoundError(f"Manifest not found: {manifest_path}")
-        return json.loads(manifest_path.read_bytes())
+        return json.loads(manifest_path.read_bytes())  # type: ignore[no-any-return]
 
     def update_alias(
         self,

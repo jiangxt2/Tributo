@@ -32,6 +32,7 @@ class _MinOpts(BaseModel):
 
 class _QuantizerOpts(BaseModel):
     """Options model for the fake quantizer — accepts quantization config."""
+
     model_config = {"extra": "forbid"}
     quantization: dict[str, Any] | None = None
 

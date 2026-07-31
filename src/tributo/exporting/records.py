@@ -34,9 +34,7 @@ class ExecutionRecord(BaseModel):
     status: str = Field(pattern=r"^(pending|running|succeeded|partial|failed)$")
     source_kind: str = ""
     source_fingerprint: str = ""
-    started_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc)
-    )
+    started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     duration_ms: int = 0
     nodes: tuple[ManifestExecutionNode, ...] = ()
     roles: dict[str, str] = Field(default_factory=dict)
@@ -56,9 +54,7 @@ class PublicationAttempt(BaseModel):
     bundle_digest: str
     idempotency_key: str
     status: str = Field(pattern=r"^(success|failed|skipped)$")
-    started_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc)
-    )
+    started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     error: str | None = None
     retryable: bool = False
 

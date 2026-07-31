@@ -179,7 +179,8 @@ class XGBoostONNXExporter:
                     "onnxmltools": getattr(onnxmltools, "__version__", "unknown"),
                 },
                 effective_options={
-                    k: v for k, v in target.typed_options.items()
+                    k: v
+                    for k, v in target.typed_options.items()
                     if k not in ("n_features",)
                 },
             ),
