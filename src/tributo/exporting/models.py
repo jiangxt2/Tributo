@@ -95,7 +95,13 @@ class ExportTarget(BaseModel):
     @field_validator("name")
     @classmethod
     def _check_name(cls, v: str) -> str:
-        return _validate_safe_name(v, "target name")
+        result = _validate_safe_name(v, "target name")
+        if result.startswith("_"):
+            raise ValueError(
+                f"target name {v!r} must not start with '_' "
+                "(reserved for implicit planner-generated nodes)"
+            )
+        return result
 
 
 @PublicAPI(stability="beta")

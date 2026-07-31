@@ -548,15 +548,14 @@ def _update_alias_s3(
         head_info = _s3_head(client, bucket, alias_key_path)
 
         if existing is None:
-            # Create-only.
+            # CAS with expected digest requires the alias to already exist —
+            # nothing to compare against, so this is an error.
             if (
                 alias_config.policy == "compare_and_swap"
                 and alias_config.expected_manifest_sha256
             ):
-                # compare_and_swap with expected digest but alias doesn't exist yet.
-                # expected_manifest_sha256 != null → "update existing"
-                # Fall through to first create.
-                pass
+                return "failed", "ALIAS_NOT_FOUND"
+            # CAS create-only (expected_manifest_sha256 is None) — create.
             try:
                 _s3_put_json(
                     client, bucket, alias_key_path, alias_data, if_none_match=True

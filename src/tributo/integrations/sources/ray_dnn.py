@@ -112,8 +112,12 @@ class RayDnnSourceProvider:
                             architecture_id, model_config_data, state_dict
                         )
                 if model is None:
-                    # Return state_dict as model_object.
-                    model = state_dict
+                    raise ValueError(
+                        "Checkpoint contains state_dict but model_config.json is "
+                        "missing or has no architecture_id.  Provide a "
+                        "model_config.json with architecture_id to enable model "
+                        "reconstruction, or use a full model checkpoint (model.pt)."
+                    )
 
         if model is None:
             raise FileNotFoundError(

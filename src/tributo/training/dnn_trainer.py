@@ -379,6 +379,10 @@ class DNNTrainerImpl(BaseTrainer):
             }
         )
 
+    @staticmethod
+    def _get_trainer_type() -> str:
+        return "dnn"
+
 
 # ── Training loop helpers ──
 

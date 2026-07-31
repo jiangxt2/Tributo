@@ -167,26 +167,26 @@ class AsyncBundleExportService:
                     execution_id,
                 )
 
-            if execution.status == "failed":
-                raise BundleExportError(
-                    f"Bundle export failed: {execution.status}",
-                    execution_result=execution,
+                if execution.status == "failed":
+                    raise BundleExportError(
+                        f"Bundle export failed: {execution.status}",
+                        execution_result=execution,
+                    )
+
+                source_info = ManifestSourceInfo(
+                    source_kind=source.source_kind,
+                    source_fingerprint=source.source_fingerprint,
+                    framework=source.metadata.get("framework"),
+                    framework_version=source.metadata.get("framework_version"),
+                    architecture_id=(
+                        source.architecture_id
+                        or (provider.provider_id if provider else None)
+                    ),
+                    task_type=source.metadata.get("task_type"),
                 )
 
-            source_info = ManifestSourceInfo(
-                source_kind=source.source_kind,
-                source_fingerprint=source.source_fingerprint,
-                framework=source.metadata.get("framework"),
-                framework_version=source.metadata.get("framework_version"),
-                architecture_id=(
-                    source.architecture_id
-                    or (provider.provider_id if provider else None)
-                ),
-                task_type=source.metadata.get("task_type"),
-            )
-
-            published = await loop.run_in_executor(
-                executor,
+                published = await loop.run_in_executor(
+                    executor,
                 lambda: publisher.publish(
                     execution=execution,
                     staging_root=staging,

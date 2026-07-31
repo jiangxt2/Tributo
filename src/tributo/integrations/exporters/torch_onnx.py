@@ -92,6 +92,10 @@ class TorchONNXExporter:
                 f"Expected torch.nn.Module, got {type(model).__name__}"
             )
 
+        # Save training state for restoration (mutates_source=False guarantee).
+        was_training = model.training
+        model.eval()
+
         opts: dict[str, Any] = target.typed_options
         opset: int = opts.get("opset", 18)
         dynamo: bool = opts.get("dynamo", False)
@@ -106,7 +110,6 @@ class TorchONNXExporter:
         if dynamo:
             try:
                 if hasattr(torch.onnx, "dynamo_export"):
-                    model.eval()
                     export_options = torch.onnx.ExportOptions(
                         dynamic_shapes=True,
                         onnx_registry=None,
@@ -165,6 +168,10 @@ class TorchONNXExporter:
             )
             files.append(DraftFile(relative_path="model_config.json", role="config"))
 
+        # Restore original training state.
+        if was_training:
+            model.train()
+
         return ArtifactDraft(
             name=target.target.name,
             format="onnx",
@@ -197,10 +204,9 @@ class TorchONNXExporter:
         external_data: bool,
         use_dynamo: bool = False,
     ) -> Any:
-        """Legacy ``torch.onnx.export`` path."""
+        """Legacy ``torch.onnx.export`` path (model already in eval mode)."""
         import torch
 
-        model.eval()
         output_path = artifact_dir / "model.onnx"
 
         # When sample_inputs is a single-tensor tuple, unwrap to avoid

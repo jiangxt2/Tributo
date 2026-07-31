@@ -108,25 +108,27 @@ class XGBoostONNXExporter:
 
         try:
             # Choose wrapper based on objective type.
-            # Classifier objectives have num_class > 1; regression models
-            # (reg:squarederror, reg:logistic, etc.) need XGBRegressor.
+            # binary:* → binary classification (XGBClassifier, n_classes=2)
+            # multi:*  → multi-class classification
+            # reg:logistic → binary classification (outputs sigmoid probability)
+            # reg:squarederror, reg:absoluteerror, … → regression
             num_class_raw = booster.attr("num_class")
             objective = booster.attr("objective") or ""
-            is_regression = (
-                num_class_raw is None
-                or int(num_class_raw or 0) <= 1
-                or objective.startswith("reg:")
+            is_classification = (
+                objective.startswith("binary:")
+                or objective.startswith("multi:")
+                or objective == "reg:logistic"
             )
 
-            if is_regression:
-                wrapper = xgboost.XGBRegressor()
-                wrapper._Booster = booster  # noqa: SLF001
-            else:
+            if is_classification:
                 wrapper = xgboost.XGBClassifier()
                 wrapper._Booster = booster  # noqa: SLF001
                 n_classes = int(num_class_raw or 0) or 2
                 wrapper.__dict__["n_classes_"] = n_classes
                 wrapper.__dict__["classes_"] = np.arange(n_classes)
+            else:
+                wrapper = xgboost.XGBRegressor()
+                wrapper._Booster = booster  # noqa: SLF001
 
             initial_types = [("float_input", FloatTensorType([None, n_features]))]
             opset = target.typed_options.get("opset", 12)

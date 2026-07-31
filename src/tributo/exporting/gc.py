@@ -93,6 +93,11 @@ class BundleGarbageCollector:
                 if child_name in _RESERVED_PREFIXES:
                     continue
 
+                # Skip prefixes that don't look like bundle IDs.
+                if not _looks_like_bundle_id(child_name):
+                    logger.debug("GC: skipping non-bundle prefix %r", child_name)
+                    continue
+
                 # Check for manifest.
                 manifest_key = f"{child_prefix}manifest.json"
                 try:
@@ -117,9 +122,10 @@ class BundleGarbageCollector:
         if not dry_run:
             for orphan_prefix in orphans:
                 try:
-                    # Acquire GC lease to protect against concurrent publish.
+                    # Acquire GC lease (same .leases/ prefix as Publisher)
+                    # to protect against concurrent publish.
                     lease_key = _acquire_gc_lease(
-                        client, bucket, orphan_prefix, gc_owner
+                        client, bucket, prefix, orphan_prefix, gc_owner
                     )
                     if lease_key is None:
                         logger.info(
@@ -158,13 +164,21 @@ def _make_client(resolver: StorageProfileResolver, storage_profile: str | None) 
     )
 
 
-def _acquire_gc_lease(client: Any, bucket: str, prefix: str, owner: str) -> str | None:
-    """Try to acquire a short-lived GC lease for *prefix*.
+def _acquire_gc_lease(
+    client: Any, bucket: str, store_prefix: str, bundle_prefix: str, owner: str
+) -> str | None:
+    """Try to acquire a short-lived GC lease for *bundle_prefix*.
+
+    Uses the same ``.leases/`` location as the Publisher to ensure mutual
+    exclusion — if a publisher holds a lease on this bundle_id, GC cannot
+    delete it.
 
     Returns the lease key if acquired, or ``None`` if a concurrent process
     holds the lease.
     """
-    lease_key = f"{prefix}.leases/gc.json"
+    # Extract bundle_id from the bundle prefix.
+    bundle_id = bundle_prefix.rstrip("/").split("/")[-1]
+    lease_key = f"{store_prefix}.leases/gc-{bundle_id}.json"
     now = time.time()
     lease_data = {"owner": owner, "created_at": now, "action": "gc"}
 
@@ -179,7 +193,7 @@ def _acquire_gc_lease(client: Any, bucket: str, prefix: str, owner: str) -> str 
         return lease_key
     except client.exceptions.ClientError as exc:
         if exc.response["Error"]["Code"] == "PreconditionFailed":
-            logger.debug("GC lease for %s already held", prefix)
+            logger.debug("GC lease for %s already held", lease_key)
             return None
         raise
 
@@ -190,6 +204,16 @@ def _release_gc_lease(client: Any, bucket: str, lease_key: str) -> None:
         client.delete_object(Bucket=bucket, Key=lease_key)
     except Exception:
         logger.debug("Failed to release GC lease %s", lease_key, exc_info=True)
+
+
+def _looks_like_bundle_id(name: str) -> bool:
+    """Return True if *name* matches the bundle ID format (bundle-<hex>).
+
+    Prevents GC from scanning/deleting non-bundle prefixes.
+    """
+    return name.startswith("bundle-") and len(name) >= 40 and all(
+        c in "0123456789abcdef-" for c in name
+    )
 
 
 def _check_orphan_age(client: Any, bucket: str, prefix: str, ttl_seconds: int) -> bool:

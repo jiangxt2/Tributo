@@ -338,7 +338,10 @@ class ExportManager:
         ]
         if not execution_started:
             overall = "failed"
-        elif any(nr.status == "failed" and nr.required for nr in all_explicit):
+        elif any(
+            nr.status in ("failed", "blocked") and nr.required
+            for nr in all_explicit
+        ):
             overall = "failed"
         elif any(nr.status == "failed" for nr in all_explicit):
             overall = "partial"
