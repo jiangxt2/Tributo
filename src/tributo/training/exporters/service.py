@@ -43,6 +43,9 @@ from tributo.training.exporters.registries import (
 )
 from tributo.util.annotations import PublicAPI
 
+# Track whether entry-point plugins have been loaded.
+_plugins_loaded = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -92,13 +95,36 @@ class BundleExportService:
         self._storage_resolver = storage_resolver or StorageProfileResolver()
         self._manifest_registry = manifest_registry or ManifestSchemaRegistry()
 
-        # Register built-in schema reader.
-        from tributo.training.exporters.manifest import _read_manifest_v1
+        # Register built-in schema readers.
+        from tributo.training.exporters.manifest import (
+            _read_manifest_v1,
+            _read_manifest_v2,
+        )
 
         try:
             self._manifest_registry.register(1, _read_manifest_v1)
         except ValueError:
             pass
+        try:
+            self._manifest_registry.register(2, _read_manifest_v2)
+        except ValueError:
+            pass
+
+        # Register built-in validators.
+        from tributo.training.exporters.validators import StructureValidator
+
+        try:
+            self._validators.register(StructureValidator)
+        except Exception:
+            pass
+
+        # Load entry-point plugins on first construction.
+        global _plugins_loaded
+        if not _plugins_loaded:
+            _load_entry_point_plugins(
+                self._exports, self._providers, self._validators
+            )
+            _plugins_loaded = True
 
     def export_bundle(
         self,
@@ -109,6 +135,7 @@ class BundleExportService:
         callback: Callable[[PublishedBundle], None] | None = None,
         raise_on_callback_error: bool = False,
         tributo_version: str = "0.0.0",
+        repository: Any | None = None,
     ) -> BundleResult:
         """Export a bundle from a resolved source.
 
@@ -202,6 +229,29 @@ class BundleExportService:
                         ) from exc
 
             return published.result
+
+
+# ── Plugin loading ─────────────────────────────────────────────────────────────
+
+
+def _load_entry_point_plugins(
+    exports: ExportRegistry,
+    providers: SourceProviderRegistry,
+    validators: ValidatorRegistry,
+) -> None:
+    """Discover and register exporter/source-provider/validator plugins."""
+    from tributo.plugin import (
+        discover_exporter_plugins,
+        discover_source_provider_plugins,
+        discover_validator_plugins,
+    )
+
+    for cls in discover_exporter_plugins():
+        exports.register(cls)
+    for cls in discover_source_provider_plugins():
+        providers.register(cls)
+    for cls in discover_validator_plugins():
+        validators.register(cls)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────

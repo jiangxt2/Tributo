@@ -158,6 +158,145 @@ def stop(address: str, job_id: str):
         sys.exit(1)
 
 
+@main.command()
+@click.option(
+    "--source",
+    required=True,
+    help="Model source: ray://<checkpoint-path>, hf://<model-id>, or local path",
+)
+@click.option(
+    "--targets",
+    required=True,
+    help="Comma-separated export targets (e.g. 'onnx,safetensors')",
+)
+@click.option(
+    "--output",
+    required=True,
+    help="Bundle output URI (local path or s3://bucket/prefix)",
+)
+@click.option(
+    "--alias",
+    default=None,
+    help="Optional alias name for the published bundle",
+)
+@click.option(
+    "--storage-profile",
+    default=None,
+    help="Storage profile name for S3 credentials",
+)
+@click.option(
+    "--request-id",
+    default=None,
+    help="Idempotency key (same request_id → same bundle_id)",
+)
+@click.option(
+    "--role",
+    "roles",
+    multiple=True,
+    help="Role assignments: name=target (repeatable)",
+)
+@click.option(
+    "--json", "json_output",
+    is_flag=True,
+    default=False,
+    help="Output result as JSON",
+)
+def export(
+    source: str,
+    targets: str,
+    output: str,
+    alias: str | None,
+    storage_profile: str | None,
+    request_id: str | None,
+    roles: tuple[str, ...],
+    json_output: bool,
+):
+    """Export a trained model to one or more formats as a bundle."""
+    try:
+        from tributo.training.exporters.models import (
+            BundleOutputConfig,
+            ExportTarget,
+        )
+        from tributo.training.exporters.service import BundleExportService
+
+        # Parse targets.
+        target_list = [
+            ExportTarget(name=fmt.strip(), format=fmt.strip())
+            for fmt in targets.split(",")
+            if fmt.strip()
+        ]
+        if not target_list:
+            raise click.BadParameter("At least one target format is required")
+
+        # Parse roles.
+        roles_dict: dict[str, str] = {}
+        for r in roles:
+            if "=" not in r:
+                raise click.BadParameter(f"Role must be 'name=target', got {r!r}")
+            name, target = r.split("=", 1)
+            roles_dict[name.strip()] = target.strip()
+
+        # Build config.
+        config = BundleOutputConfig(
+            bundle_uri=output,
+            targets=target_list,
+            request_id=request_id,
+            storage_profile=storage_profile,
+            roles=roles_dict,
+            alias={"name": alias} if alias else None,  # type: ignore[arg-type]
+        )
+
+        # Resolve source provider.
+        source_kind = "xgboost_result"  # default for local checkpoint paths
+        source_uri = source
+
+        if source.startswith("ray://"):
+            source_kind = "xgboost_result"
+            source_uri = source[6:]  # strip ray:// prefix
+        elif source.startswith("hf://"):
+            source_kind = "huggingface"
+            source_uri = source[5:]  # strip hf:// prefix
+
+        # For now, support local checkpoint paths via RayXGBoostSourceProvider.
+        from tributo.training.exporters.sources.ray_xgboost import (
+            RayXGBoostSourceProvider,
+        )
+
+        provider = RayXGBoostSourceProvider()
+        service = BundleExportService()
+
+        with provider.open_source(source_uri) as export_source:
+            result = service.export_bundle(
+                source=export_source,
+                config=config,
+                provider=provider,
+                tributo_version=_get_tributo_version(),
+            )
+
+        if json_output:
+            click.echo(result.model_dump_json(indent=2))
+        else:
+            click.echo(f"Bundle exported: {result.canonical_uri}")
+            click.echo(f"  Bundle ID:   {result.bundle_id}")
+            click.echo(f"  Manifest:    {result.manifest_uri}")
+            click.echo(f"  Status:      {result.status}")
+            if result.alias_uri:
+                click.echo(f"  Alias:       {result.alias_uri} ({result.alias_status})")
+
+    except Exception as e:
+        click.echo(f"Export failed: {e}", err=True)
+        sys.exit(1)
+
+
+def _get_tributo_version() -> str:
+    """Get the current tributo version string."""
+    try:
+        from importlib.metadata import version
+        return version("tributo")
+    except Exception:
+        return "0.0.0"
+
+
 @main.group()
 def serve():
     """Manage ONNX inference service."""

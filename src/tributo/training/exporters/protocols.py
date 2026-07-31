@@ -19,6 +19,7 @@ from tributo.training.exporters.models import (
     ResolvedArtifact,
     SupportRequest,
     SupportResult,
+    UpstreamRequirement,
     ValidationResult,
     ValidatorBinding,
 )
@@ -42,6 +43,9 @@ class ModelExporter(Protocol):
     - ``validator_bindings``: Ordered validator chain.
     - ``mutates_source``: ``True`` if ``export()`` temporarily mutates
       ``source.model_object`` (e.g. XGBoost feature names).
+    - ``upstream_requirements``: Declared upstream artifacts this exporter
+      needs (e.g. an ONNX quantizer needs an FP32 ONNX artifact).  The
+      planner uses this to inject implicit intermediate nodes.
 
     Instance attributes / construction are not part of the protocol —
     registries store *classes* and instantiate them through the
@@ -55,6 +59,7 @@ class ModelExporter(Protocol):
     options_model: ClassVar[type[BaseModel]]
     validator_bindings: ClassVar[tuple[ValidatorBinding, ...]]
     mutates_source: ClassVar[bool]
+    upstream_requirements: ClassVar[tuple[UpstreamRequirement, ...]]
 
     @classmethod
     def supports(cls, request: SupportRequest) -> SupportResult: ...

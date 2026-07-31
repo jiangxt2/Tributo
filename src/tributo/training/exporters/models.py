@@ -24,7 +24,7 @@ from tributo.util.annotations import DeveloperAPI, PublicAPI
 
 # ── Name validation ──────────────────────────────────────────────────────────
 
-_TARGET_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_TARGET_NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$")
 _RESERVED_NAMES: frozenset[str] = frozenset({".leases", "aliases", "trials"})
 
 
@@ -136,10 +136,6 @@ class BundleOutputConfig(BaseModel):
                 raise ValueError("target names must be unique")
             for t in self.targets:
                 for d in t.depends_on:
-                    if d not in names:
-                        raise ValueError(
-                            f"target {t.name!r} depends_on unknown target {d!r}"
-                        )
                     if d == t.name:
                         raise ValueError(f"target {t.name!r} cannot depend on itself")
             for role_name, target_name in self.roles.items():
@@ -457,6 +453,32 @@ class ValidatorBinding(BaseModel):
     validator_id: str
     required: bool = True
     default_options: dict[str, Any] = Field(default_factory=dict)
+
+
+@PublicAPI(stability="beta")
+class UpstreamRequirement(BaseModel):
+    """Declares that an exporter needs an upstream artifact of a given format.
+
+    Used by artifact-to-artifact transforms (e.g. ONNX quantizer needs
+    an FP32 ONNX artifact).  The *name* must match a ``depends_on`` entry
+    in the dependent target's ``ExportTarget``.  The planner reads this to
+    inject implicit intermediate nodes into the DAG.
+
+    Example::
+
+        # ONNX quantizer declares it needs an upstream FP32 ONNX artifact.
+        UpstreamRequirement(
+            name="model",
+            format="onnx",
+            options={"quantization": None},
+        )
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str = Field(..., min_length=1)
+    format: str = Field(..., min_length=1)
+    options: dict[str, Any] = Field(default_factory=dict)
 
 
 # ── Planning models ──────────────────────────────────────────────────────────

@@ -14,6 +14,7 @@ from tributo.training.exporters.models import (
     ExportTarget,
     SupportRequest,
     SupportResult,
+    UpstreamRequirement,
     ValidatorBinding,
 )
 from tributo.training.exporters.planner import ExportPlanner
@@ -29,6 +30,12 @@ class _MinOpts(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class _QuantizerOpts(BaseModel):
+    """Options model for the fake quantizer — accepts quantization config."""
+    model_config = {"extra": "forbid"}
+    quantization: dict[str, Any] | None = None
+
+
 class _ExporterONNX:
     api_version: ClassVar[int] = 1
     exporter_id: ClassVar[str] = "torch-onnx-v1"
@@ -37,6 +44,7 @@ class _ExporterONNX:
     options_model: ClassVar[type[BaseModel]] = _MinOpts
     validator_bindings: ClassVar[tuple[ValidatorBinding, ...]] = ()
     mutates_source: ClassVar[bool] = False
+    upstream_requirements: ClassVar[tuple[UpstreamRequirement, ...]] = ()
 
     @classmethod
     def supports(cls, request: SupportRequest) -> SupportResult:
@@ -54,6 +62,7 @@ class _ExporterXGBoost:
     options_model: ClassVar[type[BaseModel]] = _MinOpts
     validator_bindings: ClassVar[tuple[ValidatorBinding, ...]] = ()
     mutates_source: ClassVar[bool] = False
+    upstream_requirements: ClassVar[tuple[UpstreamRequirement, ...]] = ()
 
     @classmethod
     def supports(cls, request: SupportRequest) -> SupportResult:
@@ -68,19 +77,21 @@ class _ExporterONNXQuantizer:
     exporter_id: ClassVar[str] = "onnx-quantizer-v1"
     priority: ClassVar[int] = 90
     output_format: ClassVar[str] = "onnx"
-    options_model: ClassVar[type[BaseModel]] = _MinOpts
+    options_model: ClassVar[type[BaseModel]] = _QuantizerOpts
     validator_bindings: ClassVar[tuple[ValidatorBinding, ...]] = ()
     mutates_source: ClassVar[bool] = False
+    upstream_requirements: ClassVar[tuple[UpstreamRequirement, ...]] = (
+        UpstreamRequirement(
+            name="model",
+            format="onnx",
+            options={"quantization": None},
+        ),
+    )
 
     @classmethod
     def supports(cls, request: SupportRequest) -> SupportResult:
-        if "onnx" in request.upstream_formats:
-            return SupportResult(supported=True, code="OK")
-        return SupportResult(
-            supported=False,
-            code="NEEDS_UPSTREAM_ONNX",
-            reason="Requires upstream ONNX artifact",
-        )
+        # Accept any source_kind for testing purposes.
+        return SupportResult(supported=True, code="OK")
 
     def export(self, *args: Any, **kwargs: Any) -> Any:
         raise NotImplementedError
@@ -217,3 +228,80 @@ class TestExplicitTargets:
         )
         plan = planner.plan(cfg, _make_source())
         assert "fp32" in plan.explicit_node_map
+
+
+class TestImplicitInjection:
+    """Tests for upstream_requirements-based implicit node injection."""
+
+    def test_quantizer_injects_fp32_onnx_node(self) -> None:
+        """Quantizer declares upstream_requirements → planner injects FP32 node."""
+        planner = _make_planner()
+        cfg = BundleOutputConfig(
+            bundle_uri="/tmp/bundle",
+            targets=[
+                ExportTarget(
+                    name="quantized",
+                    format="onnx",
+                    exporter_id="onnx-quantizer-v1",
+                    depends_on=("model",),
+                    options={"quantization": {"bits": 8}},
+                ),
+            ],
+        )
+        plan = planner.plan(cfg, _make_source())
+        # Should have two nodes: implicit FP32 + explicit quantized.
+        assert len(plan.nodes) == 2
+
+        implicit = plan.nodes[0]
+        explicit = plan.nodes[1]
+
+        assert implicit.implicit is True
+        assert implicit.publish is False
+        assert implicit.target.format == "onnx"
+        # Quantization should be stripped from implicit node options.
+        assert "quantization" not in implicit.target.options
+        # Implicit node should not use the quantizer.
+        assert implicit.exporter_id != "onnx-quantizer-v1"
+
+        assert explicit.implicit is False
+        assert explicit.publish is True
+        assert explicit.exporter_id == "onnx-quantizer-v1"
+        # Quantized node depends on the implicit node.
+        assert explicit.target.depends_on == (implicit.target.name,)
+
+    def test_missing_requirement_raises(self) -> None:
+        """depends_on names an unknown dep → error."""
+        planner = _make_planner()
+        cfg = BundleOutputConfig(
+            bundle_uri="/tmp/bundle",
+            targets=[
+                ExportTarget(
+                    name="fp32",
+                    format="onnx",
+                    depends_on=("nonexistent",),
+                ),
+            ],
+        )
+        with pytest.raises(JobConfigurationError, match="nonexistent"):
+            planner.plan(cfg, _make_source())
+
+    def test_implicit_node_not_in_explicit_map(self) -> None:
+        """Implicit nodes are excluded from explicit_node_map."""
+        planner = _make_planner()
+        cfg = BundleOutputConfig(
+            bundle_uri="/tmp/bundle",
+            targets=[
+                ExportTarget(
+                    name="quantized",
+                    format="onnx",
+                    exporter_id="onnx-quantizer-v1",
+                    depends_on=("model",),
+                    options={"quantization": {"bits": 8}},
+                ),
+            ],
+        )
+        plan = planner.plan(cfg, _make_source())
+        assert "quantized" in plan.explicit_node_map
+        # Implicit node name starts with _implicit__
+        for name in plan.explicit_node_map:
+            assert not name.startswith("_implicit__")

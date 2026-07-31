@@ -208,8 +208,6 @@ def discover_exporter_plugins() -> list[Any]:
     Each entry point must point to a ``ModelExporter`` class with
     ``api_version == 1``.
     """
-    from tributo.training.exporters.protocols import ModelExporter
-
     enabled = _get_enabled_plugins()
     classes: list[Any] = []
 
@@ -230,9 +228,9 @@ def discover_exporter_plugins() -> list[Any]:
             )
             continue
 
-        if not (isinstance(cls, type) and issubclass(cls, ModelExporter)):  # type: ignore[misc]
+        if not (isinstance(cls, type) and _looks_like_exporter(cls)):
             logger.warning(
-                "Exporter plugin %r is not a ModelExporter subclass (got %r); skipping.",
+                "Exporter plugin %r is not a ModelExporter (got %r); skipping.",
                 ep.name,
                 cls,
             )
@@ -258,9 +256,43 @@ def discover_exporter_plugins() -> list[Any]:
     return classes
 
 
+def _looks_like_exporter(cls: type) -> bool:
+    """Check structural conformance to ModelExporter without issubclass.
+
+    Uses manual attribute checks because ``@runtime_checkable`` protocols
+    with ClassVar members don't support ``issubclass()``.
+    """
+    required_attrs = (
+        "api_version", "exporter_id", "priority", "output_format",
+        "options_model", "validator_bindings", "mutates_source",
+    )
+    return all(hasattr(cls, a) for a in required_attrs)
+
+
+def _looks_like_source_provider(cls: type) -> bool:
+    """Check structural conformance to SourceProvider without issubclass."""
+    required_attrs = ("api_version", "provider_id", "trainer_type", "priority")
+    return all(hasattr(cls, a) for a in required_attrs)
+
+
+def _looks_like_validator(cls: type) -> bool:
+    """Check structural conformance to ExportValidator without issubclass."""
+    required_attrs = ("api_version", "validator_id", "options_model")
+    return all(hasattr(cls, a) for a in required_attrs)
+
+
+def _looks_like_flavor(cls: type) -> bool:
+    """Check structural conformance to ModelFlavor without issubclass."""
+    return hasattr(cls, "flavor_id") and hasattr(cls, "api_version")
+
+
+def _looks_like_factory(cls: type) -> bool:
+    """Check structural conformance to ModelFactory without issubclass."""
+    return hasattr(cls, "architecture_id") and hasattr(cls, "api_version")
+
+
 def discover_source_provider_plugins() -> list[Any]:
     """Discover third-party source providers as ``tributo.source_providers``."""
-    from tributo.training.exporters.protocols import SourceProvider
 
     enabled = _get_enabled_plugins()
     classes: list[Any] = []
@@ -280,7 +312,7 @@ def discover_source_provider_plugins() -> list[Any]:
             )
             continue
 
-        if not (isinstance(cls, type) and issubclass(cls, SourceProvider)):  # type: ignore[misc]
+        if not (isinstance(cls, type) and _looks_like_source_provider(cls)):
             logger.warning(
                 "Source provider plugin %r is not a SourceProvider subclass (got %r); skipping.",
                 ep.name,
@@ -310,7 +342,6 @@ def discover_source_provider_plugins() -> list[Any]:
 
 def discover_validator_plugins() -> list[Any]:
     """Discover third-party validators as ``tributo.validators``."""
-    from tributo.training.exporters.protocols import ExportValidator
 
     enabled = _get_enabled_plugins()
     classes: list[Any] = []
@@ -330,7 +361,7 @@ def discover_validator_plugins() -> list[Any]:
             )
             continue
 
-        if not (isinstance(cls, type) and issubclass(cls, ExportValidator)):  # type: ignore[misc]
+        if not (isinstance(cls, type) and _looks_like_validator(cls)):
             logger.warning(
                 "Validator plugin %r is not an ExportValidator subclass (got %r); skipping.",
                 ep.name,
@@ -364,7 +395,6 @@ def discover_flavor_plugins() -> list[Any]:
     Each entry point must point to a ``ModelFlavor`` subclass with a
     ``flavor_id`` class variable and ``api_version == 1``.
     """
-    from tributo.training.flavor import ModelFlavor
 
     enabled = _get_enabled_plugins()
     classes: list[Any] = []
@@ -381,7 +411,7 @@ def discover_flavor_plugins() -> list[Any]:
             )
             continue
 
-        if not (isinstance(cls, type) and issubclass(cls, ModelFlavor)):
+        if not (isinstance(cls, type) and _looks_like_flavor(cls)):
             logger.warning(
                 "Flavor plugin %r is not a ModelFlavor subclass (got %r); skipping.",
                 ep.name,
@@ -413,7 +443,6 @@ def discover_flavor_plugins() -> list[Any]:
 
 def discover_model_factory_plugins() -> list[Any]:
     """Discover third-party model factories as ``tributo.model_factories``."""
-    from tributo.training.exporters.protocols import ModelFactory
 
     enabled = _get_enabled_plugins()
     classes: list[Any] = []
@@ -433,7 +462,7 @@ def discover_model_factory_plugins() -> list[Any]:
             )
             continue
 
-        if not (isinstance(cls, type) and issubclass(cls, ModelFactory)):  # type: ignore[misc]
+        if not (isinstance(cls, type) and _looks_like_factory(cls)):
             logger.warning(
                 "Model factory plugin %r is not a ModelFactory subclass (got %r); skipping.",
                 ep.name,

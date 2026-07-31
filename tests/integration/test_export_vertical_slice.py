@@ -1,0 +1,136 @@
+"""End-to-end test for the P0 vertical slice: XGBoost → ONNX → Local bundle.
+
+Requires ``xgboost`` and ``onnxmltools``.  Skipped when not installed.
+"""
+
+from __future__ import annotations
+
+import json
+import shutil
+import tempfile
+from pathlib import Path
+
+import pytest
+
+# ── Skip if optional deps are missing ──────────────────────────────────────────
+
+xgboost = pytest.importorskip("xgboost", reason="xgboost not installed")
+onnxmltools = pytest.importorskip("onnxmltools", reason="onnxmltools not installed")
+numpy = pytest.importorskip("numpy", reason="numpy not installed")
+
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+
+def _train_tiny_booster() -> xgboost.Booster:  # type: ignore[no-any-unimported]
+    """Train a minimal XGBoost booster on synthetic data."""
+    X = numpy.random.randn(100, 5).astype(numpy.float32)
+    y = numpy.random.randint(0, 2, 100).astype(numpy.float32)
+    dtrain = xgboost.DMatrix(X, label=y)
+    params = {"max_depth": 2, "eta": 0.1, "objective": "binary:logistic"}
+    booster = xgboost.train(params, dtrain, num_boost_round=3)
+    booster.feature_names = [f"f{i}" for i in range(5)]
+    return booster
+
+
+# ── Tests ──────────────────────────────────────────────────────────────────────
+
+
+class TestExporterSupports:
+    """Verify exporter protocol conformance."""
+
+    def test_supports_xgboost_result(self) -> None:
+        """XGBoostONNXExporter.supports() accepts xgboost_result."""
+        from tributo.training.exporters.models import SupportRequest
+        from tributo.training.exporters.xgboost_onnx_exporter import (
+            XGBoostONNXExporter,
+        )
+
+        cls = type(XGBoostONNXExporter())
+        result = cls.supports(
+            SupportRequest(source_kind="xgboost_result")
+        )
+        assert result.supported is True
+
+    def test_rejects_unknown_source_kind(self) -> None:
+        """XGBoostONNXExporter.supports() rejects unknown kinds."""
+        from tributo.training.exporters.models import SupportRequest
+        from tributo.training.exporters.xgboost_onnx_exporter import (
+            XGBoostONNXExporter,
+        )
+
+        cls = type(XGBoostONNXExporter())
+        result = cls.supports(
+            SupportRequest(source_kind="pytorch_result")
+        )
+        assert result.supported is False
+        assert result.code == "UNSUPPORTED_SOURCE_KIND"
+
+    def test_classvars_are_correct(self) -> None:
+        """Verify XGBoostONNXExporter declares correct metadata."""
+        from tributo.training.exporters.xgboost_onnx_exporter import (
+            XGBoostONNXExporter,
+        )
+
+        cls = XGBoostONNXExporter
+        assert cls.api_version == 1
+        assert cls.exporter_id == "xgboost-onnx-v1"
+        assert cls.output_format == "onnx"
+        assert cls.priority == 100
+        assert cls.mutates_source is True
+        assert cls.upstream_requirements == ()
+
+
+class TestExportPipelineWithRealExporter:
+    """End-to-end pipeline using the real XGBoostONNXExporter."""
+
+    @pytest.mark.slow
+    def test_xgboost_to_onnx_local_bundle(self) -> None:
+        """Train tiny XGBoost → export to ONNX → verify bundle exists."""
+        from tributo.training.exporters.models import (
+            BundleOutputConfig,
+            ExportSource,
+            ExportTarget,
+        )
+        from tributo.training.exporters.service import BundleExportService
+        from tributo.training.exporters.xgboost_onnx_exporter import (
+            XGBoostONNXExporter,
+        )
+
+        booster = _train_tiny_booster()
+        tmpdir = Path(tempfile.mkdtemp(prefix="tributo-e2e-"))
+        try:
+            service = BundleExportService()
+            service._exports.register(XGBoostONNXExporter)  # noqa: SLF001
+
+            source = ExportSource(
+                source_kind="xgboost_result",
+                model_object=booster,
+                feature_schema=list(booster.feature_names),
+                metadata={
+                    "framework": "xgboost",
+                    "framework_version": xgboost.__version__,
+                    "n_features": 5,
+                },
+            )
+            config = BundleOutputConfig(
+                bundle_uri=str(tmpdir / "bundles"),
+                targets=[
+                    ExportTarget(name="model", format="onnx", options={"opset": 12}),
+                ],
+                roles={"inference": "model"},
+            )
+
+            result = service.export_bundle(source=source, config=config)
+
+            assert result.status in ("succeeded", "partial")
+            assert result.bundle_id
+            assert result.canonical_uri
+
+            # Assert ONNX file exists in the bundle.
+            bundle_dir = Path(result.canonical_uri)
+            onnx_path = bundle_dir / "artifacts" / "model" / "model.onnx"
+            assert onnx_path.is_file(), f"ONNX file not found at {onnx_path}"
+
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)

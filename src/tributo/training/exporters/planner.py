@@ -150,9 +150,18 @@ class ExportPlanner:
         # Phase 1: Match each explicit target to a PlannedTarget.
         planned: dict[str, PlannedTarget] = {}
         for target in config.targets:
+            # Populate upstream_formats from already-planned explicit deps
+            # so that artifact-to-artifact exporters (e.g. quantizer) can
+            # check whether their upstream requirements are satisfied.
+            upstream_formats = tuple(
+                planned[d].target.format
+                for d in target.depends_on
+                if d in planned
+            )
             request = SupportRequest(
                 source_kind=source.source_kind,
                 source_metadata=source.metadata,
+                upstream_formats=upstream_formats,
             )
             candidates = self._exports.list_candidates(
                 source_kind=source.source_kind,
@@ -166,84 +175,126 @@ class ExportPlanner:
             pt = select_candidate(candidates, target, request, self._validators)
             planned[target.name] = pt
 
-        # Phase 2: Inject implicit nodes.
+        # Phase 2: Inject implicit nodes from upstream_requirements.
         implicit_nodes: list[PlannedTarget] = []
         for target in config.targets:
+            pt = planned[target.name]
+            exporter_cls = self._exports.get(pt.exporter_id)
+            requirements: tuple[Any, ...] = getattr(
+                exporter_cls, "upstream_requirements", ()
+            )
+
             for dep_name in target.depends_on:
-                dep = planned.get(dep_name)
-                if dep is not None:
+                if dep_name in planned:
                     continue  # Explicit upstream exists.
-                # Check if we need to inject an implicit FP32 ONNX node.
-                # Convention: INT8 quantizer needs an upstream FP32 ONNX.
-                if target.format == "onnx" and target.options.get("quantization"):
-                    implicit_opts: dict[str, Any] = {
-                        k: v for k, v in target.options.items() if k != "quantization"
-                    }
-                    oh = _options_hash(implicit_opts)
-                    implicit_name = _implicit_node_id(target.name, "onnx", oh)
 
-                    # Check if already injected.
-                    existing = [
-                        n for n in implicit_nodes if n.target.name == implicit_name
-                    ]
-                    if existing:
-                        # Update the dependent's depends_on reference.
-                        new_target = ExportTarget(
-                            name=target.name,
-                            format=target.format,
-                            required=target.required,
-                            depends_on=tuple(
-                                implicit_name if d == dep_name else d
-                                for d in target.depends_on
-                            ),
-                            options=target.options,
-                            validation=target.validation,
-                        )
-                        planned[target.name] = PlannedTarget(
-                            target=new_target,
-                            exporter_id=planned[target.name].exporter_id,
-                            typed_options=planned[target.name].typed_options,
-                            validator_bindings=planned[target.name].validator_bindings,
-                            implicit=False,
-                            publish=True,
-                        )
-                        continue
+                # Find the matching upstream requirement.
+                req = next((r for r in requirements if r.name == dep_name), None)
+                if req is None:
+                    raise JobConfigurationError(
+                        f"Target {target.name!r} depends on {dep_name!r}, "
+                        f"but {dep_name!r} is not an explicit target and "
+                        f"exporter {pt.exporter_id!r} does not declare an "
+                        f"upstream_requirements entry for it. "
+                        f"Declared requirements: "
+                        f"{[r.name for r in requirements]}"
+                    )
 
-                    # Create the implicit FP32 target.
-                    implicit_target = ExportTarget(
-                        name=implicit_name,
-                        format="onnx",
-                        required=target.required,  # Inherit requiredness
-                        options=implicit_opts,
+                # Build implicit node options by stripping requirement keys.
+                implicit_opts: dict[str, Any] = {
+                    k: v for k, v in target.options.items()
+                    if k not in req.options
+                }
+                oh = _options_hash(implicit_opts)
+                implicit_name = _implicit_node_id(target.name, req.format, oh)
+
+                # Check if already injected (shared implicit node).
+                existing = [
+                    n for n in implicit_nodes if n.target.name == implicit_name
+                ]
+                if existing:
+                    # Rewrite the dependent's depends_on to point at the
+                    # shared implicit node.
+                    new_target = ExportTarget(
+                        name=target.name,
+                        format=target.format,
+                        required=target.required,
+                        depends_on=tuple(
+                            implicit_name if d == dep_name else d
+                            for d in target.depends_on
+                        ),
+                        options=target.options,
+                        validation=target.validation,
                     )
-                    implicit_request = SupportRequest(
-                        source_kind=source.source_kind,
-                        source_metadata=source.metadata,
+                    planned[target.name] = PlannedTarget(
+                        target=new_target,
+                        exporter_id=pt.exporter_id,
+                        typed_options=pt.typed_options,
+                        validator_bindings=pt.validator_bindings,
+                        implicit=False,
+                        publish=True,
                     )
-                    implicit_candidates = self._exports.list_candidates(
-                        source_kind=source.source_kind,
-                        output_format="onnx",
+                    continue
+
+                # Create the implicit target.
+                implicit_target = ExportTarget(
+                    name=implicit_name,
+                    format=req.format,
+                    required=target.required,
+                    options=implicit_opts,
+                )
+                implicit_request = SupportRequest(
+                    source_kind=source.source_kind,
+                    source_metadata=source.metadata,
+                )
+                implicit_candidates = self._exports.list_candidates(
+                    source_kind=source.source_kind,
+                    output_format=req.format,
+                )
+                if not implicit_candidates:
+                    raise JobConfigurationError(
+                        f"Cannot create implicit {req.format!r} node for "
+                        f"{target.name!r}: no candidates for "
+                        f"source_kind={source.source_kind!r}"
                     )
-                    if not implicit_candidates:
-                        raise JobConfigurationError(
-                            f"Cannot create implicit ONNX node for {target.name!r}: "
-                            f"no ONNX candidates for source_kind={source.source_kind!r}"
-                        )
-                    implicit_pt = select_candidate(
-                        implicit_candidates,
-                        implicit_target,
-                        implicit_request,
-                        self._validators,
-                    )
-                    implicit_pt = PlannedTarget(
-                        target=implicit_target,
-                        exporter_id=implicit_pt.exporter_id,
-                        typed_options=implicit_pt.typed_options,
-                        validator_bindings=implicit_pt.validator_bindings,
-                        implicit=True,
-                        publish=False,
-                    )
-                    implicit_nodes.append(implicit_pt)
+                implicit_pt = select_candidate(
+                    implicit_candidates,
+                    implicit_target,
+                    implicit_request,
+                    self._validators,
+                )
+                implicit_pt = PlannedTarget(
+                    target=implicit_target,
+                    exporter_id=implicit_pt.exporter_id,
+                    typed_options=implicit_pt.typed_options,
+                    validator_bindings=implicit_pt.validator_bindings,
+                    implicit=True,
+                    publish=False,
+                )
+                implicit_nodes.append(implicit_pt)
+
+                # Rewrite the dependent's depends_on to point at the
+                # implicit node name instead of the original dep name.
+                new_deps = tuple(
+                    implicit_name if d == dep_name else d
+                    for d in target.depends_on
+                )
+                new_target = ExportTarget(
+                    name=target.name,
+                    format=target.format,
+                    required=target.required,
+                    depends_on=new_deps,
+                    options=target.options,
+                    validation=target.validation,
+                )
+                planned[target.name] = PlannedTarget(
+                    target=new_target,
+                    exporter_id=pt.exporter_id,
+                    typed_options=pt.typed_options,
+                    validator_bindings=pt.validator_bindings,
+                    implicit=False,
+                    publish=True,
+                )
 
         # Merge explicit + implicit.
         all_nodes: dict[str, PlannedTarget] = {**planned}

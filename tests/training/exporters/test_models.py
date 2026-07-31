@@ -76,14 +76,21 @@ class TestBundleOutputConfig:
                 ],
             )
 
-    def test_depends_on_unknown(self) -> None:
-        with pytest.raises(ValidationError, match="depends_on unknown target"):
-            BundleOutputConfig(
-                bundle_uri="s3://bucket/model",
-                targets=[
-                    ExportTarget(name="a", format="onnx", depends_on=("b",)),
-                ],
-            )
+    def test_depends_on_unknown_accepted_at_config_level(self) -> None:
+        """Unknown depends_on names are now accepted at config validation.
+
+        They may refer to upstream_requirements that the planner resolves
+        into implicit nodes.  The planner (not the config model) raises
+        an error if a name cannot be resolved.
+        """
+        cfg = BundleOutputConfig(
+            bundle_uri="s3://bucket/model",
+            targets=[
+                ExportTarget(name="a", format="onnx", depends_on=("b",)),
+            ],
+        )
+        assert cfg.targets is not None
+        assert cfg.targets[0].depends_on == ("b",)
 
     def test_self_dependency(self) -> None:
         with pytest.raises(ValidationError, match="cannot depend on itself"):
