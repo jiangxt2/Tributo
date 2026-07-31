@@ -28,6 +28,7 @@ import logging
 from collections import deque
 from typing import Any, Callable
 
+from tributo._common.dag import topological_order
 from tributo.util.annotations import PublicAPI
 
 logger = logging.getLogger(__name__)
@@ -158,39 +159,32 @@ def depends(*upstream: ModelRunner) -> Callable[[ModelRunner], ModelRunner]:
     return _decorator
 
 
-# ── topological sort ───────────────────────────────────────────────────────
+# ── topological sort (delegates to shared DAG kernel) ──────────────────────
 
 
 def _topological_sort(root: ModelRunner) -> list[ModelRunner]:
-    """Kahn's algorithm: BFS topological sort starting from *root*."""
-    # Build in-degree map for all reachable nodes
-    in_degree: dict[str, int] = {}
+    """Return nodes in topological order via the shared DAG kernel."""
+    # Collect all reachable nodes via BFS from *root*.
     all_nodes: dict[str, ModelRunner] = {}
-
     queue: deque[ModelRunner] = deque([root])
     while queue:
         node = queue.popleft()
         if node.name in all_nodes:
             continue
         all_nodes[node.name] = node
-        in_degree[node.name] = len(node._upstream)
-        for dep in node._upstream:
-            queue.append(dep)
+        queue.extend(node._upstream)
 
-    # Start with nodes that have no dependencies
-    ready: deque[ModelRunner] = deque(
-        n for n in all_nodes.values() if in_degree[n.name] == 0
-    )
-    order: list[ModelRunner] = []
+    # Build adjacency: {node_name: [upstream_node_names]}
+    adjacency: dict[str, list[str]] = {
+        name: [dep.name for dep in runner._upstream]
+        for name, runner in all_nodes.items()
+    }
 
-    while ready:
-        node = ready.popleft()
-        order.append(node)
-        # Decrease in-degree of nodes that depend on this one
-        for other in all_nodes.values():
-            if node in other._upstream:
-                in_degree[other.name] -= 1
-                if in_degree[other.name] == 0:
-                    ready.append(other)
+    try:
+        order = topological_order(adjacency)
+    except ValueError as exc:
+        raise ValueError(
+            f"ModelRunner dependency cycle detected from root {root.name!r}: {exc}"
+        ) from exc
 
-    return order
+    return [all_nodes[name] for name in order]

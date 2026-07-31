@@ -114,6 +114,10 @@ class MLflowTrackingCallback:
             if self._raise_on_error:
                 raise
 
+    def on_artifacts_exported(self, trainer: BaseTrainer, output_path: str) -> None:
+        """After artifacts exported: delegate to on_export_end."""
+        self.on_export_end(trainer, output_path)
+
     def on_run_complete(self, trainer: BaseTrainer, summary: dict[str, Any]) -> None:
         """Training complete: log summary, end Run.
 

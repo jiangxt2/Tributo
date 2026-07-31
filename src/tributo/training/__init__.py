@@ -29,8 +29,10 @@ from tributo.exceptions import JobConfigurationError
 from tributo.training.algorithm_spec import (
     AlgorithmSpec,
     AlgorithmStatus,
+    Capability,
     DataContract,
     DataLoadingMode,
+    ExecutionKind,
     ProblemFamily,
     ProblemType,
     ResourceHints,
@@ -84,7 +86,23 @@ except ImportError:
     _has_pu = False
 
 # Class prior estimation (pure numpy, always available)
+# BaseGraphTrainer has no hard dependency on torch/PyG — all graph-library
+# imports happen inside the user's build_graph/build_sampler implementation.
+from tributo.training.graph_trainer import BaseGraphTrainer  # noqa: E402
 from tributo.training.priors import estimate_class_prior  # noqa: E402
+
+# Causal estimator (lazy import, requires dowhy + econml)
+try:
+    from tributo.training.causal_estimator import (  # noqa: F401
+        BaseCausalEstimator,
+        CausalEffect,
+        CausalGraph,
+        RefutationResult,
+    )
+
+    _has_causal = True
+except ImportError:
+    _has_causal = False
 
 __all__ = [
     # BaseTrainer abstraction
@@ -92,9 +110,11 @@ __all__ = [
     # AlgorithmSpec & supporting types
     "AlgorithmSpec",
     "AlgorithmStatus",
+    "Capability",
     "TrainerSpec",
     "DataContract",
     "DataLoadingMode",
+    "ExecutionKind",
     "ProblemFamily",
     "ProblemType",
     "ResourceHints",
@@ -119,9 +139,22 @@ __all__ = [
     "export_to_onnx",
     "submit_training_job",
     "wait_for_job",
+    # GNN base class (no optional deps)
+    "BaseGraphTrainer",
     # Class prior estimation
     "estimate_class_prior",
 ]
+
+# Dynamically export causal-related symbols (if dowhy + econml available)
+if _has_causal:
+    __all__.extend(
+        [
+            "BaseCausalEstimator",
+            "CausalEffect",
+            "CausalGraph",
+            "RefutationResult",
+        ]
+    )
 
 # Dynamically export DNN-related symbols (if torch is available)
 if _has_dnn:

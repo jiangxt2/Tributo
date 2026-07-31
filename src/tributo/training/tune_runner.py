@@ -18,7 +18,7 @@ from ray.tune.search import BasicVariantGenerator
 
 from tributo._common.immutable import deep_thaw
 from tributo.exceptions import JobConfigurationError, JobExecutionError
-from tributo.training.algorithm_spec import AlgorithmSpec
+from tributo.training.algorithm_spec import AlgorithmSpec, Capability
 from tributo.training.config import (
     apply_dot_overrides,
     validate_and_normalize_config,
@@ -237,6 +237,13 @@ class TuneRunner:
         Returns:
             Ray Tune ResultGrid containing all trial results.
         """
+        # Guard: reject algorithms that don't declare Capability.TUNABLE.
+        if Capability.TUNABLE not in self._trainer_spec.capabilities:
+            raise JobConfigurationError(
+                f"Algorithm {self._trainer_spec.name!r} does not declare "
+                f"Capability.TUNABLE and cannot be used with TuneRunner."
+            )
+
         # Set runtime_env at Ray session level (only before ray.init)
         if runtime_env is not None:
             if not ray.is_initialized():

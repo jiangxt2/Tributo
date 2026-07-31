@@ -18,7 +18,7 @@ import uuid
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from tributo._common.storage_profiles import StorageProfileResolver
 from tributo.exceptions import BundleExportError, PostPublishCallbackError
@@ -92,13 +92,40 @@ class BundleExportService:
         self._storage_resolver = storage_resolver or StorageProfileResolver()
         self._manifest_registry = manifest_registry or ManifestSchemaRegistry()
 
-        # Register built-in schema reader.
-        from tributo.training.exporters.manifest import _read_manifest_v1
+        # Register built-in schema readers (v1 for compat, v2 current).
+        from tributo.training.exporters.manifest import (
+            _read_manifest_v1,
+            _read_manifest_v2,
+        )
 
-        try:
-            self._manifest_registry.register(1, _read_manifest_v1)
-        except ValueError:
-            pass
+        for version, reader in ((1, _read_manifest_v1), (2, _read_manifest_v2)):
+            try:
+                self._manifest_registry.register(version, reader)
+            except ValueError:
+                pass
+
+    @staticmethod
+    def ensure_exportable(spec: Any) -> None:
+        """Raise ``BundleExportError`` if *spec* does not declare ``Capability.EXPORTABLE``.
+
+        Callers should invoke this before calling ``export_bundle()`` to
+        fail-fast with a clear error rather than discovering mid-export
+        that the algorithm does not produce serialisable artifacts.
+
+        Args:
+            spec: An ``AlgorithmSpec`` instance.
+
+        Raises:
+            BundleExportError: The algorithm is not exportable.
+        """
+        from tributo.training.algorithm_spec import Capability
+
+        if Capability.EXPORTABLE not in spec.capabilities:
+            raise BundleExportError(
+                f"Algorithm {spec.name!r} does not declare "
+                f"Capability.EXPORTABLE — it cannot produce serialisable "
+                f"artifacts."
+            )
 
     def export_bundle(
         self,

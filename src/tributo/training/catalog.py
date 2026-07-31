@@ -16,6 +16,8 @@ from tributo.training.algorithm_spec import (
     PROBLEM_FAMILY_MAP,
     AlgorithmSpec,
     AlgorithmStatus,
+    Capability,
+    ExecutionKind,
     ProblemFamily,
     ProblemType,
 )
@@ -50,15 +52,39 @@ class AlgorithmCatalog:
         modality: str | None = None,
         tag: str | None = None,
         extras_group: str | None = None,
+        execution_kind: ExecutionKind | None = None,
+        capabilities: Capability | tuple[Capability, ...] | None = None,
         include_deprecated: bool = False,
     ) -> list[str]:
         """Return algorithm names matching all filter criteria (intersection).
 
         Filters are applied conjunctively — an algorithm must satisfy
         every non-None filter to be included.
+
+        Args:
+            execution_kind: Filter by ``ExecutionKind`` (e.g. ``TRAIN``,
+                ``ESTIMATE``).
+            capabilities: Filter by one or more ``Capability`` tags.  When
+                multiple capabilities are given, the algorithm must have
+                **all** of them (conjunction).
         """
         snapshot = self._registry.snapshot()
         self._validate_integrity(snapshot)
+
+        # Normalise capabilities to a tuple of Capability enums for
+        # consistent iteration.  Plain strings (natural for str-Enum)
+        # are coerced so that `catalog.list(capabilities="tunable")`
+        # works as expected.
+        cap_set: tuple[Capability, ...] = ()
+        if isinstance(capabilities, Capability):
+            cap_set = (capabilities,)
+        elif isinstance(capabilities, str):
+            cap_set = (Capability(capabilities),)
+        elif capabilities is not None:
+            # Accept (Capability, ...) or list of strings/instances.
+            cap_set = tuple(
+                Capability(c) if isinstance(c, str) else c for c in capabilities
+            )
 
         results: list[str] = []
         for name, spec in snapshot.items():
@@ -73,6 +99,10 @@ class AlgorithmCatalog:
             if tag is not None and tag not in spec.tags:
                 continue
             if extras_group is not None and spec.extras_group != extras_group:
+                continue
+            if execution_kind is not None and spec.execution_kind != execution_kind:
+                continue
+            if cap_set and not all(c in spec.capabilities for c in cap_set):
                 continue
             if not include_deprecated and spec.status == AlgorithmStatus.DEPRECATED:
                 continue

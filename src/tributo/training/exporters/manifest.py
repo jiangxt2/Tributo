@@ -85,7 +85,11 @@ class ManifestExecution(BaseModel):
 
 @PublicAPI(stability="beta")
 class ExportManifest(BaseModel):
-    """Canonical manifest for a published model bundle (schema v1).
+    """Canonical manifest for a published model bundle (schema v2).
+
+    v2 adds ``artifact_kind`` on ``LogicalArtifact`` so that consumers
+    can distinguish model files from reports, diagnostics, and graph
+    snapshots without inspecting file contents.
 
     The manifest is written last during publish and serves as the
     single integrity anchor: its SHA-256 digest is the ``manifest_sha256``
@@ -94,7 +98,7 @@ class ExportManifest(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: int = Field(default=1, ge=1)
+    schema_version: int = Field(default=2, ge=1)
     bundle_id: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     status: str = Field(pattern=r"^(succeeded|partial)$")
@@ -165,16 +169,43 @@ class ManifestSchemaRegistry:
 
 
 def _read_manifest_v1(raw: dict[str, Any], canonical_bytes: bytes) -> ExportManifest:
-    """Parse and validate a v1 manifest."""
+    """Parse and validate a v1 manifest.
+
+    v1 artifacts lack ``artifact_kind`` — the reader defaults them to
+    ``"model"`` for backward compatibility.
+    """
+    # Normalise v1 artifacts: inject artifact_kind="model" if missing.
+    raw = dict(raw)
+    artifacts = raw.get("artifacts", ())
+    if artifacts:
+        raw["artifacts"] = tuple(
+            {**a, "artifact_kind": a.get("artifact_kind", "model")}
+            if isinstance(a, dict)
+            else a
+            for a in artifacts
+        )
     manifest = ExportManifest(**raw)
     declared_digest = raw.get("_manifest_sha256")
     if declared_digest is not None:
         # The digest field should NOT be in the manifest itself — but if a
         # pre-release version included it, skip the check rather than failing.
         pass
-    actual = hashlib.sha256(canonical_bytes).hexdigest()
-    # NOTE: The canonical_bytes used for verification come from the
-    # publisher/reader, which strips any _manifest_sha256 wrapper before
-    # hashing.  The ExportManifest model itself does not carry this field.
-    _ = actual  # digest verification is done by BundleReader
     return manifest
+
+
+def _read_manifest_v2(raw: dict[str, Any], canonical_bytes: bytes) -> ExportManifest:
+    """Parse and validate a v2 manifest (native reader)."""
+    manifest = ExportManifest(**raw)
+    return manifest
+
+
+# ── Schema registry singleton ──────────────────────────────────────────────────
+
+_SCHEMA_REGISTRY = ManifestSchemaRegistry()
+_SCHEMA_REGISTRY.register(1, _read_manifest_v1)
+_SCHEMA_REGISTRY.register(2, _read_manifest_v2)
+
+
+def get_schema_registry() -> ManifestSchemaRegistry:
+    """Return the shared manifest schema registry."""
+    return _SCHEMA_REGISTRY
