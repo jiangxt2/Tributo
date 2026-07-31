@@ -42,6 +42,7 @@ class XGBoostONNXExporter:
     exporter_id: ClassVar[str] = "xgboost-onnx-v1"
     priority: ClassVar[int] = 100
     output_format: ClassVar[str] = "onnx"
+    source_kinds: ClassVar[tuple[str, ...]] = ("xgboost_result",)
     options_model: ClassVar[type[BaseModel]] = XGBoostONNXOptions
     validator_bindings: ClassVar[tuple[ValidatorBinding, ...]] = (
         ValidatorBinding(validator_id="structure-v1", required=True),

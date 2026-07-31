@@ -56,6 +56,11 @@ class ModelExporter(Protocol):
     exporter_id: ClassVar[str]
     priority: ClassVar[int]
     output_format: ClassVar[str]
+    # Source kinds this exporter consumes (values of ``ExportSource.source_kind``,
+    # e.g. "xgboost_result", "dnn_result").  The registry uses this for
+    # coarse filtering; transform exporters that consume an upstream
+    # artifact (not the source) declare ``()`` and are never filtered out.
+    source_kinds: ClassVar[tuple[str, ...]]
     options_model: ClassVar[type[BaseModel]]
     validator_bindings: ClassVar[tuple[ValidatorBinding, ...]]
     mutates_source: ClassVar[bool]

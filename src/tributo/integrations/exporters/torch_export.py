@@ -54,6 +54,7 @@ class TorchExportExporter:
     exporter_id: ClassVar[str] = "torch-export-v1"
     priority: ClassVar[int] = 75
     output_format: ClassVar[str] = "pt2"
+    source_kinds: ClassVar[tuple[str, ...]] = ("dnn_result", "torch_module")
     options_model: ClassVar[type[BaseModel]] = TorchExportOptions
     validator_bindings: ClassVar[tuple[ValidatorBinding, ...]] = (
         ValidatorBinding(validator_id="structure-v1", required=True),
@@ -223,7 +224,7 @@ def _build_dynamic_shapes(inputs: tuple[Any, ...]) -> dict[str, Any] | None:
     result: dict[str, Any] = {}
     for i, inp in enumerate(inputs):
         if hasattr(inp, "shape"):
-            shape_desc = {}
+            shape_desc: dict[int, int | None] = {}
             for j, dim in enumerate(inp.shape):
                 if j == 0:
                     shape_desc[j] = None  # Batch dim is dynamic.

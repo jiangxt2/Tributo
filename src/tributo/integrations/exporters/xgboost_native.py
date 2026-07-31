@@ -42,6 +42,7 @@ class XGBoostNativeExporter:
     exporter_id: ClassVar[str] = "xgboost-native-v1"
     priority: ClassVar[int] = 80
     output_format: ClassVar[str] = "xgboost"
+    source_kinds: ClassVar[tuple[str, ...]] = ("xgboost_result",)
     options_model: ClassVar[type[BaseModel]] = XGBoostNativeOptions
     validator_bindings: ClassVar[tuple[ValidatorBinding, ...]] = (
         ValidatorBinding(validator_id="structure-v1", required=True),
@@ -83,12 +84,9 @@ class XGBoostNativeExporter:
         fmt = target.typed_options.get("fmt", "ubj")
 
         if fmt == "ubj":
-            raw = booster.save_raw()
+            raw: bytes = bytes(booster.save_raw())
             ext = "ubj"
-            if isinstance(raw, bytearray):
-                raw = bytes(raw)
         else:
-            raw = booster.save_raw()  # UBJ bytes, save_model writes to file
             ext = "json"
             # Use a temp path for JSON (save_model only writes to files).
             json_path = context.artifact_dir / f"model.{ext}"

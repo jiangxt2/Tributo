@@ -42,6 +42,7 @@ class TorchSafetensorsExporter:
     exporter_id: ClassVar[str] = "torch-safetensors-v1"
     priority: ClassVar[int] = 90
     output_format: ClassVar[str] = "safetensors"
+    source_kinds: ClassVar[tuple[str, ...]] = ("dnn_result", "torch_module")
     options_model: ClassVar[type[BaseModel]] = SafetensorsOptions
     validator_bindings: ClassVar[tuple[ValidatorBinding, ...]] = (
         ValidatorBinding(validator_id="structure-v1", required=True),

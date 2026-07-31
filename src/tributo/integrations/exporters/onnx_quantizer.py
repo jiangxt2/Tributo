@@ -53,6 +53,8 @@ class ONNXQuantizer:
     # supports() MISSING_UPSTREAM gate keeps it out of plain requests.
     priority: ClassVar[int] = 110
     output_format: ClassVar[str] = "onnx"
+    # Source kind this exporter consumes ("" for transform exporters).
+    source_kinds: ClassVar[tuple[str, ...]] = ()
     options_model: ClassVar[type[BaseModel]] = ONNXQuantizerOptions
     validator_bindings: ClassVar[tuple[ValidatorBinding, ...]] = (
         ValidatorBinding(validator_id="structure-v1", required=True),

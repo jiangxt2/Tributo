@@ -43,6 +43,11 @@ class HuggingFaceONNXExporter:
     exporter_id: ClassVar[str] = "hf-onnx-v1"
     priority: ClassVar[int] = 85
     output_format: ClassVar[str] = "onnx"
+    source_kinds: ClassVar[tuple[str, ...]] = (
+        "hf_model",
+        "huggingface_model",
+        "transformers",
+    )
     options_model: ClassVar[type[BaseModel]] = HFONNXOptions
     validator_bindings: ClassVar[tuple[ValidatorBinding, ...]] = (
         ValidatorBinding(validator_id="structure-v1", required=True),

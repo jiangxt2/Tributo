@@ -48,6 +48,7 @@ class TorchONNXExporter:
     exporter_id: ClassVar[str] = "torch-onnx-v1"
     priority: ClassVar[int] = 95
     output_format: ClassVar[str] = "onnx"
+    source_kinds: ClassVar[tuple[str, ...]] = ("dnn_result", "torch_module")
     options_model: ClassVar[type[BaseModel]] = TorchONNXOptions
     validator_bindings: ClassVar[tuple[ValidatorBinding, ...]] = (
         ValidatorBinding(validator_id="structure-v1", required=True),
@@ -239,18 +240,20 @@ class TorchONNXExporter:
         else:
             model_input = sample_inputs
 
-        torch.onnx.export(
-            model,
-            model_input,
-            str(output_path),
-            opset_version=opset,
-            input_names=input_names,
-            output_names=output_names,
-            dynamic_axes={name: {0: "batch_size"} for name in input_names},
-            dynamo=use_dynamo,
-            export_params=True,
-            do_constant_folding=True,
-        )
+        export_kwargs: dict[str, Any] = {
+            "opset_version": opset,
+            "input_names": input_names,
+            "output_names": output_names,
+            "dynamic_axes": {name: {0: "batch_size"} for name in input_names},
+            "export_params": True,
+            "do_constant_folding": True,
+        }
+        # The ``dynamo`` keyword of torch.onnx.export was added in
+        # PyTorch 2.1 — the legacy identity extra supports torch>=2.0.0,
+        # so only pass it when the runtime understands it.
+        if hasattr(torch.onnx, "dynamo_export"):
+            export_kwargs["dynamo"] = use_dynamo
+        torch.onnx.export(model, model_input, str(output_path), **export_kwargs)
         return output_path
 
 
