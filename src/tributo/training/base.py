@@ -20,6 +20,21 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# ── Plugin helpers ────────────────────────────────────────────────────────────────
+
+_provider_plugins_loaded = False
+
+
+def _load_provider_plugins(registry: Any) -> None:
+    """Load source-provider plugins into *registry* (cached)."""
+    global _provider_plugins_loaded
+    if not _provider_plugins_loaded:
+        from tributo.plugin import discover_source_provider_plugins
+
+        for cls in discover_source_provider_plugins():
+            registry.register(cls)
+        _provider_plugins_loaded = True
+
 
 # ---------------------------------------------------------------------------
 # Backward-compatible alias (Phase 1: pure alias, no warning)
@@ -120,14 +135,28 @@ class BaseTrainer(ABC):
             output_path: Export destination (local path or S3 URI).
         """
 
-    def run(self, output_path: str) -> dict[str, Any]:
+    def run(
+        self,
+        output_path: str,
+        *,
+        bundle_config: Any | None = None,
+    ) -> dict[str, Any]:
         """Template Method: ``setup → training_loop → export_model``.
 
         Subclasses should write their actual results into ``self._summary``
         inside ``export_model``; this method returns that dict.
 
+        When *bundle_config* is set (a ``BundleOutputConfig`` with non-empty
+        ``targets``), the export path is routed through
+        ``BundleExportService`` instead of the legacy ``export_model()``
+        method.  This is the **bundle mode** entry point — it uses the
+        new export framework (planner → executor → publisher).
+
         Args:
-            output_path: Model export path.
+            output_path: Model export path (legacy mode).
+            bundle_config: Optional ``BundleOutputConfig`` for bundle-mode
+                export.  When provided and has non-empty targets, the
+                export is routed through the new bundle pipeline.
 
         Returns:
             A summary dict, containing at minimum ``{"status": "succeeded"}``.
@@ -151,7 +180,16 @@ class BaseTrainer(ABC):
                 except Exception as e:
                     logger.warning("Callback on_training_end failed: %s", e)
 
-            self.export_model(checkpoint, output_path)
+            # ── Bundle mode routing ──
+            if (
+                bundle_config is not None
+                and hasattr(bundle_config, "targets")
+                and bundle_config.targets is not None
+                and len(bundle_config.targets) > 0
+            ):
+                self._export_bundle(checkpoint, bundle_config)
+            else:
+                self.export_model(checkpoint, output_path)
 
             # Fire on_export_end
             for cb in self._callbacks:
@@ -185,3 +223,72 @@ class BaseTrainer(ABC):
             raise
 
         return self._summary
+
+    def _export_bundle(
+        self,
+        checkpoint: Any,
+        bundle_config: Any,
+    ) -> None:
+        """Route export through the new bundle pipeline.
+
+        Resolves a ``SourceProvider`` from the training checkpoint, creates
+        an ``ExportSource``, and delegates to ``BundleExportService``.
+        Results are written to ``self._summary``.
+
+        Args:
+            checkpoint: The training result (Ray Result or raw model).
+            bundle_config: A ``BundleOutputConfig`` with non-empty targets.
+        """
+        from tributo.exporting.service import BundleExportService
+        from tributo.exporting.registries import SourceProviderRegistry
+
+        # Resolve the source provider for this trainer type.
+        provider_registry = SourceProviderRegistry()
+        _load_provider_plugins(provider_registry)
+
+        trainer_type = self._get_trainer_type()
+        provider_cls = provider_registry.resolve(trainer_type)
+        provider = provider_cls()
+
+        # Open the source and run the bundle pipeline.
+        with provider.open_source(checkpoint) as source:
+            service = BundleExportService()
+            result = service.export_bundle(
+                source=source,
+                config=bundle_config,
+                provider=provider,
+                tributo_version=self._get_tributo_version(),
+            )
+
+        # Populate summary from bundle result.
+        self._summary.update({
+            "bundle_id": result.bundle_id,
+            "canonical_uri": result.canonical_uri,
+            "manifest_sha256": result.manifest_sha256,
+            "artifacts": [
+                {"name": a.name, "format": a.format, "tree_digest": a.tree_digest}
+                for a in result.artifacts
+            ],
+            "node_results": [
+                {"node_id": nr.node_id, "status": nr.status, "target_name": nr.target_name}
+                for nr in result.node_results
+            ],
+        })
+
+    @staticmethod
+    def _get_trainer_type() -> str:
+        """Return the trainer_type string for this trainer class.
+
+        Subclasses override this to declare their trainer type identity.
+        Default returns ``"xgboost"`` — the most common case.
+        """
+        return "xgboost"
+
+    @staticmethod
+    def _get_tributo_version() -> str:
+        """Return the current tributo version string."""
+        try:
+            from importlib.metadata import version
+            return version("tributo")
+        except Exception:
+            return "0.0.0"
