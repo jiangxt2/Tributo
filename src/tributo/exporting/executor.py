@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 from tributo.exceptions import JobExecutionError
+from tributo.exporting.errors import sanitize_error_message
 from tributo.exporting.models import (
     ArtifactDraft,
     ArtifactFile,
@@ -336,7 +337,7 @@ class ExportManager:
                 failure = FailureInfo(
                     code=type(exc).__name__,
                     category="export",
-                    message=str(exc)[:4096],
+                    message=sanitize_error_message(str(exc))[:4096],
                     retryable=False,
                 )
                 node_results[node_id] = NodeResult(
@@ -365,7 +366,9 @@ class ExportManager:
             nr.status in ("failed", "blocked") and nr.required for nr in all_explicit
         ):
             overall = "failed"
-        elif any(nr.status == "failed" for nr in all_explicit):
+        elif any(nr.status in ("failed", "blocked") for nr in all_explicit):
+            # Optional failures or blocked nodes (blocked by a failed
+            # dependency) make the execution partial, not succeeded.
             overall = "partial"
         else:
             overall = "succeeded"

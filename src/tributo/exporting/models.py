@@ -146,9 +146,8 @@ class BundleOutputConfig(BaseModel):
                         raise ValueError(f"target {t.name!r} cannot depend on itself")
             for role_name, _target_name in self.roles.items():
                 _validate_safe_name(role_name, "role name")
-                # Roles may reference implicit targets (upstream_requirements)
-                # that the planner resolves — skip the exists-in-targets check.
-                # The planner validates that all role targets resolve at plan time.
+                # Roles are validated by the planner (Phase 3): references
+                # to implicit targets are rejected there, not here.
         if self.alias is not None:
             if (
                 self.alias.policy == "newer"
@@ -156,6 +155,13 @@ class BundleOutputConfig(BaseModel):
             ):
                 raise ValueError(
                     "policy='newer' must not specify expected_manifest_sha256"
+                )
+            # Alias relies on S3 CAS semantics — reject local/file targets
+            # explicitly instead of silently dropping the alias.
+            if self.bundle_uri is not None and not self.bundle_uri.startswith("s3://"):
+                raise ValueError(
+                    f"alias is only supported with s3:// bundle URIs "
+                    f"(got {self.bundle_uri!r})"
                 )
         return self
 
@@ -177,6 +183,8 @@ class BundleOutputConfig(BaseModel):
             path = v[7:]
             if not path or path == "/":
                 raise ValueError("file:// URI must not point to filesystem root")
+            if not Path(v[7:]).is_absolute():
+                raise ValueError(f"file:// URI must be an absolute path, got {v!r}")
             return v
         if v.startswith("/") or v.startswith("./") or v.startswith("../"):
             # Reject paths that resolve to filesystem root.
@@ -324,7 +332,7 @@ class LogicalArtifact(BaseModel):
                 }
                 for f in files
             ],
-            key=lambda r: str(r["path"]),
+            key=lambda r: str(r["path"]).encode("utf-8"),
         )
         payload = json.dumps(
             records, sort_keys=True, separators=(",", ":"), ensure_ascii=False

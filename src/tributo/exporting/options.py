@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 from tributo.util.annotations import PublicAPI
 
@@ -54,7 +54,8 @@ class TorchONNXOptions(BaseModel):
     # Bundle mode defaults to the TorchDynamo exporter path (PyTorch >= 2.5
     # recommended path per the export plan); legacy single-path export keeps
     # its own ``dynamo=False`` default and is unaffected by this option.
-    opset: int = Field(default=18, ge=12, le=21)
+    # Opset is locked to 18 — the plan only promises CI-verified values.
+    opset: Literal[18] = 18
     dynamo: bool = True
     external_data: bool = False
 

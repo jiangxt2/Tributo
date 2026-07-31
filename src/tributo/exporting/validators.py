@@ -1,20 +1,18 @@
-"""Built-in export validators — structure, roundtrip, and parity.
+"""Built-in export validators.
 
-Three required validators for first-party exporters:
-
-- ``StructureValidator``: file integrity, format detection, signature, path safety.
-- ``RoundtripValidator``: reload artifact with target runtime.
-- ``ParityValidator``: compare source model vs exported model outputs.
-
-Each validator declares its own typed options model (``extra="forbid"``).
+First phase ships ``StructureValidator`` only — the plan scopes the
+required validation chain to file integrity, format detection, signature
+and path safety.  Roundtrip and parity validators are planned for a later
+PR (explicitly deferred, not silently stubbed).
 """
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, Mapping
+from typing import ClassVar, Mapping
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
+from tributo.exporting.errors import sanitize_error_message
 from tributo.exporting.models import (
     ExportSource,
     FailureInfo,
@@ -75,7 +73,7 @@ class StructureValidator:
             # Verify all declared files.
             for af in artifact.descriptor.files:
                 fp = (root / af.relative_path).resolve()
-                if not str(fp).startswith(str(root)):
+                if not fp.is_relative_to(root):
                     return ValidationResult(
                         validator_id=self.validator_id,
                         status="failed",
@@ -118,104 +116,6 @@ class StructureValidator:
                 failure=FailureInfo(
                     code="STRUCTURE_ERROR",
                     category="validation",
-                    message=str(exc)[:4096],
+                    message=sanitize_error_message(str(exc))[:4096],
                 ),
             )
-
-
-# ── RoundtripValidator ──────────────────────────────────────────────────────
-
-
-@PublicAPI(stability="beta")
-class RoundtripValidatorOptions(BaseModel):
-    """Options for ``RoundtripValidator``."""
-
-    model_config = ConfigDict(extra="forbid")
-
-
-@PublicAPI(stability="beta")
-class RoundtripValidator:
-    """Validates that the artifact can be reloaded by the target runtime.
-
-    This is a base implementation that self-reports as passed when the
-    target runtime is not installed (e.g. ONNX Runtime unavailable during
-    CI).  Concrete exporters should register a format-specific roundtrip
-    validator.
-    """
-
-    api_version: ClassVar[int] = 1
-    validator_id: ClassVar[str] = "roundtrip-v1"
-    options_model: ClassVar[type[BaseModel]] = RoundtripValidatorOptions
-
-    def validate(
-        self,
-        source: ExportSource,
-        artifact: ResolvedArtifact,
-        upstream: Mapping[str, ResolvedArtifact],
-        options: BaseModel,
-    ) -> ValidationResult:
-        return ValidationResult(
-            validator_id=self.validator_id,
-            status="passed",
-            metrics={},
-        )
-
-
-# ── ParityValidator ─────────────────────────────────────────────────────────
-
-
-@PublicAPI(stability="beta")
-class ParityValidatorOptions(BaseModel):
-    """Typed options for ``ParityValidator``.
-
-    Each exporter should subclass or provide its own options model with
-    format-specific thresholds.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    absolute_error: float | None = Field(default=None, ge=0)
-    relative_error: float | None = Field(default=None, ge=0)
-    cosine_similarity: float | None = Field(default=None, ge=0, le=1)
-    classification_agreement: float | None = Field(default=None, ge=0, le=1)
-
-
-@PublicAPI(stability="beta")
-class ParityValidator:
-    """Compares source model vs exported model outputs.
-
-    Base implementation self-reports as passed when no parity input is
-    available.  Concrete exporters must register a format-specific parity
-    validator that performs actual inference comparison.
-    """
-
-    api_version: ClassVar[int] = 1
-    validator_id: ClassVar[str] = "parity-v1"
-    options_model: ClassVar[type[BaseModel]] = ParityValidatorOptions
-
-    def validate(
-        self,
-        source: ExportSource,
-        artifact: ResolvedArtifact,
-        upstream: Mapping[str, ResolvedArtifact],
-        options: BaseModel,
-    ) -> ValidationResult:
-        opts: Any = options
-        thresholds: dict[str, float] = {}
-        if isinstance(opts, ParityValidatorOptions):
-            for key in (
-                "absolute_error",
-                "relative_error",
-                "cosine_similarity",
-                "classification_agreement",
-            ):
-                v = getattr(opts, key, None)
-                if v is not None:
-                    thresholds[key] = v
-
-        return ValidationResult(
-            validator_id=self.validator_id,
-            status="passed",
-            metrics={},
-            thresholds=thresholds,
-        )
