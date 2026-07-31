@@ -9,8 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict
-from typing import ClassVar, Mapping
+from typing import Any, ClassVar, Mapping
 
 from tributo.training.exporters.artifact_protocol import ARTIFACT_KIND_REPORT
 from tributo.training.exporters.models import (
@@ -70,9 +69,12 @@ class CausalReportExporter:
             )
 
         # Normalise dataclass objects to dicts for JSON serialisation.
-        def _serialise(obj: object) -> object:
+        # We use manual field extraction instead of dataclasses.asdict()
+        # because json.dump's default callback receives Any, which doesn't
+        # match asdict's strict DataclassInstance overload signature.
+        def _serialise(obj: Any) -> Any:
             if hasattr(obj, "__dataclass_fields__"):
-                return asdict(obj)  # type: ignore[arg-type]
+                return {f: getattr(obj, f) for f in obj.__dataclass_fields__}
             raise TypeError(f"Cannot serialise {type(obj).__name__}")
 
         report = {
