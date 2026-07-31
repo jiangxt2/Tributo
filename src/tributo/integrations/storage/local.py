@@ -177,7 +177,7 @@ class LocalBundleRepository:
         alias_path = alias_dir / f"{alias}.json"
 
         alias_data = {
-            "manifest_uri": new_ref.manifest_sha256,
+            "manifest_sha256": new_ref.manifest_sha256,
             "canonical_uri": new_ref.canonical_uri,
             "bundle_id": new_ref.bundle_id,
         }
@@ -186,7 +186,7 @@ class LocalBundleRepository:
         if expected_revision is not None:
             if alias_path.exists():
                 current = json.loads(alias_path.read_bytes())
-                current_sha = current.get("manifest_uri", "")
+                current_sha = current.get("manifest_sha256", "")
                 if current_sha != expected_revision:
                     return AliasUpdateResult(
                         alias=alias,

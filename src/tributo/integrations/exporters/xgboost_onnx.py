@@ -87,23 +87,15 @@ class XGBoostONNXExporter:
         from onnxmltools.convert.common.data_types import FloatTensorType
 
         booster: xgboost.Booster = source.model_object
-        n_features: int = target.typed_options.get("n_features", 0)
 
-        if n_features <= 0:
-            # Infer n_features from feature_names or sample_inputs.
-            if booster.feature_names is not None:
-                n_features = len(booster.feature_names)
-            elif source.sample_inputs is not None:
-                sample = source.sample_inputs
-                if hasattr(sample, "shape"):
-                    n_features = int(sample.shape[-1])
-                elif isinstance(sample, (list, tuple)):
-                    n_features = len(sample)
-            if n_features <= 0:
-                raise ValueError(
-                    "Cannot determine n_features: set it via target options "
-                    "(e.g. {n_features: 10}) or provide feature_names on the booster"
-                )
+        # Infer n_features from the booster's feature_names.
+        if booster.feature_names is not None:
+            n_features = len(booster.feature_names)
+        else:
+            raise ValueError(
+                "Cannot determine n_features: please set feature_names "
+                "on the XGBoost booster before calling this exporter"
+            )
 
         # Save original feature names for ONNX metadata.
         original_names = booster.feature_names
