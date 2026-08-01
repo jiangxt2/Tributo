@@ -11,6 +11,7 @@ from typing import Any, ClassVar, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from tributo.exceptions import PostPublishCallbackError
 from tributo.util.annotations import PublicAPI
 
 # ── Data models ────────────────────────────────────────────────────────────────
@@ -118,15 +119,19 @@ class PublicationRunner:
         # The manifest JSON on disk carries no ``_manifest_sha256`` key —
         # surface the publisher's canonical digest so hooks that read it
         # (e.g. the MLflow hook) report the value consumers verify
-        # against, not a re-computed fallback.
-        manifest["_manifest_sha256"] = manifest_sha256
+        # against, not a re-computed fallback.  Copy the dict so the
+        # caller's manifest is never mutated.
+        manifest = {**manifest, "_manifest_sha256": manifest_sha256}
 
         receipts: list[HookReceipt] = []
         for hook, options, required in self._hooks:
             receipt = hook.execute(canonical_uri, manifest, options, local_bundle_dir)
             receipts.append(receipt)
             if receipt.status == "failed" and required:
-                raise RuntimeError(
-                    f"Required hook {hook.hook_id!r} failed: {receipt.error}"
-                )
+                # Same "bundle published, post-processing failed" semantics
+                # as the service-level callback — callers handle one type.
+                raise PostPublishCallbackError(
+                    f"Required hook {hook.hook_id!r} failed: {receipt.error}",
+                    bundle_result=None,
+                ) from None
         return receipts

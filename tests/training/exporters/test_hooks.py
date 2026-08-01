@@ -15,6 +15,7 @@ from typing import Any, ClassVar
 
 import pytest
 
+from tributo.exceptions import PostPublishCallbackError
 from tributo.exporting.hooks import HookReceipt, PublicationRunner
 from tributo.integrations.hooks.mlflow_hook import MLflowPostPublishHook
 
@@ -84,7 +85,7 @@ class TestPublicationRunner:
         hook = _FailingHook()
         runner = PublicationRunner([(hook, {}, True)])
 
-        with pytest.raises(RuntimeError, match="Required hook"):
+        with pytest.raises(PostPublishCallbackError, match="Required hook"):
             runner.run("s3://b/models/x/", {"bundle_id": "b"}, "d" * 64)
 
 
