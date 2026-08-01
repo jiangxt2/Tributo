@@ -564,7 +564,7 @@ class PUTrainerImpl(BaseTrainer):
 
     @staticmethod
     def _get_trainer_type() -> str:
-        return "dnn"
+        return "pu"
 
 
 # ── Orchestration entry points ──
