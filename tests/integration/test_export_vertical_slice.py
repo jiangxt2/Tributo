@@ -17,6 +17,10 @@ xgboost = pytest.importorskip("xgboost", reason="xgboost not installed")
 onnxmltools = pytest.importorskip("onnxmltools", reason="onnxmltools not installed")
 numpy = pytest.importorskip("numpy", reason="numpy not installed")
 
+# Needs optional deps (xgboost/onnxmltools) — owned by the future
+# export-xgboost job, so the unit job skips this module entirely.
+pytestmark = pytest.mark.integration
+
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 

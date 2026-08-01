@@ -31,7 +31,6 @@ jobs:
               - "src/**"
               - "tests/**"
               - "pyproject.toml"
-              - "uv.lock"
               - ".github/actions/**"
               - ".github/workflows/**"
               - "scripts/**"
