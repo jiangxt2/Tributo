@@ -7,6 +7,7 @@ self-contained, and include the graph IR plus parameters.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import logging
 from typing import Any, ClassVar, Mapping
@@ -71,21 +72,20 @@ class TorchExportExporter:
                 code="UNSUPPORTED_SOURCE_KIND",
                 reason=f"Expected dnn_result/torch_module, got {request.source_kind!r}",
             )
-        try:
-            import torch  # noqa: F401
-
-            if not hasattr(torch, "export"):
-                return SupportResult(
-                    supported=False,
-                    code="TORCH_EXPORT_UNAVAILABLE",
-                    reason="torch.export requires PyTorch >= 2.1",
-                )
-        except ImportError as exc:
+        if importlib.util.find_spec("torch") is None:
             return SupportResult(
                 supported=False,
                 code="MISSING_DEPENDENCY",
-                reason=f"torch not available: {exc}",
+                reason="torch not available",
                 missing_dependencies=("torch>=2.1",),
+            )
+        import torch
+
+        if not hasattr(torch, "export"):
+            return SupportResult(
+                supported=False,
+                code="TORCH_EXPORT_UNAVAILABLE",
+                reason="torch.export requires PyTorch >= 2.1",
             )
         return SupportResult(supported=True, code="OK")
 

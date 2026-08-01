@@ -6,6 +6,7 @@ format.  Picks UBJ by default (compact binary, ~½ the size of JSON).
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import logging
 from typing import Any, ClassVar, Mapping
@@ -59,13 +60,11 @@ class XGBoostNativeExporter:
                 code="UNSUPPORTED_SOURCE_KIND",
                 reason=f"Expected source_kind='xgboost_result', got {request.source_kind!r}",
             )
-        try:
-            import xgboost  # noqa: F401
-        except ImportError as exc:
+        if importlib.util.find_spec("xgboost") is None:
             return SupportResult(
                 supported=False,
                 code="MISSING_DEPENDENCY",
-                reason=f"xgboost not available: {exc}",
+                reason="xgboost not available",
                 missing_dependencies=("xgboost",),
             )
         return SupportResult(supported=True, code="OK")

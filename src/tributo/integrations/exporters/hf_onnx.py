@@ -6,6 +6,7 @@ to export a HuggingFace model to ONNX format.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import logging
 from pathlib import Path
@@ -65,9 +66,7 @@ class HuggingFaceONNXExporter:
                 code="UNSUPPORTED_SOURCE_KIND",
                 reason=f"Expected hf_model/transformers source_kind, got {request.source_kind!r}",
             )
-        try:
-            import transformers  # noqa: F401
-        except ImportError:
+        if importlib.util.find_spec("transformers") is None:
             return SupportResult(
                 supported=False,
                 code="MISSING_DEPENDENCY",

@@ -6,6 +6,7 @@ conversion in a protocol-conformant class.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import logging
 from typing import Any, ClassVar, Mapping
@@ -67,14 +68,14 @@ class XGBoostONNXExporter:
                 reason=f"Expected source_kind='xgboost_result', got {request.source_kind!r}",
             )
         # Verify onnxmltools + xgboost are available.
-        try:
-            import onnxmltools  # noqa: F401
-            import xgboost  # noqa: F401
-        except ImportError as exc:
+        if (
+            importlib.util.find_spec("onnxmltools") is None
+            or importlib.util.find_spec("xgboost") is None
+        ):
             return SupportResult(
                 supported=False,
                 code="MISSING_DEPENDENCY",
-                reason=f"onnxmltools/xgboost not available: {exc}",
+                reason="onnxmltools/xgboost not available",
                 missing_dependencies=("onnxmltools", "xgboost"),
             )
         if request.source_metadata.get("has_categorical_features"):
@@ -158,13 +159,13 @@ class XGBoostONNXExporter:
 
             if is_classification:
                 wrapper = xgboost.XGBClassifier()
-                wrapper._Booster = booster  # noqa: SLF001
+                wrapper._Booster = booster
                 n_classes = int(num_class_raw or 0) or 2
                 wrapper.__dict__["n_classes_"] = n_classes
                 wrapper.__dict__["classes_"] = np.arange(n_classes)
             else:
                 wrapper = xgboost.XGBRegressor()
-                wrapper._Booster = booster  # noqa: SLF001
+                wrapper._Booster = booster
 
             initial_types = [("float_input", FloatTensorType([None, n_features]))]
             opset = target.typed_options.get("opset", 12)

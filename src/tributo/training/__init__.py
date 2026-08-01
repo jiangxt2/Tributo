@@ -26,6 +26,7 @@ from __future__ import annotations
 import logging
 
 from tributo.exceptions import JobConfigurationError
+from tributo.plugin import discover_trainer_plugins
 from tributo.training.algorithm_spec import (
     AlgorithmSpec,
     AlgorithmStatus,
@@ -38,11 +39,14 @@ from tributo.training.algorithm_spec import (
     ResourceHints,
 )
 from tributo.training.base import BaseTrainer, TrainerSpec
+from tributo.training.catalog import get_algorithm_catalog as _get_catalog
+from tributo.training.graph_trainer import BaseGraphTrainer
 from tributo.training.job_submitter import (
     submit_training_job,
     wait_for_job,
 )
 from tributo.training.onnx_exporter import export_to_onnx
+from tributo.training.priors import estimate_class_prior
 from tributo.training.registry import get_trainer, list_trainers, register
 from tributo.training.tune_config import TuneSearchConfig
 from tributo.training.tune_runner import TuneRunner, extract_best_params
@@ -64,9 +68,9 @@ logger = logging.getLogger(__name__)
 # DNN trainer (lazy import, avoids requiring torch unconditionally)
 try:
     from tributo.training.dnn_trainer import (
-        DNNTrainerImpl,  # noqa: F401
-        run_dnn_training_from_json,  # noqa: F401
-        run_dnn_training_with_config,  # noqa: F401
+        DNNTrainerImpl,
+        run_dnn_training_from_json,
+        run_dnn_training_with_config,
     )
 
     _has_dnn = True
@@ -76,9 +80,9 @@ except ImportError:
 # PU trainer (lazy import, requires torch)
 try:
     from tributo.training.pu_trainer import (
-        PUTrainerImpl,  # noqa: F401
-        run_pu_training_from_json,  # noqa: F401
-        run_pu_training_with_config,  # noqa: F401
+        PUTrainerImpl,
+        run_pu_training_from_json,
+        run_pu_training_with_config,
     )
 
     _has_pu = True
@@ -88,12 +92,10 @@ except ImportError:
 # Class prior estimation (pure numpy, always available)
 # BaseGraphTrainer has no hard dependency on torch/PyG — all graph-library
 # imports happen inside the user's build_graph/build_sampler implementation.
-from tributo.training.graph_trainer import BaseGraphTrainer  # noqa: E402
-from tributo.training.priors import estimate_class_prior  # noqa: E402
 
 # Causal estimator (lazy import, requires dowhy + econml)
 try:
-    from tributo.training.causal_estimator import (  # noqa: F401
+    from tributo.training.causal_estimator import (
         BaseCausalEstimator,
         CausalEffect,
         CausalGraph,
@@ -147,38 +149,30 @@ __all__ = [
 
 # Dynamically export causal-related symbols (if dowhy + econml available)
 if _has_causal:
-    __all__.extend(
-        [
-            "BaseCausalEstimator",
-            "CausalEffect",
-            "CausalGraph",
-            "RefutationResult",
-        ]
-    )
+    __all__ += [
+        "BaseCausalEstimator",
+        "CausalEffect",
+        "CausalGraph",
+        "RefutationResult",
+    ]
 
 # Dynamically export DNN-related symbols (if torch is available)
 if _has_dnn:
-    __all__.extend(
-        [
-            "DNNTrainerImpl",
-            "run_dnn_training_from_json",
-            "run_dnn_training_with_config",
-        ]
-    )
+    __all__ += [
+        "DNNTrainerImpl",
+        "run_dnn_training_from_json",
+        "run_dnn_training_with_config",
+    ]
 
 # Dynamically export PU-related symbols (if torch is available)
 if _has_pu:
-    __all__.extend(
-        [
-            "PUTrainerImpl",
-            "run_pu_training_from_json",
-            "run_pu_training_with_config",
-        ]
-    )
+    __all__ += [
+        "PUTrainerImpl",
+        "run_pu_training_from_json",
+        "run_pu_training_with_config",
+    ]
 
 # Auto-discover third-party trainer plugins via entry_points
-from tributo.plugin import discover_trainer_plugins  # noqa: E402
-
 for _ep_spec in discover_trainer_plugins():
     from tributo.training.registry import register as _reg
 
@@ -191,8 +185,6 @@ for _ep_spec in discover_trainer_plugins():
         )
 
 # Phase 3 integrity gate: validate replacement graph after all plugins loaded.
-from tributo.training.catalog import get_algorithm_catalog as _get_catalog  # noqa: E402
-
 try:
     _get_catalog().validate_integrity()
 except JobConfigurationError:

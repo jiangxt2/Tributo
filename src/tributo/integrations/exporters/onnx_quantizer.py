@@ -12,6 +12,7 @@ and discarded transparently.
 
 from __future__ import annotations
 
+import importlib.util
 import logging
 import shutil
 from typing import Any, ClassVar, Mapping
@@ -81,13 +82,11 @@ class ONNXQuantizer:
                     "(format='onnx' in depends_on)"
                 ),
             )
-        try:
-            import onnxruntime.quantization  # noqa: F401
-        except ImportError as exc:
+        if importlib.util.find_spec("onnxruntime.quantization") is None:
             return SupportResult(
                 supported=False,
                 code="MISSING_DEPENDENCY",
-                reason=f"onnxruntime not available: {exc}",
+                reason="onnxruntime not available",
                 missing_dependencies=("onnxruntime",),
             )
         return SupportResult(supported=True, code="OK")

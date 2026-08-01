@@ -13,6 +13,7 @@ Design principles (inspired by Ray _common/utils.py):
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import logging
 import os
@@ -267,12 +268,10 @@ def download_from_s3(
     Raises:
         ImportError: boto3 is not installed.
     """
-    try:
-        import boto3  # noqa: F401
-    except ImportError as e:
+    if importlib.util.find_spec("boto3") is None:
         raise ImportError(
             "boto3 is required for S3 download. Install with: pip install boto3"
-        ) from e
+        )
 
     bucket, key = parse_s3_url(s3_uri)
     if local_dir is None:

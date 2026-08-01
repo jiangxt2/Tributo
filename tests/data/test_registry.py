@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import sys
 
 import pytest
@@ -18,18 +19,10 @@ class TestRegistry:
         """内置连接器应已注册。"""
         connectors = list_connectors()
         assert "parquet" in connectors
-        try:
-            import lance  # noqa: F401
-
+        if importlib.util.find_spec("lance") is not None:
             assert "lance" in connectors
-        except ImportError:
-            pass
-        try:
-            import pyiceberg  # noqa: F401
-
+        if importlib.util.find_spec("pyiceberg") is not None:
             assert "iceberg" in connectors
-        except ImportError:
-            pass
 
     def test_get_connector_returns_instance(self):
         connector = get_connector("parquet")
