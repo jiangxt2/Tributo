@@ -185,11 +185,6 @@ def _read_manifest_v1(raw: dict[str, Any], canonical_bytes: bytes) -> ExportMani
             for a in artifacts
         )
     manifest = ExportManifest(**raw)
-    declared_digest = raw.get("_manifest_sha256")
-    if declared_digest is not None:
-        # The digest field should NOT be in the manifest itself — but if a
-        # pre-release version included it, skip the check rather than failing.
-        pass
     return manifest
 
 

@@ -219,9 +219,10 @@ def _copy_tree_fsync(src: Path, dst: Path) -> None:
 def _local_identical_manifest(final_dir: Path, manifest_bytes: bytes) -> bytes | None:
     """Return the existing manifest bytes if *final_dir* holds the same bundle.
 
-    Compares bundle_id + artifact tree digests semantically (mirrors the
-    S3 logical comparison).  Returns None when the directory is missing,
-    has no manifest, or holds different content.
+    Compares bundle_id + artifact tree digests semantically — a subset of
+    the S3 logical comparison (roles/source_info changes are not detected
+    locally).  Returns None when the directory is missing, has no manifest,
+    or holds different content.
     """
     existing_manifest_path = final_dir / "manifest.json"
     if not existing_manifest_path.is_file():
