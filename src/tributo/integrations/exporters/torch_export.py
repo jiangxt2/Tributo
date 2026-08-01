@@ -7,13 +7,13 @@ self-contained, and include the graph IR plus parameters.
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import logging
 from typing import Any, ClassVar, Mapping
 
 from pydantic import BaseModel, ConfigDict
 
+from tributo._common.dependencies import TORCH, DependencyState, probe_dependency
 from tributo.exporting.models import (
     ArtifactDraft,
     DraftFile,
@@ -72,20 +72,12 @@ class TorchExportExporter:
                 code="UNSUPPORTED_SOURCE_KIND",
                 reason=f"Expected dnn_result/torch_module, got {request.source_kind!r}",
             )
-        if importlib.util.find_spec("torch") is None:
+        if probe_dependency(TORCH).state is not DependencyState.AVAILABLE:
             return SupportResult(
                 supported=False,
                 code="MISSING_DEPENDENCY",
-                reason="torch not available",
-                missing_dependencies=("torch>=2.1",),
-            )
-        import torch
-
-        if not hasattr(torch, "export"):
-            return SupportResult(
-                supported=False,
-                code="TORCH_EXPORT_UNAVAILABLE",
-                reason="torch.export requires PyTorch >= 2.1",
+                reason="torch>=2.5.0 required",
+                missing_dependencies=("torch",),
             )
         return SupportResult(supported=True, code="OK")
 

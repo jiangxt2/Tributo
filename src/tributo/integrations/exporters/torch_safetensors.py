@@ -6,13 +6,18 @@ optional sharding.  Uses ``safetensors.torch.save_file``.
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import logging
 from typing import Any, ClassVar, Mapping
 
 from pydantic import BaseModel
 
+from tributo._common.dependencies import (
+    SAFETENSORS,
+    TORCH,
+    DependencyState,
+    probe_dependency,
+)
 from tributo.exporting.models import (
     ArtifactDraft,
     DraftFile,
@@ -60,15 +65,17 @@ class TorchSafetensorsExporter:
                 code="UNSUPPORTED_SOURCE_KIND",
                 reason=f"Expected source_kind='dnn_result' or 'torch_module', got {request.source_kind!r}",
             )
-        if (
-            importlib.util.find_spec("safetensors") is None
-            or importlib.util.find_spec("torch") is None
-        ):
+        missing: list[str] = []
+        if probe_dependency(SAFETENSORS).state is not DependencyState.AVAILABLE:
+            missing.append("safetensors")
+        if probe_dependency(TORCH).state is not DependencyState.AVAILABLE:
+            missing.append("torch")
+        if missing:
             return SupportResult(
                 supported=False,
                 code="MISSING_DEPENDENCY",
-                reason="safetensors/torch not available",
-                missing_dependencies=("safetensors", "torch"),
+                reason="safetensors>=0.4.3/torch>=2.5.0 required",
+                missing_dependencies=tuple(missing),
             )
         return SupportResult(supported=True, code="OK")
 

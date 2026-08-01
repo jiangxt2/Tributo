@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
-import importlib.util
 import sys
 
 import pytest
 
+from tributo._common.dependencies import (
+    LANCE,
+    PYICEBERG,
+    DependencyState,
+    probe_dependency,
+)
 from tributo.data.base import DataConnector
 from tributo.data.registry import get_connector, list_connectors, register_connector
 from tributo.exceptions import JobConfigurationError
@@ -19,9 +24,9 @@ class TestRegistry:
         """内置连接器应已注册。"""
         connectors = list_connectors()
         assert "parquet" in connectors
-        if importlib.util.find_spec("lance") is not None:
+        if probe_dependency(LANCE).state is DependencyState.AVAILABLE:
             assert "lance" in connectors
-        if importlib.util.find_spec("pyiceberg") is not None:
+        if probe_dependency(PYICEBERG).state is DependencyState.AVAILABLE:
             assert "iceberg" in connectors
 
     def test_get_connector_returns_instance(self):

@@ -6,7 +6,6 @@ to export a HuggingFace model to ONNX format.
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import logging
 from pathlib import Path
@@ -14,6 +13,12 @@ from typing import Any, ClassVar, Mapping
 
 from pydantic import BaseModel
 
+from tributo._common.dependencies import (
+    TORCH,
+    TRANSFORMERS,
+    DependencyState,
+    probe_dependency,
+)
 from tributo.exporting.models import (
     ArtifactDraft,
     DraftFile,
@@ -66,12 +71,17 @@ class HuggingFaceONNXExporter:
                 code="UNSUPPORTED_SOURCE_KIND",
                 reason=f"Expected hf_model/transformers source_kind, got {request.source_kind!r}",
             )
-        if importlib.util.find_spec("transformers") is None:
+        missing: list[str] = []
+        if probe_dependency(TRANSFORMERS).state is not DependencyState.AVAILABLE:
+            missing.append("transformers")
+        if probe_dependency(TORCH).state is not DependencyState.AVAILABLE:
+            missing.append("torch")
+        if missing:
             return SupportResult(
                 supported=False,
                 code="MISSING_DEPENDENCY",
-                reason="transformers not installed",
-                missing_dependencies=("transformers",),
+                reason="transformers>=4.40.0/torch>=2.5.0 required",
+                missing_dependencies=tuple(missing),
             )
         return SupportResult(supported=True, code="OK")
 

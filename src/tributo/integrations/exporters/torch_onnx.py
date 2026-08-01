@@ -7,7 +7,6 @@ uses the TorchDynamo ONNX exporter which produces a more optimised graph.
 
 from __future__ import annotations
 
-import importlib.util
 import inspect
 import json
 import logging
@@ -15,6 +14,7 @@ from typing import Any, ClassVar, Mapping
 
 from pydantic import BaseModel
 
+from tributo._common.dependencies import DependencyState, TORCH, probe_dependency
 from tributo.exporting.models import (
     ArtifactDraft,
     DraftFile,
@@ -75,11 +75,11 @@ class TorchONNXExporter:
                     f"got {request.source_kind!r}"
                 ),
             )
-        if importlib.util.find_spec("torch") is None:
+        if probe_dependency(TORCH).state is not DependencyState.AVAILABLE:
             return SupportResult(
                 supported=False,
                 code="MISSING_DEPENDENCY",
-                reason="torch not available",
+                reason="torch>=2.5.0 required",
                 missing_dependencies=("torch",),
             )
         return SupportResult(supported=True, code="OK")

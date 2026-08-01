@@ -6,13 +6,13 @@ format.  Picks UBJ by default (compact binary, ~½ the size of JSON).
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import logging
 from typing import Any, ClassVar, Mapping
 
 from pydantic import BaseModel
 
+from tributo._common.dependencies import XGBOOST, DependencyState, probe_dependency
 from tributo.exporting.models import (
     ArtifactDraft,
     DraftFile,
@@ -60,11 +60,11 @@ class XGBoostNativeExporter:
                 code="UNSUPPORTED_SOURCE_KIND",
                 reason=f"Expected source_kind='xgboost_result', got {request.source_kind!r}",
             )
-        if importlib.util.find_spec("xgboost") is None:
+        if probe_dependency(XGBOOST).state is not DependencyState.AVAILABLE:
             return SupportResult(
                 supported=False,
                 code="MISSING_DEPENDENCY",
-                reason="xgboost not available",
+                reason="xgboost>=2.1.0 required",
                 missing_dependencies=("xgboost",),
             )
         return SupportResult(supported=True, code="OK")

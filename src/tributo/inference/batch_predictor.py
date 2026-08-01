@@ -17,6 +17,7 @@ import numpy as np
 if TYPE_CHECKING:
     from tributo.exporting.runtime import BundleModelRuntime
 
+from tributo._common.dependencies import BOTO3, require_dependency
 from tributo.exceptions import DataSourceError, JobConfigurationError
 from tributo.inference.base import BasePredictor
 from tributo.util.annotations import PublicAPI
@@ -118,8 +119,7 @@ class XGBoostONNXPredictor(BasePredictor):
             import tempfile
             import uuid
 
-            if importlib.util.find_spec("boto3") is None:
-                raise JobConfigurationError("boto3 is required for S3 model download.")
+            require_dependency(BOTO3)
 
             cache_dir = Path(tempfile.gettempdir()) / "tributo_onnx" / str(uuid.uuid4())
             cache_dir.mkdir(parents=True, exist_ok=True)
@@ -262,8 +262,7 @@ class XGBoostONNXPredictor(BasePredictor):
         import tempfile
         import uuid
 
-        if importlib.util.find_spec("boto3") is None:
-            raise JobConfigurationError("boto3 is required for S3 model download.")
+        require_dependency(BOTO3)
 
         cache_dir = Path(tempfile.gettempdir()) / "tributo_onnx" / str(uuid.uuid4())
         cache_dir.mkdir(parents=True, exist_ok=True)

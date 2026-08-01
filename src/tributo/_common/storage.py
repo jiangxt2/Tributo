@@ -13,7 +13,6 @@ Design principles (inspired by Ray _common/utils.py):
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import logging
 import os
@@ -22,6 +21,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from tributo._common.dependencies import BOTO3, require_dependency
 from tributo.util.annotations import DeveloperAPI
 
 logger = logging.getLogger(__name__)
@@ -266,12 +266,9 @@ def download_from_s3(
         Local file path.
 
     Raises:
-        ImportError: boto3 is not installed.
+        MissingOptionalDependency: boto3 is not installed.
     """
-    if importlib.util.find_spec("boto3") is None:
-        raise ImportError(
-            "boto3 is required for S3 download. Install with: pip install boto3"
-        )
+    require_dependency(BOTO3)
 
     bucket, key = parse_s3_url(s3_uri)
     if local_dir is None:

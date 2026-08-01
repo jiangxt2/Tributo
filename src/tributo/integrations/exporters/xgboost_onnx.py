@@ -6,13 +6,18 @@ conversion in a protocol-conformant class.
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import logging
 from typing import Any, ClassVar, Mapping
 
 from pydantic import BaseModel
 
+from tributo._common.dependencies import (
+    ONNXMLTOOLS,
+    XGBOOST,
+    DependencyState,
+    probe_dependency,
+)
 from tributo.exporting.models import (
     ArtifactDraft,
     DraftFile,
@@ -68,15 +73,17 @@ class XGBoostONNXExporter:
                 reason=f"Expected source_kind='xgboost_result', got {request.source_kind!r}",
             )
         # Verify onnxmltools + xgboost are available.
-        if (
-            importlib.util.find_spec("onnxmltools") is None
-            or importlib.util.find_spec("xgboost") is None
-        ):
+        missing: list[str] = []
+        if probe_dependency(ONNXMLTOOLS).state is not DependencyState.AVAILABLE:
+            missing.append("onnxmltools")
+        if probe_dependency(XGBOOST).state is not DependencyState.AVAILABLE:
+            missing.append("xgboost")
+        if missing:
             return SupportResult(
                 supported=False,
                 code="MISSING_DEPENDENCY",
-                reason="onnxmltools/xgboost not available",
-                missing_dependencies=("onnxmltools", "xgboost"),
+                reason="onnxmltools>=1.13.0/xgboost>=2.1.0 required",
+                missing_dependencies=tuple(missing),
             )
         if request.source_metadata.get("has_categorical_features"):
             return SupportResult(
