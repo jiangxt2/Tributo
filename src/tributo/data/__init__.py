@@ -13,27 +13,13 @@ Usage example::
 
 from __future__ import annotations
 
+import importlib
 import logging
 
-from tributo.exceptions import JobConfigurationError
-
-logger = logging.getLogger(__name__)
-
-# Trigger built-in connector registration (must be after registry import).
-# iceberg/lance are optional dependencies — skip registration when not installed.
-try:
-    import tributo.data.iceberg  # noqa: F401, I001
-except ImportError:
-    pass
-try:
-    import tributo.data.lance  # noqa: F401, I001
-except ImportError:
-    pass
-import tributo.data.parquet  # noqa: E402, F401, I001
-from tributo.data.base import DataConnector, S3Config, WriteMode  # noqa: E402
-from tributo.data.graph import GraphDataBundle, GraphSchema  # noqa: E402
-from tributo.data.registry import get_connector, list_connectors, register_connector  # noqa: E402
-from tributo.data.source_config import (  # noqa: E402
+from tributo.data.base import DataConnector, S3Config, WriteMode
+from tributo.data.graph import GraphDataBundle, GraphSchema
+from tributo.data.registry import get_connector, list_connectors, register_connector
+from tributo.data.source_config import (
     CsvSourceConfig,
     IcebergSourceConfig,
     LegacyConfigNormalizer,
@@ -44,6 +30,27 @@ from tributo.data.source_config import (  # noqa: E402
     SqlPartitioning,
     SqlSourceConfig,
 )
+from tributo.exceptions import JobConfigurationError
+from tributo.plugin import discover_connector_plugins
+
+logger = logging.getLogger(__name__)
+
+# Trigger built-in connector registration (must be after registry import):
+# connectors register themselves via module-level register_connector()
+# calls (parquet.py/lance.py/iceberg.py), so the registry must be loaded
+# before the importlib.import_module() calls below. Never move connector
+# registration into registry/source_config module init — that would
+# create an import cycle with data/__init__.py.
+# iceberg/lance are optional dependencies — skip registration when not installed.
+try:
+    importlib.import_module("tributo.data.iceberg")
+except ImportError:
+    pass
+try:
+    importlib.import_module("tributo.data.lance")
+except ImportError:
+    pass
+importlib.import_module("tributo.data.parquet")
 
 __all__ = [
     # Abstract base classes and config
@@ -70,8 +77,6 @@ __all__ = [
 ]
 
 # Auto-discover third-party connector plugins via entry_points
-from tributo.plugin import discover_connector_plugins  # noqa: E402
-
 for _ep_cls in discover_connector_plugins():
     from tributo.data.registry import register_connector as _reg_conn
 

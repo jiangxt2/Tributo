@@ -115,7 +115,7 @@ class TestOnnxDeterminism:
         def convert(b):
             b.feature_names = [f"f{i}" for i in range(4)]
             wrapper = xgb.XGBClassifier()
-            wrapper._Booster = b  # noqa: SLF001
+            wrapper._Booster = b
             wrapper.__dict__["n_classes_"] = 2
             wrapper.__dict__["classes_"] = np.arange(2)
             model = convert_xgboost(

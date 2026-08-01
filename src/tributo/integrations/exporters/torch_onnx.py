@@ -7,6 +7,7 @@ uses the TorchDynamo ONNX exporter which produces a more optimised graph.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import logging
 from typing import Any, ClassVar, Mapping
@@ -66,13 +67,11 @@ class TorchONNXExporter:
                 code="UNSUPPORTED_SOURCE_KIND",
                 reason=f"Expected dnn_result/torch_module, got {request.source_kind!r}",
             )
-        try:
-            import torch  # noqa: F401
-        except ImportError as exc:
+        if importlib.util.find_spec("torch") is None:
             return SupportResult(
                 supported=False,
                 code="MISSING_DEPENDENCY",
-                reason=f"torch not available: {exc}",
+                reason="torch not available",
                 missing_dependencies=("torch",),
             )
         return SupportResult(supported=True, code="OK")

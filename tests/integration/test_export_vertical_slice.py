@@ -8,6 +8,7 @@ from __future__ import annotations
 import shutil
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -25,7 +26,7 @@ pytestmark = pytest.mark.integration
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 
-def _train_tiny_booster() -> xgboost.Booster:  # type: ignore[no-any-unimported]
+def _train_tiny_booster() -> Any:
     """Train a minimal XGBoost booster on synthetic data."""
     X = numpy.random.randn(100, 5).astype(numpy.float32)
     y = numpy.random.randint(0, 2, 100).astype(numpy.float32)

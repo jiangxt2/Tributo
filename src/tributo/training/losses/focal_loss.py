@@ -11,18 +11,18 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from tributo.util.annotations import PublicAPI
+
 try:
     import torch
     import torch.nn as nn
-    import torch.nn.functional as F  # noqa: F401 — used by binary_cross_entropy_with_logits
+    import torch.nn.functional as F  # used by binary_cross_entropy_with_logits
 
     HAS_TORCH = True
 except ImportError:
     HAS_TORCH = False
 
 logger = logging.getLogger(__name__)
-
-from tributo.util.annotations import PublicAPI  # noqa: E402
 
 if HAS_TORCH:
 

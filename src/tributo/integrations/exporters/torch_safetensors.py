@@ -6,6 +6,7 @@ optional sharding.  Uses ``safetensors.torch.save_file``.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import logging
 from typing import Any, ClassVar, Mapping
@@ -59,14 +60,14 @@ class TorchSafetensorsExporter:
                 code="UNSUPPORTED_SOURCE_KIND",
                 reason=f"Expected source_kind='dnn_result' or 'torch_module', got {request.source_kind!r}",
             )
-        try:
-            import safetensors  # noqa: F401
-            import torch  # noqa: F401
-        except ImportError as exc:
+        if (
+            importlib.util.find_spec("safetensors") is None
+            or importlib.util.find_spec("torch") is None
+        ):
             return SupportResult(
                 supported=False,
                 code="MISSING_DEPENDENCY",
-                reason=f"safetensors/torch not available: {exc}",
+                reason="safetensors/torch not available",
                 missing_dependencies=("safetensors", "torch"),
             )
         return SupportResult(supported=True, code="OK")

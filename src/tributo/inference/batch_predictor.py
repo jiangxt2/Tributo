@@ -6,6 +6,7 @@ avoiding reloading the ONNX model for each batch. Data is stream-processed end-t
 
 from __future__ import annotations
 
+import importlib.util
 import logging
 from pathlib import Path
 from typing import Any
@@ -77,12 +78,8 @@ class XGBoostONNXPredictor(BasePredictor):
             import tempfile
             import uuid
 
-            try:
-                import boto3  # noqa: F401
-            except ImportError as e:
-                raise JobConfigurationError(
-                    "boto3 is required for S3 model download."
-                ) from e
+            if importlib.util.find_spec("boto3") is None:
+                raise JobConfigurationError("boto3 is required for S3 model download.")
 
             cache_dir = Path(tempfile.gettempdir()) / "tributo_onnx" / str(uuid.uuid4())
             cache_dir.mkdir(parents=True, exist_ok=True)
@@ -169,12 +166,8 @@ class XGBoostONNXPredictor(BasePredictor):
         import tempfile
         import uuid
 
-        try:
-            import boto3  # noqa: F401
-        except ImportError as e:
-            raise JobConfigurationError(
-                "boto3 is required for S3 model download."
-            ) from e
+        if importlib.util.find_spec("boto3") is None:
+            raise JobConfigurationError("boto3 is required for S3 model download.")
 
         cache_dir = Path(tempfile.gettempdir()) / "tributo_onnx" / str(uuid.uuid4())
         cache_dir.mkdir(parents=True, exist_ok=True)
