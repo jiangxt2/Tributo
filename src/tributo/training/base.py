@@ -217,7 +217,7 @@ class BaseTrainer(ABC):
 
     def run(
         self,
-        output_path: str,
+        output_path: str = "",
         *,
         bundle_config: Any | None = None,
     ) -> dict[str, Any]:
@@ -234,7 +234,8 @@ class BaseTrainer(ABC):
         new export framework (planner → executor → publisher).
 
         Args:
-            output_path: Artifact export path.
+            output_path: Artifact export path (legacy mode only; bundle
+                mode passes an empty string by default).
             bundle_config: Optional ``BundleOutputConfig`` for bundle-mode
                 export.  When provided and has non-empty targets, the
                 export is routed through the new bundle pipeline.
@@ -270,27 +271,32 @@ class BaseTrainer(ABC):
                 and bundle_config.targets is not None
                 and len(bundle_config.targets) > 0
             ):
+                # Bundle mode: post-publish actions run through the
+                # PublicationRunner hooks — legacy artifact-export
+                # callbacks are not fired (plan: backward-compat contract).
                 self._export_bundle(checkpoint, bundle_config)
             else:
                 self._export_artifacts_default(checkpoint, output_path)
 
-            # Fire artifact-exported callbacks.  If a callback implements
-            # on_artifacts_exported (the new hook), use it.  Otherwise
-            # fall back to on_export_end for backward compatibility.
-            # This avoids double-firing when a callback delegates
-            # on_artifacts_exported → on_export_end.
-            for cb in self._callbacks:
-                has_new_hook = "on_artifacts_exported" in type(cb).__dict__
-                if has_new_hook:
-                    try:
-                        cb.on_artifacts_exported(self, output_path)
-                    except Exception as e:
-                        logger.warning("Callback on_artifacts_exported failed: %s", e)
-                else:
-                    try:
-                        cb.on_export_end(self, output_path)
-                    except Exception as e:
-                        logger.warning("Callback on_export_end failed: %s", e)
+                # Fire artifact-exported callbacks (legacy only).  If a
+                # callback implements on_artifacts_exported (the new hook),
+                # use it.  Otherwise fall back to on_export_end for backward
+                # compatibility.  This avoids double-firing when a callback
+                # delegates on_artifacts_exported → on_export_end.
+                for cb in self._callbacks:
+                    has_new_hook = "on_artifacts_exported" in type(cb).__dict__
+                    if has_new_hook:
+                        try:
+                            cb.on_artifacts_exported(self, output_path)
+                        except Exception as e:
+                            logger.warning(
+                                "Callback on_artifacts_exported failed: %s", e
+                            )
+                    else:
+                        try:
+                            cb.on_export_end(self, output_path)
+                        except Exception as e:
+                            logger.warning("Callback on_export_end failed: %s", e)
 
             logger.info("%s training completed.", type(self).__name__)
 
