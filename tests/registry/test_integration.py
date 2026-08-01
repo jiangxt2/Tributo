@@ -16,11 +16,15 @@ from uuid import uuid4
 
 import pytest
 import requests
-from mlflow.tracking import MlflowClient
 
 from tributo.registry.callback import MLflowTrackingCallback
 from tributo.registry.mlflow_util import _MLflowTrackerUtil
 from tributo.registry.model_registry import ModelRegistry
+
+# mlflow lives in the registry extra - skip collection without it
+# (importorskip comes after all imports to avoid E402).
+mlflow = pytest.importorskip("mlflow", reason="mlflow not installed")
+MlflowClient = mlflow.tracking.MlflowClient
 
 logger = logging.getLogger(__name__)
 
