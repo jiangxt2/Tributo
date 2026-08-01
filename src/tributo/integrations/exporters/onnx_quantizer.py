@@ -82,7 +82,12 @@ class ONNXQuantizer:
                     "(format='onnx' in depends_on)"
                 ),
             )
-        if importlib.util.find_spec("onnxruntime.quantization") is None:
+        # Probe the top-level package only: find_spec() on a dotted name
+        # imports the parent first, so a missing onnxruntime raises
+        # ModuleNotFoundError instead of returning None. Submodule presence
+        # (onnxruntime.quantization) is validated at export time by the
+        # real import.
+        if importlib.util.find_spec("onnxruntime") is None:
             return SupportResult(
                 supported=False,
                 code="MISSING_DEPENDENCY",
