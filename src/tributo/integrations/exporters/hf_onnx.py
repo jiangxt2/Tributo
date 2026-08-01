@@ -91,45 +91,23 @@ class HuggingFaceONNXExporter:
         task: str | None = target.typed_options.get("task")
         opset: int | None = target.typed_options.get("opset")
 
-        # Resolve task from metadata if not explicitly set.
+        # Resolve task from metadata if not explicitly set (the provider
+        # writes metadata["task"], not task_type).
         if task is None:
-            task = source.metadata.get("task_type")
+            task = source.metadata.get("task")
         if opset is None:
             opset = 14
 
-        # Try Optimum first (preferred path).
-        optimum_used = False
-        try:
-            from optimum.onnxruntime import ORTModelForSequenceClassification
-
-            if task in ("text-classification", "sequence-classification"):
-                # Optimum's export path is superseded by the transformers
-                # exporter below (which writes into artifact_dir directly);
-                # loading the ORT wrapper only validates model availability.
-                ORTModelForSequenceClassification.from_pretrained(
-                    model_id or "unknown",
-                    export=True,
-                    opset=opset,
-                )
-                _export_with_transformers_onnx(
-                    model,
-                    model_id,
-                    task,
-                    opset,
-                    context.artifact_dir,
-                )
-                optimum_used = False  # Use the transformers path instead.
-        except ImportError:
-            pass
-
-        if not optimum_used:
-            _export_with_transformers_onnx(
-                model,
-                model_id,
-                task or "default",
-                opset,
-                context.artifact_dir,
-            )
+        # Export via the transformers onnx exporter — operates on the
+        # in-process model object (plan: no second from_pretrained call,
+        # which would fail for in-process sources with no model_id).
+        _export_with_transformers_onnx(
+            model,
+            model_id,
+            task or "default",
+            opset,
+            context.artifact_dir,
+        )
 
         # Save tokenizer config.
         tokenizer_files: list[DraftFile] = []
