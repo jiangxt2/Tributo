@@ -24,7 +24,7 @@ from tributo.util.annotations import DeveloperAPI, PublicAPI
 
 # ── Name validation ──────────────────────────────────────────────────────────
 
-_TARGET_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_TARGET_NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$")
 _RESERVED_NAMES: frozenset[str] = frozenset({".leases", "aliases", "trials"})
 
 
@@ -135,19 +135,19 @@ class BundleOutputConfig(BaseModel):
             if len(names) != len(self.targets):
                 raise ValueError("target names must be unique")
             for t in self.targets:
+                if t.name.startswith("_"):
+                    raise ValueError(
+                        f"target name {t.name!r} must not start with '_' "
+                        "(reserved for implicit planner-generated nodes)"
+                    )
+            for t in self.targets:
                 for d in t.depends_on:
-                    if d not in names:
-                        raise ValueError(
-                            f"target {t.name!r} depends_on unknown target {d!r}"
-                        )
                     if d == t.name:
                         raise ValueError(f"target {t.name!r} cannot depend on itself")
-            for role_name, target_name in self.roles.items():
+            for role_name, _target_name in self.roles.items():
                 _validate_safe_name(role_name, "role name")
-                if target_name not in names:
-                    raise ValueError(
-                        f"role {role_name!r} references unknown target {target_name!r}"
-                    )
+                # Roles are validated by the planner (Phase 3): references
+                # to implicit targets are rejected there, not here.
         if self.alias is not None:
             if (
                 self.alias.policy == "newer"
@@ -155,6 +155,13 @@ class BundleOutputConfig(BaseModel):
             ):
                 raise ValueError(
                     "policy='newer' must not specify expected_manifest_sha256"
+                )
+            # Alias relies on S3 CAS semantics — reject local/file targets
+            # explicitly instead of silently dropping the alias.
+            if self.bundle_uri is not None and not self.bundle_uri.startswith("s3://"):
+                raise ValueError(
+                    f"alias is only supported with s3:// bundle URIs "
+                    f"(got {self.bundle_uri!r})"
                 )
         return self
 
@@ -164,11 +171,20 @@ class BundleOutputConfig(BaseModel):
         if v is None:
             return v
         if v.startswith("s3://") and len(v) > 5:
+            # Reject persisted URIs carrying credentials or query/fragment
+            # (plan: "拒绝带凭证或签名 query 的持久化 URI").
+            rest = v[5:]
+            if "@" in rest:
+                raise ValueError("s3:// URI must not contain credentials")
+            if "?" in rest or "#" in rest:
+                raise ValueError("s3:// URI must not contain query or fragment")
             return v
         if v.startswith("file://"):
             path = v[7:]
             if not path or path == "/":
                 raise ValueError("file:// URI must not point to filesystem root")
+            if not Path(v[7:]).is_absolute():
+                raise ValueError(f"file:// URI must be an absolute path, got {v!r}")
             return v
         if v.startswith("/") or v.startswith("./") or v.startswith("../"):
             # Reject paths that resolve to filesystem root.
@@ -316,7 +332,7 @@ class LogicalArtifact(BaseModel):
                 }
                 for f in files
             ],
-            key=lambda r: str(r["path"]),
+            key=lambda r: str(r["path"]).encode("utf-8"),
         )
         payload = json.dumps(
             records, sort_keys=True, separators=(",", ":"), ensure_ascii=False
@@ -424,6 +440,22 @@ class BundleResult(BaseModel):
     alias_failure: FailureInfo | None = None
 
 
+@PublicAPI(stability="beta")
+class BundleRef(BaseModel):
+    """Immutable reference to a committed bundle.
+
+    This is the stable handle that callers keep — it never changes after
+    commit and can be passed to ``load_bundle()`` without needing to know
+    the storage backend.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    canonical_uri: str
+    bundle_id: str
+    manifest_sha256: str
+
+
 @DeveloperAPI
 class PublishedBundle:
     """Transient handle returned within BundleExportService context.
@@ -467,6 +499,32 @@ class ValidatorBinding(BaseModel):
     validator_id: str
     required: bool = True
     default_options: dict[str, Any] = Field(default_factory=dict)
+
+
+@PublicAPI(stability="beta")
+class UpstreamRequirement(BaseModel):
+    """Declares that an exporter needs an upstream artifact of a given format.
+
+    Used by artifact-to-artifact transforms (e.g. ONNX quantizer needs
+    an FP32 ONNX artifact).  The *name* must match a ``depends_on`` entry
+    in the dependent target's ``ExportTarget``.  The planner reads this to
+    inject implicit intermediate nodes into the DAG.
+
+    Example::
+
+        # ONNX quantizer declares it needs an upstream FP32 ONNX artifact.
+        UpstreamRequirement(
+            name="model",
+            format="onnx",
+            options={"quantization": None},
+        )
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str = Field(..., min_length=1)
+    format: str = Field(..., min_length=1)
+    options: dict[str, Any] = Field(default_factory=dict)
 
 
 # ── Planning models ──────────────────────────────────────────────────────────

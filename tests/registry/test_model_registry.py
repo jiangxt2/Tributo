@@ -5,10 +5,14 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
-from mlflow.exceptions import MlflowException
 
 from tributo.registry.model_registry import ModelRegistry
 from tributo.registry.schema import ModelVersion
+
+# mlflow lives in the registry extra - skip collection without it
+# (importorskip comes after all imports to avoid E402).
+mlflow = pytest.importorskip("mlflow", reason="mlflow not installed")
+MlflowException = mlflow.exceptions.MlflowException
 
 
 def _make_model_version(

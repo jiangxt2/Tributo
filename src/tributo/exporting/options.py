@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 from tributo.util.annotations import PublicAPI
 
@@ -51,8 +51,12 @@ class TorchONNXOptions(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    opset: int = Field(default=18, ge=12, le=21)
-    dynamo: bool = False
+    # Bundle mode defaults to the TorchDynamo exporter path (PyTorch >= 2.5
+    # recommended path per the export plan); legacy single-path export keeps
+    # its own ``dynamo=False`` default and is unaffected by this option.
+    # Opset is locked to 18 — the plan only promises CI-verified values.
+    opset: Literal[18] = 18
+    dynamo: bool = True
     external_data: bool = False
 
 
@@ -99,11 +103,13 @@ class ONNXQuantizerOptions(BaseModel):
 
 # ── Registry of known options models (for discovery / docs) ──────────────────
 
-_BUILTIN_OPTIONS: dict[str, type[BaseModel]] = {
+_BUILTIN_OPTIONS: dict[str, type[BaseModel] | None] = {
     "xgboost-native-v1": XGBoostNativeOptions,
     "xgboost-onnx-v1": XGBoostONNXOptions,
     "torch-onnx-v1": TorchONNXOptions,
     "torch-safetensors-v1": SafetensorsOptions,
     "hf-onnx-v1": HFONNXOptions,
     "onnx-quantizer-v1": ONNXQuantizerOptions,
+    # Options models defined alongside their exporters in integrations/.
+    "torch-export-v1": None,
 }

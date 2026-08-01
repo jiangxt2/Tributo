@@ -11,7 +11,7 @@ from typing import Any, ClassVar, Mapping, Protocol, runtime_checkable
 
 from pydantic import BaseModel
 
-from tributo.training.exporters.models import (
+from tributo.exporting.models import (
     ArtifactDraft,
     ExportContext,
     ExportSource,
@@ -19,6 +19,7 @@ from tributo.training.exporters.models import (
     ResolvedArtifact,
     SupportRequest,
     SupportResult,
+    UpstreamRequirement,
     ValidationResult,
     ValidatorBinding,
 )
@@ -42,6 +43,9 @@ class ModelExporter(Protocol):
     - ``validator_bindings``: Ordered validator chain.
     - ``mutates_source``: ``True`` if ``export()`` temporarily mutates
       ``source.model_object`` (e.g. XGBoost feature names).
+    - ``upstream_requirements``: Declared upstream artifacts this exporter
+      needs (e.g. an ONNX quantizer needs an FP32 ONNX artifact).  The
+      planner uses this to inject implicit intermediate nodes.
 
     Instance attributes / construction are not part of the protocol —
     registries store *classes* and instantiate them through the
@@ -52,9 +56,15 @@ class ModelExporter(Protocol):
     exporter_id: ClassVar[str]
     priority: ClassVar[int]
     output_format: ClassVar[str]
+    # Source kinds this exporter consumes (values of ``ExportSource.source_kind``,
+    # e.g. "xgboost_result", "dnn_result").  The registry uses this for
+    # coarse filtering; transform exporters that consume an upstream
+    # artifact (not the source) declare ``()`` and are never filtered out.
+    source_kinds: ClassVar[tuple[str, ...]]
     options_model: ClassVar[type[BaseModel]]
     validator_bindings: ClassVar[tuple[ValidatorBinding, ...]]
     mutates_source: ClassVar[bool]
+    upstream_requirements: ClassVar[tuple[UpstreamRequirement, ...]]
 
     @classmethod
     def supports(cls, request: SupportRequest) -> SupportResult: ...
@@ -110,7 +120,7 @@ class SourceProvider(Protocol):
     def open_source(
         self,
         result: Any,
-        config: BaseModel,
+        config: BaseModel | None = None,
     ) -> Any:  # ContextManager[ExportSource]
         ...
 

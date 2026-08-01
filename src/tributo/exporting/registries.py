@@ -16,8 +16,10 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from pydantic import ValidationError
+
 from tributo.exceptions import JobConfigurationError
-from tributo.training.exporters.models import (
+from tributo.exporting.models import (
     ExportTarget,
     PlannedTarget,
     PluginLoadDiagnostic,
@@ -25,7 +27,7 @@ from tributo.training.exporters.models import (
     SupportResult,
     ValidatorBinding,
 )
-from tributo.training.exporters.protocols import (
+from tributo.exporting.protocols import (
     ExportValidator,
     ModelExporter,
     ModelFactory,
@@ -103,7 +105,10 @@ class ExportRegistry:
         Does NOT call ``supports()`` — that is the Planner's job.
         """
         candidates = [
-            c for c in self._by_id.values() if c.output_format == output_format
+            c
+            for c in self._by_id.values()
+            if c.output_format == output_format
+            and (not getattr(c, "source_kinds", ()) or source_kind in c.source_kinds)
         ]
         candidates.sort(key=lambda c: (-c.priority, c.exporter_id))
         return candidates
@@ -116,6 +121,10 @@ class ExportRegistry:
 
     def diagnostics(self) -> tuple[PluginLoadDiagnostic, ...]:
         return tuple(self._diagnostics)
+
+    def record_diagnostic(self, diagnostic: PluginLoadDiagnostic) -> None:
+        """Append a plugin-loading diagnostic from entry-point discovery."""
+        self._diagnostics.append(diagnostic)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -182,6 +191,10 @@ class SourceProviderRegistry:
     def diagnostics(self) -> tuple[PluginLoadDiagnostic, ...]:
         return tuple(self._diagnostics)
 
+    def record_diagnostic(self, diagnostic: PluginLoadDiagnostic) -> None:
+        """Append a plugin-loading diagnostic from entry-point discovery."""
+        self._diagnostics.append(diagnostic)
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ValidatorRegistry
@@ -224,6 +237,10 @@ class ValidatorRegistry:
 
     def diagnostics(self) -> tuple[PluginLoadDiagnostic, ...]:
         return tuple(self._diagnostics)
+
+    def record_diagnostic(self, diagnostic: PluginLoadDiagnostic) -> None:
+        """Append a plugin-loading diagnostic from entry-point discovery."""
+        self._diagnostics.append(diagnostic)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -358,19 +375,37 @@ def select_candidate(
         candidate = exact[0]
     else:
         supported: list[tuple[type[ModelExporter], SupportResult]] = []
+        candidate_failures: list[str] = []
         for c in candidates:
             result = c.supports(request)
-            if result.supported:
-                supported.append((c, result))
+            if not result.supported:
+                candidate_failures.append(
+                    f"  {c.exporter_id}: [{result.code}] {result.reason}"
+                )
+                continue
+            # Candidate-level options validation: invalid options make this
+            # candidate unavailable — collect the reason and keep evaluating
+            # the remaining candidates (diagnosability over fail-fast).
+            try:
+                c.options_model(**target.options)
+            except ValidationError as exc:
+                candidate_failures.append(f"  {c.exporter_id}: options invalid: {exc}")
+                continue
+            # A candidate whose required validators cannot be resolved is
+            # unavailable too — the registry may be missing its plugin.
+            try:
+                for vb in c.validator_bindings:
+                    validator_registry.get(vb.validator_id)
+            except JobConfigurationError as exc:
+                candidate_failures.append(f"  {c.exporter_id}: {exc}")
+                continue
+            supported.append((c, result))
 
         if not supported:
-            reasons = []
-            for c in candidates:
-                r = c.supports(request)
-                reasons.append(f"  {c.exporter_id}: [{r.code}] {r.reason}")
             raise JobConfigurationError(
                 f"No exporter supports {target.format!r} for "
-                f"source_kind={request.source_kind!r}:\n" + "\n".join(reasons)
+                f"source_kind={request.source_kind!r}:\n"
+                + "\n".join(candidate_failures)
             )
 
         supported.sort(key=lambda x: (-x[0].priority, x[0].exporter_id))
@@ -385,6 +420,17 @@ def select_candidate(
             )
 
         candidate = top[0]
+
+    # Reject validation overrides the selected exporter does not bind —
+    # a mistyped validator_id must not be silently ignored.
+    bound_ids = {vb.validator_id for vb in candidate.validator_bindings}
+    for vid in target.validation:
+        if vid not in bound_ids:
+            raise JobConfigurationError(
+                f"Target {target.name!r} validation override {vid!r} is not "
+                f"bound by exporter {candidate.exporter_id!r} "
+                f"(bound: {sorted(bound_ids)})"
+            )
 
     # Build typed options
     typed_options = candidate.options_model(**target.options).model_dump()

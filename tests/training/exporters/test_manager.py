@@ -7,8 +7,8 @@ from typing import Any, ClassVar, Mapping
 
 from pydantic import BaseModel
 
-from tributo.training.exporters.manager import ExportManager
-from tributo.training.exporters.models import (
+from tributo.exporting.executor import ExportManager
+from tributo.exporting.models import (
     ArtifactDraft,
     BundleOutputConfig,
     DraftFile,
@@ -23,8 +23,8 @@ from tributo.training.exporters.models import (
     ValidationResult,
     ValidatorBinding,
 )
-from tributo.training.exporters.planner import ExportPlanner
-from tributo.training.exporters.registries import (
+from tributo.exporting.planner import ExportPlanner
+from tributo.exporting.registries import (
     ExportRegistry,
     ValidatorRegistry,
 )
@@ -300,6 +300,75 @@ class TestFailurePropagation:
 
         dep_nr = [n for n in result.node_results if n.node_id == "dependent"][0]
         assert dep_nr.status == "blocked"
+
+    def test_session_fatal_optional_cancels_downstream(self, tmp_path: Path) -> None:
+        """Integrity violation on an optional node is session-fatal.
+
+        Staging/path integrity violations cancel all remaining nodes and
+        force the overall result to ``failed`` even when the failing node
+        is optional (plan: session-fatal semantics).
+        """
+
+        class _IntegrityViolator:
+            api_version: ClassVar[int] = 1
+            exporter_id: ClassVar[str] = "integrity-v1"
+            priority: ClassVar[int] = 10
+            output_format: ClassVar[str] = "onnx"
+            options_model: ClassVar[type[BaseModel]] = _MinOpts
+            validator_bindings: ClassVar[tuple[ValidatorBinding, ...]] = ()
+            mutates_source: ClassVar[bool] = False
+
+            @classmethod
+            def supports(cls, r: SupportRequest) -> SupportResult:
+                return SupportResult(supported=True, code="OK")
+
+            def export(
+                self,
+                context: ExportContext,
+                source: ExportSource,
+                upstream: Mapping[str, ResolvedArtifact],
+                target: Any,
+            ) -> ArtifactDraft:
+                (context.artifact_dir / "model.onnx").write_bytes(b"data")
+                (context.artifact_dir / "undeclared.log").write_bytes(b"leak")
+                return ArtifactDraft(
+                    name=target.target.name,
+                    format="onnx",
+                    flavor_id="onnx-runtime-v1",
+                    files=(DraftFile(relative_path="model.onnx", role="model"),),
+                    entrypoint="model.onnx",
+                    producer=ProducerInfo(exporter_id=self.exporter_id),
+                )
+
+        er2 = ExportRegistry()
+        er2.register(_IntegrityViolator)
+        vr2 = ValidatorRegistry()
+        cfg = BundleOutputConfig(
+            bundle_uri="/tmp/bundle",
+            targets=[
+                ExportTarget(
+                    name="bad",
+                    format="onnx",
+                    required=False,
+                    exporter_id="integrity-v1",
+                ),
+                ExportTarget(name="dependent", format="onnx", depends_on=("bad",)),
+                ExportTarget(name="independent", format="onnx"),
+            ],
+        )
+        planner = ExportPlanner(er2, vr2)
+        plan = planner.plan(cfg, _make_source())
+        mgr = ExportManager(er2, vr2)
+        result = mgr.execute(plan, _make_source(), tmp_path / "staging", "exec-1")
+
+        # Session-fatal overrides the "optional failure → partial" rule.
+        assert result.status == "failed"
+        bad_nr = [n for n in result.node_results if n.node_id == "bad"][0]
+        dep_nr = [n for n in result.node_results if n.node_id == "dependent"][0]
+        ind_nr = [n for n in result.node_results if n.node_id == "independent"][0]
+        assert bad_nr.status == "failed"
+        assert dep_nr.status == "blocked"  # blocked by its failed dependency
+        assert ind_nr.status == "cancelled"  # remaining DAG cancelled
 
 
 class TestRehashVerification:

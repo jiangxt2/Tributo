@@ -88,7 +88,8 @@ embeddings = [
     "daft>=0.7.0,<0.8.0",
 ]
 identity = [
-    "tributo[data,model-export-torch]",
+    "tributo[data,model-export]",
+    "torch>=2.0.0",
     "onnxruntime>=1.20.0",
 ]
 streaming = [
@@ -133,17 +134,28 @@ pu = "tributo.training.pu_trainer"
 bge_small_zh = "tributo.embeddings.registry"
 
 [project.entry-points."tributo.exporters"]
-torchscript = "tributo.training.exporters.torchscript:TorchScriptExporter"
-safetensors = "tributo.training.exporters.safetensors:SafetensorsExporter"
-causal_report = "tributo.training.exporters.causal_report:CausalReportExporter"
+xgboost-onnx-v1 = "tributo.integrations.exporters.xgboost_onnx:XGBoostONNXExporter"
+xgboost-native-v1 = "tributo.integrations.exporters.xgboost_native:XGBoostNativeExporter"
+torch-safetensors-v1 = "tributo.integrations.exporters.torch_safetensors:TorchSafetensorsExporter"
+torch-onnx-v1 = "tributo.integrations.exporters.torch_onnx:TorchONNXExporter"
+torch-export-v1 = "tributo.integrations.exporters.torch_export:TorchExportExporter"
+hf-onnx-v1 = "tributo.integrations.exporters.hf_onnx:HuggingFaceONNXExporter"
+onnx-quantizer-v1 = "tributo.integrations.exporters.onnx_quantizer:ONNXQuantizer"
 
 [project.entry-points."tributo.source_providers"]
+ray-xgboost-v1 = "tributo.integrations.sources.ray_xgboost:RayXGBoostSourceProvider"
+ray-dnn-v1 = "tributo.integrations.sources.ray_dnn:RayDnnSourceProvider"
+hf-v1 = "tributo.integrations.sources.huggingface:HuggingFaceSourceProvider"
 
 [project.entry-points."tributo.validators"]
+onnx-runtime-v1 = "tributo.integrations.validators.onnx_runtime:ONNXRuntimeValidator"
 
 [project.entry-points."tributo.model_flavors"]
 
 [project.entry-points."tributo.model_factories"]
+
+[project.entry-points."tributo.hooks"]
+mlflow-log-v1 = "tributo.integrations.hooks.mlflow_hook:MLflowPostPublishHook"
 
 [project.entry-points."tributo.stream_sources"]
 kafka = "tributo.streaming.kafka_source:KafkaStreamSource"

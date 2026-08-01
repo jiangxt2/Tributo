@@ -12,8 +12,9 @@ import logging
 import time
 from pathlib import Path
 
-from tributo.exceptions import JobExecutionError
-from tributo.training.exporters.models import (
+from tributo.exceptions import JobExecutionError, SessionFatalError
+from tributo.exporting.errors import sanitize_error_message
+from tributo.exporting.models import (
     ArtifactDraft,
     ArtifactFile,
     ArtifactRef,
@@ -26,9 +27,9 @@ from tributo.training.exporters.models import (
     ResolvedArtifact,
     ValidationResult,
 )
-from tributo.training.exporters.planner import ExportPlan
-from tributo.training.exporters.protocols import ModelExporter
-from tributo.training.exporters.registries import (
+from tributo.exporting.planner import ExportPlan
+from tributo.exporting.protocols import ModelExporter
+from tributo.exporting.registries import (
     ExportRegistry,
     ValidatorRegistry,
 )
@@ -57,25 +58,36 @@ def _materialize_artifact(
     """Verify draft files exist, compute hashes/sizes, return LogicalArtifact.
 
     The manager does NOT trust exporter-reported hashes — it re-reads every
-    file from disk.
+    file from disk.  Also validates that ``draft.name`` is safe for use in
+    filesystem paths (no ``/`` or ``..`` components).
     """
+    # Guard against hostile draft.name (path traversal).  Integrity
+    # violations are session-fatal: they cancel all remaining nodes
+    # regardless of the failing node's required flag (plan: staging/path
+    # integrity violations are session-fatal errors).
+    if "/" in draft.name or "\\" in draft.name or draft.name in (".", ".."):
+        raise SessionFatalError(
+            f"Exporter {draft.producer.exporter_id!r} returned unsafe "
+            f"artifact name {draft.name!r}"
+        )
+
     materialized: list[ArtifactFile] = []
     seen_paths: set[str] = set()
 
     for df in draft.files:
         fp = (artifact_dir / df.relative_path).resolve()
         if not fp.is_relative_to(artifact_dir.resolve()):
-            raise JobExecutionError(
+            raise SessionFatalError(
                 f"Exporter {draft.producer.exporter_id!r} wrote file outside "
                 f"artifact_dir: {df.relative_path!r}"
             )
         if not fp.is_file():
-            raise JobExecutionError(
+            raise SessionFatalError(
                 f"Exporter {draft.producer.exporter_id!r} declared "
                 f"{df.relative_path!r} but file does not exist"
             )
         if df.relative_path in seen_paths:
-            raise JobExecutionError(
+            raise SessionFatalError(
                 f"Duplicate relative_path in draft: {df.relative_path!r}"
             )
         seen_paths.add(df.relative_path)
@@ -97,7 +109,7 @@ def _materialize_artifact(
         if fp.is_file():
             rel = str(fp.relative_to(artifact_dir))
             if rel not in declared:
-                raise JobExecutionError(
+                raise SessionFatalError(
                     f"Exporter wrote undeclared file: {rel!r} — "
                     "all output files must appear in ArtifactDraft.files"
                 )
@@ -165,6 +177,7 @@ class ExportManager:
         staged_descriptors: dict[str, LogicalArtifact] = {}
         execution_started = False
         terminal = False
+        session_fatal = False
 
         for node in plan.nodes:
             node_id = node.target.name
@@ -219,7 +232,7 @@ class ExportManager:
 
                 # -- Instantiate exporter --
                 exporter_cls = self._exports.get(node.exporter_id)
-                exporter: ModelExporter = exporter_cls()  # type: ignore[call-arg]
+                exporter: ModelExporter = exporter_cls()
 
                 # -- Collect upstream resolved artifacts --
                 upstream: dict[str, ResolvedArtifact] = {
@@ -228,6 +241,29 @@ class ExportManager:
 
                 # -- Run export --
                 draft = exporter.export(context, source, upstream, node)
+
+                # -- Stamp lineage: derived_from references the upstream
+                # artifacts actually consumed (resolved by dependency name).
+                # Exporters may leave derived_from empty; the executor fills
+                # it so every manifest derived_from resolves (plan §验收).
+                if node.target.depends_on:
+                    draft = draft.model_copy(
+                        update={
+                            "derived_from": tuple(
+                                ArtifactRef(
+                                    node_id=dep,
+                                    artifact_name=resolved_artifacts[
+                                        dep
+                                    ].descriptor.name,
+                                    tree_digest=resolved_artifacts[
+                                        dep
+                                    ].descriptor.tree_digest,
+                                )
+                                for dep in node.target.depends_on
+                                if dep in resolved_artifacts
+                            )
+                        }
+                    )
 
                 # -- Materialise (re-hash) --
                 artifact = _materialize_artifact(draft, artifact_dir, node_id)
@@ -239,7 +275,7 @@ class ExportManager:
                 for vb in node.validator_bindings:
                     try:
                         validator_cls = self._validators.get(vb.validator_id)
-                        validator = validator_cls()  # type: ignore[call-arg]
+                        validator = validator_cls()
                         opts = validator_cls.options_model(**vb.default_options)
                         vr = validator.validate(source, ra, upstream, opts)
                         validation_results.append(vr)
@@ -305,7 +341,7 @@ class ExportManager:
                 failure = FailureInfo(
                     code=type(exc).__name__,
                     category="export",
-                    message=str(exc)[:4096],
+                    message=sanitize_error_message(str(exc))[:4096],
                     retryable=False,
                 )
                 node_results[node_id] = NodeResult(
@@ -319,8 +355,12 @@ class ExportManager:
                     duration_ms=duration_ms,
                 )
 
-                if is_required:
+                # Session-fatal errors (integrity violations) cancel the
+                # remaining DAG even when the failing node is optional,
+                # and force the overall result to ``failed``.
+                if is_required or isinstance(exc, SessionFatalError):
                     terminal = True
+                    session_fatal = session_fatal or isinstance(exc, SessionFatalError)
 
         # Compute overall status.
         all_explicit = [
@@ -328,11 +368,18 @@ class ExportManager:
             for nr in node_results.values()
             if nr.node_id in {t.name for t in plan.explicit_targets}
         ]
-        if not execution_started:
+        if session_fatal or not execution_started:
+            # Session-fatal failures always yield ``failed`` — the
+            # remaining DAG was cancelled even if the failing node was
+            # optional (plan: session-fatal semantics).
             overall = "failed"
-        elif any(nr.status == "failed" and nr.required for nr in all_explicit):
+        elif any(
+            nr.status in ("failed", "blocked") and nr.required for nr in all_explicit
+        ):
             overall = "failed"
-        elif any(nr.status == "failed" for nr in all_explicit):
+        elif any(nr.status in ("failed", "blocked") for nr in all_explicit):
+            # Optional failures or blocked nodes (blocked by a failed
+            # dependency) make the execution partial, not succeeded.
             overall = "partial"
         else:
             overall = "succeeded"

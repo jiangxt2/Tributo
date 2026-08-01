@@ -1,11 +1,18 @@
-"""Model export module.
+"""Deprecated re-exports from ``tributo.exporting``.
 
-Provides PyTorch -> ONNX and other model export functionalities,
-plus the generalised ``ArtifactExporter`` protocol for non-model
-artifacts (reports, diagnostics, graph snapshots).
+All bundle export functionality has moved to ``tributo.exporting``.
+These re-exports exist for backward compatibility and will be removed
+in a future release.
+
+Also re-exports the generalised ``ArtifactExporter`` protocol for
+non-model artifacts (reports, diagnostics, graph snapshots).
 """
 
 from __future__ import annotations
+
+import importlib
+import warnings
+from typing import Any
 
 from tributo.training.exporters.artifact_protocol import (
     ARTIFACT_KIND_DIAGNOSTICS,
@@ -32,3 +39,20 @@ __all__ = [
     "SafetensorsExporter",
     "TorchScriptExporter",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    if name in __all__:
+        return globals()[name]
+    warnings.warn(
+        f"tributo.training.exporters.{name} is deprecated; "
+        f"use tributo.exporting.{name} instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    try:
+        return getattr(importlib.import_module(f"tributo.exporting.{name}"), name)
+    except ModuleNotFoundError:
+        raise AttributeError(
+            f"module 'tributo.training.exporters' has no attribute {name!r}"
+        ) from None

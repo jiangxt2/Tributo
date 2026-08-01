@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import hashlib
+import io
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from tributo.training.exporters.manifest import ManifestSourceInfo
-from tributo.training.exporters.models import (
+from tributo.exporting.manifest import ManifestSourceInfo
+from tributo.exporting.models import (
     AliasConfig,
     ArtifactFile,
     ArtifactRef,
@@ -17,7 +20,7 @@ from tributo.training.exporters.models import (
     NodeResult,
     ProducerInfo,
 )
-from tributo.training.exporters.publisher import Publisher
+from tributo.exporting.publisher import Publisher
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -106,7 +109,13 @@ def _setup_staging(
         for af in artifact.files:
             fp = artifact_dir / af.relative_path
             fp.parent.mkdir(parents=True, exist_ok=True)
-            fp.write_bytes(b"fake-content" + af.relative_path.encode())
+            # Pad to the declared size_bytes so S3 idempotency head checks
+            # (length + sha256 metadata) can match.
+            fp.write_bytes(
+                (b"fake-content" + af.relative_path.encode()).ljust(
+                    af.size_bytes, b"\0"
+                )
+            )
     return {a.name: a for a in artifacts}
 
 
@@ -318,7 +327,7 @@ class TestLocalPublish:
 
         assert published.result.roles == {"inference": "fp32"}
 
-    def test_alias_not_requested_for_local(self, tmp_path: Path) -> None:
+    def test_alias_written_for_local(self, tmp_path: Path) -> None:
         staging = tmp_path / "staging"
         dest = tmp_path / "dest"
         artifact = _make_logical_artifact("fp32")
@@ -335,7 +344,7 @@ class TestLocalPublish:
         )
 
         publisher = Publisher()
-        # alias with local URI should not attempt update.
+        # alias with local URI should write alias file.
         published = publisher.publish(
             execution=execution,
             staging_root=staging,
@@ -347,27 +356,248 @@ class TestLocalPublish:
             alias_config=AliasConfig(name="latest", policy="newer"),
         )
 
-        assert published.result.alias_status == "not_requested"
+        assert published.result.alias_status == "updated"
+        assert published.result.alias_uri is not None
+        # Verify alias file was written.
+        alias_path = Path(published.result.alias_uri)  # type: ignore[arg-type]
+        assert alias_path.is_file()
 
 
-# ── S3 publish tests (botocore Stubber) ──────────────────────────────────────
+# ── S3 publish tests (fake client recording requests) ────────────────────────
+
+
+class _FakeClientError(Exception):
+    """Minimal botocore-style ClientError (only ``.response`` is consulted)."""
+
+    def __init__(self, code: str) -> None:
+        self.response = {"Error": {"Code": code}}
+        super().__init__(code)
+
+
+class _FakeS3:
+    """In-memory S3 fake that records calls and honours conditional writes.
+
+    The Publisher consults only ``client.exceptions.ClientError`` and the
+    ``response["Error"]["Code"]`` attribute, so this fake is sufficient to
+    assert request parameters (If-None-Match / If-Match / checksum
+    metadata) without a network.  Real end-to-end behaviour against an
+    S3-compatible store is covered by the MinIO integration tests.
+    """
+
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+        self.metadata: dict[str, dict[str, str]] = {}
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.exceptions = type("_E", (), {"ClientError": _FakeClientError})
+
+    def _etag(self, key: str) -> str:
+        # Unquoted hex digest — matches ``_s3_head`` which strips quotes.
+        return hashlib.sha256(self.objects.get(key, b"")).hexdigest()
+
+    def put_object(self, **kwargs: Any) -> dict[str, str]:
+        self.calls.append(("put_object", kwargs))
+        key = kwargs["Key"]
+        body = kwargs.get("Body", b"")
+        if not isinstance(body, bytes):
+            body = body.encode()
+        if kwargs.get("IfNoneMatch") == "*" and key in self.objects:
+            raise _FakeClientError("PreconditionFailed")
+        if "IfMatch" in kwargs and kwargs["IfMatch"].strip('"') != self._etag(key):
+            raise _FakeClientError("PreconditionFailed")
+        self.objects[key] = body
+        if kwargs.get("Metadata"):
+            self.metadata[key] = dict(kwargs["Metadata"])
+        return {"ETag": f'"{self._etag(key)}"'}  # botocore-style quoted ETag
+
+    def get_object(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("get_object", kwargs))
+        key = kwargs["Key"]
+        if key not in self.objects:
+            raise _FakeClientError("NoSuchKey")
+        return {"Body": io.BytesIO(self.objects[key])}
+
+    def head_object(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("head_object", kwargs))
+        key = kwargs["Key"]
+        if key not in self.objects:
+            raise _FakeClientError("404")
+        return {
+            "ContentLength": len(self.objects[key]),
+            "ETag": f'"{self._etag(key)}"',  # botocore-style quoted ETag
+            "Metadata": self.metadata.get(key, {}),
+        }
+
+    def delete_object(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(("delete_object", kwargs))
+        self.objects.pop(kwargs["Key"], None)
+        return {}
+
+
+def _publish_s3(
+    fake: _FakeS3,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    alias: AliasConfig | None = None,
+    bundle_id: str = "bundle-abc123",
+) -> Any:
+    """Run a publish to ``s3://test-bucket/models`` against *fake*."""
+    monkeypatch.setattr(
+        "tributo.exporting.publisher._s3_client_from_profile",
+        lambda resolver, profile: fake,
+    )
+    # Unique staging dir per call so idempotent-retry tests can publish
+    # multiple times against the same tmp_path.
+    staging = tmp_path / f"staging-{len(fake.calls)}"
+    artifact = _make_logical_artifact("fp32")
+    staged = _setup_staging(staging, [artifact])
+    ref = ArtifactRef(
+        node_id="fp32",
+        artifact_name="fp32",
+        tree_digest=artifact.tree_digest,
+    )
+    execution = _make_execution(
+        nodes=(_make_node_result(artifact_ref=ref),),
+        staged_artifacts=staged,
+    )
+    publisher = Publisher()
+    return publisher.publish(
+        execution=execution,
+        staging_root=staging,
+        bundle_uri="s3://test-bucket/models",
+        bundle_id=bundle_id,
+        execution_id="exec-1",
+        tributo_version="0.1.0",
+        source_info=_make_source_info(),
+        alias_config=alias,
+    )
 
 
 class TestS3PublishLogic:
-    """Tests for S3-specific logic using unit-level verification.
+    """S3 request-parameter verification via a recording fake client.
 
     Integration tests with a real S3-compatible endpoint (MinIO) are in
-    the CI workflow.
+    ``tests/integration/test_export_s3.py`` (pytest ``s3`` marker).
     """
 
-    def test_s3_bundle_uri_produces_s3_manifest_uri(self, tmp_path: Path) -> None:
-        """Skip: actual S3 calls require botocore stubber or MinIO."""
-        pytest.skip("S3 integration test — requires MinIO or botocore Stubber setup")
+    def test_s3_manifest_uses_condition_write_and_checksum_metadata(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Manifest-last: If-None-Match + tributo-sha256 metadata."""
+        fake = _FakeS3()
+        published = _publish_s3(fake, monkeypatch, tmp_path)
 
-    def test_alias_newer_policy_comparison(self) -> None:
-        """Alias with policy=newer should compare created_at timestamps."""
-        pytest.skip("Alias unit test — requires S3 client mock")
+        assert (
+            published.result.manifest_uri
+            == "s3://test-bucket/models/bundle-abc123/manifest.json"
+        )
 
-    def test_alias_cas_policy_rejects_mismatch(self) -> None:
-        """Alias with compare_and_swap should reject mismatched digests."""
-        pytest.skip("Alias unit test — requires S3 client mock")
+        puts_by_key = {kw["Key"]: kw for n, kw in fake.calls if n == "put_object"}
+        manifest_put = puts_by_key["models/bundle-abc123/manifest.json"]
+        assert manifest_put["IfNoneMatch"] == "*"
+        assert manifest_put["ContentType"] == "application/json"
+        assert (
+            manifest_put["Metadata"]["tributo-sha256"]
+            == published.result.manifest_sha256
+        )
+
+        # Publish lease uses If-None-Match create semantics.
+        lease_put = next(
+            kw
+            for n, kw in fake.calls
+            if n == "put_object" and kw["Key"].endswith(".leases/bundle-abc123.json")
+        )
+        assert lease_put["IfNoneMatch"] == "*"
+
+        # Artifact upload carries the file body under the artifact key.
+        artifact_put = puts_by_key["models/bundle-abc123/artifacts/fp32/model.onnx"]
+        assert artifact_put["Body"] == (b"fake-contentmodel.onnx").ljust(100, b"\0")
+
+    def test_s3_idempotent_retry_logically_equal(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Retrying the same bundle does not raise a collision."""
+        fake = _FakeS3()
+        first = _publish_s3(fake, monkeypatch, tmp_path)
+        second = _publish_s3(fake, monkeypatch, tmp_path)
+
+        # Second publish succeeded idempotently with the same manifest.
+        assert second.result.status == "succeeded"
+        assert second.result.manifest_sha256 == first.result.manifest_sha256
+
+    def test_alias_newer_policy_comparison(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """policy=newer: an older existing alias is replaced via If-Match."""
+        fake = _FakeS3()
+        alias = AliasConfig(name="latest", policy="newer")
+        alias_key = "models/aliases/latest.json"
+        fake.objects[alias_key] = json.dumps(
+            {
+                "manifest_uri": "s3://test-bucket/models/old-bundle/manifest.json",
+                "manifest_sha256": "d" * 64,
+                "bundle_id": "bundle-old",
+                "created_at": "2024-01-01T00:00:00+00:00",
+            }
+        ).encode()
+
+        published = _publish_s3(fake, monkeypatch, tmp_path, alias=alias)
+
+        assert published.result.alias_status == "updated"
+        alias_puts = [
+            kw for n, kw in fake.calls if n == "put_object" and kw["Key"] == alias_key
+        ]
+        assert len(alias_puts) == 1
+        assert "IfMatch" in alias_puts[0] and alias_puts[0]["IfMatch"] != "*"
+
+    def test_alias_newer_keeps_fresher_existing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """policy=newer: a fresher existing alias is left unchanged."""
+        fake = _FakeS3()
+        alias = AliasConfig(name="latest", policy="newer")
+        alias_key = "models/aliases/latest.json"
+        fake.objects[alias_key] = json.dumps(
+            {
+                "manifest_uri": "s3://test-bucket/models/newer-bundle/manifest.json",
+                "manifest_sha256": "e" * 64,
+                "bundle_id": "bundle-newer",
+                "created_at": "2999-01-01T00:00:00+00:00",
+            }
+        ).encode()
+
+        published = _publish_s3(fake, monkeypatch, tmp_path, alias=alias)
+
+        assert published.result.alias_status == "unchanged"
+        assert not any(
+            n == "put_object" and kw["Key"] == alias_key for n, kw in fake.calls
+        )
+
+    def test_alias_cas_policy_rejects_mismatch(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """compare_and_swap with a mismatched digest fails the alias."""
+        fake = _FakeS3()
+        alias = AliasConfig(
+            name="latest",
+            policy="compare_and_swap",
+            expected_manifest_sha256="f" * 64,  # differs from existing
+        )
+        alias_key = "models/aliases/latest.json"
+        fake.objects[alias_key] = json.dumps(
+            {
+                "manifest_uri": "s3://test-bucket/models/old/manifest.json",
+                "manifest_sha256": "d" * 64,
+                "bundle_id": "bundle-old",
+                "created_at": "2024-01-01T00:00:00+00:00",
+            }
+        ).encode()
+
+        published = _publish_s3(fake, monkeypatch, tmp_path, alias=alias)
+
+        assert published.result.alias_status == "failed"
+        assert published.result.alias_failure is not None
+        assert published.result.alias_failure.code == "CAS_MISMATCH"
+        assert not any(
+            n == "put_object" and kw["Key"] == alias_key for n, kw in fake.calls
+        )

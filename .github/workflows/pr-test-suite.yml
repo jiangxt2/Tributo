@@ -18,6 +18,9 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.filter.outputs.code }}
+      # model_export is a subset of code: the export-contract job runs
+      # only when the export framework or its tests changed.
+      model_export: ${{ steps.filter.outputs.model_export }}
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
       - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36
@@ -28,11 +31,16 @@ jobs:
               - "src/**"
               - "tests/**"
               - "pyproject.toml"
-              - "uv.lock"
               - ".github/actions/**"
               - ".github/workflows/**"
               - "scripts/**"
               - "tools/**"
+            model_export:
+              - "src/tributo/exporting/**"
+              - "src/tributo/integrations/**"
+              - "tests/training/exporters/**"
+              - "tests/integration/test_export*"
+              - "pyproject.toml"
 
   dco:
     name: DCO Check
@@ -109,6 +117,81 @@ jobs:
           uv run python -m pytest tests/ \
             -m "not integration and not slow and not s3" \
             -v --tb=short --timeout=180
+
+  # Domain gate for the export framework (plan: export-contract job).
+  # Runs the exporter-agnostic contract tests (models/registries/planner/
+  # manager/manifest/publisher/hooks) without heavy optional deps —
+  # ``uv sync --extra dev`` has none of xgboost/torch/onnxmltools.
+  export-contract:
+    name: Export Contract (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    needs: [paths-filter, lint]
+    if: needs.paths-filter.outputs.model_export == 'true'
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+
+      - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Run export contract tests
+        # YAML plain scalars fold newlines into spaces, which turns the
+        # trailing backslash into a literal argument - use a literal block.
+        run: |
+          uv run python -m pytest tests/training/exporters/ \
+            -v --tb=short --timeout=180
+
+  export-s3:
+    name: Export S3 Integration (MinIO)
+    runs-on: ubuntu-latest
+    needs: [paths-filter, lint]
+    if: needs.paths-filter.outputs.code == 'true'
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+
+      - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
+        with:
+          python-version: "3.12"
+
+      # minio/minio:latest no longer ships `server /data` as its default
+      # CMD (it prints the CLI help and exits), so the server must be
+      # started explicitly instead of relying on a service container.
+      - name: Start MinIO
+        run: |
+          docker run -d --name minio \
+            -p 9000:9000 \
+            -e MINIO_ROOT_USER=minioadmin \
+            -e MINIO_ROOT_PASSWORD=minioadmin123 \
+            minio/minio:latest server /data --console-address ":9001"
+
+      - name: Wait for MinIO health
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:9000/minio/health/live >/dev/null; then
+              echo "MinIO ready"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "MinIO failed to become healthy"
+          docker logs minio || true
+          exit 1
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Run S3 export integration tests
+        run: uv run python -m pytest tests/integration/test_export_s3.py -v --tb=short --timeout=180
+        env:
+          S3_ENDPOINT: http://localhost:9000
+          AWS_ACCESS_KEY_ID: minioadmin
+          AWS_SECRET_ACCESS_KEY: minioadmin123
 
   build:
     name: Package Build & Smoke Test

@@ -16,13 +16,18 @@ import time
 
 import numpy as np
 import pandas as pd
+import pytest
 import ray
 import requests
-from mlflow.tracking import MlflowClient
 
 from tributo.registry.callback import MLflowTrackingCallback
 from tributo.registry.model_registry import ModelRegistry
 from tributo.training.xgboost_trainer import XGBoostTrainerImpl
+
+# mlflow lives in the registry extra - skip collection without it
+# (importorskip comes after all imports to avoid E402).
+mlflow = pytest.importorskip("mlflow", reason="mlflow not installed")
+MlflowClient = mlflow.tracking.MlflowClient
 
 MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5000")
 os.environ["MLFLOW_TRACKING_URI"] = MLFLOW_TRACKING_URI

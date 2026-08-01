@@ -15,7 +15,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from tributo.training.exporters.models import (
+from tributo.exporting.models import (
     ArtifactRef,
     FailureInfo,
     LogicalArtifact,
@@ -85,11 +85,11 @@ class ManifestExecution(BaseModel):
 
 @PublicAPI(stability="beta")
 class ExportManifest(BaseModel):
-    """Canonical manifest for a published model bundle (schema v2).
+    """Canonical manifest for a published model bundle (schema v1).
 
-    v2 adds ``artifact_kind`` on ``LogicalArtifact`` so that consumers
-    can distinguish model files from reports, diagnostics, and graph
-    snapshots without inspecting file contents.
+    Artifacts carry ``artifact_kind`` so that consumers can distinguish
+    model files from reports, diagnostics, and graph snapshots without
+    inspecting file contents.
 
     The manifest is written last during publish and serves as the
     single integrity anchor: its SHA-256 digest is the ``manifest_sha256``
@@ -98,7 +98,7 @@ class ExportManifest(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: int = Field(default=2, ge=1)
+    schema_version: int = Field(default=1, ge=1)
     bundle_id: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     status: str = Field(pattern=r"^(succeeded|partial)$")
@@ -185,25 +185,88 @@ def _read_manifest_v1(raw: dict[str, Any], canonical_bytes: bytes) -> ExportMani
             for a in artifacts
         )
     manifest = ExportManifest(**raw)
-    declared_digest = raw.get("_manifest_sha256")
-    if declared_digest is not None:
-        # The digest field should NOT be in the manifest itself — but if a
-        # pre-release version included it, skip the check rather than failing.
-        pass
     return manifest
 
 
-def _read_manifest_v2(raw: dict[str, Any], canonical_bytes: bytes) -> ExportManifest:
-    """Parse and validate a v2 manifest (native reader)."""
-    manifest = ExportManifest(**raw)
-    return manifest
+# ── Bundle digest computation ───────────────────────────────────────────────────
+
+
+@PublicAPI(stability="beta")
+def compute_bundle_digest(
+    artifacts: tuple[LogicalArtifact, ...],
+    roles: dict[str, str],
+    input_sig: ManifestSignature | None = None,
+    output_sig: ManifestSignature | None = None,
+    flavor: str | None = None,
+    exporter_options: dict[str, dict[str, Any]] | None = None,
+) -> str:
+    """Compute a content-addressable bundle digest.
+
+    Includes: sorted artifact descriptors, roles, signatures, flavor, and
+    exporter options.  Excludes ``created_at``, ``bundle_id``, and
+    ``canonical_uri`` so that identical content produces identical digest
+    regardless of when or where it was committed.
+    """
+    # Build canonical representation of artifacts.
+    artifact_entries: list[dict[str, Any]] = []
+    for a in artifacts:
+        file_entries = sorted(
+            (
+                {
+                    "path": f.relative_path,
+                    "sha256": f.sha256,
+                    "size_bytes": f.size_bytes,
+                    "role": f.role,
+                }
+                for f in a.files
+            ),
+            key=lambda d: str(d["path"]),
+        )
+        derived_entries = sorted(
+            (
+                {
+                    "node_id": d.node_id,
+                    "artifact_name": d.artifact_name,
+                    "tree_digest": d.tree_digest,
+                }
+                for d in a.derived_from
+            ),
+            key=lambda d: (str(d["node_id"]), str(d["artifact_name"])),
+        )
+        artifact_entries.append(
+            {
+                "name": a.name,
+                "format": a.format,
+                "flavor_id": a.flavor_id,
+                "entrypoint": a.entrypoint,
+                "files": file_entries,
+                "derived_from": derived_entries,
+            }
+        )
+
+    payload: dict[str, Any] = {
+        "artifacts": sorted(artifact_entries, key=lambda x: x["name"]),
+        "roles": dict(sorted(roles.items())),
+    }
+    if input_sig is not None:
+        payload["input_signature"] = input_sig.model_dump(mode="json")
+    if output_sig is not None:
+        payload["output_signature"] = output_sig.model_dump(mode="json")
+    if flavor is not None:
+        payload["flavor"] = flavor
+    if exporter_options:
+        payload["exporter_options"] = dict(sorted(exporter_options.items()))
+
+    canonical = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 # ── Schema registry singleton ──────────────────────────────────────────────────
 
 _SCHEMA_REGISTRY = ManifestSchemaRegistry()
 _SCHEMA_REGISTRY.register(1, _read_manifest_v1)
-_SCHEMA_REGISTRY.register(2, _read_manifest_v2)
 
 
 def get_schema_registry() -> ManifestSchemaRegistry:

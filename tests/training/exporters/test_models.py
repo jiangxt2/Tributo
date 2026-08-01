@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from tributo.training.exporters.models import (
+from tributo.exporting.models import (
     AliasConfig,
     ArtifactDraft,
     ArtifactFile,
@@ -76,14 +76,21 @@ class TestBundleOutputConfig:
                 ],
             )
 
-    def test_depends_on_unknown(self) -> None:
-        with pytest.raises(ValidationError, match="depends_on unknown target"):
-            BundleOutputConfig(
-                bundle_uri="s3://bucket/model",
-                targets=[
-                    ExportTarget(name="a", format="onnx", depends_on=("b",)),
-                ],
-            )
+    def test_depends_on_unknown_accepted_at_config_level(self) -> None:
+        """Unknown depends_on names are now accepted at config validation.
+
+        They may refer to upstream_requirements that the planner resolves
+        into implicit nodes.  The planner (not the config model) raises
+        an error if a name cannot be resolved.
+        """
+        cfg = BundleOutputConfig(
+            bundle_uri="s3://bucket/model",
+            targets=[
+                ExportTarget(name="a", format="onnx", depends_on=("b",)),
+            ],
+        )
+        assert cfg.targets is not None
+        assert cfg.targets[0].depends_on == ("b",)
 
     def test_self_dependency(self) -> None:
         with pytest.raises(ValidationError, match="cannot depend on itself"):
@@ -94,13 +101,14 @@ class TestBundleOutputConfig:
                 ],
             )
 
-    def test_roles_unknown_target(self) -> None:
-        with pytest.raises(ValidationError, match="references unknown target"):
-            BundleOutputConfig(
-                bundle_uri="s3://bucket/model",
-                targets=[ExportTarget(name="a", format="onnx")],
-                roles={"inference": "b"},
-            )
+    def test_roles_implicit_allowed(self) -> None:
+        """Roles may reference names resolved by upstream_requirements."""
+        cfg = BundleOutputConfig(
+            bundle_uri="s3://bucket/model",
+            targets=[ExportTarget(name="a", format="onnx")],
+            roles={"inference": "b"},
+        )
+        assert cfg.roles == {"inference": "b"}
 
     def test_alias_newer_rejects_expected_sha256(self) -> None:
         with pytest.raises(ValidationError, match="policy='newer'"):
@@ -380,7 +388,7 @@ class TestExportContext:
         from pathlib import Path
 
         ctx = __import__(
-            "tributo.training.exporters.models", fromlist=["ExportContext"]
+            "tributo.exporting.models", fromlist=["ExportContext"]
         ).ExportContext(
             execution_id="exec-1",
             node_id="node-1",
