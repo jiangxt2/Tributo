@@ -19,7 +19,7 @@ _OPTIONAL_CONNECTORS: dict[str, str] = {
 }
 
 
-@PublicAPI(stability="alpha")
+@PublicAPI(stability="beta")
 def register_connector(name: str, cls: type[DataConnector]) -> None:
     """Register a data connector.
 
@@ -34,7 +34,7 @@ def register_connector(name: str, cls: type[DataConnector]) -> None:
     _registry.register(name, cls)
 
 
-@PublicAPI(stability="alpha")
+@PublicAPI(stability="beta")
 def get_connector(name: str) -> DataConnector:
     """Return an instance of a registered data connector.
 
@@ -60,7 +60,7 @@ def get_connector(name: str) -> DataConnector:
     return cls()
 
 
-@PublicAPI(stability="alpha")
+@PublicAPI(stability="beta")
 def list_connectors() -> list[str]:
     """Return the names of all registered connectors."""
     return _registry.list()

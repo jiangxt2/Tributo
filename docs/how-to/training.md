@@ -6,29 +6,35 @@ Run XGBoost and DNN training jobs across a Ray cluster.
 
 ### Configuration File
 
-Create a YAML config (`training.yaml`):
+Create a JSON config (`training.json`):
 
-```yaml
-data:
-  type: s3
-  uri: s3://your-bucket/train/*.parquet
-  format: parquet
-
-model:
-  label_col: "label"
-  xgb_params:
-    objective: "binary:logistic"
-    eval_metric: ["logloss", "auc"]
-    max_depth: 6
-    eta: 0.1
-    subsample: 0.8
-    colsample_bytree: 0.8
-  num_rounds: 200
-  early_stopping_rounds: 20
-
-export:
-  onnx_output: "s3://your-bucket/models/xgboost_model.onnx"
+```json
+{
+  "data": {
+    "type": "s3",
+    "uri": "s3://your-bucket/train/*.parquet",
+    "format": "parquet"
+  },
+  "model": {
+    "label_col": "label",
+    "xgb_params": {
+      "objective": "binary:logistic",
+      "eval_metric": ["logloss", "auc"],
+      "max_depth": 6,
+      "eta": 0.1,
+      "subsample": 0.8,
+      "colsample_bytree": 0.8
+    },
+    "num_rounds": 200,
+    "early_stopping_rounds": 20
+  },
+  "export": {
+    "onnx_output": "s3://your-bucket/models/xgboost_model.onnx"
+  }
+}
 ```
+
+> **Note**: Tributo only supports JSON configuration. YAML is not supported.
 
 ### Python API
 

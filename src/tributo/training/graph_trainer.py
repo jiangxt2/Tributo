@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from tributo.data.graph import GraphDataBundle
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="alpha")
 class BaseGraphTrainer(BaseTrainer):
     """GNN training base class.
 

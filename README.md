@@ -98,9 +98,13 @@ print(client.get_status(job_id))
 ├─────────────────────────────────────────────────────────┤
 │              _common (runtime_env / io / logging)         │
 ├─────────────────────────────────────────────────────────┤
-│                 Ray Cluster (≥ 2.9.0)                    │
+│                 Ray Cluster (2.55.1)                      │
 └─────────────────────────────────────────────────────────┘
 ```
+
+For a detailed map of current capabilities, planned work, and API stability
+guarantees, see the [Architecture Documentation](docs/architecture/) and
+[API Stability Inventory](docs/STABILITY.md).
 
 ---
 

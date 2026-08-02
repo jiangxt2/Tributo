@@ -1,4 +1,6 @@
-"""Phase 2a TransformCompiler implementation for DAFT and RAY backends.
+"""Prototype: TransformCompiler for DAFT and RAY backends.
+
+Stability: prototype — validation only; not for production use. See D4.
 
 This module translates ``TransformSpec`` objects into engine-native
 expressions and applies them to SourcePlans.

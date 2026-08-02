@@ -59,7 +59,7 @@ class IcebergWriteConfig(BaseModel):
     mode: WriteMode = Field(default=WriteMode.OVERWRITE, description="Write mode")
 
 
-@PublicAPI(stability="alpha")
+@PublicAPI(stability="beta")
 class IcebergDataConnector(DataConnector):
     """Iceberg data connector.
 

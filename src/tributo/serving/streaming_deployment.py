@@ -29,7 +29,7 @@ from tributo.util.annotations import PublicAPI
 logger = logging.getLogger(__name__)
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="alpha")
 class StreamingInferenceService(ABC):
     """Streaming inference service base class.
 
@@ -97,7 +97,7 @@ class StreamingInferenceService(ABC):
         }
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="alpha")
 class LLMStreamingService(StreamingInferenceService):
     """LLM streaming inference service.
 

@@ -106,6 +106,6 @@ uv run tributo embed serve stop
 Run hyperparameter optimization.
 
 ```bash
-uv run tributo tune run --config tune_config.yaml
+uv run tributo tune run --config tune_config.json
 ```
 

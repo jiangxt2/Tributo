@@ -49,7 +49,7 @@ run_inference_from_json("inference.json")
 from tributo.inference import submit_inference_job
 
 job_id = submit_inference_job(
-    "inference.yaml",
+    "inference.json",
     dashboard_url="http://127.0.0.1:8265",
 )
 print(f"Job submitted: {job_id}")
