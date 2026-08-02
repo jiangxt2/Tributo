@@ -7,6 +7,7 @@ reporting the estimate as passed.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import pytest
@@ -94,6 +95,38 @@ class TestRefuteContract:
         )
         with pytest.raises(NotImplementedError, match="does not implement refute"):
             est.training_loop()
+
+    def test_training_loop_handles_unresolved_estimate(
+        self,
+        monkeypatch: Any,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Regression: an estimate with no resolved value must not crash
+        logging (``estimate_value`` is typed ``float | None``).
+
+        INFO is enabled so the ``%s`` formatting path actually runs; the
+        previous ``%.4f`` format crashed on ``None`` here.
+        """
+        est = _estimator(_RefutingCausal)
+        est.setup()
+        caplog.set_level(logging.INFO)
+        monkeypatch.setattr(est, "_load_data", lambda: None)
+        monkeypatch.setattr(
+            est,
+            "identify",
+            lambda *args, **kwargs: CausalGraph(treatment="t", outcome="y"),
+        )
+        monkeypatch.setattr(
+            est,
+            "estimate",
+            lambda *args, **kwargs: CausalEffect(
+                method="test.ols",
+                estimate_value=None,
+            ),
+        )
+        result = est.training_loop()
+        assert result["effect"].estimate_value is None
+        assert result["refutation"].passed is True
 
     def test_training_loop_with_refute_override(self, monkeypatch: Any) -> None:
         est = _estimator(_RefutingCausal)
