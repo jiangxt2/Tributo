@@ -186,8 +186,9 @@ class DNNTrainerImpl(BaseTrainer):
         run_config: dict[str, Any] | None = None,
         *,
         _validated_config: DNNTrainingConfig | None = None,
+        **kwargs: Any,
     ) -> None:
-        super().__init__(datasets, config, run_config)
+        super().__init__(datasets, config, run_config, **kwargs)
         self._train_config = _validated_config or DNNTrainingConfig.model_validate(
             config
         )

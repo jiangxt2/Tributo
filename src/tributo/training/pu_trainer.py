@@ -405,8 +405,9 @@ class PUTrainerImpl(BaseTrainer):
         run_config: dict[str, Any] | None = None,
         *,
         _validated_config: PUTrainingConfig | None = None,
+        **kwargs: Any,
     ) -> None:
-        super().__init__(datasets, config, run_config)
+        super().__init__(datasets, config, run_config, **kwargs)
         self._pu_config = _validated_config or PUTrainingConfig.model_validate(config)
         self._features = build_features_from_config(self._pu_config.features)
 
