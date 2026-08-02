@@ -1,4 +1,6 @@
-"""Pipeline orchestration core.
+"""Alpha: pipeline orchestration core.
+
+Stability: alpha — may change without notice.
 
 Lightweight in-process DAG executor inspired by Kedro's Node/Pipeline
 pattern.  Each ``PipelineStep`` references an algorithm from the trainer
@@ -28,7 +30,7 @@ logger = logging.getLogger(__name__)
 # ── Pipeline data types ──────────────────────────────────────────────────────
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="alpha")
 @dataclass(frozen=True)
 class ArtifactSpec:
     """Artifact type declaration — describes kind and schema.
@@ -48,7 +50,7 @@ class ArtifactSpec:
     schema: dict[str, Any] | None = None
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="alpha")
 @dataclass(frozen=True)
 class ArtifactRef:
     """Pure locator for a step output — no type information.
@@ -66,7 +68,7 @@ class ArtifactRef:
     output_port: str
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="alpha")
 @dataclass(frozen=True)
 class InputBinding:
     """Consumer-side input binding — source reference + expected type.
@@ -89,7 +91,7 @@ class InputBinding:
 # ── PipelineStep ─────────────────────────────────────────────────────────────
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="alpha")
 @dataclass
 class PipelineStep:
     """A single step in a training pipeline.
@@ -112,7 +114,7 @@ class PipelineStep:
 # ── Pipeline ─────────────────────────────────────────────────────────────────
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="alpha")
 class Pipeline:
     """In-process DAG executor for multi-step training workflows.
 

@@ -73,7 +73,7 @@ _KNOWN_ARTIFACT_KINDS: frozenset[str] = frozenset(
 )
 
 
-@PublicAPI(stability="stable")
+@PublicAPI(stability="beta")
 def is_known_artifact_kind(kind: str) -> bool:
     """Return ``True`` if *kind* is a recognised artifact kind constant."""
     return kind in _KNOWN_ARTIFACT_KINDS

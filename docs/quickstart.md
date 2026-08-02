@@ -4,7 +4,7 @@ This guide gets you from zero to a running Tributo job in under 5 minutes.
 
 ## Prerequisites
 
-- Python 3.10–3.13
+- Python 3.12–3.13
 - A [Ray cluster](https://docs.ray.io/en/latest/cluster/getting-started.html) (or use `ray.init()` for local mode)
 - Optional: S3-compatible storage (MinIO, AWS S3, etc.)
 

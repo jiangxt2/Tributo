@@ -27,7 +27,6 @@ dependencies = [
     "ray[default,serve,tune]==2.55.1",
     "pydantic>=2.0.0",
     "click>=8.0.0",
-    "pyyaml>=6.0.0",
     "onnxruntime>=1.20.0",
     "s3fs>=2026.2.0",
     "pyarrow>=15.0.0",

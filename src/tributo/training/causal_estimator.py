@@ -1,4 +1,4 @@
-"""BaseCausalEstimator — causal inference base class.
+"""Causal inference base class.
 
 Follows the DoWhy / EconML three-phase lifecycle:
 ``identify → estimate → refute``, adapted to the ``BaseTrainer``

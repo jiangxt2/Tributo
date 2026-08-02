@@ -20,7 +20,7 @@ from tributo.util.annotations import PublicAPI
 logger = logging.getLogger(__name__)
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="alpha")
 class KafkaStreamSource(StreamSource):
     """Kafka event stream source for online inference.
 

@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     import ray.data
 
 
-@PublicAPI(stability="alpha")
+@PublicAPI(stability="beta")
 class WriteMode(Enum):
     """Write mode.
 
@@ -34,7 +34,7 @@ class WriteMode(Enum):
     APPEND = "append"
 
 
-@PublicAPI(stability="alpha")
+@PublicAPI(stability="beta")
 class S3Config(StrictConfigModel):
     """S3 connection configuration, shared across all data modules.
 
@@ -53,7 +53,7 @@ class S3Config(StrictConfigModel):
     region: Optional[str] = Field(default=None, description="AWS region")
 
 
-@PublicAPI(stability="alpha")
+@PublicAPI(stability="beta")
 class DataConnector(ABC):
     """Abstract base class for data connectors.
 

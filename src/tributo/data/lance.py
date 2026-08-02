@@ -44,7 +44,7 @@ class LanceWriteConfig(BaseModel):
     s3: Optional[S3Config] = Field(default=None, description="S3 connection config")
 
 
-@PublicAPI(stability="alpha")
+@PublicAPI(stability="beta")
 class LanceDataConnector(DataConnector):
     """Lance data connector.
 
