@@ -277,7 +277,8 @@ class AlgorithmSpec:
         config_model: Pydantic model for config validation.
         execution_kind: Lifecycle skeleton (``TRAIN`` / ``ESTIMATE`` / ``TRANSFORM``).
         capabilities: Composable infrastructure feature flags
-            (``TUNABLE`` / ``EXPORTABLE`` / ``DISTRIBUTED`` / ``INCREMENTAL``).
+            (``TUNABLE`` / ``EXPORTABLE`` / ``DISTRIBUTED`` / ``INCREMENTAL``);
+            must be declared explicitly — no capabilities are assumed.
         status: Lifecycle stage.
         deprecated_since: Version when deprecated (e.g. ``"0.4.0"``).
         replacement: Name of the replacement algorithm.
@@ -311,7 +312,10 @@ class AlgorithmSpec:
 
     # -- execution kind & capabilities (Phase 4: algorithm extensibility) ------
     execution_kind: ExecutionKind = ExecutionKind.TRAIN
-    capabilities: tuple[Capability, ...] = (Capability.TUNABLE, Capability.EXPORTABLE)
+    # No default capabilities: every algorithm must declare the
+    # infrastructure features it actually supports, otherwise capability
+    # gates (e.g. TuneRunner's TUNABLE check) can never reject anything.
+    capabilities: tuple[Capability, ...] = ()
 
     # -- lifecycle -------------------------------------------------------------
     status: AlgorithmStatus = AlgorithmStatus.READY

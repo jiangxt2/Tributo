@@ -12,6 +12,7 @@ from tributo.data.base import S3Config
 from tributo.integrations.broker import CancellationChecker
 from tributo.training.algorithm_spec import (
     AlgorithmSpec,
+    Capability,
     DataLoadingMode,
     ProblemType,
     ResourceHints,
@@ -742,6 +743,7 @@ _trainer_spec = AlgorithmSpec(
     ),
     data_modality=("tabular",),
     extras_group="training",
+    capabilities=(Capability.TUNABLE, Capability.EXPORTABLE),
     data_loading=DataLoadingMode.CANONICAL_DRIVER,
     resource_hints=ResourceHints(gpu_required=False),
     config_model=XGBoostTrainingConfig,

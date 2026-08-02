@@ -9,6 +9,7 @@ from tributo.exceptions import JobConfigurationError
 from tributo.training.algorithm_spec import (
     AlgorithmSpec,
     AlgorithmStatus,
+    Capability,
     DataLoadingMode,
     ProblemFamily,
     ProblemType,
@@ -117,6 +118,21 @@ class TestCatalogList:
             trad=_spec("trad", tags=("classical",)),
         )
         assert cat.list(tag="ctr") == ["ctr"]
+
+    def test_filter_by_capabilities(self) -> None:
+        tunable = AlgorithmSpec(
+            name="tunable-alg",
+            trainer_cls=FakeTrainer,
+            capabilities=(Capability.TUNABLE, Capability.EXPORTABLE),
+        )
+        plain = AlgorithmSpec(name="plain-alg", trainer_cls=FakeTrainer)
+        cat = _catalog(tunable=tunable, plain=plain)
+        # Enum and plain-string forms both filter on the declared set.
+        assert cat.list(capabilities=Capability.TUNABLE) == ["tunable-alg"]
+        assert cat.list(capabilities="tunable") == ["tunable-alg"]
+        assert cat.list(capabilities=(Capability.TUNABLE, Capability.EXPORTABLE)) == [
+            "tunable-alg"
+        ]
 
     def test_filter_by_extras_group(self) -> None:
         cat = _catalog(

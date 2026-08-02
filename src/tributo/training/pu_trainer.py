@@ -34,6 +34,7 @@ from pydantic import Field
 from tributo._common.config import StrictConfigModel
 from tributo.training.algorithm_spec import (
     AlgorithmSpec,
+    Capability,
     DataLoadingMode,
     ProblemType,
     ResourceHints,
@@ -633,6 +634,7 @@ _trainer_spec = AlgorithmSpec(
     problem_types=(ProblemType.PU_LEARNING,),
     data_modality=("tabular",),
     extras_group="identity",
+    capabilities=(Capability.TUNABLE, Capability.EXPORTABLE),
     data_loading=DataLoadingMode.CANONICAL_TRAINER,
     resource_hints=ResourceHints(gpu_required=False),
     config_model=PUTrainingConfig,

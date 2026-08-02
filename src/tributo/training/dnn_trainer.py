@@ -13,6 +13,7 @@ from pydantic import Field
 from tributo._common.config import StrictConfigModel
 from tributo.training.algorithm_spec import (
     AlgorithmSpec,
+    Capability,
     DataLoadingMode,
     ProblemType,
     ResourceHints,
@@ -760,6 +761,7 @@ register(
         problem_types=(ProblemType.BINARY_CLASSIFICATION,),
         data_modality=("tabular",),
         extras_group="identity",
+        capabilities=(Capability.TUNABLE, Capability.EXPORTABLE),
         data_loading=DataLoadingMode.CANONICAL_DRIVER,
         resource_hints=ResourceHints(gpu_required=False),
         config_model=DNNTrainingConfig,

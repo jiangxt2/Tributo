@@ -196,7 +196,12 @@ class BaseCausalEstimator(BaseTrainer):
         estimate: CausalEffect,
         method: str = "placebo",
     ) -> RefutationResult:
-        """Refute the estimated causal effect (default: placebo treatment).
+        """Refute the estimated causal effect.
+
+        Subclasses must implement this method.  The base class
+        deliberately provides **no** default implementation — returning
+        ``passed=True`` for an unimplemented refutation would be a false
+        success (the same pattern fixed for XGBoost export in E0).
 
         Args:
             estimate: The estimated effect from ``estimate()``.
@@ -204,23 +209,15 @@ class BaseCausalEstimator(BaseTrainer):
 
         Returns:
             A ``RefutationResult``.
+
+        Raises:
+            NotImplementedError: The subclass does not implement
+                refutation.
         """
-        logger.info(
-            "Refuting estimate (method=%s): %s → %s, value=%.4f",
-            method,
-            self._treatment,
-            self._outcome,
-            estimate.estimate_value,
-        )
-        # Default placebo refutation: the result is left to the concrete
-        # implementation or treated as passed when no specialised refuter
-        # is available.
-        return RefutationResult(
-            method=method,
-            passed=True,
-            new_effect=estimate.estimate_value or 0.0,
-            interpretation=f"Placebo refutation ({method}) not implemented; "
-            f"estimate accepted by default.",
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement refute("
+            f"method={method!r}) for estimate {estimate.method!r}; "
+            f"override to enable refutation."
         )
 
     # -- BaseTrainer integration -----------------------------------------------
@@ -246,8 +243,10 @@ class BaseCausalEstimator(BaseTrainer):
         )
         logger.info("Estimating causal effect via graph: %s", graph.graph_description)
         effect = self.estimate(data, graph)
+        # estimate_value is typed float | None, so use %s (%.4f would
+        # crash on an estimate that never resolved a value).
         logger.info(
-            "Estimated effect: %s = %.4f (CI: [%s, %s])",
+            "Estimated effect: %s = %s (CI: [%s, %s])",
             effect.method,
             effect.estimate_value,
             effect.ci_lower,
