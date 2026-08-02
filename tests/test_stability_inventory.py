@@ -280,9 +280,7 @@ def _discover_tributo_modules() -> list[str]:
     for dirpath, _dirnames, filenames in os.walk(root):
         for fname in filenames:
             if fname.endswith(".py") and not fname.startswith("_"):
-                rel = os.path.relpath(
-                    os.path.join(dirpath, fname[:-3]), root
-                )
+                rel = os.path.relpath(os.path.join(dirpath, fname[:-3]), root)
                 mod = "tributo." + rel.replace(os.sep, ".")
                 modules.append(mod)
         if "__init__.py" in filenames:
