@@ -30,13 +30,12 @@ def test_xgboost_rejects_yaml():
 def test_xgboost_accepts_json(tmp_path: Path):
     path = tmp_path / "cfg.json"
     _write(path, {"data": {"type": "csv", "path": "x.csv", "label_col": "y"}})
-    # Will fail later on actual training but should not fail on parsing
+    # The provider path should preserve the old early missing-file error and
+    # must not start Ray just to discover that the local input is absent.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", FutureWarning)
-        try:
+        with pytest.raises(FileNotFoundError, match=r"x\.csv"):
             run_training_from_json(str(path))
-        except FileNotFoundError:
-            pass  # expected since x.csv doesn't exist
 
 
 def test_pu_rejects_yaml():

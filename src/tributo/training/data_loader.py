@@ -1,39 +1,59 @@
 """Ray Dataset distributed data loading.
 
-Canonical entry-point (Phase 3)::
+Canonical entry-point (D1+D2 — ProviderRegistry path)::
 
     from tributo.training.data_loader import load_ray_dataset_from_source
     ds = load_ray_dataset_from_source({"type": "parquet", "path": "s3://..."})
+
+    # or the target provider/uri shape:
+    ds = load_ray_dataset_from_source(
+        {"provider": "tributo.parquet", "uri": "s3://...", "options": {}}
+    )
 
 Legacy entry-point (deprecated, kept for old plugins)::
 
     from tributo.training.data_loader import load_ray_dataset_from_config
     ds = load_ray_dataset_from_config({"type": "s3", "uri": "s3://...", ...})
+
+``TRIBUTO_DATA_BACKEND=legacy`` (read once at import) rolls back to the
+pre-D1+D2 direct dispatch.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 from pydantic import TypeAdapter
 
 from tributo._common import find_project_root
+from tributo.data.provider_registry import resolve_provider
 from tributo.data.source_config import (
+    CanonicalSourceInput,
     CsvSourceConfig,
     IcebergSourceConfig,
     LegacyConfigNormalizer,
+    LegacySourceInput,
     ParquetSourceConfig,
+    ProviderSourceConfig,
+    RawSourceConfig,
     SourceConfig,
     SqlSourceConfig,
 )
+from tributo.exceptions import JobConfigurationError
 
 if TYPE_CHECKING:
     import ray.data
 
 logger = logging.getLogger(__name__)
+
+# Rollback switch (migration-safety.md): flags are read once at import time —
+# changing the env var at runtime has no effect, by design.
+DATA_BACKEND = os.getenv("TRIBUTO_DATA_BACKEND", "provider")
 
 # ---------------------------------------------------------------------------
 # Canonical loader (Phase 3)
@@ -45,15 +65,21 @@ def load_ray_dataset_from_source(
     *,
     project_root_path: Path | None = None,
 ) -> "ray.data.Dataset":
-    """Load a Ray Dataset from a canonical ``SourceConfig`` dict.
+    """Load a Ray Dataset from a canonical source dict (D1+D2 provider path).
 
-    Validates *source* against the ``SourceConfig`` discriminated union
-    before dispatching to the appropriate loader.  Unknown fields are
-    rejected because all four source types inherit ``StrictConfigModel``.
+    Validates *source* against ``CanonicalSourceInput`` (both the
+    ``type/path/dialect`` and the ``provider/uri`` shapes) and routes it
+    through the ProviderRegistry: ``resolve → normalize → open →
+    to_ray_dataset``.  Unknown fields are rejected (``extra="forbid"``).
+
+    With ``TRIBUTO_DATA_BACKEND=legacy`` the old direct dispatch is used
+    instead (rollback switch); a ``provider/uri`` input then fails loudly
+    rather than being silently guessed.
 
     Args:
         source: Canonical source dict, e.g.
-            ``{"type": "parquet", "path": "s3://bucket/data"[, "s3": {...}]}``.
+            ``{"type": "parquet", "path": "s3://bucket/data"[, "s3": {...}]}``
+            or ``{"provider": "tributo.parquet", "uri": ..., "options": {...}}``.
         project_root_path: Project root for resolving relative paths.
 
     Returns:
@@ -61,22 +87,23 @@ def load_ray_dataset_from_source(
 
     Raises:
         ValidationError: If *source* fails Pydantic validation.
-        ValueError: Unsupported source type (should not happen after validation).
+        JobConfigurationError: Unknown provider/type, or provider/uri input
+            under the legacy backend.
     """
-    adapter: TypeAdapter[Any] = TypeAdapter(SourceConfig)
+    if DATA_BACKEND == "legacy":
+        if isinstance(source, ProviderSourceConfig) or (
+            isinstance(source, dict) and "provider" in source
+        ):
+            raise JobConfigurationError(
+                "provider/uri sources require TRIBUTO_DATA_BACKEND=provider; "
+                "the legacy backend cannot route them."
+            )
+        return _legacy_load_from_canonical_dict(source, project_root_path)
+
+    adapter: TypeAdapter[Any] = TypeAdapter(CanonicalSourceInput)
     cfg = adapter.validate_python(source)
-
-    if isinstance(cfg, SqlSourceConfig):
-        return _load_sql_dataset(cfg)
-    if isinstance(cfg, (ParquetSourceConfig, CsvSourceConfig)):
-        return _load_file_dataset(cfg, project_root_path)
-    if isinstance(cfg, IcebergSourceConfig):
-        from tributo.data import get_connector
-
-        connector = get_connector("iceberg")
-        return connector.read(catalog=cfg.catalog, table=cfg.table)
-
-    raise ValueError(f"unsupported source type: {type(cfg).__name__}")
+    cfg = _resolve_relative_path(cfg, project_root_path)
+    return _load_via_provider(cfg)
 
 
 # ---------------------------------------------------------------------------
@@ -105,16 +132,122 @@ def load_ray_dataset_from_config(
     """
     warnings.warn(
         "load_ray_dataset_from_config() is deprecated. "
-        "Use load_ray_dataset_from_source() with a canonical source dict.",
+        "Use load_ray_dataset_from_source() with a canonical source dict. "
+        "See https://github.com/jiangxt2/Tributo/blob/master/docs/architecture/"
+        "migration-safety.md.",
         FutureWarning,
         stacklevel=2,
     )
-    cfg = LegacyConfigNormalizer.normalize(data_config)
-    # Dump back to dict so the canonical loader re-validates via TypeAdapter.
-    return load_ray_dataset_from_source(
-        cfg.model_dump(mode="python"),
+    if "provider" in data_config:
+        raise JobConfigurationError(
+            "provider/uri sources require load_ray_dataset_from_source(); "
+            "the legacy config entrypoint cannot route canonical ProviderSourceConfig"
+        )
+    if DATA_BACKEND == "legacy":
+        cfg = LegacyConfigNormalizer.normalize(data_config)
+        return _legacy_load_from_canonical_dict(
+            cfg.model_dump(mode="python"),
+            project_root_path=project_root_path,
+        )
+    # D1+D2: the historical semantics (type=csv → Parquet default, type=s3
+    # routing, ...) live only in the LegacySourceInput branch.
+    return _load_via_provider(
+        LegacySourceInput(raw=dict(data_config)),
         project_root_path=project_root_path,
     )
+
+
+# ---------------------------------------------------------------------------
+# D1+D2 provider path
+# ---------------------------------------------------------------------------
+
+
+def _load_via_provider(
+    source: CanonicalSourceInput | LegacySourceInput,
+    project_root_path: Path | None = None,
+) -> "ray.data.Dataset":
+    """Route a typed canonical/legacy source through the ProviderRegistry.
+
+    The registry resolves the provider (canonical route or legacy type
+    route); legacy semantics are materialized by ``LegacyConfigNormalizer``
+    into a builtin config before ``normalize()``.  Relative file paths are
+    resolved against *project_root_path* (same behaviour as the legacy
+    dispatch).
+    """
+    provider = resolve_provider(source)
+    if isinstance(source, LegacySourceInput):
+        normalized = LegacyConfigNormalizer.normalize(source.raw)
+        if isinstance(normalized, RawSourceConfig):
+            raise JobConfigurationError(
+                f"Unknown legacy source type: {normalized.type!r}"
+            )
+        resolved_input = _resolve_relative_path(normalized, project_root_path)
+        resolved = provider.normalize(resolved_input)
+    else:
+        resolved = provider.normalize(source)
+    handle = provider.open(resolved)
+    try:
+        return handle.to_ray_dataset()
+    finally:
+        handle.close()
+
+
+def _resolve_relative_path(
+    source: CanonicalSourceInput, project_root_path: Path | None
+) -> CanonicalSourceInput:
+    """Resolve relative paths of builtin file sources against the project root.
+
+    Preserves the historical local-path behaviour. Relative local paths in
+    both builtin ``path`` and file-provider ``uri`` shapes are resolved
+    against *project_root_path*; explicit URI schemes and absolute paths are
+    left unchanged.
+    """
+    if isinstance(source, (ParquetSourceConfig, CsvSourceConfig)):
+        parsed = urlsplit(source.path)
+        if parsed.scheme:
+            return source
+        path = Path(source.path)
+        if not path.is_absolute():
+            root = project_root_path or find_project_root()
+            return source.model_copy(update={"path": str(root / path)})
+    if isinstance(source, ProviderSourceConfig):
+        # Canonical file URIs may be supplied as relative local paths.  Resolve
+        # them at the loader boundary so the actual read and ref_id use the
+        # same project-root semantics as the typed source shape.
+        if source.provider in {"tributo.parquet", "parquet", "tributo.csv", "csv"}:
+            parsed = urlsplit(source.uri)
+            path = Path(source.uri)
+            if not parsed.scheme and not path.is_absolute():
+                root = project_root_path or find_project_root()
+                return source.model_copy(update={"uri": str(root / path)})
+    return source
+
+
+def _legacy_load_from_canonical_dict(
+    source: dict[str, Any],
+    project_root_path: Path | None = None,
+) -> "ray.data.Dataset":
+    """Legacy direct dispatch — the ``TRIBUTO_DATA_BACKEND=legacy`` path.
+
+    Frozen copy of the pre-D1+D2 loader: validates against the
+    ``SourceConfig`` union and dispatches by ``isinstance``.  Kept intact
+    for the rollback switch; not evolved (the D1+D2 provider path fixes the
+    S3-CSV and Iceberg connector issues).
+    """
+    adapter: TypeAdapter[Any] = TypeAdapter(SourceConfig)
+    cfg = adapter.validate_python(source)
+
+    if isinstance(cfg, SqlSourceConfig):
+        return _load_sql_dataset(cfg)
+    if isinstance(cfg, (ParquetSourceConfig, CsvSourceConfig)):
+        return _load_file_dataset(cfg, project_root_path)
+    if isinstance(cfg, IcebergSourceConfig):
+        from tributo.data import get_connector
+
+        connector = get_connector("iceberg")
+        return connector.read(catalog=cfg.catalog, table=cfg.table)
+
+    raise ValueError(f"unsupported source type: {type(cfg).__name__}")
 
 
 # ---------------------------------------------------------------------------

@@ -13,7 +13,7 @@ semantics:
 | Domain | Protocol / Class | Location |
 |--------|-----------------|----------|
 | Export source resolution | `SourceProvider` (protocol) | `exporting/protocols.py` |
-| Data source ingestion | `DataSourceProvider` (prototype) | `data/provider.py` |
+| Data source ingestion | `DataSourceProvider` (beta stable contract) | `data/provider.py` |
 | Data connector | `DataConnector` (base class) | `data/base.py` |
 | Inference data routing | `InferenceConfig.data_type` branches | `inference/pipeline.py` |
 | Model export | `ModelExporter` (protocol) | `exporting/protocols.py` |
@@ -44,11 +44,18 @@ Rules:
 - Lowercase, dot-separated. Each segment matches `[a-z][a-z0-9_]*`.
 - Built-in providers use the `tributo.` prefix. Third-party providers use their
   package name as prefix.
-- The provider ID is the **canonical key** in `SourceConfig.provider`. User-facing
-  short aliases (e.g. `engine="daft"`) are mapped to full provider IDs by a
-  **selector table** that lives in the data registry — not in the provider itself.
+- The provider ID is the **canonical key** in `ProviderSourceConfig.provider`. A provider
+  may declare default short aliases (e.g. `"parquet"`), but alias resolution and
+  conflict checks belong to the **data registry**, not the provider: the
+  registry maps aliases to full provider IDs through a selector table, exact ID
+  always wins over alias, and registration fails fast on any ID↔ID, alias↔ID,
+  or alias↔alias conflict (atomically — a failed registration leaves no partial
+  entry).
 - Provider IDs are **immutable once released**. Renaming a provider requires a
   new ID and a deprecation window for the old one.
+- Provider IDs identify the logical bounded data source, not an execution
+  engine. Daft, Ray, and legacy implementations remain internal backends or
+  selector choices and must not be frozen into the public provider namespace.
 
 #### 2. Exporter IDs (Bundle Domain)
 
@@ -105,7 +112,7 @@ A `DatasetRef` is a lightweight, credential-free record of what data was used:
 ```python
 @dataclass(frozen=True)
 class DatasetRef:
-    ref_id: str            # SHA-256 of (provider_id + canonical_uri + partition_filter)
+    ref_id: str            # Versioned SHA-256 of all canonical result-affecting inputs
     provider_id: str       # e.g. "tributo.parquet"
     uri: str               # Canonical URI (s3://, file://, etc.)
     schema_fingerprint: str  # SHA-256 of canonical Arrow schema JSON
@@ -114,11 +121,14 @@ class DatasetRef:
 ```
 
 Rules:
-- `DatasetRef` lives in `tributo.data.refs` (to be created by D1+D2; this module
-  does not exist yet as of A0) and is importable by both `tributo.data`
-  and `tributo.exporting`.
+- `DatasetRef` lives in `tributo.data.refs` and is importable by both
+  `tributo.data` and `tributo.exporting`.
 - **Credentials must never appear** in a `DatasetRef` or Bundle Manifest.
-- `DatasetRef` is stored in `ManifestSourceInfo` (via `source_fingerprint`).
+- Bundle Manifest v1 stores only `DatasetRef.ref_id` in
+  `ManifestSourceInfo.source_fingerprint`; the full `DatasetRef` remains a
+  credential-free data-domain object and is not embedded in the existing v1
+  string field. A richer manifest field requires a separate compatibility
+  decision.
 - Future evolution: if richer provenance is needed, add optional `parent_refs:
   tuple[DatasetRef, ...]` — never change the existing fields.
 
@@ -130,7 +140,45 @@ Rules:
 - Unknown fields: **fail-fast** (Pydantic `extra="forbid"`).
 - Compatibility: New optional fields with defaults must not break existing configs.
   Removing or renaming a field requires a deprecation window.
-- `SourceConfig.provider` stores the **full provider ID** (not the short alias).
+- `ProviderSourceConfig.provider` stores the **full provider ID** (not the short alias).
+- Existing beta JSON configurations using `type/path/dialect` remain readable
+  during migration. D1+D2 normalizes both the existing shape and the target
+  `provider/uri` shape into an internal `ResolvedSource`; it must not silently
+  remove or rename the existing persisted fields.
+- Canonical input is **typed, never guessed from a bare dict**:
+  `CanonicalSourceInput = BuiltinSourceConfig | ProviderSourceConfig`, where
+  `ProviderSourceConfig` has the fields `provider` (full ID), `uri` and
+  `options` (single name — no `config`/`format_options` aliases). Legacy dicts
+  enter through `LegacySourceInput(raw=..., mode="legacy")`; the historical
+  `type=csv` → Parquet default exists only in that legacy layer.
+
+### D1+D2 Runtime Boundary
+
+D1+D2 stabilizes the smallest bounded-read contract needed by the production
+loader:
+
+```python
+DataSourceProvider.open(ResolvedSource) -> DatasetHandle
+DatasetHandle.to_ray_dataset() -> ray.data.Dataset
+DatasetHandle.close() -> None  # idempotent
+```
+
+`ResolvedSource` contains the canonical provider ID, credential-free URI and
+validated options. `DataConnector` and the existing SQL loaders remain
+implementation details behind Provider adapters. The existing `SourcePlan`,
+`TransformCompiler`, transform pushdown and residual-transform lifecycle stay
+prototype-level until D4 makes a separate go/no-go decision.
+
+Resolution order is explicit: `ProviderRegistry.resolve()` selects the provider
+(exact ID → alias → built-in legacy mapping), then the selected provider
+`normalize()`s the input into `ResolvedSource`, then `open()` returns the
+`DatasetHandle`. Rollback to the old direct dispatch is controlled by
+`TRIBUTO_DATA_BACKEND=legacy` (see migration-safety.md); a `provider/uri` input
+is rejected loudly in legacy mode rather than silently guessed.
+
+`DatasetHandle` represents a bounded finite read. It does not carry Kafka
+offsets, commits, partition ownership, or other `StreamSource` lifecycle
+semantics.
 
 ### Manifest Schema Version (Bundle Domain)
 
@@ -279,8 +327,9 @@ Every exported artifact has one of these statuses:
 
 - Existing `SourceProvider` in `exporting/protocols.py` is renamed to
   `ExportSourceProvider` (E1). The old name is deprecated with a re-export shim.
-- Existing provider IDs in prototype code (`data/provider.py`) are aligned to
-  the `tributo.<name>` format.
+- Existing prototype provider IDs in `data/provider.py` are not a public
+  compatibility contract; D1+D2 replaces engine-oriented examples with the
+  logical data-source IDs defined above.
 - No existing Manifest data is affected (v1 remains v1).
 
 ### Rollback

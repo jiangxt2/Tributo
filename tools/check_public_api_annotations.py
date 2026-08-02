@@ -38,6 +38,7 @@ _EXEMPT_NAMES: set[str] = {
     "SourceConfig",
     "SourceInput",
     "TrainerSpec",
+    "CanonicalSourceInput",
     # Deprecated alias — resolves to the annotated ExportSourceProvider.
     "SourceProvider",
     # Stable string constants — Python str objects cannot be decorated.

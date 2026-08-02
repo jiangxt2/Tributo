@@ -26,8 +26,8 @@ from pydantic import Field, ValidationError
 from tributo._common.config import StrictConfigModel
 from tributo._common.immutable import deep_thaw
 from tributo.data.source_config import (
+    CanonicalSourceInput,
     LegacyConfigNormalizer,
-    SourceConfig,
 )
 from tributo.exceptions import JobConfigurationError
 from tributo.training.algorithm_spec import AlgorithmSpec, DataLoadingMode
@@ -47,9 +47,10 @@ class TrainingDataConfig(StrictConfigModel):
     subclasses or other config sections.
     """
 
-    source: SourceConfig | None = Field(
+    source: CanonicalSourceInput | None = Field(
         default=None,
-        description="Storage source. None when datasets are supplied externally.",
+        description="Storage source (type/path/dialect or provider/uri shape). "
+        "None when datasets are supplied externally.",
     )
 
 
@@ -225,7 +226,7 @@ def resolve_data_source(
     """Return a canonical source dict for data loading.
 
     - ``CANONICAL_*``: reads ``config["data"]["source"]``, re-validates
-      with ``TypeAdapter(SourceConfig)``.
+      with ``TypeAdapter(CanonicalSourceInput)``.
     - ``LEGACY_DRIVER``: normalises the flat ``config["data"]`` via
       the legacy adapter, dumps back to canonical.
 
@@ -249,7 +250,7 @@ def resolve_data_source(
         # Re-validate through TypeAdapter to catch source-level errors early.
         from pydantic import TypeAdapter
 
-        adapter: TypeAdapter[Any] = TypeAdapter(SourceConfig)
+        adapter: TypeAdapter[Any] = TypeAdapter(CanonicalSourceInput)
         try:
             validated = adapter.validate_python(source)
         except ValidationError as e:

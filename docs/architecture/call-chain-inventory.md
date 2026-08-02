@@ -1,7 +1,7 @@
 # Call Chain Inventory
 
 Documenting every data entry point and model export entry point in the
-current codebase (baseline: commit `5ed81a0`, 2026-08-02).
+current codebase (baseline: commit `137b125`, 2026-08-02).
 
 ## Data Entry Points
 
@@ -14,33 +14,37 @@ User code
   ↓
 load_ray_dataset_from_config(config: dict)        ← main public entry
   ↓
-load_ray_dataset_from_source(source: SourceConfig) ← canonical (D1+D2 target)
+LegacySourceInput(raw=config, mode="legacy")
   ↓
-  type dispatch:
-    ├── "s3" / "csv" / "parquet" / "lance"
-    │     → _load_file_dataset()
-    │       → ray.data.read_parquet / read_csv / read_lance
-    │
-    ├── "clickhouse"
-    │     → _load_clickhouse_dataset()  ← deprecated loader wrapper
-    │       → _load_clickhouse()
-    │         → clickhouse-connect → ray.data.from_arrow
-    │
-    ├── "doris" / "mysql"
-    │     → _load_doris_mysql()
-    │       → PyMySQL → ray.data.from_arrow
-    │
-    └── "postgresql" / ConnectorX path
-          → _load_connectorx()  ← NotImplementedError (experimental)
+load_ray_dataset_from_source(source: CanonicalSourceInput)
+  ↓
+ProviderRegistry.resolve() → provider.normalize()
+  ↓
+provider.open(resolved) → DatasetHandle.to_ray_dataset()
 ```
 
 **Legacy alias**: `load_dataframe_from_config()` — wraps `load_ray_dataset_from_config()` into Pandas.
 
 **Prototype (not on main path)**:
-- `data/provider.py` — `DataSourceProvider`, `SourceRouter`, `SourcePlan` (has
-  unit tests; no production callers)
-- `data/transform_compiler.py` — `TransformCompiler`, Daft/Ray pushdown
-  (prototype; no production callers)
+- `data/transform_compiler.py` — D4 prototype types (`SourcePlan`,
+  `TransformCompiler`, `SourceRouter`, `TransformPipeline`, Daft/Ray
+  pushdown; prototype; no production callers)
+- `data/provider.py` is the D1+D2 **stable** provider contract
+  (`DataSourceProvider` / `ResolvedSource` / `DatasetHandle`), not a
+  prototype.
+
+**D1+D2 canonical path**:
+
+```
+CanonicalSourceInput (provider/uri or type/path/dialect shapes)
+  → ProviderRegistry.resolve()           exact ID → alias → built-in mapping
+  → provider.normalize() → ResolvedSource(provider_id, canonical_uri, options)
+  → provider.open(resolved) → DatasetHandle
+  → DatasetHandle.to_ray_dataset()
+```
+
+Existing `DataConnector` and SQL loaders remain Provider implementation
+details. `SourcePlan` and transform pushdown are deferred to D4.
 
 ### 2. Inference Data Loading
 
@@ -226,7 +230,7 @@ Plugin groups also discovered:
 | Inference ClickHouse branch goes through deprecated loader wrapper | `pipeline.py:152-162` | D3 fix target |
 | Old XGBoost ONNX export swallows errors | `training/onnx_exporter.py` | E0 fix target |
 | SourceProvider (export) ≠ DataSourceProvider (data) | `exporting/protocols.py` vs `data/provider.py` | D1+D2 / E1 rename target |
-| Prototype Provider/TransformCompiler has no production callers | `data/provider.py`, `data/transform_compiler.py` | D1+D2 / D4 target |
+| TransformCompiler prototype has no production callers | `data/transform_compiler.py` | D4 target |
 | ConnectorX path is NotImplementedError | `data_loader.py:261-264` | Future; explicit error message added in A0 |
 
 <!-- END -->

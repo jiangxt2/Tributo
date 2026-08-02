@@ -13,25 +13,37 @@ exit gates are satisfied.**
 ### Data Provider (D1+D2 / D3)
 
 ```
-Old: training.data_loader direct dispatch (legacy config dict)
+Old: training.data_loader direct dispatch (legacy type/path/dialect config)
   ↓
-New: DataSourceProvider + SourceConfig (JSON, provider ID)
+New: DataSourceProvider + ResolvedSource (logical provider ID, canonical URI)
   ↓
-Compat: LegacyConfigNormalizer wraps old config dicts → SourceConfig
+Compat: LegacyConfigNormalizer wraps old config dicts → ResolvedSource
 ```
 
 Exit gates before removing legacy adapter:
-- [ ] All built-in data sources (Parquet, Lance, Iceberg, S3, ClickHouse) have
-  Provider implementations with contract tests.
-- [ ] Contract/golden comparison: old path vs new path produce identical
-  `DatasetHandle` for the same input on a fixed benchmark dataset.
+- [ ] All built-in data sources (Parquet, CSV, Iceberg, ClickHouse, Doris) have
+  Provider implementations with contract tests. Lance stays deferred — it is not
+  part of the D1+D2 matrix; S3 is a storage profile, not a provider.
+- [ ] Contract/golden comparison: old path vs new path produce equivalent
+  schema, rows and error behavior for the same input on a fixed benchmark
+  dataset; the new path returns a bounded `DatasetHandle`.
 - [ ] Training, inference, and embeddings all route through the new Provider
   (verified by code audit, not just test coverage).
 - [ ] Legacy adapter has been in place for ≥ 1 minor version with
-  `DeprecationWarning`.
+  `FutureWarning` (the historical deprecation signal used by the data
+  loader).
 
 Rollback: Set `TRIBUTO_DATA_BACKEND=legacy` environment variable (or equivalent
 feature flag) to bypass the Provider router and use the old dispatch.
+
+During D1+D2, existing `DataConnector` and SQL loaders remain implementation
+details behind Provider adapters. Provider IDs identify logical data sources
+(`tributo.parquet`, `tributo.clickhouse`, etc.); engine/backend selectors are
+not persisted as public provider IDs. `SourcePlan` and transform pushdown are
+not part of this migration gate and remain deferred to D4. File providers
+accept local paths and S3 paths with an explicit `S3Config`; S3 URI userinfo,
+query parameters, and fragments are rejected because the current connectors
+cannot execute those forms without changing object-key semantics.
 
 ### Bundle Export (E1 / E2 / E4)
 

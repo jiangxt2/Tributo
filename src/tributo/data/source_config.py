@@ -6,6 +6,7 @@ dispatch in ``training/data_loader.py`` and ``inference/pipeline.py``.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, Field, model_validator
@@ -133,6 +134,8 @@ class IcebergSourceConfig(StrictConfigModel):
         catalog_properties: PyIceberg catalog connection properties.
         s3: S3 authentication config for object storage access.
         snapshot_id: Specific snapshot to read (``None`` = current).
+        row_filter: Optional Iceberg row filter expression.
+        selected_fields: Optional column projection.
     """
 
     type: Literal["iceberg"] = "iceberg"  # noqa: A003
@@ -141,6 +144,8 @@ class IcebergSourceConfig(StrictConfigModel):
     catalog_properties: dict[str, str] = Field(default_factory=dict)
     s3: dict[str, str] | None = None
     snapshot_id: int | None = None
+    row_filter: str | None = None
+    selected_fields: list[str] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +160,34 @@ BuiltinSourceConfig = Annotated[
 
 # Keep SourceConfig alias for backward compatibility.
 SourceConfig = BuiltinSourceConfig
+
+
+@PublicAPI(stability="beta")
+class ProviderSourceConfig(StrictConfigModel):
+    """Target ``provider/uri`` source shape (D1+D2 canonical).
+
+    Attributes:
+        provider: Full provider ID (e.g. ``"tributo.parquet"``). Short
+            aliases are resolved by the ProviderRegistry, but the persisted
+            config stores the full ID.
+        uri: Canonical URI of the bounded data source (``s3://``, local
+            path, or a dialect-specific connection reference).
+        options: Provider-validated options (format options, table
+            references, SQL query digest, etc.). May carry credentials —
+            redaction guarantees they never reach ``repr``, logs, errors,
+            ``DatasetRef`` or benchmark output.
+    """
+
+    provider: str = Field(min_length=1)
+    uri: str = Field(min_length=1)
+    options: dict[str, Any] = Field(default_factory=dict)
+
+
+# Canonical input union: existing type/path/dialect shapes plus the target
+# provider/uri shape. No discriminator — the shape is matched structurally
+# (a dict containing "provider" resolves to ProviderSourceConfig; the mixed
+# shape carrying both "provider" and "type" fails against both members).
+CanonicalSourceInput = BuiltinSourceConfig | ProviderSourceConfig
 
 
 @PublicAPI(stability="beta")
@@ -224,6 +257,21 @@ _SQL_DIALECT_TYPES: dict[str, str] = {
 
 
 @PublicAPI(stability="beta")
+@dataclass(frozen=True)
+class LegacySourceInput:
+    """Explicit wrapper for legacy ``data_config`` dicts (D1+D2).
+
+    Carries the historical semantics of the old JSON shapes — ``type=csv``
+    without an explicit ``format`` reads Parquet, ``type=s3`` routes by
+    ``format``, etc. The ProviderRegistry never guesses these semantics from
+    a bare dict; only this typed wrapper enters the legacy resolution path.
+    """
+
+    raw: dict[str, Any]
+    mode: Literal["legacy"] = "legacy"
+
+
+@PublicAPI(stability="beta")
 class LegacyConfigNormalizer:
     """Normalise legacy ``data_config`` dicts into typed ``SourceConfig`` objects.
 
@@ -252,6 +300,11 @@ class LegacyConfigNormalizer:
         Unknown types become ``RawSourceConfig`` for plugin passthrough.
         Malformed built-in types still raise ``ValueError``.
         """
+        if "provider" in data_config:
+            raise ValueError(
+                "canonical provider/uri input must use "
+                "ProviderSourceConfig; it cannot enter the legacy normalizer"
+            )
         data_type = data_config.get("type", "csv")
 
         if data_type == "s3":
@@ -350,6 +403,8 @@ class LegacyConfigNormalizer:
             catalog_properties=data_config.get("catalog_properties", {}),
             s3=data_config.get("s3"),
             snapshot_id=data_config.get("snapshot_id"),
+            row_filter=data_config.get("row_filter"),
+            selected_fields=data_config.get("selected_fields"),
         )
 
     # -- env fallback helper -------------------------------------------------------

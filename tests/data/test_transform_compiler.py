@@ -5,7 +5,8 @@ from __future__ import annotations
 import pyarrow as pa
 import pytest
 
-from tributo.data.provider import (
+from tributo.data.transform_compiler import (
+    ConcreteTransformCompiler,
     FilterEq,
     FilterIsIn,
     FilterNull,
@@ -14,7 +15,6 @@ from tributo.data.provider import (
     TransformBackend,
     TransformPipeline,
 )
-from tributo.data.transform_compiler import ConcreteTransformCompiler
 
 # Fixed schema for all tests
 SCHEMA = pa.schema(

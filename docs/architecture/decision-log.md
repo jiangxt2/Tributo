@@ -32,17 +32,22 @@ has a benchmarked pushdown path.
 |------|----------|----------|---------|
 | 2026-08-02 | **NO-GO** | D1+D2 not yet merged; no production Provider exists | @jiangxt2 |
 
-### Data-volume / Multi-worker (T3)
+### Data-volume / Multi-worker (T3 Distributed extension)
 
-**Trigger**: D1+D2 AND T1 are merged AND at least one real task exceeds
-single-worker safe capacity.
+T3 Core is an unconditional reliability baseline and does not require a
+Go/No-Go decision. It owns single-worker batch/worker memory budgets,
+input-size validation and fail-fast before unbounded materialization. This
+decision track applies only to the distributed extension.
+
+**Trigger**: D1+D2, T1 and T3 Core are merged AND at least one real task exceeds
+the declared single-worker safe capacity.
 
 **Decision criteria**:
 - A specific task OOMs on a single worker, OR a user reports a training job
   that requires > 16 GB worker memory, OR multi-GPU user requirement is
   documented with a concrete workload.
 - The safe capacity is `min(worker_memory * 0.7, 16 GB)` for single-worker
-  training per the D1+D2 memory budget config.
+  training per the T3 Core memory budget config.
 - `pd.concat` of full `iter_batches` exceeding this limit is the
   signal — not speculation about future scale.
 

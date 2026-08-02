@@ -52,3 +52,22 @@ def mock_ray_address():
 def sample_entrypoint():
     """Provide a sample job entrypoint."""
     return "python -c 'print(\"Hello from Ray\")'"
+
+
+@pytest.fixture(scope="module")
+def ray_local_runtime():
+    """Run Ray data contract tests in one bounded local runtime per module."""
+    import ray
+
+    already_initialized = ray.is_initialized()
+    if not already_initialized:
+        ray.init(
+            include_dashboard=False,
+            ignore_reinit_error=True,
+            num_cpus=1,
+        )
+    try:
+        yield
+    finally:
+        if not already_initialized and ray.is_initialized():
+            ray.shutdown()
