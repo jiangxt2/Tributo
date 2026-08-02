@@ -38,6 +38,8 @@ _EXEMPT_NAMES: set[str] = {
     "SourceConfig",
     "SourceInput",
     "TrainerSpec",
+    # Deprecated alias — resolves to the annotated ExportSourceProvider.
+    "SourceProvider",
     # Stable string constants — Python str objects cannot be decorated.
     "ARTIFACT_KIND_MODEL",
     "ARTIFACT_KIND_REPORT",

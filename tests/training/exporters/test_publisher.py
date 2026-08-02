@@ -16,6 +16,7 @@ from tributo.exporting.models import (
     ArtifactFile,
     ArtifactRef,
     ExportExecutionResult,
+    FailureInfo,
     LogicalArtifact,
     NodeResult,
     ProducerInfo,
@@ -65,6 +66,7 @@ def _make_node_result(
     publish: bool = True,
     artifact_ref: ArtifactRef | None = None,
     exporter_id: str = "test-v1",
+    failure: FailureInfo | None = None,
 ) -> NodeResult:
     return NodeResult(
         node_id=node_id,
@@ -74,6 +76,7 @@ def _make_node_result(
         publish=publish,
         exporter_id=exporter_id,
         artifact_ref=artifact_ref,
+        failure=failure,
     )
 
 
@@ -257,7 +260,15 @@ class TestLocalPublish:
             nodes=(
                 _make_node_result(node_id="fp32", artifact_ref=ref_ok),
                 _make_node_result(
-                    node_id="opt", status="failed", required=False, artifact_ref=None
+                    node_id="opt",
+                    status="failed",
+                    required=False,
+                    artifact_ref=None,
+                    failure=FailureInfo(
+                        code="EXPORT_FAILED",
+                        category="export",
+                        message="optional export failed",
+                    ),
                 ),
             ),
             status="partial",
@@ -276,6 +287,18 @@ class TestLocalPublish:
 
         assert published.result.status == "partial"
         assert published.local_bundle_dir.exists()
+
+        # The manifest records partial at the top level and keeps the
+        # failed node's status and failure details.
+        manifest = json.loads(
+            (published.local_bundle_dir / "manifest.json").read_bytes()
+        )
+        assert manifest["status"] == "partial"
+        opt_node = next(
+            n for n in manifest["execution"]["nodes"] if n["node_id"] == "opt"
+        )
+        assert opt_node["status"] == "failed"
+        assert opt_node["failure"]["message"] == "optional export failed"
 
     def test_failed_execution_rejected(self, tmp_path: Path) -> None:
         staging = tmp_path / "staging"

@@ -11,9 +11,16 @@ import hashlib
 import json
 from collections.abc import Callable
 from datetime import datetime, timezone
-from typing import Any
+from typing import Annotated, Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    Strict,
+    field_validator,
+    model_validator,
+)
 
 from tributo.exporting.models import (
     ArtifactRef,
@@ -43,14 +50,127 @@ class ManifestSourceInfo(BaseModel):
 
 
 @PublicAPI(stability="beta")
+class SignatureField(BaseModel):
+    """A single input/output field with its data type and shape.
+
+    ``dtype`` is a framework-neutral canonical string (e.g. ``"float32"``,
+    ``"int64"``) — never a numpy/scipy object, so the manifest stays
+    JSON-serialisable.  ``shape`` entries are positive integers for fixed
+    dimensions or non-empty strings for dynamic axes (e.g. ``"batch"``).
+    Strict types: floats and booleans are rejected, never coerced.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str = Field(..., min_length=1)
+    dtype: str = Field(..., min_length=1)
+    shape: tuple[Annotated[int, Strict()] | Annotated[str, Strict()], ...] = ()
+
+    @field_validator("name", "dtype")
+    @classmethod
+    def _reject_blank(cls, v: str) -> str:
+        if v != v.strip():
+            raise ValueError(f"must not contain leading/trailing whitespace, got {v!r}")
+        return v
+
+    @field_validator("shape")
+    @classmethod
+    def _check_shape(cls, v: tuple[Any, ...]) -> tuple[Any, ...]:
+        for dim in v:
+            if isinstance(dim, int) and dim <= 0:
+                raise ValueError(f"shape dimensions must be positive, got {dim!r}")
+            if isinstance(dim, str) and not dim.strip():
+                raise ValueError("dynamic shape axes must be non-empty strings")
+        return v
+
+
+@PublicAPI(stability="beta")
 class ManifestSignature(BaseModel):
-    """Input / output signature recorded in the manifest."""
+    """Input / output signature recorded in the manifest.
+
+    Resolution order: ``input_fields``/``output_fields`` take precedence;
+    the v1 ``input_names``/``output_names`` fields serve as fallback for
+    manifests written before fields existed, and ``dynamic_axes`` remains
+    the legacy axis representation.  When both representations are present
+    but disagree on the set of names, the manifest is rejected (fail-fast)
+    rather than silently preferring one.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     input_names: tuple[str, ...] = ()
     output_names: tuple[str, ...] = ()
     dynamic_axes: dict[str, dict[int, str]] = Field(default_factory=dict)
+    input_fields: tuple[SignatureField, ...] = ()
+    output_fields: tuple[SignatureField, ...] = ()
+
+    @model_validator(mode="after")
+    def _check_representation_consistency(self) -> ManifestSignature:
+        for legacy_attr, field_attr in (
+            ("input_names", "input_fields"),
+            ("output_names", "output_fields"),
+        ):
+            legacy_names = getattr(self, legacy_attr)
+            fields = getattr(self, field_attr)
+            if fields:
+                self._check_unique_and_ordered(legacy_attr, legacy_names, fields)
+        # dynamic_axes is a single shared map covering both sides — validate
+        # it once against input_fields + output_fields together.
+        all_fields = self.input_fields + self.output_fields
+        if all_fields:
+            self._check_dynamic_axes_consistency(all_fields)
+        return self
+
+    @staticmethod
+    def _check_unique_and_ordered(
+        legacy_attr: str,
+        legacy_names: tuple[str, ...],
+        fields: tuple[SignatureField, ...],
+    ) -> None:
+        field_names = tuple(f.name for f in fields)
+        if len(set(field_names)) != len(field_names):
+            raise ValueError(
+                f"{legacy_attr.replace('names', 'fields')} contains duplicate "
+                f"field names: {field_names!r}"
+            )
+        if legacy_names and legacy_names != field_names:
+            raise ValueError(
+                f"{legacy_attr} and {legacy_attr.replace('names', 'fields')} "
+                f"disagree on field order: {legacy_names!r} vs {field_names!r}"
+            )
+
+    def _check_dynamic_axes_consistency(
+        self, fields: tuple[SignatureField, ...]
+    ) -> None:
+        declared = {f.name for f in fields}
+        for name in self.dynamic_axes:
+            if name not in declared:
+                raise ValueError(
+                    f"dynamic_axes references undeclared field {name!r}; "
+                    f"declared: {sorted(declared)}"
+                )
+        for f in fields:
+            if f.name not in self.dynamic_axes:
+                continue
+            axes = self.dynamic_axes[f.name]
+            for idx, dim in enumerate(f.shape):
+                if isinstance(dim, str):
+                    if idx not in axes or axes[idx] != dim:
+                        raise ValueError(
+                            f"dynamic axis {idx} of {f.name!r}: shape declares "
+                            f"{dim!r} but dynamic_axes declares {axes!r}"
+                        )
+                elif idx in axes:
+                    raise ValueError(
+                        f"dimension {idx} of {f.name!r} is fixed in shape but "
+                        f"declared dynamic in dynamic_axes: {axes!r}"
+                    )
+            for idx in axes:
+                if idx < 0 or idx >= len(f.shape):
+                    raise ValueError(
+                        f"dynamic axis {idx} of {f.name!r} is out of range for "
+                        f"shape {f.shape!r}"
+                    )
 
 
 @PublicAPI(stability="beta")
@@ -101,7 +221,14 @@ class ExportManifest(BaseModel):
     schema_version: int = Field(default=1, ge=1)
     bundle_id: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    status: str = Field(pattern=r"^(succeeded|partial)$")
+    status: str = Field(
+        pattern=r"^(succeeded|partial)$",
+        description="Published state. 'failed' is an execution-time state — "
+        "a failed bundle is never published (BundleExportService raises "
+        "BundleExportError before publish). Ordinary optional-node failures "
+        "produce 'partial'; session-fatal integrity failures fail the whole "
+        "execution and are never published either.",
+    )
     canonical_uri: str
     tributo_version: str
     source_info: ManifestSourceInfo

@@ -1,7 +1,7 @@
 """Bundle export service — top-level lifecycle orchestration.
 
 ``BundleExportService`` wires together all export components:
-SourceProvider → StagingArea → Planner → Manager → Publisher → callback.
+ExportSourceProvider → StagingArea → Planner → Manager → Publisher → callback.
 
 It is the single entry point for bundle-mode export, replacing the
 legacy ``BaseTrainer.export_model()`` path when ``output.targets`` is set.
@@ -21,7 +21,11 @@ from pathlib import Path
 from typing import Any, Callable
 
 from tributo._common.storage_profiles import StorageProfileResolver
-from tributo.exceptions import BundleExportError, PostPublishCallbackError
+from tributo.exceptions import (
+    BundleExportError,
+    JobConfigurationError,
+    PostPublishCallbackError,
+)
 from tributo.exporting.executor import ExportManager
 from tributo.exporting.manifest import (
     ManifestExecutionNode,
@@ -35,7 +39,7 @@ from tributo.exporting.models import (
     PublishedBundle,
 )
 from tributo.exporting.planner import ExportPlanner
-from tributo.exporting.protocols import SourceProvider
+from tributo.exporting.protocols import ExportSourceProvider
 from tributo.exporting.publisher import Publisher
 from tributo.exporting.registries import (
     ExportRegistry,
@@ -125,7 +129,7 @@ class BundleExportService:
         source: ExportSource,
         config: BundleOutputConfig,
         *,
-        provider: SourceProvider | None = None,
+        provider: ExportSourceProvider | None = None,
         callback: Callable[[PublishedBundle], None] | None = None,
         raise_on_callback_error: bool = False,
         tributo_version: str = "0.0.0",
@@ -135,7 +139,7 @@ class BundleExportService:
         Args:
             source: Resolved ``ExportSource`` (from a provider).
             config: Validated ``BundleOutputConfig`` with non-empty targets.
-            provider: The ``SourceProvider`` that produced *source*. Used to
+            provider: The ``ExportSourceProvider`` that produced *source*. Used to
                 populate ``ManifestSourceInfo``.
             callback: Optional ``on_bundle_complete`` hook, called after
                 publish but before staging cleanup.
@@ -150,7 +154,9 @@ class BundleExportService:
             BundleExportError: If the execution fails (required nodes).
         """
         if config.targets is None:
-            raise ValueError("BundleExportService requires targets (bundle mode)")
+            raise JobConfigurationError(
+                "BundleExportService requires targets (bundle mode)"
+            )
 
         # Generate stable IDs. bundle_id is derived solely from request_id
         # so retries with the same request_id produce the identical bundle_id
@@ -185,16 +191,15 @@ class BundleExportService:
                 source_fingerprint=source.source_fingerprint,
                 framework=source.metadata.get("framework"),
                 framework_version=source.metadata.get("framework_version"),
-                architecture_id=(
-                    source.architecture_id
-                    or (provider.provider_id if provider else None)
-                ),
+                # architecture_id belongs to the Model Factory namespace;
+                # never fall back to the provider ID (separate namespace).
+                architecture_id=source.architecture_id,
                 task_type=source.metadata.get("task_type"),
             )
 
             # Phase 4: Publish.
             if config.bundle_uri is None:
-                raise ValueError("bundle_uri is required for publishing")
+                raise JobConfigurationError("bundle_uri is required for publishing")
             published = publisher.publish(
                 execution=execution,
                 staging_root=staging,

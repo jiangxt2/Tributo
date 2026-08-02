@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "bundle_id": "bundle-golden-v1",
+  "created_at": "2026-07-30T00:00:00Z",
+  "status": "succeeded",
+  "canonical_uri": "/tmp/bundle-golden-v1",
+  "tributo_version": "1.0.0",
+  "source_info": {
+    "source_kind": "xgboost_result",
+    "source_fingerprint": "golden-fp-0001",
+    "framework": null,
+    "framework_version": null,
+    "architecture_id": null,
+    "task_type": null
+  },
+  "input_signature": {
+    "input_names": [
+      "f0",
+      "f1"
+    ],
+    "output_names": [
+      "label"
+    ],
+    "dynamic_axes": {}
+  },
+  "output_signature": {
+    "input_names": [],
+    "output_names": [],
+    "dynamic_axes": {}
+  },
+  "artifacts": [
+    {
+      "name": "onnx-model",
+      "format": "onnx",
+      "flavor_id": "onnx-runtime-v1",
+      "variant": null,
+      "files": [
+        {
+          "relative_path": "model.onnx",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "size_bytes": 4096,
+          "role": "model"
+        }
+      ],
+      "entrypoint": "model.onnx",
+      "tree_digest": "49b9e2729315ad6a687b4846f33be16151f134db8291ecc6ebdb289af50859b6",
+      "producer": {
+        "exporter_id": "xgboost-onnx-v1",
+        "exporter_version": null,
+        "framework_versions": {},
+        "runtime_versions": {},
+        "effective_options": {},
+        "effective_options_digest": ""
+      },
+      "derived_from": [],
+      "validation": []
+    }
+  ],
+  "roles": {
+    "inference": "onnx-model"
+  },
+  "execution": {
+    "execution_id": "exec-golden-v1",
+    "nodes": [
+      {
+        "node_id": "onnx-model",
+        "target_name": "onnx-model",
+        "exporter_id": "xgboost-onnx-v1",
+        "status": "succeeded",
+        "required": true,
+        "implicit": false,
+        "artifact_ref": {
+          "node_id": "onnx-model",
+          "artifact_name": "onnx-model",
+          "tree_digest": "49b9e2729315ad6a687b4846f33be16151f134db8291ecc6ebdb289af50859b6"
+        },
+        "failure": null,
+        "duration_ms": 100
+      }
+    ]
+  }
+}

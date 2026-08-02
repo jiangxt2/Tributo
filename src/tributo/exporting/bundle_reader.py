@@ -86,13 +86,18 @@ class BundleReader:
         except ValueError:
             pass
 
-    def read_manifest(
+    def read_manifest_with_bytes(
         self,
         manifest_or_bundle_uri: str,
         *,
         storage_profile: str | None = None,
-    ) -> ExportManifest:
-        """Read and validate a bundle manifest.
+    ) -> tuple[ExportManifest, bytes]:
+        """Read a bundle manifest, returning ``(manifest, raw_bytes)``.
+
+        ``raw_bytes`` is the exact manifest file content as published.
+        Digest verification MUST compare against these bytes — never a
+        re-serialisation of the parsed model, which changes as soon as
+        new optional fields with defaults are added to the manifest.
 
         *manifest_or_bundle_uri* can be:
         - ``s3://bucket/prefix/manifest.json`` (exact manifest URI)
@@ -101,7 +106,7 @@ class BundleReader:
         - A local path to a bundle root or manifest file.
 
         When resolving via an alias, the alias ``manifest_sha256`` is
-        verified against the canonical manifest bytes.
+        verified against the raw manifest bytes.
         """
         manifest_bytes, expected_sha256 = self._fetch_manifest_bytes(
             manifest_or_bundle_uri, storage_profile
@@ -119,6 +124,28 @@ class BundleReader:
                     f"got {actual_sha256[:16]}..."
                 )
 
+        return manifest, manifest_bytes
+
+    def read_manifest(
+        self,
+        manifest_or_bundle_uri: str,
+        *,
+        storage_profile: str | None = None,
+    ) -> ExportManifest:
+        """Read and validate a bundle manifest.
+
+        *manifest_or_bundle_uri* can be:
+        - ``s3://bucket/prefix/manifest.json`` (exact manifest URI)
+        - ``s3://bucket/prefix/{bundle_id}/`` (bundle root — appends ``manifest.json``)
+        - ``s3://bucket/prefix/aliases/{name}.json`` (alias — resolves one hop)
+        - A local path to a bundle root or manifest file.
+
+        When resolving via an alias, the alias ``manifest_sha256`` is
+        verified against the raw manifest bytes.
+        """
+        manifest, _ = self.read_manifest_with_bytes(
+            manifest_or_bundle_uri, storage_profile=storage_profile
+        )
         return manifest
 
     @contextmanager

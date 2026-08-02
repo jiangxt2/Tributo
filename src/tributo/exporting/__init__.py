@@ -48,7 +48,7 @@ def export(
     """Export a model source to one or more formats.
 
     Args:
-        source: An ``ExportSource`` produced by a ``SourceProvider``
+        source: An ``ExportSource`` produced by an ``ExportSourceProvider``
             (e.g. ``RayXGBoostSourceProvider``).  Raw model objects are
             not accepted — create a source through the matching provider.
         spec: An ``ExportSpec`` (alias for ``BundleOutputConfig``) defining
@@ -63,7 +63,7 @@ def export(
     if not hasattr(source, "source_kind"):
         raise TypeError(
             f"source must be an ExportSource, got {type(source).__name__}. "
-            "Use a SourceProvider to create one (e.g. RayXGBoostSourceProvider)."
+            "Use an ExportSourceProvider to create one (e.g. RayXGBoostSourceProvider)."
         )
 
     # The function-level storage_profile overrides the config-level one.
@@ -103,18 +103,17 @@ def load_bundle(ref: BundleRef | str) -> dict[str, Any]:
         uri = ref
         expected_sha256 = None
 
-    raw = reader.read_manifest(uri)
+    raw, manifest_bytes = reader.read_manifest_with_bytes(uri)
     manifest_dict: dict[str, Any] = raw.model_dump(mode="json")
 
-    # Verify manifest integrity when a BundleRef was provided.
+    # Verify manifest integrity when a BundleRef was provided.  The digest
+    # is computed over the raw manifest bytes as published — never a
+    # re-serialisation of the parsed model, which would diverge once new
+    # optional fields with defaults are added to the schema.
     if expected_sha256 is not None:
         import hashlib
-        import json
 
-        canonical = json.dumps(
-            manifest_dict, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-        ).encode("utf-8")
-        actual_sha256 = hashlib.sha256(canonical).hexdigest()
+        actual_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
         if actual_sha256 != expected_sha256:
             raise ValueError(
                 f"Manifest integrity check failed: "

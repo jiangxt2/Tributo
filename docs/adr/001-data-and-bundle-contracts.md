@@ -145,6 +145,21 @@ Rules:
 - The compatibility window is **2 schema versions or 2 Tributo minor versions,
   whichever is longer**.
 
+#### Manifest v1 Field-Evolution Compatibility Matrix (E1)
+
+The E1 contract keeps `schema_version = 1` and adds **optional fields only**
+(`SignatureField`, `ManifestSignature.input_fields/output_fields`).  The
+resulting matrix is:
+
+| Direction | Behavior |
+|-----------|----------|
+| New reader → old v1 manifest | Supported — optional fields default to empty; v1 artifacts without `artifact_kind` get `"model"` injected |
+| Old reader → new v1 manifest | Fails fast via `extra="forbid"` — expected, not a bug; old versions never promise to read new manifests |
+| Digest verification | `manifest_sha256` is always computed over the **raw published bytes**, so field additions never invalidate old bundles |
+| Rollback | Reverting E1 restores the pre-E1 reader; already-published E1 bundles remain readable by the pre-E1 reader only if they predate the new fields |
+| Removal conditions | `SourceProvider` (protocol name) is removed 2 minor versions after E1 (STABILITY.md), gated on migration telemetry. `input_names`/`dynamic_axes` are v1 compatibility fields and are **retained indefinitely** — new readers parse old manifests through them; they are never removal candidates |
+
+
 ### Bounded Data vs Streaming Protocol Boundary
 
 ```
@@ -231,6 +246,16 @@ Every exported artifact has one of these statuses:
 - If any required artifact is `FAILED`, the Bundle is `FAILED` — this is the
   fix from E0.
 - `PARTIAL_SUCCESS` only applies when optional artifacts are missing.
+- `FAILED` is an **execution-time state**: a failed bundle is never published
+  (`BundleExportService` raises `BundleExportError` before publish), so no
+  committed Manifest ever carries `status="failed"`.  Published Manifests
+  expose only `succeeded` / `partial` (lowercase), while per-node states in
+  `ManifestExecutionNode.status` retain the lowercase `failed` / `blocked` /
+  `cancelled` values.
+- Exception boundary: an ordinary optional-node failure produces a
+  `partial` bundle; session-fatal integrity failures (path traversal,
+  undeclared files, missing files) fail the whole execution even when the
+  failing node is optional, and are never published.
 
 ## Consequences
 

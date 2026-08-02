@@ -177,13 +177,13 @@ class ExporterConformanceTest:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SourceProvider conformance test
+# ExportSourceProvider conformance test
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
 @PublicAPI(stability="beta")
-class SourceProviderConformanceTest:
-    """Base class for testing custom ``SourceProvider`` implementations.
+class ExportSourceProviderConformanceTest:
+    """Base class for testing custom ``ExportSourceProvider`` implementations.
 
     Subclasses must provide:
     - ``provider_cls``: The provider class under test.

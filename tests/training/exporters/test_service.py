@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel
 
+from tributo.exceptions import BundleExportError, JobConfigurationError
 from tributo.exporting.models import (
     ArtifactDraft,
     BundleOutputConfig,
@@ -66,6 +67,31 @@ class _TestExporter:
             entrypoint="model.onnx",
             producer=ProducerInfo(exporter_id=self.exporter_id),
         )
+
+
+class _FailingExporter:
+    """Required exporter whose export() always fails."""
+
+    api_version: int = 1
+    exporter_id: str = "failing-exporter-v1"
+    priority: int = 100
+    output_format: str = "onnx"
+    options_model: type[BaseModel] = _MinOpts
+    validator_bindings: tuple[ValidatorBinding, ...] = ()
+    mutates_source: bool = False
+
+    @classmethod
+    def supports(cls, request: SupportRequest) -> SupportResult:
+        return SupportResult(supported=True, code="OK")
+
+    def export(
+        self,
+        context: ExportContext,
+        source: ExportSource,
+        upstream: dict,
+        target: object,
+    ) -> ArtifactDraft:
+        raise RuntimeError("simulated required export failure")
 
 
 def _make_source() -> ExportSource:
@@ -134,7 +160,7 @@ class TestBundleExportService:
         source = _make_source()
         config = BundleOutputConfig()
 
-        with pytest.raises(ValueError, match="targets"):
+        with pytest.raises(JobConfigurationError, match="targets"):
             service.export_bundle(source=source, config=config)
 
     def test_callback_called(self, tmp_path: Path) -> None:
@@ -208,6 +234,30 @@ class TestBundleExportService:
             )
         assert exc_info.value.bundle_result is not None
         assert exc_info.value.bundle_result.status == "succeeded"
+
+    def test_required_failure_raises_and_publishes_nothing(
+        self, tmp_path: Path
+    ) -> None:
+        er, vr = _make_registries()
+        er.register(_FailingExporter)
+        service = BundleExportService(export_registry=er, validator_registry=vr)
+        config = BundleOutputConfig(
+            bundle_uri=str(tmp_path / "bundles"),
+            targets=[
+                ExportTarget(
+                    name="fp32",
+                    format="onnx",
+                    exporter_id="failing-exporter-v1",
+                )
+            ],
+            roles={"inference": "fp32"},
+        )
+
+        with pytest.raises(BundleExportError, match="Bundle export failed"):
+            service.export_bundle(source=_make_source(), config=config)
+
+        # A failed bundle is never published — no manifest on disk.
+        assert not (tmp_path / "bundles").exists()
 
     def test_request_id_determines_bundle_id(self, tmp_path: Path) -> None:
         er, vr = _make_registries()
