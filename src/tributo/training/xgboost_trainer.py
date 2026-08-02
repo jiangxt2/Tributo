@@ -248,17 +248,19 @@ class XGBoostTrainerImpl(BaseTrainer):
         metrics = result.metrics or {}
         s3_cfg_dict = cfg.data.s3.model_dump()
 
-        # Export ONNX (failure does not interrupt training flow)
+        # Export ONNX.  Once a path is configured the model is a required
+        # artifact: a failed export must fail the run (ADR-001), never
+        # produce a "succeeded" run without the model.
         onnx_path = output_path or cfg.output.onnx_path
         onnx_hash = ""
         onnx_size = 0
         if onnx_path:
+            n_features = int(metrics.get("n_features", 0))
+            if result.checkpoint is None:
+                raise RuntimeError(
+                    "Training result has no checkpoint, cannot export ONNX"
+                )
             try:
-                n_features = int(metrics.get("n_features", 0))
-                if result.checkpoint is None:
-                    raise RuntimeError(
-                        "Training result has no checkpoint, cannot export ONNX"
-                    )
                 onnx_path, onnx_hash, onnx_size = export_onnx(
                     checkpoint=result.checkpoint,
                     onnx_path=onnx_path,
@@ -267,8 +269,10 @@ class XGBoostTrainerImpl(BaseTrainer):
                     s3_cfg=s3_cfg_dict,
                 )
             except Exception:
-                logger.exception("ONNX export failed, continuing without ONNX")
-                onnx_path = None
+                logger.exception(
+                    "ONNX export failed for required artifact: %s", onnx_path
+                )
+                raise
 
         # Save metrics
         feature_columns = [
