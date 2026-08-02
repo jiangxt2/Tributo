@@ -390,6 +390,6 @@ def test_per_symbol_stability_matches_module(module_name: str) -> None:
         pytest.fail(
             f"{module_name}: {len(mismatches)} symbol-level mismatch(es):\n"
             + "\n".join(mismatches)
-            + f"\n\nEither update the @PublicAPI annotation in source, "
-            f"the STABILITY_MAP entry, or add a _SYMBOL_OVERRIDES entry."
+            + "\n\nEither update the @PublicAPI annotation in source, "
+            "the STABILITY_MAP entry, or add a _SYMBOL_OVERRIDES entry."
         )
