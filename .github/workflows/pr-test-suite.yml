@@ -79,11 +79,20 @@ jobs:
 
       - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
 
+      # uv.lock is the single source of truth for dependency and tool
+      # versions; fail the PR when pyproject.toml changed without
+      # regenerating it.
+      - name: Check lockfile freshness
+        run: uv lock --check
+
+      - name: Install dependencies
+        run: uv sync --extra dev --locked
+
       - name: Lint (ruff)
-        run: uvx ruff check src/ tests/
+        run: uv run ruff check src/ tests/
 
       - name: Format check (ruff)
-        run: uvx ruff format --check src/ tests/
+        run: uv run ruff format --check src/ tests/
 
   unit-tests:
     name: Unit Tests (Python ${{ matrix.python-version }})
@@ -101,7 +110,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync --extra dev --locked
 
       - name: Type check (mypy)
         run: uv run mypy src/tributo
@@ -121,7 +130,7 @@ jobs:
   # Domain gate for the export framework (plan: export-contract job).
   # Runs the exporter-agnostic contract tests (models/registries/planner/
   # manager/manifest/publisher/hooks) without heavy optional deps —
-  # ``uv sync --extra dev`` has none of xgboost/torch/onnxmltools.
+  # ``uv sync --extra dev --locked`` has none of xgboost/torch/onnxmltools.
   export-contract:
     name: Export Contract (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
@@ -138,7 +147,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync --extra dev --locked
 
       - name: Run export contract tests
         # YAML plain scalars fold newlines into spaces, which turns the
@@ -184,7 +193,7 @@ jobs:
           exit 1
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync --extra dev --locked
 
       - name: Run S3 export integration tests
         run: uv run python -m pytest tests/integration/test_export_s3.py -v --tb=short --timeout=180

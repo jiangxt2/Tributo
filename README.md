@@ -128,7 +128,31 @@ uv sync --extra embeddings
 
 # Development dependencies
 uv sync --extra dev
+
+# SQL sources (ClickHouse / Doris)
+uv sync --extra clickhouse,mysql
 ```
+
+---
+
+## Data Sources
+
+Data sources are opt-in extras where applicable — install the extra for the
+dialect or backend you use:
+
+| Dialect | Client | Extra | Status |
+|---|---|---|---|
+| Parquet / CSV / local | Ray Data | (core) | ✅ Stable |
+| Lance / Iceberg | pylance / pyiceberg | `tributo[data]` | ✅ Stable |
+| S3 | boto3 / s3fs | `tributo[s3]` | ✅ Stable |
+| ClickHouse | clickhouse-connect | `tributo[clickhouse]` | ✅ Stable |
+| Doris | PyMySQL | `tributo[mysql]` | ✅ Stable |
+| PostgreSQL / MySQL | ConnectorX | — | ⚠️ Experimental — not yet implemented |
+
+The `mysql` extra is required to read Doris sources; missing it fails fast
+with an install hint instead of a bare `ModuleNotFoundError`. ConnectorX
+paths for PostgreSQL/MySQL raise `NotImplementedError` and will be
+implemented in a future release.
 
 ---
 

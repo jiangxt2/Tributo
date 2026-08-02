@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import sys
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+from tributo.data.source_config import SqlSourceConfig
 from tributo.training.data_loader import load_ray_dataset_from_source
 
 
@@ -42,3 +46,24 @@ def test_s3_unsupported_format_raises():
         raise AssertionError("expected ValidationError")
     except ValidationError:
         pass
+
+
+def test_doris_missing_mysql_extra_raises_install_hint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Doris sources fail fast with an install hint when the mysql extra is absent."""
+    from tributo.training.data_loader import _load_doris_mysql
+
+    monkeypatch.setitem(sys.modules, "pymysql", None)  # import fails
+
+    source = SqlSourceConfig(
+        dialect="doris",
+        sql="SELECT 1",
+        host="localhost",
+        port=9030,
+        database="db",
+        user="user",
+        password="pass",
+    )
+    with pytest.raises(ImportError, match=r"tributo\[mysql\]"):
+        _load_doris_mysql(source)

@@ -31,7 +31,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install project with all extras
-        run: uv sync --all-extras
+        run: uv sync --all-extras --locked
 
       - name: Run heavy tests (includes slow)
         run: |
