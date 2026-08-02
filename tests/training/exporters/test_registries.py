@@ -224,7 +224,7 @@ class TestSourceProviderRegistry:
 
     def test_no_provider_raises(self) -> None:
         reg = SourceProviderRegistry()
-        with pytest.raises(JobConfigurationError, match="No SourceProvider"):
+        with pytest.raises(JobConfigurationError, match="No ExportSourceProvider"):
             reg.resolve("unknown")
 
     def test_duplicate_detection(self) -> None:
@@ -334,6 +334,45 @@ class TestSelectCandidate:
 
         with pytest.raises(JobConfigurationError, match="not found"):
             select_candidate([_FakeONNXExporter], target, request, validator_reg)
+
+    def test_explicit_exporter_tolerates_missing_optional_validator(
+        self,
+    ) -> None:
+        """Missing optional validators must not fail planning — the executor
+        logs and continues for optional bindings."""
+
+        class _WithOptionalValidator(_FakeONNXExporter):
+            exporter_id = "with-optional-validator-v1"
+            validator_bindings = (
+                ValidatorBinding(validator_id="missing-validator", required=False),
+            )
+
+        target = ExportTarget(
+            name="fp32", format="onnx", exporter_id="with-optional-validator-v1"
+        )
+        request = SupportRequest(source_kind="pytorch_result")
+        validator_reg = ValidatorRegistry()
+
+        result = select_candidate(
+            [_WithOptionalValidator], target, request, validator_reg
+        )
+        assert result.exporter_id == "with-optional-validator-v1"
+
+    def test_explicit_exporter_requires_registered_validator(self) -> None:
+        class _WithRequiredValidator(_FakeONNXExporter):
+            exporter_id = "with-required-validator-v1"
+            validator_bindings = (
+                ValidatorBinding(validator_id="missing-validator", required=True),
+            )
+
+        target = ExportTarget(
+            name="fp32", format="onnx", exporter_id="with-required-validator-v1"
+        )
+        request = SupportRequest(source_kind="pytorch_result")
+        validator_reg = ValidatorRegistry()
+
+        with pytest.raises(JobConfigurationError, match="missing-validator"):
+            select_candidate([_WithRequiredValidator], target, request, validator_reg)
 
     def test_explicit_not_supported(self) -> None:
         target = ExportTarget(name="fp32", format="onnx", exporter_id="xgboost-onnx-v1")

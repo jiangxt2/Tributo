@@ -79,7 +79,7 @@ version and the Manifest schema version.
 |----------|----------------------|-----------|
 | `ModelExporter` | 1 | `exporting/protocols.py` |
 | `ExportValidator` | 1 | `exporting/protocols.py` |
-| `SourceProvider` (export) | 1 | `exporting/protocols.py` |
+| `ExportSourceProvider` (renamed from `SourceProvider` in E1) | 1 | `exporting/protocols.py` |
 | `ModelFactory` | 1 | `exporting/protocols.py` |
 | `ModelFlavor` | 1 | `integrations/` |
 | Trainer entry points | N/A (not versioned) | `plugin.py` |

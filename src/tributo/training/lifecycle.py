@@ -128,7 +128,7 @@ class TrainingLifecycle:
     ) -> None:
         """Route export through the new bundle pipeline.
 
-        Resolves a ``SourceProvider`` from the training checkpoint, creates
+        Resolves an ``ExportSourceProvider`` from the training checkpoint, creates
         an ``ExportSource``, and delegates to ``BundleExportService``.
         Results are written into *summary*.
         """

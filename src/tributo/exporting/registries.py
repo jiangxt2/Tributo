@@ -28,10 +28,10 @@ from tributo.exporting.models import (
     ValidatorBinding,
 )
 from tributo.exporting.protocols import (
+    ExportSourceProvider,
     ExportValidator,
     ModelExporter,
     ModelFactory,
-    SourceProvider,
 )
 from tributo.util.annotations import DeveloperAPI, PublicAPI
 
@@ -134,17 +134,17 @@ class ExportRegistry:
 
 @PublicAPI(stability="beta")
 class SourceProviderRegistry:
-    """Registry of ``SourceProvider`` classes keyed by ``provider_id``.
+    """Registry of ``ExportSourceProvider`` classes keyed by ``provider_id``.
 
     ``resolve(trainer_type)`` returns the highest-priority provider for
     a given trainer type.  Ties raise an error.
     """
 
     def __init__(self) -> None:
-        self._by_id: dict[str, type[SourceProvider]] = {}
+        self._by_id: dict[str, type[ExportSourceProvider]] = {}
         self._diagnostics: list[PluginLoadDiagnostic] = []
 
-    def register(self, provider_cls: type[SourceProvider]) -> None:
+    def register(self, provider_cls: type[ExportSourceProvider]) -> None:
         pid = provider_cls.provider_id
         if not isinstance(pid, str) or not pid:
             self._diagnostics.append(
@@ -167,11 +167,11 @@ class SourceProviderRegistry:
             return
         self._by_id[pid] = provider_cls
 
-    def resolve(self, trainer_type: str) -> type[SourceProvider]:
+    def resolve(self, trainer_type: str) -> type[ExportSourceProvider]:
         candidates = [p for p in self._by_id.values() if p.trainer_type == trainer_type]
         if not candidates:
             raise JobConfigurationError(
-                f"No SourceProvider for trainer_type {trainer_type!r}. "
+                f"No ExportSourceProvider for trainer_type {trainer_type!r}. "
                 f"Registered: {sorted(self._by_id)}"
             )
         candidates.sort(key=lambda c: (-c.priority, c.provider_id))
@@ -180,7 +180,7 @@ class SourceProviderRegistry:
         if len(candidates) > 1 and candidates[1].priority == top.priority:
             tied = [c.provider_id for c in candidates if c.priority == top.priority]
             raise JobConfigurationError(
-                f"Ambiguous SourceProvider for {trainer_type!r}: {tied}. "
+                f"Ambiguous ExportSourceProvider for {trainer_type!r}: {tied}. "
                 "Specify provider_id explicitly."
             )
         return top
@@ -366,13 +366,20 @@ def select_candidate(
                 f"Exporter {target.exporter_id!r} not found among candidates "
                 f"for format={target.format!r}"
             )
-        if not exact[0].supports(request).supported:
-            result = exact[0].supports(request)
+        candidate = exact[0]
+        result = candidate.supports(request)
+        if not result.supported:
             raise JobConfigurationError(
                 f"Exporter {target.exporter_id!r} does not support "
                 f"{target.format!r}: [{result.code}] {result.reason}"
             )
-        candidate = exact[0]
+        # Mirror the auto-select branch: a candidate whose required
+        # validators cannot be resolved is unavailable (fail-fast).
+        # Optional bindings are tolerated here — the executor logs and
+        # continues for missing optional validators.
+        for vb in candidate.validator_bindings:
+            if vb.required:
+                validator_registry.get(vb.validator_id)
     else:
         supported: list[tuple[type[ModelExporter], SupportResult]] = []
         candidate_failures: list[str] = []
@@ -393,9 +400,11 @@ def select_candidate(
                 continue
             # A candidate whose required validators cannot be resolved is
             # unavailable too — the registry may be missing its plugin.
+            # Optional bindings are tolerated (executor logs and continues).
             try:
                 for vb in c.validator_bindings:
-                    validator_registry.get(vb.validator_id)
+                    if vb.required:
+                        validator_registry.get(vb.validator_id)
             except JobConfigurationError as exc:
                 candidate_failures.append(f"  {c.exporter_id}: {exc}")
                 continue
@@ -441,9 +450,11 @@ def select_candidate(
         # Override defaults from target.validation if provided
         overrides = target.validation.get(vb.validator_id, {})
         merged = {**vb.default_options, **overrides}
-        # Validate against the validator's own options model
-        validator_cls = validator_registry.get(vb.validator_id)
-        validator_cls.options_model(**merged)
+        # Required bindings must resolve here (fail-fast); missing optional
+        # validators are tolerated — the executor logs and continues.
+        if vb.required:
+            validator_cls = validator_registry.get(vb.validator_id)
+            validator_cls.options_model(**merged)
         bindings.append(
             ValidatorBinding(
                 validator_id=vb.validator_id,

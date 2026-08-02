@@ -1,12 +1,13 @@
 """Public-API tests for ``tributo.exporting.export`` input contract.
 
 Locks the documented contract: ``export()`` accepts only an
-``ExportSource`` produced by a ``SourceProvider`` — raw model objects are
-rejected with ``TypeError``.
+``ExportSource`` produced by an ``ExportSourceProvider`` — raw model
+objects are rejected with ``TypeError``.
 """
 
 from __future__ import annotations
 
+import importlib
 from typing import Any
 
 import pytest
@@ -22,3 +23,23 @@ class TestExportInputContract:
 
         with pytest.raises(TypeError, match="ExportSource"):
             export(raw_object, spec)
+
+
+class TestSourceProviderAlias:
+    """Deprecated ``SourceProvider`` name resolves with a warning (STABILITY.md)."""
+
+    def test_deprecated_name_warns_and_resolves(self) -> None:
+        protocols = importlib.import_module("tributo.exporting.protocols")
+
+        with pytest.warns(DeprecationWarning, match="deprecated"):
+            alias = protocols.SourceProvider
+
+        assert alias is protocols.ExportSourceProvider
+
+    def test_wildcard_import_warns_and_exposes_deprecated_name(self) -> None:
+        # STABILITY.md promises import compatibility — including `import *`.
+        ns: dict[str, Any] = {}
+        with pytest.warns(DeprecationWarning, match="deprecated"):
+            exec("from tributo.exporting.protocols import *", ns)
+
+        assert ns["SourceProvider"] is ns["ExportSourceProvider"]

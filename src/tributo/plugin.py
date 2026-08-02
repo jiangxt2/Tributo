@@ -40,10 +40,10 @@ from typing import Any, TypeGuard
 
 from tributo.exporting.models import PluginLoadDiagnostic
 from tributo.exporting.protocols import (
+    ExportSourceProvider,
     ExportValidator,
     ModelExporter,
     ModelFactory,
-    SourceProvider,
 )
 
 logger = logging.getLogger(__name__)
@@ -340,8 +340,8 @@ def _looks_like_exporter(cls: type) -> TypeGuard[type[ModelExporter]]:
     return all(hasattr(cls, a) for a in required_attrs)
 
 
-def _looks_like_source_provider(cls: type) -> TypeGuard[type[SourceProvider]]:
-    """Check structural conformance to SourceProvider without issubclass."""
+def _looks_like_source_provider(cls: type) -> TypeGuard[type[ExportSourceProvider]]:
+    """Check structural conformance to ExportSourceProvider without issubclass."""
     required_attrs = ("api_version", "provider_id", "trainer_type", "priority")
     return all(hasattr(cls, a) for a in required_attrs)
 
@@ -398,7 +398,7 @@ def discover_source_provider_plugins(
 
         if not (isinstance(cls, type) and _looks_like_source_provider(cls)):
             logger.warning(
-                "Source provider plugin %r is not a SourceProvider subclass (got %r); skipping.",
+                "Source provider plugin %r is not an ExportSourceProvider subclass (got %r); skipping.",
                 ep.name,
                 cls,
             )
@@ -406,7 +406,7 @@ def discover_source_provider_plugins(
                 diagnostics,
                 "tributo.source_providers",
                 ep.name,
-                f"Not a SourceProvider subclass (got {cls!r})",
+                f"Not an ExportSourceProvider subclass (got {cls!r})",
                 error_type=type(cls).__name__,
             )
             continue

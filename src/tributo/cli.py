@@ -255,9 +255,9 @@ def export(
         elif source.startswith("hf://"):
             source_uri = source[5:]  # strip hf:// prefix
 
-        from tributo.exporting.protocols import SourceProvider
+        from tributo.exporting.protocols import ExportSourceProvider
 
-        provider: SourceProvider
+        provider: ExportSourceProvider
         if source.startswith("hf://"):
             from tributo.integrations.sources.huggingface import (
                 HuggingFaceSourceProvider,

@@ -7,7 +7,7 @@ the registry and planner consume without instantiation.
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, Mapping, Protocol, runtime_checkable
+from typing import Any, ClassVar, ContextManager, Mapping, Protocol, runtime_checkable
 
 from pydantic import BaseModel
 
@@ -99,12 +99,12 @@ class ExportValidator(Protocol):
     ) -> ValidationResult: ...
 
 
-# ── SourceProvider ───────────────────────────────────────────────────────────
+# ── ExportSourceProvider ───────────────────────────────────────────────────────────
 
 
 @runtime_checkable
 @PublicAPI(stability="beta")
-class SourceProvider(Protocol):
+class ExportSourceProvider(Protocol):
     """Resolves a training result (Ray ``Result`` / HF model id) into
     an ``ExportSource`` context manager.
 
@@ -121,8 +121,7 @@ class SourceProvider(Protocol):
         self,
         result: Any,
         config: BaseModel | None = None,
-    ) -> Any:  # ContextManager[ExportSource]
-        ...
+    ) -> ContextManager[ExportSource]: ...
 
 
 # ── ModelFactory ─────────────────────────────────────────────────────────────
@@ -142,3 +141,38 @@ class ModelFactory(Protocol):
 
     def build(self, model_config: dict[str, Any]) -> Any:  # returns nn.Module
         ...
+
+
+# ── Deprecated alias ──────────────────────────────────────────────────────────
+
+
+def __getattr__(name: str) -> Any:
+    """PEP 562 fallback — deprecated ``SourceProvider`` name.
+
+    Emits a ``DeprecationWarning`` (STABILITY.md: 2 minor versions after the
+    E1 rename).  ``F822`` for this module is suppressed via
+    ``per-file-ignores`` in ``pyproject.toml``: the name is provided
+    dynamically by this function, which static AST analysis cannot see.
+    """
+    if name == "SourceProvider":
+        import warnings
+
+        warnings.warn(
+            "tributo.exporting.protocols.SourceProvider is deprecated; "
+            "use ExportSourceProvider instead",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return ExportSourceProvider
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+__all__ = [
+    "ExportSourceProvider",
+    "ExportValidator",
+    "ModelExporter",
+    "ModelFactory",
+    # Deprecated alias — resolved through __getattr__ (with a warning) so
+    # explicit and wildcard imports keep working until removal (STABILITY.md).
+    "SourceProvider",
+]
