@@ -225,7 +225,14 @@ def _load_doris_mysql(source: SqlSourceConfig) -> "ray.data.Dataset":
     resolved = LegacyConfigNormalizer.resolve_env(source)
 
     import pyarrow as pa
-    import pymysql
+
+    try:
+        import pymysql
+    except ImportError as exc:
+        raise ImportError(
+            "The 'mysql' extra is required for Doris sources. "
+            "Install it with: pip install 'tributo[mysql]'"
+        ) from exc
 
     conn = pymysql.connect(
         host=resolved.host,

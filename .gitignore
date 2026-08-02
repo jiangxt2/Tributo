@@ -19,10 +19,12 @@ build/
 
 # Package manager
 .uv/
-uv.lock
 
 # Testing
 .pytest_cache/
+
+# Docs build output
+site/
 .coverage
 htmlcov/
 .tox/
