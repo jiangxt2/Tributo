@@ -23,6 +23,7 @@ from typing import Any
 from tributo.exporting.models import (
     BundleOutputConfig,
     BundleRef,
+    ExportSource,
     ExportTarget,
 )
 from tributo.util.annotations import PublicAPI
@@ -39,7 +40,7 @@ class ExportSpec(BundleOutputConfig):
 
 @PublicAPI(stability="beta")
 def export(
-    source: Any,
+    source: ExportSource,
     spec: ExportSpec,
     *,
     storage_profile: str | None = None,
@@ -47,8 +48,9 @@ def export(
     """Export a model source to one or more formats.
 
     Args:
-        source: An ``ExportSource`` (from a ``SourceProvider``) or a raw
-            model object that will be wrapped automatically.
+        source: An ``ExportSource`` produced by a ``SourceProvider``
+            (e.g. ``RayXGBoostSourceProvider``).  Raw model objects are
+            not accepted — create a source through the matching provider.
         spec: An ``ExportSpec`` (alias for ``BundleOutputConfig``) defining
             targets, bundle URI, roles, and optional alias.
         storage_profile: Optional storage profile name for S3 credentials.
@@ -56,10 +58,9 @@ def export(
     Returns:
         ``BundleRef`` — an immutable reference to the committed bundle.
     """
-    from tributo.exporting.models import ExportSource
     from tributo.exporting.service import BundleExportService
 
-    if not isinstance(source, ExportSource):
+    if not hasattr(source, "source_kind"):
         raise TypeError(
             f"source must be an ExportSource, got {type(source).__name__}. "
             "Use a SourceProvider to create one (e.g. RayXGBoostSourceProvider)."
