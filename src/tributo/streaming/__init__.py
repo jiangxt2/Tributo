@@ -7,8 +7,16 @@ Separate from ``tributo.data`` (batch connectors) and ``tributo.serving``
 
 from __future__ import annotations
 
+from tributo.exceptions import (
+    KafkaCommitError,
+    KafkaPoisonMessageError,
+    StreamSourceError,
+)
 from tributo.streaming.protocol import StreamSource
 
 __all__ = [
     "StreamSource",
+    "StreamSourceError",
+    "KafkaCommitError",
+    "KafkaPoisonMessageError",
 ]

@@ -147,6 +147,9 @@ _SYMBOL_OVERRIDES: dict[str, str] = {
     "tributo.exceptions.UnsupportedArtifactFormat": "beta",
     "tributo.exceptions.PostPublishCallbackError": "beta",
     "tributo.exceptions.PluginLoadIssue": "beta",
+    "tributo.exceptions.StreamSourceError": "beta",
+    "tributo.exceptions.KafkaCommitError": "beta",
+    "tributo.exceptions.KafkaPoisonMessageError": "beta",
 }
 
 

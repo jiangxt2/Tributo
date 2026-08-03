@@ -1,7 +1,7 @@
 # API Stability Inventory
 
 Canonical stability classification for every Tributo module.
-Last updated: 2026-08-02 (A0 baseline).
+Last updated: 2026-08-03 (S0 fail-closed streaming baseline).
 
 ## Stability Levels
 
@@ -25,6 +25,7 @@ Last updated: 2026-08-02 (A0 baseline).
 | `tributo.job` — `TributoClient`, `RayJob` | `stable` | Primary user-facing API |
 | `tributo.exceptions` — core exceptions | `stable` | ``TributoError`` and 16 common subtypes |
 | `tributo.exceptions` — Bundle/Plugin exceptions | `beta` | ``BundleExportError``, ``AliasConflict``, ``UnsupportedArtifactFormat``, ``PostPublishCallbackError``, ``PluginLoadIssue`` |
+| `tributo.exceptions` — Streaming exceptions | `beta` | ``StreamSourceError``, ``KafkaCommitError``, ``KafkaPoisonMessageError`` |
 
 ### Training (tributo.training.*)
 
@@ -132,7 +133,7 @@ Last updated: 2026-08-02 (A0 baseline).
 | Module | Level | Notes |
 |--------|-------|-------|
 | `tributo.streaming.protocol` — `StreamSource` | `beta` | Streaming protocol |
-| `tributo.streaming.kafka_source` | `alpha` | Kafka source (minimal contract; see decision log) |
+| `tributo.streaming.kafka_source` | `alpha` | Kafka source (S0 fail-closed safety baseline: commit retention, poison-message stop, uncommitted-batch barrier; S1/S2 still NO-GO per decision log) |
 
 ### Pipeline (tributo.pipeline.*)
 
