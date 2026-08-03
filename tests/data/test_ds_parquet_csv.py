@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import tempfile
 from pathlib import Path
 
@@ -203,9 +204,11 @@ class TestParquetDaft:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.s3
-class TestParquetS3Daft:
-    def setup_method(self) -> None:
+@pytest.mark.s3_contract
+@pytest.mark.usefixtures("s3_environment")
+class TestDS1ParquetS3:
+    @pytest.fixture(autouse=True)
+    def _setup_s3(self, s3_environment: None) -> None:
         import daft
         from daft.io import IOConfig, S3Config
 
@@ -220,7 +223,7 @@ class TestParquetS3Daft:
         # S3 config
         self.s3_cfg = IOConfig(
             s3=S3Config(
-                endpoint_url="http://127.0.0.10:9000",
+                endpoint_url=os.environ["S3_ENDPOINT"],
                 key_id="minioadmin",
                 access_key="minioadmin123",
                 region_name="us-east-1",
@@ -230,6 +233,19 @@ class TestParquetS3Daft:
         )
         self.s3_path = "s3://test-bucket/ds1-s3-test.parquet"
 
+        # Do not rely on a pre-created bucket in a developer's MinIO setup.
+        # The local Moto fixture and CI MinIO both start with an empty store.
+        from tributo._common.storage import get_boto3_client
+
+        client = get_boto3_client(path_style=True)
+        try:
+            client.head_bucket(Bucket="test-bucket")
+        except client.exceptions.ClientError as exc:
+            code = exc.response.get("Error", {}).get("Code")
+            if code not in {"404", "NoSuchBucket", "NotFound"}:
+                raise
+            client.create_bucket(Bucket="test-bucket")
+
         # Clean up stale files from previous runs before writing.
         # Daft write_parquet treats the path as a directory — left-over
         # partition files from a prior setup would cause duplicate rows.
@@ -238,7 +254,7 @@ class TestParquetS3Daft:
         s3 = s3fs.S3FileSystem(
             key="minioadmin",
             secret="minioadmin123",
-            endpoint_url="http://127.0.0.10:9000",
+            endpoint_url=os.environ["S3_ENDPOINT"],
         )
         if s3.exists(self.s3_path):
             s3.rm(self.s3_path, recursive=True)

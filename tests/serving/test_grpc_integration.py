@@ -20,7 +20,7 @@ from tributo.serving.grpc_runner import (
     start_grpc_serving,
     stop_grpc_serving,
 )
-from tributo.serving.proto.generated import inference_pb2, inference_pb2_grpc
+from tributo.serving.proto import inference_pb2, inference_pb2_grpc
 
 pytestmark = [pytest.mark.slow, pytest.mark.integration]
 

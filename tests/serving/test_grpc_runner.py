@@ -34,7 +34,7 @@ def test_start_grpc_serving(mock_serve, mock_ray):
     call_kwargs = mock_serve.start.call_args
     assert call_kwargs.kwargs["grpc_options"]["port"] == 8001
     assert call_kwargs.kwargs["grpc_options"]["grpc_servicer_functions"] == [
-        "tributo.serving.proto.generated.inference_pb2_grpc"
+        "tributo.serving.proto.inference_pb2_grpc"
         ".add_InferenceServiceServicer_to_server"
     ]
 
@@ -53,7 +53,7 @@ def test_start_grpc_serving_default_values(mock_serve, mock_ray):
     call_kwargs = mock_serve.start.call_args
     assert call_kwargs.kwargs["grpc_options"]["port"] == DEFAULT_GRPC_PORT
     assert call_kwargs.kwargs["grpc_options"]["grpc_servicer_functions"] == [
-        "tributo.serving.proto.generated.inference_pb2_grpc"
+        "tributo.serving.proto.inference_pb2_grpc"
         ".add_InferenceServiceServicer_to_server"
     ]
 

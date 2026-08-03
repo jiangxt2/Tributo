@@ -7,11 +7,15 @@ avoiding reloading the ONNX model for each batch. Data is stream-processed end-t
 from __future__ import annotations
 
 import importlib.util
+import json
 import logging
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from tributo.exporting.runtime import BundleModelRuntime
 
 from tributo.exceptions import DataSourceError, JobConfigurationError
 from tributo.inference.base import BasePredictor
@@ -29,6 +33,9 @@ class XGBoostONNXPredictor(BasePredictor):
     2. __call__ runs inference on each batch, returning the batch with a prediction column;
     3. The session is released automatically when the Actor is reclaimed.
 
+    The model may be loaded from a published bundle (``bundle_uri`` +
+    explicit ``role``) or from a raw ``model_uri`` path (legacy compat).
+
     predictor_config dict keys:
         return_probs (bool): True returns probability matrix, False returns class labels, default True.
         prediction_column (str): Output column name, default "prediction".
@@ -38,8 +45,12 @@ class XGBoostONNXPredictor(BasePredictor):
 
     def __init__(
         self,
-        model_uri: str,
+        model_uri: str | None = None,
         predictor_config: dict[str, Any] | None = None,
+        bundle_uri: str | None = None,
+        role: str = "inference",
+        unsafe: bool = False,
+        storage_profile: str | None = None,
     ) -> None:
         self.return_probs = (predictor_config or {}).get("return_probs", True)
         self.prediction_column = (predictor_config or {}).get(
@@ -47,31 +58,60 @@ class XGBoostONNXPredictor(BasePredictor):
         )
         self._s3_config = (predictor_config or {}).get("s3_config") or {}
         self.feature_names: list[str] = []
+        self._bundle_uri = bundle_uri
+        self._role = role
+        self._unsafe = unsafe
+        self._storage_profile = storage_profile
+        self._runtime: "BundleModelRuntime | None" = None
+        self._output_names: tuple[str, ...] = ()
 
-        super().__init__(model_uri, predictor_config)
+        if (model_uri is None) == (bundle_uri is None):
+            raise ValueError(
+                "exactly one of 'model_uri' (legacy) or 'bundle_uri' must be provided"
+            )
 
-    def _load_model(self) -> None:
-        """Resolve model path → download → initialize ONNX session → load feature_names."""
-        local_path = self._resolve_model(self.model_uri)
-        self._init_session(local_path)
-
-        explicit = self.predictor_config.get("feature_names")
-        if explicit:
-            self.feature_names = explicit
+        if bundle_uri is not None:
+            self.model_uri = bundle_uri
+            self.predictor_config = predictor_config or {}
+            self._load_model()
         else:
-            self.feature_names = self._load_feature_names(local_path)
-            if self.feature_names:
-                logger.info(
-                    "Loaded feature_names from ONNX metadata: %s", self.feature_names
-                )
+            assert model_uri is not None  # guarded by the exclusivity check above
+            super().__init__(model_uri, predictor_config)
 
     @classmethod
     def get_feature_names(
         cls,
-        model_uri: str,
+        model_uri: str | None = None,
         predictor_config: dict[str, Any] | None = None,
+        *,
+        bundle_uri: str | None = None,
+        role: str = "inference",
+        unsafe: bool = False,
+        storage_profile: str | None = None,
     ) -> list[str]:
-        """Read feature_names from ONNX model metadata (without loading a session)."""
+        """Read feature column names from a bundle or ONNX metadata.
+
+        The bundle path reads ONNX ``feature_names`` metadata (the *table*
+        feature names used to select Dataset columns).  It does not infer
+        table columns from the manifest signature because that is a
+        *tensor*-level contract; the legacy path reads ONNX metadata.
+        """
+        if bundle_uri is not None:
+            from tributo.exporting.runtime import BundleModelLoader
+
+            loader = BundleModelLoader()
+            runtime = loader.open(
+                bundle_uri,
+                role=role,
+                unsafe=unsafe,
+                storage_profile=storage_profile,
+            )
+            try:
+                return _feature_names_from_bundle(runtime)
+            finally:
+                runtime.close()
+
+        assert model_uri is not None
         s3_config = (predictor_config or {}).get("s3_config") or {}
 
         if model_uri.startswith("s3://"):
@@ -104,20 +144,91 @@ class XGBoostONNXPredictor(BasePredictor):
 
         return cls._load_feature_names(local_path)
 
+    def _load_model(self) -> None:
+        """Load the model: bundle path (shared runtime) or legacy raw path."""
+        if self._bundle_uri is not None:
+            self._load_model_from_bundle()
+            return
+        local_path = self._resolve_model(self.model_uri)
+        self._init_session(local_path)
+
+        explicit = self.predictor_config.get("feature_names")
+        if explicit:
+            self.feature_names = explicit
+        else:
+            self.feature_names = self._load_feature_names(local_path)
+            if self.feature_names:
+                logger.info(
+                    "Loaded feature_names from ONNX metadata: %s", self.feature_names
+                )
+
+    def _load_model_from_bundle(self) -> None:
+        """Open the bundle through the shared BundleModelLoader."""
+        from tributo.exporting.runtime import BundleModelLoader
+
+        assert self._bundle_uri is not None
+        loader = BundleModelLoader()
+        self._runtime = loader.open(
+            self._bundle_uri,
+            role=self._role,
+            unsafe=self._unsafe,
+            storage_profile=self._storage_profile,
+        )
+        try:
+            self.input_name = self._runtime.model.input_names[0]
+            self._output_names = self._runtime.model.output_names
+
+            explicit = self.predictor_config.get("feature_names")
+            if explicit:
+                self.feature_names = explicit
+            else:
+                self.feature_names = _feature_names_from_bundle(self._runtime)
+                if self.feature_names:
+                    logger.info(
+                        "Loaded feature_names from bundle: %s", self.feature_names
+                    )
+        except BaseException:
+            # Runtime ownership starts once ``loader.open`` succeeds.  Any
+            # later initialization failure must release staged bundle files
+            # deterministically; ``__del__`` is only a best-effort fallback.
+            self._runtime.close()
+            raise
+
     @staticmethod
     def _load_feature_names(model_path: str | Path) -> list[str]:
-        """Read feature_names from ONNX model metadata."""
+        """Read feature_names from ONNX model metadata.
+
+        A model without a ``feature_names`` property is fine (no names
+        recorded).  A present-but-corrupt value — unparsable JSON or not
+        a list of strings — is a packaging error and must fail fast:
+        silently dropping it would let batch inference proceed with
+        silently misnamed columns.
+        """
         try:
-            import json
+            import onnxruntime as ort
+        except ImportError as exc:
+            raise JobConfigurationError(
+                "onnxruntime is required to read ONNX feature metadata."
+            ) from exc
 
-            import onnx
-
-            model = onnx.load(model_path)
-            for prop in model.metadata_props:
-                if prop.key == "feature_names":
-                    return json.loads(prop.value)  # type: ignore[no-any-return]
-        except Exception:
-            logger.debug("Failed to load feature_names from ONNX metadata")
+        session = ort.InferenceSession(str(model_path))
+        metadata = session.get_modelmeta().custom_metadata_map
+        raw_value = metadata.get("feature_names")
+        if raw_value is not None:
+            try:
+                names: Any = json.loads(raw_value)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"ONNX metadata 'feature_names' is corrupt: {exc}"
+                ) from exc
+            if not isinstance(names, list) or not all(
+                isinstance(n, str) for n in names
+            ):
+                raise ValueError(
+                    "ONNX metadata 'feature_names' must be a JSON list of "
+                    f"strings, got {type(names).__name__}"
+                )
+            return names
         return []
 
     def _resolve_model(self, model_uri: str) -> str:
@@ -135,31 +246,16 @@ class XGBoostONNXPredictor(BasePredictor):
 
     @staticmethod
     def _build_s3_client(s3_config: dict[str, Any]) -> Any:
-        """Build a boto3 S3 client from config dict + environment variables."""
-        import os
+        """Build an S3 client through the shared storage resolver.
 
-        import boto3
+        Legacy raw-model downloads and BundleReader must resolve endpoint,
+        credentials, and region in exactly the same way.  Keeping this
+        adapter on the common factory prevents the two serving paths from
+        drifting when storage configuration evolves.
+        """
+        from tributo._common.storage import get_boto3_client_from_config
 
-        endpoint = (
-            s3_config.get("endpoint")
-            or os.environ.get("AWS_ENDPOINT_URL")
-            or os.environ.get("S3_ENDPOINT")
-        )
-        access_key = s3_config.get("access_key_id") or os.environ.get(
-            "AWS_ACCESS_KEY_ID"
-        )
-        secret_key = s3_config.get("secret_access_key") or os.environ.get(
-            "AWS_SECRET_ACCESS_KEY"
-        )
-        region = s3_config.get("region") or os.environ.get("AWS_REGION", "us-east-1")
-
-        return boto3.client(
-            "s3",
-            endpoint_url=endpoint,
-            aws_access_key_id=access_key,
-            aws_secret_access_key=secret_key,
-            region_name=region,
-        )
+        return get_boto3_client_from_config(s3_config)
 
     def _download_from_s3(self, s3_uri: str) -> str:
         """Download the ONNX model from S3 to a local temp directory."""
@@ -210,6 +306,16 @@ class XGBoostONNXPredictor(BasePredictor):
             output_names,
         )
 
+    def close(self) -> None:
+        """Release bundle resources (idempotent).
+
+        Call when the Ray Actor's lifetime ends (e.g. from a driver-side
+        shutdown helper); prediction keeps working after close because
+        the model is in memory.  No-op on the legacy ``model_uri`` path.
+        """
+        if self._runtime is not None:
+            self._runtime.close()
+
     def __call__(self, batch: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         """Run inference on a batch.
 
@@ -237,7 +343,11 @@ class XGBoostONNXPredictor(BasePredictor):
                 np.float32
             )
 
-        outputs = self.session.run(None, {self.input_name: features})
+        if self._runtime is not None:
+            result = self._runtime.predict({self.input_name: features})
+            outputs = [np.asarray(result[n]) for n in self._output_names]
+        else:
+            outputs = self.session.run(None, {self.input_name: features})
 
         if self.return_probs and len(outputs) >= 2:
             # XGBoost classification model: outputs[1] is the probability matrix
@@ -247,3 +357,25 @@ class XGBoostONNXPredictor(BasePredictor):
 
         batch[self.prediction_column] = predictions
         return batch
+
+
+def _feature_names_from_bundle(runtime: "BundleModelRuntime") -> list[str]:
+    """Read table feature names from ONNX metadata in a bundle.
+
+    The manifest signature is a *tensor*-level contract (names of the model
+    graph inputs), while batch inference selects Dataset columns by *table*
+    feature names.  Falling back to signature names would turn a tensor name
+    such as ``float_input`` into a guessed table column and can silently
+    select the wrong data.  Callers must provide explicit feature columns or
+    publish the original feature names in ONNX metadata.
+    """
+    metadata_names = XGBoostONNXPredictor._load_feature_names(
+        runtime.resolved_artifact.entrypoint_path
+    )
+    if metadata_names:
+        return metadata_names
+    raise JobConfigurationError(
+        "Bundle ONNX artifact has no 'feature_names' metadata. Manifest "
+        "input names describe model tensors, not Dataset columns; specify "
+        "feature_columns explicitly or publish ONNX feature_names metadata."
+    )

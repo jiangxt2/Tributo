@@ -7,7 +7,11 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel
 
-from tributo.exceptions import BundleExportError, JobConfigurationError
+from tributo.exceptions import (
+    BundleExportError,
+    JobConfigurationError,
+    UnsupportedArtifactFormat,
+)
 from tributo.exporting.models import (
     ArtifactDraft,
     BundleOutputConfig,
@@ -23,8 +27,10 @@ from tributo.exporting.models import (
 )
 from tributo.exporting.registries import (
     ExportRegistry,
+    FlavorRegistry,
     ValidatorRegistry,
 )
+from tributo.exporting.runtime import BundleModel, BundleModelLoader
 from tributo.exporting.service import BundleExportService
 
 # ── Fake components ───────────────────────────────────────────────────────────
@@ -94,6 +100,26 @@ class _FailingExporter:
         raise RuntimeError("simulated required export failure")
 
 
+class _SignatureGateFlavor:
+    """Test loader that must not run before the signature gate."""
+
+    api_version = 1
+    flavor_id = "onnx-runtime-v1"
+    security_mode = "safe"
+    signature_required = True
+    required_dependencies: tuple[str, ...] = ()
+
+    def load(
+        self,
+        artifact: object,
+        *,
+        role: str,
+        unsafe: bool = False,
+        architecture_id: str | None = None,
+    ) -> BundleModel:
+        raise AssertionError("signature gate must reject before loading")
+
+
 def _make_source() -> ExportSource:
     return ExportSource(
         source_kind="pytorch_result",
@@ -154,6 +180,26 @@ class TestBundleExportService:
         result = service.export_bundle(source=source, config=config)
 
         assert result.manifest_uri.endswith("manifest.json")
+
+    def test_pre_e2_export_is_rejected_by_default_serving_gate(
+        self, tmp_path: Path
+    ) -> None:
+        """The current export path's empty signature has an actionable error."""
+        er, vr = _make_registries()
+        service = BundleExportService(export_registry=er, validator_registry=vr)
+        result = service.export_bundle(
+            source=_make_source(),
+            config=_make_config(tmp_path),
+        )
+
+        flavors = FlavorRegistry()
+        flavors.register(_SignatureGateFlavor)
+        loader = BundleModelLoader(flavor_registry=flavors)
+        with pytest.raises(
+            UnsupportedArtifactFormat,
+            match="published without the typed input/output contract",
+        ):
+            loader.open(result.manifest_uri)
 
     def test_legacy_mode_rejected(self) -> None:
         service = BundleExportService()

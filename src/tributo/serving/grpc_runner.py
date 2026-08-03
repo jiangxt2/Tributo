@@ -24,8 +24,12 @@ DEFAULT_GRPC_PORT = 8001
 
 @PublicAPI(stability="beta")
 def start_grpc_serving(
-    model_path: str,
+    model_path: str | None = None,
     *,
+    bundle_uri: str | None = None,
+    role: str = "inference",
+    unsafe: bool = False,
+    storage_profile: str | None = None,
     app_name: str = DEFAULT_APP_NAME,
     grpc_port: int = DEFAULT_GRPC_PORT,
     num_replicas: int = 1,
@@ -35,8 +39,16 @@ def start_grpc_serving(
 ) -> str:
     """Start gRPC inference service.
 
+    The stable model entry is a published ``bundle_uri``; a raw
+    ``model_path`` remains as a compatibility adapter.
+
     Args:
-        model_path: ONNX model file path.
+        model_path: ONNX model file path (legacy compat adapter).
+        bundle_uri: Published bundle URI (stable serving entry point).
+        role: Artifact role to serve; defaults to ``inference``.
+        unsafe: Permit loading bundles without typed signatures or
+            flavors that are not safe.
+        storage_profile: Storage profile name for S3 bundles.
         app_name: Serve Application name.
         grpc_port: gRPC port.
         num_replicas: Number of replicas.
@@ -47,6 +59,10 @@ def start_grpc_serving(
     Returns:
         Deployed Serve Application name.
     """
+    if (model_path is None) == (bundle_uri is None):
+        raise ValueError(
+            "exactly one of 'model_path' (legacy) or 'bundle_uri' must be provided"
+        )
     return deploy_serve_app(
         gRPCInferenceService,
         app_name=app_name,
@@ -57,6 +73,10 @@ def start_grpc_serving(
         enable_http=enable_http,
         runtime_env=runtime_env,
         model_path=model_path,
+        bundle_uri=bundle_uri,
+        role=role,
+        unsafe=unsafe,
+        storage_profile=storage_profile,
     )
 
 

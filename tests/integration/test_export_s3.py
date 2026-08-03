@@ -1,8 +1,7 @@
-"""End-to-end S3 publish tests against a real S3-compatible store (MinIO).
+"""S3-compatible bundle publishing contract tests.
 
-Marked ``s3`` — the CI ``export-s3`` job runs these against a MinIO
-service container.  Locally they run against the MinIO container
-(``S3_ENDPOINT``, default ``http://127.0.0.10:9000``).
+The default backend is an ephemeral Moto server. The same suite runs against
+real MinIO in the explicit compatibility gate.
 
 Covers the plan's PR3 acceptance items: publish round-trip, lease +
 conditional writes, checksum metadata, alias CAS conflicts, and orphan
@@ -35,14 +34,15 @@ from tributo.exporting.models import (
 )
 from tributo.exporting.publisher import Publisher
 
-pytestmark = pytest.mark.s3
-
-_ENDPOINT = os.environ.get("S3_ENDPOINT", "http://127.0.0.10:9000")
+pytestmark = [
+    pytest.mark.s3_contract,
+    pytest.mark.usefixtures("s3_environment"),
+]
 
 
 def _env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     """Point credentials at MinIO and enable path-style addressing."""
-    monkeypatch.setenv("S3_ENDPOINT", _ENDPOINT)
+    monkeypatch.setenv("S3_ENDPOINT", os.environ["S3_ENDPOINT"])
     monkeypatch.setenv(
         "AWS_ACCESS_KEY_ID", os.environ.get("AWS_ACCESS_KEY_ID", "minioadmin")
     )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -167,6 +168,106 @@ class TestOpenArtifact:
         # Should pass without error.
         with reader.open_artifact(str(bundle_dir), role="inference") as ra:
             assert ra.descriptor.entrypoint == "model.onnx"
+
+    def test_open_artifact_reuses_passed_manifest(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """传入 manifest 时不重新读取（TOCTOU 防护：校验与加载同一快照）。"""
+        bundle_dir, _, _ = _create_test_bundle(tmp_path)
+        reader = BundleReader()
+        manifest = reader.read_manifest(str(bundle_dir))
+
+        calls = 0
+        original = reader.read_manifest
+
+        def counting_read_manifest(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(reader, "read_manifest", counting_read_manifest)
+
+        with reader.open_artifact(
+            str(bundle_dir), role="inference", manifest=manifest
+        ) as ra:
+            assert ra.descriptor.name == "fp32"
+        assert calls == 0, "passed manifest must skip re-reading from storage"
+
+    def test_s3_integrity_failure_cleans_temp_root(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """S3 下载后完整性校验失败 → 临时根目录必须被清理，不泄漏。"""
+        import tempfile
+
+        bundle_dir, _, _ = _create_test_bundle(tmp_path)
+        reader = BundleReader(cache_dir=tmp_path / "cache")
+
+        # 模拟"已下载"的 S3 临时目录：内容与 manifest 声明不符 → 校验失败
+        context_root = Path(tempfile.mkdtemp(prefix="tributo-bundle-artifact-"))
+        (context_root / "artifact").mkdir()
+        (context_root / "artifact" / "model.onnx").write_bytes(b"tampered-content")
+
+        manifest = reader.read_manifest(str(bundle_dir))
+        cache_root = reader._cache_dir / manifest.artifacts[0].tree_digest
+        cache_root.mkdir(parents=True)
+        (cache_root / "model.onnx").write_bytes(b"tampered-cache")
+        monkeypatch.setattr(reader, "read_manifest", lambda *a, **k: manifest)
+        monkeypatch.setattr(
+            reader, "_download_artifact_s3", lambda *a, **k: context_root
+        )
+
+        try:
+            with pytest.raises(ValueError, match="expected"):
+                with reader.open_artifact("s3://bucket/prefix/x", artifact_name="fp32"):
+                    pytest.fail("must not yield on verification failure")
+        finally:
+            assert not context_root.exists(), (
+                "S3 temp root must be removed when verification fails"
+            )
+            assert not cache_root.exists(), (
+                "A failed integrity check must invalidate the shared digest cache"
+            )
+
+    def test_s3_copytree_failure_cleans_temp_root(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """S3 缓存复制失败 → 已创建的临时根目录必须清理。"""
+        import shutil
+        import tempfile
+
+        from tributo.exporting import bundle_reader as br
+
+        bundle_dir, _, _ = _create_test_bundle(tmp_path)
+        reader = BundleReader(cache_dir=tmp_path / "cache")
+        manifest = reader.read_manifest(str(bundle_dir)).model_copy(
+            update={"canonical_uri": "s3://bucket/prefix/x"}
+        )
+        artifact = manifest.artifacts[0]
+
+        class _FakeS3:
+            def head_object(self, **kwargs: Any) -> dict[str, int]:
+                af = next(
+                    f for f in artifact.files if kwargs["Key"].endswith(f.relative_path)
+                )
+                return {"ContentLength": af.size_bytes}
+
+            def download_file(self, bucket: str, key: str, filename: str) -> None:
+                del bucket, key
+                Path(filename).write_bytes(b"payload")
+
+        def _fail_copytree(*args: Any, **kwargs: Any) -> None:
+            del args, kwargs
+            raise RuntimeError("copy failed")
+
+        before = set(Path(tempfile.gettempdir()).glob("tributo-bundle-artifact-*"))
+        monkeypatch.setattr(br, "_s3_client", lambda *a, **k: _FakeS3())
+        monkeypatch.setattr(shutil, "copytree", _fail_copytree)
+
+        with pytest.raises(RuntimeError, match="copy failed"):
+            reader._download_artifact_s3(manifest, artifact, None)
+
+        after = set(Path(tempfile.gettempdir()).glob("tributo-bundle-artifact-*"))
+        assert after == before, "temp root must be cleaned when copytree fails"
 
 
 class TestResourceLimits:

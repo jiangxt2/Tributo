@@ -69,14 +69,25 @@ class BasePredictor(ABC):
     @classmethod
     def get_feature_names(
         cls,
-        model_uri: str,
+        model_uri: str | None = None,
         predictor_config: dict[str, Any] | None = None,
+        *,
+        bundle_uri: str | None = None,
+        role: str = "inference",
+        unsafe: bool = False,
+        storage_profile: str | None = None,
     ) -> list[str]:
-        """Read feature names from model metadata (optional override).
+        """Read feature names from a bundle or model metadata.
 
         Args:
-            model_uri: Model path.
+            model_uri: Model path (legacy entry).
             predictor_config: Predictor-specific config.
+            bundle_uri: Published bundle URI (stable entry); feature names
+                come from the model's ONNX metadata, falling back to the
+                manifest's typed input signature.
+            role: Artifact role to serve from the bundle.
+            unsafe: Permit bundles without typed signatures or unsafe flavors.
+            storage_profile: Storage profile name for S3 bundles.
 
         Returns:
             List of feature names, default returns empty list.

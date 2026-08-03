@@ -89,10 +89,23 @@ jobs:
         run: uv sync --extra dev --locked
 
       - name: Lint (ruff)
-        run: uv run ruff check src/ tests/
+        run: uv run --locked --no-sync ruff check src/ tests/
 
       - name: Format check (ruff)
-        run: uv run ruff format --check src/ tests/
+        run: uv run --locked --no-sync ruff format --check src/ tests/
+
+      - name: Verify generated protobuf sources
+        run: |
+          proto_check_dir="$(mktemp -d)"
+          trap 'rm -rf "$proto_check_dir"' EXIT
+          PROTO_OUTPUT_DIR="$proto_check_dir" \
+            bash src/tributo/serving/proto/compile.sh
+          diff -u \
+            src/tributo/serving/proto/inference_pb2.py \
+            "$proto_check_dir/tributo/serving/proto/inference_pb2.py"
+          diff -u \
+            src/tributo/serving/proto/inference_pb2_grpc.py \
+            "$proto_check_dir/tributo/serving/proto/inference_pb2_grpc.py"
 
   unit-tests:
     name: Unit Tests (Python ${{ matrix.python-version }})
@@ -113,18 +126,18 @@ jobs:
         run: uv sync --extra dev --locked
 
       - name: Type check (mypy)
-        run: uv run mypy src/tributo
+        run: uv run --locked --no-sync mypy src/tributo
 
       - name: Verify README examples
-        run: uv run python scripts/verify_readme_examples.py
+        run: uv run --locked --no-sync python scripts/verify_readme_examples.py
 
       - name: Check public API annotations
-        run: uv run python tools/check_public_api_annotations.py
+        run: uv run --locked --no-sync python tools/check_public_api_annotations.py
 
       - name: Run unit tests
         run: |
-          uv run python -m pytest tests/ \
-            -m "not integration and not slow and not s3" \
+          uv run --locked --no-sync python -m pytest tests/ \
+            -m "not integration and not slow and not minio_compat and not ray_runtime_env" \
             -v --tb=short --timeout=180
 
   # Domain gate for the export framework (plan: export-contract job).
@@ -153,12 +166,13 @@ jobs:
         # YAML plain scalars fold newlines into spaces, which turns the
         # trailing backslash into a literal argument - use a literal block.
         run: |
-          uv run python -m pytest tests/training/exporters/ \
+          uv run --locked --no-sync python -m pytest tests/training/exporters/ \
             -v --tb=short --timeout=180
 
   export-s3:
     name: Export S3 Integration (MinIO)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: [paths-filter, lint]
     if: needs.paths-filter.outputs.code == 'true'
     steps:
@@ -168,39 +182,43 @@ jobs:
         with:
           python-version: "3.12"
 
-      # minio/minio:latest no longer ships `server /data` as its default
-      # CMD (it prints the CLI help and exits), so the server must be
-      # started explicitly instead of relying on a service container.
-      - name: Start MinIO
-        run: |
-          docker run -d --name minio \
-            -p 9000:9000 \
-            -e MINIO_ROOT_USER=minioadmin \
-            -e MINIO_ROOT_PASSWORD=minioadmin123 \
-            minio/minio:latest server /data --console-address ":9001"
-
-      - name: Wait for MinIO health
-        run: |
-          for i in $(seq 1 30); do
-            if curl -sf http://localhost:9000/minio/health/live >/dev/null; then
-              echo "MinIO ready"
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "MinIO failed to become healthy"
-          docker logs minio || true
-          exit 1
-
       - name: Install dependencies
         run: uv sync --extra dev --locked
 
       - name: Run S3 export integration tests
-        run: uv run python -m pytest tests/integration/test_export_s3.py -v --tb=short --timeout=180
+        run: |
+          uv run --locked --no-sync python -m pytest \
+            tests/integration/test_export_s3.py \
+            tests/integration/test_minio_compat.py \
+            tests/data/test_ds_parquet_csv.py \
+            -m "s3_contract or minio_compat" \
+            -v --tb=short --timeout=180
         env:
-          S3_ENDPOINT: http://localhost:9000
           AWS_ACCESS_KEY_ID: minioadmin
           AWS_SECRET_ACCESS_KEY: minioadmin123
+
+  ray-runtime-env:
+    name: Ray Runtime Environment
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [paths-filter, lint]
+    if: needs.paths-filter.outputs.code == 'true'
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+
+      - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --extra dev --locked
+
+      - name: Run Ray runtime-environment contract test
+        env:
+          RAY_ENABLE_UV_RUN_RUNTIME_ENV: "1"
+        run: |
+          uv run --locked --no-sync python -m pytest tests/integration/test_ray_runtime_env.py \
+            -m ray_runtime_env -v --tb=short --timeout=180
 
   build:
     name: Package Build & Smoke Test

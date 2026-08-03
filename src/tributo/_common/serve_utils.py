@@ -16,8 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 DEFAULT_GRPC_SERVICER_FUNCTION = (
-    "tributo.serving.proto.generated.inference_pb2_grpc"
-    ".add_InferenceServiceServicer_to_server"
+    "tributo.serving.proto.inference_pb2_grpc.add_InferenceServiceServicer_to_server"
 )
 
 

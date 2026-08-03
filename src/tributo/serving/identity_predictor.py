@@ -37,9 +37,14 @@ class IdentityPredictor:
 
     def __init__(
         self,
-        model_path: str | Path,
+        model_path: str | Path | None = None,
         preprocessor_path: str | Path | None = None,
         feature_config_path: str | Path | None = None,
+        *,
+        bundle_uri: str | None = None,
+        role: str = "inference",
+        unsafe: bool = False,
+        storage_profile: str | None = None,
     ) -> None:
         """Initialize predictor.
 
@@ -47,10 +52,30 @@ class IdentityPredictor:
             model_path: ONNX model file path or directory containing the complete model package.
             preprocessor_path: Preprocessing parameter file path (optional, only needed when model_path is a file).
             feature_config_path: Feature configuration file path (optional, only needed when model_path is a file).
+            bundle_uri: Published bundle URI (stable entry point). When set,
+                the preprocessor and feature config are located by artifact
+                role inside the bundle instead of the paths above.
+            role: Artifact role to serve; defaults to ``inference``.
+            unsafe: Permit loading bundles without typed signatures or
+                flavors that are not safe.
+            storage_profile: Storage profile name for S3 bundles.
 
         Raises:
             FileNotFoundError: If the model file does not exist.
         """
+        if (model_path is None) == (bundle_uri is None):
+            raise ValueError(
+                "exactly one of 'model_path' (legacy) or 'bundle_uri' must be provided"
+            )
+
+        self._runtime: Any = None
+        if bundle_uri is not None:
+            self._open_bundle(
+                bundle_uri, role=role, unsafe=unsafe, storage_profile=storage_profile
+            )
+            return
+
+        assert model_path is not None  # guarded by the exclusivity check above
         model_path = Path(model_path)
 
         # If it's a directory, auto-locate files in the model package
@@ -93,6 +118,111 @@ class IdentityPredictor:
                 logger.warning("Feature config file not found: %s", feature_config_path)
         else:
             self.features = []
+
+    def _open_bundle(
+        self,
+        bundle_uri: str,
+        *,
+        role: str,
+        unsafe: bool,
+        storage_profile: str | None,
+    ) -> None:
+        """Load the model package through the shared BundleModelLoader.
+
+        Auxiliary files are located by artifact role inside the verified
+        bundle: ``preprocessor.json`` (role ``preprocessor``) and
+        ``model_config.json`` (role ``config``, carrying the ``features``
+        list).  Files that are not present are tolerated, matching the
+        legacy path's behaviour.
+        """
+        from tributo.exporting.runtime import BundleModelLoader
+
+        loader = BundleModelLoader()
+        self._runtime = loader.open(
+            bundle_uri, role=role, unsafe=unsafe, storage_profile=storage_profile
+        )
+        self.model = _BundleModelAdapter(self._runtime)
+        logger.info("Loaded bundle model from %s (role=%r)", bundle_uri, role)
+
+        self.transformer = None
+        self.features: list[SparseFeat | DenseFeat] = []
+
+        # Auxiliary-file parsing must not leak the model runtime: any
+        # failure below (bad JSON, invalid preprocessor) closes it
+        # deterministically before re-raising.  __del__ is only a
+        # best-effort fallback, never a substitute for this.
+        try:
+            # 1) Auxiliary files inside the model artifact (file role).
+            self._load_aux_files(
+                self._runtime.resolved_artifact, self._runtime.artifact
+            )
+
+            # 2) Auxiliary files published as separate artifacts — locate
+            # them by manifest role, never by guessing inside the model
+            # artifact.
+            for aux_role in ("preprocessor", "feature_config", "config"):
+                if aux_role not in self._runtime.manifest.roles:
+                    continue
+                if (
+                    self._runtime.manifest.roles[aux_role]
+                    == self._runtime.artifact.name
+                ):
+                    continue  # already handled via the model artifact
+                self._load_aux_artifact(bundle_uri, aux_role, storage_profile)
+        except BaseException:
+            self._runtime.close()
+            raise
+
+    def _load_aux_artifact(
+        self,
+        bundle_uri: str,
+        aux_role: str,
+        storage_profile: str | None,
+    ) -> None:
+        """Open an auxiliary artifact by manifest role and read its files."""
+        from tributo.exporting.bundle_reader import BundleReader
+
+        reader = BundleReader()
+        with reader.open_artifact(
+            bundle_uri,
+            role=aux_role,
+            storage_profile=storage_profile,
+            # Same snapshot as the model runtime — never re-read.
+            manifest=self._runtime.manifest,
+        ) as aux:
+            self._load_aux_files(aux, aux.descriptor)
+            logger.info("Loaded auxiliary artifact role=%r", aux_role)
+
+    def _load_aux_files(self, resolved: Any, artifact: Any) -> None:
+        """Read preprocessor/config files from an artifact (by file role)."""
+        for file_entry in artifact.files:
+            if file_entry.role == "preprocessor":
+                self.transformer = FeatureTransformer.load(
+                    resolved.path_for(file_entry.relative_path)
+                )
+                logger.info("Loaded preprocessor from %s", file_entry.relative_path)
+            elif file_entry.role == "config":
+                config = json.loads(
+                    resolved.path_for(file_entry.relative_path).read_text()
+                )
+                features_cfg = (
+                    config.get("features") if isinstance(config, dict) else config
+                )
+                if isinstance(features_cfg, list) and features_cfg:
+                    self.features = self._parse_features(features_cfg)
+                    logger.info(
+                        "Loaded feature config from %s", file_entry.relative_path
+                    )
+
+    def close(self) -> None:
+        """Release bundle resources (idempotent).
+
+        Call when the predictor's lifetime ends; prediction keeps working
+        after close (in-memory model contract).  No-op on the legacy
+        ``model_path`` path.
+        """
+        if self._runtime is not None:
+            self._runtime.close()
 
     def _parse_features(
         self, config: list[dict[str, Any]]
@@ -221,3 +351,31 @@ class IdentityPredictor:
             }
             for p in probs
         ]
+
+
+class _BundleModelAdapter:
+    """Adapts a ``BundleModel`` to ONNXModel's ``predict_numpy`` interface.
+
+    Lets the existing ``predict`` / ``predict_batch`` flows stay untouched
+    while the underlying model comes from a bundle runtime.
+    """
+
+    def __init__(self, runtime: Any) -> None:
+        self._runtime = runtime
+
+    def predict_numpy(
+        self,
+        inputs: dict[str, np.ndarray],
+        output_index: int = 0,
+    ) -> np.ndarray:
+        """Run inference and return the selected output array."""
+        result = self._runtime.predict(inputs)
+        name = self._runtime.model.output_names[output_index]
+        return np.asarray(result[name])
+
+    def health(self) -> dict[str, Any]:
+        """Health check view."""
+        return {
+            "status": "healthy",
+            "input_names": list(self._runtime.model.input_names),
+        }

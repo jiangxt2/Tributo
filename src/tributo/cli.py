@@ -417,9 +417,30 @@ def serve():
 @serve.command("start")
 @click.option(
     "--model-path",
-    required=True,
     type=click.Path(exists=True),
-    help="Path to ONNX model file",
+    help="Path to ONNX model file (legacy entry)",
+)
+@click.option(
+    "--bundle-uri",
+    help="Published bundle URI (stable serving entry point)",
+)
+@click.option(
+    "--role",
+    default="inference",
+    show_default=True,
+    help="Artifact role to serve from the bundle",
+)
+@click.option(
+    "--unsafe",
+    is_flag=True,
+    default=False,
+    help="Permit bundles without typed signatures or flavors that are "
+    "not safe (compat-only)",
+)
+@click.option(
+    "--storage-profile",
+    default=None,
+    help="Storage profile name for S3 bundles",
 )
 @click.option(
     "--app-name",
@@ -443,18 +464,34 @@ def serve():
     help="Ray cluster address (e.g., ray://127.0.0.1:10001)",
 )
 def serve_start(
-    model_path: str,
+    model_path: str | None,
+    bundle_uri: str | None,
+    role: str,
+    unsafe: bool,
+    storage_profile: str | None,
     app_name: str,
     route_prefix: str,
     num_replicas: int,
     ray_address: str | None,
 ):
-    """Start ONNX inference service."""
+    """Start ONNX inference service.
+
+    Exactly one of ``--model-path`` (legacy) or ``--bundle-uri`` must be
+    provided.
+    """
+    if (model_path is None) == (bundle_uri is None):
+        raise click.ClickException(
+            "exactly one of --model-path (legacy) or --bundle-uri must be provided"
+        )
     from tributo.serving import start_serving
 
     try:
         start_serving(
             model_path=model_path,
+            bundle_uri=bundle_uri,
+            role=role,
+            unsafe=unsafe,
+            storage_profile=storage_profile,
             app_name=app_name,
             route_prefix=route_prefix,
             num_replicas=num_replicas,
@@ -661,9 +698,30 @@ def grpc():
 @grpc.command("start")
 @click.option(
     "--model-path",
-    required=True,
     type=click.Path(exists=True),
-    help="Path to ONNX model file",
+    help="Path to ONNX model file (legacy entry)",
+)
+@click.option(
+    "--bundle-uri",
+    help="Published bundle URI (stable serving entry point)",
+)
+@click.option(
+    "--role",
+    default="inference",
+    show_default=True,
+    help="Artifact role to serve from the bundle",
+)
+@click.option(
+    "--unsafe",
+    is_flag=True,
+    default=False,
+    help="Permit bundles without typed signatures or flavors that are "
+    "not safe (compat-only)",
+)
+@click.option(
+    "--storage-profile",
+    default=None,
+    help="Storage profile name for S3 bundles",
 )
 @click.option(
     "--app-name",
@@ -693,19 +751,35 @@ def grpc():
     help="Whether to also start the HTTP proxy (default: enabled)",
 )
 def grpc_start(
-    model_path: str,
+    model_path: str | None,
+    bundle_uri: str | None,
+    role: str,
+    unsafe: bool,
+    storage_profile: str | None,
     app_name: str,
     grpc_port: int,
     num_replicas: int,
     ray_address: Optional[str],
     enable_http: bool,
 ):
-    """Start gRPC inference service."""
+    """Start gRPC inference service.
+
+    Exactly one of ``--model-path`` (legacy) or ``--bundle-uri`` must be
+    provided.
+    """
+    if (model_path is None) == (bundle_uri is None):
+        raise click.ClickException(
+            "exactly one of --model-path (legacy) or --bundle-uri must be provided"
+        )
     from tributo.serving.grpc_runner import start_grpc_serving
 
     try:
         start_grpc_serving(
             model_path=model_path,
+            bundle_uri=bundle_uri,
+            role=role,
+            unsafe=unsafe,
+            storage_profile=storage_profile,
             app_name=app_name,
             grpc_port=grpc_port,
             num_replicas=num_replicas,

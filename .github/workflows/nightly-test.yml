@@ -8,7 +8,8 @@ name: Nightly Test
 #
 # What this does NOT cover:
 #   - integration tests (need Docker Ray cluster + MLflow server)
-#   - s3 tests (need MinIO / S3 credentials)
+#   - MinIO compatibility tests (the PR suite has an explicit compatibility
+#     gate; portable S3 contract tests remain in this regression)
 # These require real infrastructure — run them locally in the Docker
 # cluster per tests/integrations/ file headers.
 
@@ -36,7 +37,7 @@ jobs:
       - name: Run heavy tests (includes slow)
         run: |
           uv run python -m pytest tests/ \
-            -m "not integration and not s3" \
+            -m "not integration and not minio_compat and not ray_runtime_env" \
             -v --tb=long --timeout=600
 
       - name: Upload test results
