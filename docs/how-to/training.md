@@ -89,6 +89,30 @@ Three methods, in order of preference:
 | `use_gpu` | Only set to `True` if workers have GPUs and `xgboost-gpu` is installed. |
 | `num_cpus_per_worker` | Default 1. Increase if workers have spare CPU. |
 
+## Resource Budget (T3 Core)
+
+Every training worker enforces an unconditional materialization budget.
+Over-budget inputs **fail fast** (a `ResourceBudgetExceededError` is raised
+before the unbounded concat) — data is never silently truncated.
+
+| Config field | Default | Meaning |
+|---|---|---|
+| `resource.max_batch_bytes` | 64 MiB | Per-batch size guard. |
+| `resource.max_worker_materialization_bytes` | 1 GiB | Total bytes materialized per worker across all splits (includes the concat-copy peak). |
+| `resource.max_input_rows_per_worker` | `null` (disabled) | Optional per-worker row guard; exceeding it fails fast instead of slicing. |
+
+```json
+"resource": {
+  "max_batch_bytes": 67108864,
+  "max_worker_materialization_bytes": 1073741824,
+  "max_input_rows_per_worker": 1000000
+}
+```
+
+> **Note**: `external_memory` and `data_iter` are reserved XGBoost
+> parameters — they would bypass this budget contract and are rejected
+> by the config.
+
 ## See Also
 
 - Example: `examples/xgboost_s3_training.py`

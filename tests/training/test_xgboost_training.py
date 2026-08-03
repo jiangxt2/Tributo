@@ -124,11 +124,11 @@ def test_xgboost_training_without_val(job_client):
 
 @pytest.mark.slow
 def test_onnx_model_inference(job_client):
-    """导出的 ONNX 模型可推理且输出 shape 正确。
+    """导出的 ONNX 模型可推理、维度信息正确。
 
     job 内 ``export_from_checkpoint(validate=True)`` 已完成 onnxruntime
-    推理验证（失败会 raise → job FAILED）；宿主机侧从 logs 拿到产物路径
-    与 metrics 即视为导出成功，无需访问容器内文件。
+    推理验证（含输出 shape 检查，失败会 raise → job FAILED）；宿主机
+    侧从 logs 拿到产物路径与 n_features 断言导出成功，无需访问容器内文件。
     """
     test_name = "test_inference"
     job_id = submit_training_job(
