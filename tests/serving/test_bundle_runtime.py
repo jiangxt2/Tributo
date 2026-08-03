@@ -341,6 +341,48 @@ class TestSignatureValidation:
         runtime = _loader().open(str(bundle), role="inference")
         runtime.close()
 
+    def test_incomplete_input_dtypes_rejected(self, tmp_path: Path) -> None:
+        """模型元数据不完整（input_dtypes 为空）→ 拒绝而非 zip 静默放行。"""
+        bundle = build_test_bundle(tmp_path)
+
+        class _IncompleteModel(_EchoModel):
+            input_dtypes: tuple[str, ...] = ()
+
+        class _IncompleteFlavor(_EchoFlavor):
+            def load(
+                self,
+                artifact: Any,
+                *,
+                role: str,
+                unsafe: bool = False,
+                architecture_id: str | None = None,
+            ) -> BundleModel:
+                return _IncompleteModel()
+
+        with pytest.raises(ModelSchemaMismatchError, match="incomplete model"):
+            _loader(_IncompleteFlavor).open(str(bundle), role="inference")
+
+    def test_incomplete_output_shapes_rejected(self, tmp_path: Path) -> None:
+        """模型元数据不完整（output_shapes 为空）→ 拒绝。"""
+        bundle = build_test_bundle(tmp_path)
+
+        class _IncompleteModel(_EchoModel):
+            output_shapes: tuple[tuple[int | None, ...], ...] = ()
+
+        class _IncompleteFlavor(_EchoFlavor):
+            def load(
+                self,
+                artifact: Any,
+                *,
+                role: str,
+                unsafe: bool = False,
+                architecture_id: str | None = None,
+            ) -> BundleModel:
+                return _IncompleteModel()
+
+        with pytest.raises(ModelSchemaMismatchError, match="incomplete model"):
+            _loader(_IncompleteFlavor).open(str(bundle), role="inference")
+
 
 # ── Runtime lifecycle ──────────────────────────────────────────────────────────
 
@@ -398,6 +440,7 @@ class TestRuntimeLifecycle:
                 role: str | None = None,
                 artifact_name: str | None = None,
                 storage_profile: str | None = None,
+                manifest: Any = None,
             ) -> Any:
                 from contextlib import contextmanager
 

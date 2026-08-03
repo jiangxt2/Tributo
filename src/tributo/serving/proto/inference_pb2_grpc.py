@@ -3,7 +3,7 @@
 import grpc
 import warnings
 
-from . import inference_pb2 as inference__pb2
+from tributo.serving.proto import inference_pb2 as tributo_dot_serving_dot_proto_dot_inference__pb2
 
 GRPC_GENERATED_VERSION = '1.81.1'
 GRPC_VERSION = grpc.__version__
@@ -18,7 +18,7 @@ except ImportError:
 if _version_not_supported:
     raise RuntimeError(
         f'The grpc package installed is at version {GRPC_VERSION},'
-        + ' but the generated code in inference_pb2_grpc.py depends on'
+        + ' but the generated code in tributo/serving/proto/inference_pb2_grpc.py depends on'
         + f' grpcio>={GRPC_GENERATED_VERSION}.'
         + f' Please upgrade your grpc module to grpcio>={GRPC_GENERATED_VERSION}'
         + f' or downgrade your generated code using grpcio-tools<={GRPC_VERSION}.'
@@ -37,18 +37,18 @@ class InferenceServiceStub:
         """
         self.Predict = channel.unary_unary(
                 '/tributo.serving.InferenceService/Predict',
-                request_serializer=inference__pb2.PredictRequest.SerializeToString,
-                response_deserializer=inference__pb2.PredictResponse.FromString,
+                request_serializer=tributo_dot_serving_dot_proto_dot_inference__pb2.PredictRequest.SerializeToString,
+                response_deserializer=tributo_dot_serving_dot_proto_dot_inference__pb2.PredictResponse.FromString,
                 _registered_method=True)
         self.StreamPredict = channel.unary_stream(
                 '/tributo.serving.InferenceService/StreamPredict',
-                request_serializer=inference__pb2.PredictRequest.SerializeToString,
-                response_deserializer=inference__pb2.PredictResponse.FromString,
+                request_serializer=tributo_dot_serving_dot_proto_dot_inference__pb2.PredictRequest.SerializeToString,
+                response_deserializer=tributo_dot_serving_dot_proto_dot_inference__pb2.PredictResponse.FromString,
                 _registered_method=True)
         self.BatchPredict = channel.stream_unary(
                 '/tributo.serving.InferenceService/BatchPredict',
-                request_serializer=inference__pb2.PredictRequest.SerializeToString,
-                response_deserializer=inference__pb2.PredictResponse.FromString,
+                request_serializer=tributo_dot_serving_dot_proto_dot_inference__pb2.PredictRequest.SerializeToString,
+                response_deserializer=tributo_dot_serving_dot_proto_dot_inference__pb2.PredictResponse.FromString,
                 _registered_method=True)
 
 
@@ -82,18 +82,18 @@ def add_InferenceServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
             'Predict': grpc.unary_unary_rpc_method_handler(
                     servicer.Predict,
-                    request_deserializer=inference__pb2.PredictRequest.FromString,
-                    response_serializer=inference__pb2.PredictResponse.SerializeToString,
+                    request_deserializer=tributo_dot_serving_dot_proto_dot_inference__pb2.PredictRequest.FromString,
+                    response_serializer=tributo_dot_serving_dot_proto_dot_inference__pb2.PredictResponse.SerializeToString,
             ),
             'StreamPredict': grpc.unary_stream_rpc_method_handler(
                     servicer.StreamPredict,
-                    request_deserializer=inference__pb2.PredictRequest.FromString,
-                    response_serializer=inference__pb2.PredictResponse.SerializeToString,
+                    request_deserializer=tributo_dot_serving_dot_proto_dot_inference__pb2.PredictRequest.FromString,
+                    response_serializer=tributo_dot_serving_dot_proto_dot_inference__pb2.PredictResponse.SerializeToString,
             ),
             'BatchPredict': grpc.stream_unary_rpc_method_handler(
                     servicer.BatchPredict,
-                    request_deserializer=inference__pb2.PredictRequest.FromString,
-                    response_serializer=inference__pb2.PredictResponse.SerializeToString,
+                    request_deserializer=tributo_dot_serving_dot_proto_dot_inference__pb2.PredictRequest.FromString,
+                    response_serializer=tributo_dot_serving_dot_proto_dot_inference__pb2.PredictResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -122,8 +122,8 @@ class InferenceService:
             request,
             target,
             '/tributo.serving.InferenceService/Predict',
-            inference__pb2.PredictRequest.SerializeToString,
-            inference__pb2.PredictResponse.FromString,
+            tributo_dot_serving_dot_proto_dot_inference__pb2.PredictRequest.SerializeToString,
+            tributo_dot_serving_dot_proto_dot_inference__pb2.PredictResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -149,8 +149,8 @@ class InferenceService:
             request,
             target,
             '/tributo.serving.InferenceService/StreamPredict',
-            inference__pb2.PredictRequest.SerializeToString,
-            inference__pb2.PredictResponse.FromString,
+            tributo_dot_serving_dot_proto_dot_inference__pb2.PredictRequest.SerializeToString,
+            tributo_dot_serving_dot_proto_dot_inference__pb2.PredictResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -176,8 +176,8 @@ class InferenceService:
             request_iterator,
             target,
             '/tributo.serving.InferenceService/BatchPredict',
-            inference__pb2.PredictRequest.SerializeToString,
-            inference__pb2.PredictResponse.FromString,
+            tributo_dot_serving_dot_proto_dot_inference__pb2.PredictRequest.SerializeToString,
+            tributo_dot_serving_dot_proto_dot_inference__pb2.PredictResponse.FromString,
             options,
             channel_credentials,
             insecure,

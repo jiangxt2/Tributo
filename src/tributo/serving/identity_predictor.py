@@ -68,7 +68,7 @@ class IdentityPredictor:
                 "exactly one of 'model_path' (legacy) or 'bundle_uri' must be provided"
             )
 
-        self._runtime = None
+        self._runtime: Any = None
         if bundle_uri is not None:
             self._open_bundle(
                 bundle_uri, role=role, unsafe=unsafe, storage_profile=storage_profile
@@ -147,17 +147,31 @@ class IdentityPredictor:
         self.transformer = None
         self.features: list[SparseFeat | DenseFeat] = []
 
-        # 1) Auxiliary files inside the model artifact (file role).
-        self._load_aux_files(self._runtime.resolved_artifact, self._runtime.artifact)
+        # Auxiliary-file parsing must not leak the model runtime: any
+        # failure below (bad JSON, invalid preprocessor) closes it
+        # deterministically before re-raising.  __del__ is only a
+        # best-effort fallback, never a substitute for this.
+        try:
+            # 1) Auxiliary files inside the model artifact (file role).
+            self._load_aux_files(
+                self._runtime.resolved_artifact, self._runtime.artifact
+            )
 
-        # 2) Auxiliary files published as separate artifacts — locate them
-        # by manifest role, never by guessing inside the model artifact.
-        for aux_role in ("preprocessor", "feature_config", "config"):
-            if aux_role not in self._runtime.manifest.roles:
-                continue
-            if self._runtime.manifest.roles[aux_role] == self._runtime.artifact.name:
-                continue  # already handled via the model artifact
-            self._load_aux_artifact(bundle_uri, aux_role, storage_profile)
+            # 2) Auxiliary files published as separate artifacts — locate
+            # them by manifest role, never by guessing inside the model
+            # artifact.
+            for aux_role in ("preprocessor", "feature_config", "config"):
+                if aux_role not in self._runtime.manifest.roles:
+                    continue
+                if (
+                    self._runtime.manifest.roles[aux_role]
+                    == self._runtime.artifact.name
+                ):
+                    continue  # already handled via the model artifact
+                self._load_aux_artifact(bundle_uri, aux_role, storage_profile)
+        except BaseException:
+            self._runtime.close()
+            raise
 
     def _load_aux_artifact(
         self,
@@ -170,7 +184,11 @@ class IdentityPredictor:
 
         reader = BundleReader()
         with reader.open_artifact(
-            bundle_uri, role=aux_role, storage_profile=storage_profile
+            bundle_uri,
+            role=aux_role,
+            storage_profile=storage_profile,
+            # Same snapshot as the model runtime — never re-read.
+            manifest=self._runtime.manifest,
         ) as aux:
             self._load_aux_files(aux, aux.descriptor)
             logger.info("Loaded auxiliary artifact role=%r", aux_role)

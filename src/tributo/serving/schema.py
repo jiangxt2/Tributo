@@ -119,6 +119,10 @@ class PredictRequest(BaseModel):
             )
         if self.features is not None and not self.features:
             raise ValueError("features must not be empty")
+        if self.inputs is not None and not self.inputs:
+            raise ValueError(
+                "inputs must not be empty — provide at least one named tensor"
+            )
         return self
 
 

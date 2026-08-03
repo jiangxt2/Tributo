@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from tributo.serving.grpc_deployment import _prepare_inputs
-from tributo.serving.proto.generated import inference_pb2
+from tributo.serving.proto import inference_pb2
 
 
 def _make_dummy_onnx(tmp_path: Path) -> str:
@@ -81,7 +81,7 @@ def test_grpc_deployment_class_definition():
 
 def test_inference_pb2_import():
     """inference_pb2 可以正常导入并包含正确的消息类型。"""
-    from tributo.serving.proto.generated import inference_pb2
+    from tributo.serving.proto import inference_pb2
 
     # 检查消息类型存在
     assert hasattr(inference_pb2, "PredictRequest")
@@ -90,11 +90,31 @@ def test_inference_pb2_import():
 
 def test_inference_pb2_grpc_import():
     """inference_pb2_grpc 可以正常导入并包含正确的服务类型。"""
-    from tributo.serving.proto.generated import inference_pb2_grpc
+    from tributo.serving.proto import inference_pb2_grpc
 
     # 检查服务类型存在
     assert hasattr(inference_pb2_grpc, "InferenceServiceStub")
     assert hasattr(inference_pb2_grpc, "InferenceServiceServicer")
+
+
+def test_inference_pb2_module_name_and_pickle():
+    """pb2 模块名必须是完整包路径（否则 protobuf 对象无法 pickle）。"""
+    import pickle
+
+    from tributo.serving.proto import inference_pb2
+
+    request = inference_pb2.PredictRequest(
+        features=[0.5, 0.5],
+        model_name="test",
+    )
+
+    # 模块名必须与真实 import 路径一致——裸 "inference_pb2" 曾导致
+    # PicklingError: Can't pickle <class 'inference_pb2.PredictRequest'>
+    assert request.__class__.__module__ == "tributo.serving.proto.inference_pb2"
+
+    restored = pickle.loads(pickle.dumps(request))
+    assert list(restored.features) == [0.5, 0.5]
+    assert restored.model_name == "test"
 
 
 def test_predict_request_creation():
@@ -478,3 +498,85 @@ class TestBatchPredictInputConsistency:
         assert ctx.code is None
         assert len(calls) == 1
         assert calls[0]["a"].shape == (2,)
+
+    def test_inconsistent_shape_across_requests_rejected(self):
+        """同名输入但非 batch 维 shape 不一致 → INVALID_ARGUMENT。"""
+        import asyncio
+
+        import grpc as grpc_module
+
+        from tributo.serving.grpc_deployment import gRPCInferenceService
+
+        class _FakeContext:
+            def __init__(self) -> None:
+                self.code = None
+                self.details = None
+
+            def set_code(self, code: object) -> None:
+                self.code = code
+
+            def set_details(self, message: str) -> None:
+                self.details = message
+
+        async def run() -> _FakeContext:
+            service = gRPCInferenceService.__new__(gRPCInferenceService)
+            ctx = _FakeContext()
+
+            async def request_stream():
+                for shape in ((1, 2), (1, 3)):  # 非 batch 维 2 vs 3
+                    req = inference_pb2.PredictRequest()
+                    t = req.inputs.add()
+                    t.name = "a"
+                    t.shape.extend(list(shape))
+                    t.datatype = "float32"
+                    t.data.extend([1.0] * shape[1])
+                    yield req
+
+            await service.BatchPredict(request_stream(), ctx)
+            return ctx
+
+        ctx = asyncio.run(run())
+        assert ctx.code == grpc_module.StatusCode.INVALID_ARGUMENT
+        assert "non-batch dimensions" in ctx.details
+
+    def test_mixed_modes_across_requests_rejected(self):
+        """versioned 与 legacy 混用 → INVALID_ARGUMENT 而非 AssertionError。"""
+        import asyncio
+
+        import grpc as grpc_module
+
+        from tributo.serving.grpc_deployment import gRPCInferenceService
+
+        class _FakeContext:
+            def __init__(self) -> None:
+                self.code = None
+                self.details = None
+
+            def set_code(self, code: object) -> None:
+                self.code = code
+
+            def set_details(self, message: str) -> None:
+                self.details = message
+
+        async def run() -> _FakeContext:
+            service = gRPCInferenceService.__new__(gRPCInferenceService)
+            ctx = _FakeContext()
+
+            async def request_stream():
+                # 第一条：versioned inputs
+                req1 = inference_pb2.PredictRequest()
+                t = req1.inputs.add()
+                t.name = "a"
+                t.datatype = "float32"
+                t.data.extend([1.0])
+                yield req1
+                # 第二条：legacy features
+                req2 = inference_pb2.PredictRequest(features=[0.5, 0.5])
+                yield req2
+
+            await service.BatchPredict(request_stream(), ctx)
+            return ctx
+
+        ctx = asyncio.run(run())
+        assert ctx.code == grpc_module.StatusCode.INVALID_ARGUMENT
+        assert "Mixed input modes" in ctx.details

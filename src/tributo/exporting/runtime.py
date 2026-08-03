@@ -83,6 +83,7 @@ class BundleReaderLike(Protocol):
         role: str | None = None,
         artifact_name: str | None = None,
         storage_profile: str | None = None,
+        manifest: ExportManifest | None = None,
     ) -> Any: ...
 
 
@@ -326,7 +327,13 @@ class BundleModelLoader:
         try:
             resolved = stack.enter_context(
                 self._reader.open_artifact(
-                    bundle_uri, role=role, storage_profile=storage_profile
+                    bundle_uri,
+                    role=role,
+                    storage_profile=storage_profile,
+                    # Reuse the validated manifest: resolving the artifact
+                    # against a freshly re-read one would create a TOCTOU
+                    # window (validation sees manifest A, loading sees B).
+                    manifest=manifest,
                 )
             )
             flavor = flavor_cls()
@@ -577,6 +584,12 @@ def _validate_loaded_signature(manifest: ExportManifest, model: BundleModel) -> 
                 f"the loaded model inputs {actual_names!r}"
             )
         actual_dtypes = tuple(model.input_dtypes)
+        if len(actual_dtypes) != len(declared_in):
+            raise ModelSchemaMismatchError(
+                f"Manifest declares {len(declared_in)} input(s) but the "
+                f"loaded model reports {len(actual_dtypes)} input dtypes — "
+                "incomplete model metadata"
+            )
         mismatched_dtypes = [
             (f.name, f.dtype, actual)
             for f, actual in zip(declared_in, actual_dtypes)
@@ -603,6 +616,12 @@ def _validate_loaded_signature(manifest: ExportManifest, model: BundleModel) -> 
                 f"match the loaded model outputs {actual_out_names!r}"
             )
         actual_out_dtypes = tuple(model.output_dtypes)
+        if len(actual_out_dtypes) != len(declared_out):
+            raise ModelSchemaMismatchError(
+                f"Manifest declares {len(declared_out)} output(s) but the "
+                f"loaded model reports {len(actual_out_dtypes)} output "
+                "dtypes — incomplete model metadata"
+            )
         mismatched_out = [
             (f.name, f.dtype, actual)
             for f, actual in zip(declared_out, actual_out_dtypes)
@@ -633,6 +652,12 @@ def _validate_declared_shapes(
     (int) dimension must equal the model's.  Dynamic axes — declared as
     strings, or model dims that are ``None`` — are skipped.
     """
+    if len(actual_shapes) != len(fields):
+        raise ModelSchemaMismatchError(
+            f"Manifest declares {len(fields)} {side} field(s) but the "
+            f"loaded model reports {len(actual_shapes)} shapes — "
+            "incomplete model metadata"
+        )
     for field, actual_shape in zip(fields, actual_shapes):
         declared = field.shape
         if not declared:

@@ -178,7 +178,7 @@ target-version = "py312"
 extend-exclude = [
     "jobs/",
     "scripts/",
-    "src/tributo/serving/proto/generated/",
+    "src/tributo/serving/proto/inference_pb2*.py",
 ]
 
 [tool.ruff.lint]
@@ -254,7 +254,7 @@ warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
 ignore_missing_imports = true
-exclude = ["src/tributo/serving/proto/generated/"]
+exclude = ["inference_pb2"]
 
 [[tool.mypy.overrides]]
 module = "tributo.cli"

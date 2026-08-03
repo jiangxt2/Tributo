@@ -168,6 +168,30 @@ class TestOpenArtifact:
         with reader.open_artifact(str(bundle_dir), role="inference") as ra:
             assert ra.descriptor.entrypoint == "model.onnx"
 
+    def test_open_artifact_reuses_passed_manifest(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """传入 manifest 时不重新读取（TOCTOU 防护：校验与加载同一快照）。"""
+        bundle_dir, _, _ = _create_test_bundle(tmp_path)
+        reader = BundleReader()
+        manifest = reader.read_manifest(str(bundle_dir))
+
+        calls = 0
+        original = reader.read_manifest
+
+        def counting_read_manifest(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(reader, "read_manifest", counting_read_manifest)
+
+        with reader.open_artifact(
+            str(bundle_dir), role="inference", manifest=manifest
+        ) as ra:
+            assert ra.descriptor.name == "fp32"
+        assert calls == 0, "passed manifest must skip re-reading from storage"
+
     def test_s3_integrity_failure_cleans_temp_root(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -164,6 +164,11 @@ class TestPredictRequestVersioned:
         with pytest.raises(ValidationError, match="must be provided"):
             PredictRequest(return_probs=True)
 
+    def test_empty_inputs_rejected(self):
+        """空 inputs 列表应在 Pydantic 层拒绝，而非模型层报缺输入。"""
+        with pytest.raises(ValidationError, match="must not be empty"):
+            PredictRequest(inputs=[])
+
     def test_legacy_features_still_valid(self):
         """旧 features 协议继续可用（compat）。"""
         req = PredictRequest(features=[[0.1, 0.2]])

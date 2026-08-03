@@ -156,10 +156,19 @@ class BundleReader:
         role: str | None = None,
         artifact_name: str | None = None,
         storage_profile: str | None = None,
+        manifest: ExportManifest | None = None,
     ) -> Generator[ResolvedArtifact, None, None]:
         """Open a resolved artifact from a published bundle.
 
         Exactly one of *role* or *artifact_name* must be specified.
+
+        *manifest* — when provided, the already-parsed manifest is reused
+        instead of re-reading it from storage.  This is the TOCTOU guard
+        for callers that validated the manifest first (e.g. the bundle
+        model loader): the artifact is resolved against the *same*
+        manifest snapshot that the validation used, so an S3 manifest
+        changed between two reads can never make validation see A and
+        loading see B.
 
         Context manager — the artifact's local files are only valid within
         the ``with`` block.  For S3 bundles, the temp directory is cleaned
@@ -170,9 +179,10 @@ class BundleReader:
                 "Exactly one of 'role' or 'artifact_name' must be specified"
             )
 
-        manifest = self.read_manifest(
-            manifest_or_bundle_uri, storage_profile=storage_profile
-        )
+        if manifest is None:
+            manifest = self.read_manifest(
+                manifest_or_bundle_uri, storage_profile=storage_profile
+            )
 
         # Resolve target artifact.
         target_name: str

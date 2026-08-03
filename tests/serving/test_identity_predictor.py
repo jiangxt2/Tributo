@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -116,3 +117,53 @@ def test_close_legacy_path_is_noop(tmp_path: Path):
     onnx_path = make_dummy_onnx(tmp_path)
     predictor = IdentityPredictor(model_path=onnx_path)
     predictor.close()  # 不抛即通过
+
+
+def test_aux_load_failure_closes_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """辅助 artifact 解析失败时主 runtime 必须确定性关闭。
+
+    Captures the runtime returned by the loader and asserts ``closed``
+    after the constructor raised — only the deterministic exception path
+    can have set it (the captured reference keeps ``__del__`` from
+    running, so this cannot be a GC-side-effect false positive).
+    """
+    from tests.serving.bundle_fixtures import build_test_bundle, make_dummy_onnx
+    from tributo.exporting.runtime import BundleModelLoader
+
+    onnx_path = make_dummy_onnx(tmp_path)
+    bundle = build_test_bundle(
+        tmp_path,
+        onnx_path=onnx_path,
+        roles={
+            "inference": "model",
+            "feature_config": "config_art",
+        },
+        extra_artifacts={
+            "config_art": {
+                "model_config.json": (
+                    "config",
+                    b"{not-valid-json",  # 触发 JSON 解析失败
+                )
+            }
+        },
+    )
+
+    captured: list[Any] = []
+    original_open = BundleModelLoader.open
+
+    def capturing_open(self, *args: Any, **kwargs: Any) -> Any:
+        runtime = original_open(self, *args, **kwargs)
+        captured.append(runtime)
+        return runtime
+
+    monkeypatch.setattr(BundleModelLoader, "open", capturing_open)
+
+    with pytest.raises(json.JSONDecodeError):
+        IdentityPredictor(bundle_uri=str(bundle), role="inference")
+
+    assert len(captured) == 1
+    assert captured[0].closed is True, (
+        "auxiliary load failure must close the model runtime deterministically"
+    )

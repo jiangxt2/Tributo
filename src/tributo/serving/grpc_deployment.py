@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 import grpc
 import numpy as np
 
-from tributo.serving.proto.generated import inference_pb2
+from tributo.serving.proto import inference_pb2
 from tributo.serving.schema import PredictInput
 
 if TYPE_CHECKING:
@@ -311,8 +311,17 @@ class gRPCInferenceService:
             return inference_pb2.PredictResponse()
 
         if isinstance(inputs_list[0], dict):
-            # Versioned inputs: every request must carry the same input
-            # names — concatenate each named tensor across requests.
+            # Versioned inputs: every request must use the same mode, the
+            # same input names, and matching per-tensor shapes (non-batch
+            # axes) — anything else is a client contract violation.
+            for item in inputs_list[1:]:
+                if not isinstance(item, dict):
+                    _set_invalid_argument(
+                        grpc_context,
+                        "Mixed input modes across batch requests: versioned "
+                        "inputs and legacy features cannot be combined",
+                    )
+                    return inference_pb2.PredictResponse()
             expected_names = set(inputs_list[0])
             for item in inputs_list[1:]:
                 assert isinstance(item, dict)
@@ -323,6 +332,19 @@ class gRPCInferenceService:
                         f"expected {sorted(expected_names)}, got {sorted(item)}",
                     )
                     return inference_pb2.PredictResponse()
+            first = inputs_list[0]
+            for item in inputs_list[1:]:
+                assert isinstance(item, dict)
+                for name, arr in item.items():
+                    if arr.shape[1:] != first[name].shape[1:]:
+                        _set_invalid_argument(
+                            grpc_context,
+                            f"Input {name!r} has shape {arr.shape} but the "
+                            f"first request carries shape {first[name].shape} "
+                            "— non-batch dimensions must match across "
+                            "batch requests",
+                        )
+                        return inference_pb2.PredictResponse()
             named: dict[str, list[np.ndarray]] = {}
             for item in inputs_list:
                 assert isinstance(item, dict)
@@ -333,6 +355,23 @@ class gRPCInferenceService:
             }
             outputs = self._run(batch)
         else:
+            for item in inputs_list[1:]:
+                if not isinstance(item, np.ndarray):
+                    _set_invalid_argument(
+                        grpc_context,
+                        "Mixed input modes across batch requests: legacy "
+                        "features and versioned inputs cannot be combined",
+                    )
+                    return inference_pb2.PredictResponse()
+                if item.shape[1:] != inputs_list[0].shape[1:]:
+                    _set_invalid_argument(
+                        grpc_context,
+                        f"Legacy feature matrix has shape {item.shape} but the "
+                        f"first request carries shape {inputs_list[0].shape} "
+                        "— non-batch dimensions must match across batch "
+                        "requests",
+                    )
+                    return inference_pb2.PredictResponse()
             batch = np.concatenate([np.asarray(i) for i in inputs_list], axis=0)
             outputs = self._run(batch)
 
