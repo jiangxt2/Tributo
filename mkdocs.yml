@@ -71,5 +71,6 @@ nav:
       - ONNX Serving: how-to/serving.md
       - Batch Inference: how-to/inference.md
       - PU Learning: how-to/pu-learning.md
+      - Testing: how-to/testing.md
   - CLI Reference: cli.md
   - API Reference: api.md
