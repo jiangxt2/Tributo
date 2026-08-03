@@ -26,29 +26,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# ── Plugin helpers ────────────────────────────────────────────────────────────────
-
-_provider_plugins_cache: list[Any] | None = None
-
-
-def _load_provider_plugins(registry: Any) -> None:
-    """Load source-provider plugins into *registry*.
-
-    Discovery runs once (cached), but classes are re-registered into every
-    fresh registry so that repeated ``.run()`` calls in the same process
-    see the full provider set.
-    """
-    global _provider_plugins_cache
-    if _provider_plugins_cache is None:
-        from tributo.plugin import discover_source_provider_plugins
-
-        _provider_plugins_cache = discover_source_provider_plugins()
-
-    for cls in _provider_plugins_cache:
-        if cls.provider_id not in {p.provider_id for p in registry._by_id.values()}:
-            registry.register(cls)
-
-
 # ---------------------------------------------------------------------------
 # Backward-compatible alias (Phase 1: pure alias, no warning)
 # ---------------------------------------------------------------------------
@@ -136,6 +113,10 @@ class BaseTrainer(ABC):
         # Extract callbacks from kwargs to avoid changing subclass signatures.
         # Shallow-copy so external list mutations don't leak into the trainer.
         self._callbacks: list[TrainerCallback] = list(kwargs.get("callbacks", []))
+        # Run summary, populated by ``run()``.  Declared here so subclasses
+        # writing export results into ``self._summary`` (the contract
+        # documented on ``run()``) do not trigger type-check errors.
+        self._summary: dict[str, Any] = {}
 
     @abstractmethod
     def setup(self) -> None:
@@ -245,142 +226,26 @@ class BaseTrainer(ABC):
             "succeeded" | "partial"}`` — a partial bundle is still a
             successful run, but the summary marks it ``partial``.
         """
-        self._summary: dict[str, Any] = {"status": "succeeded"}
+        from tributo.training.callbacks import CallbackDispatcher
+        from tributo.training.lifecycle import TrainingLifecycle
 
-        # Let the callback decide whether to raise (via raise_on_error).
-        # The base class does not catch here so callbacks can abort early.
-        for cb in self._callbacks:
-            cb.on_setup_start(self)
+        lifecycle = TrainingLifecycle(self, CallbackDispatcher(self._callbacks))
+        return lifecycle.run(output_path, bundle_config=bundle_config)
 
-        try:
-            logger.info("Starting %s training...", type(self).__name__)
-            self.setup()
-            checkpoint = self.training_loop()
+    def _export_bundle(self, checkpoint: Any, bundle_config: Any) -> None:
+        """Legacy bundle-export hook (backward compatible).
 
-            # Fire on_training_end
-            for cb in self._callbacks:
-                try:
-                    cb.on_training_end(self, checkpoint)
-                except Exception as e:
-                    logger.warning("Callback on_training_end failed: %s", e)
-
-            # ── Bundle mode routing ──
-            if (
-                bundle_config is not None
-                and hasattr(bundle_config, "targets")
-                and bundle_config.targets is not None
-                and len(bundle_config.targets) > 0
-            ):
-                # Bundle mode: post-publish actions run through the
-                # PublicationRunner hooks — legacy artifact-export
-                # callbacks are not fired (plan: backward-compat contract).
-                self._export_bundle(checkpoint, bundle_config)
-            else:
-                self._export_artifacts_default(checkpoint, output_path)
-
-                # Fire artifact-exported callbacks (legacy only).  If a
-                # callback implements on_artifacts_exported (the new hook),
-                # use it.  Otherwise fall back to on_export_end for backward
-                # compatibility.  This avoids double-firing when a callback
-                # delegates on_artifacts_exported → on_export_end.
-                for cb in self._callbacks:
-                    has_new_hook = "on_artifacts_exported" in type(cb).__dict__
-                    if has_new_hook:
-                        try:
-                            cb.on_artifacts_exported(self, output_path)
-                        except Exception as e:
-                            logger.warning(
-                                "Callback on_artifacts_exported failed: %s", e
-                            )
-                    else:
-                        try:
-                            cb.on_export_end(self, output_path)
-                        except Exception as e:
-                            logger.warning("Callback on_export_end failed: %s", e)
-
-            logger.info("%s training completed.", type(self).__name__)
-
-            # Fire on_run_complete
-            for cb in self._callbacks:
-                try:
-                    cb.on_run_complete(self, self._summary)
-                except Exception as e:
-                    logger.warning("Callback on_run_complete failed: %s", e)
-
-        except Exception as e:
-            # Fire on_run_error; use exception chaining if a callback also
-            # raises so the original training error is preserved for debugging.
-            callback_error: Exception | None = None
-            for cb in self._callbacks:
-                try:
-                    cb.on_run_error(self, e)
-                except Exception as cb_err:
-                    logger.warning("Callback on_run_error failed: %s", cb_err)
-                    if callback_error is None:
-                        callback_error = cb_err
-            if callback_error is not None:
-                raise callback_error from e
-            raise
-
-        return self._summary
-
-    def _export_bundle(
-        self,
-        checkpoint: Any,
-        bundle_config: Any,
-    ) -> None:
-        """Route export through the new bundle pipeline.
-
-        Resolves an ``ExportSourceProvider`` from the training checkpoint, creates
-        an ``ExportSource``, and delegates to ``BundleExportService``.
-        Results are written to ``self._summary``.
-
-        Args:
-            checkpoint: The training result (Ray Result or raw model).
-            bundle_config: A ``BundleOutputConfig`` with non-empty targets.
+        Kept so subclasses that override the protected hook keep working:
+        ``TrainingLifecycle.run`` dispatches to the subclass override when
+        present.  The default implementation forwards to the current bundle
+        route, so ``super()._export_bundle(...)`` inside an override still
+        runs the real pipeline.  The default path never calls this method.
         """
-        from tributo.exporting.registries import SourceProviderRegistry
-        from tributo.exporting.service import BundleExportService
+        from tributo.training.callbacks import CallbackDispatcher
+        from tributo.training.lifecycle import TrainingLifecycle
 
-        # Resolve the source provider for this trainer type.
-        provider_registry = SourceProviderRegistry()
-        _load_provider_plugins(provider_registry)
-
-        trainer_type = self._get_trainer_type()
-        provider_cls = provider_registry.resolve(trainer_type)
-        provider = provider_cls()
-
-        # Open the source and run the bundle pipeline.
-        with provider.open_source(checkpoint) as source:
-            service = BundleExportService()
-            result = service.export_bundle(
-                source=source,
-                config=bundle_config,
-                provider=provider,
-                tributo_version=self._get_tributo_version(),
-            )
-
-        # Populate summary from bundle result.  A partial bundle is still
-        # a successful run — the summary marks it ``partial``.
-        self._summary.update(
-            {
-                "status": result.status,
-                "bundle_id": result.bundle_id,
-                "canonical_uri": result.canonical_uri,
-                "manifest_sha256": result.manifest_sha256,
-                "artifacts": [
-                    {"name": a.name, "format": a.format, "tree_digest": a.tree_digest}
-                    for a in result.artifacts
-                ],
-                "node_results": [
-                    {
-                        "node_id": nr.node_id,
-                        "status": nr.status,
-                        "target_name": nr.target_name,
-                    }
-                    for nr in result.node_results
-                ],
-            }
+        TrainingLifecycle(self, CallbackDispatcher(self._callbacks))._export_bundle(
+            checkpoint, bundle_config, self._summary
         )
 
     @staticmethod
