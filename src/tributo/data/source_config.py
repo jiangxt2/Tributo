@@ -164,7 +164,7 @@ SourceConfig = BuiltinSourceConfig
 
 @PublicAPI(stability="beta")
 class ProviderSourceConfig(StrictConfigModel):
-    """Target ``provider/uri`` source shape (D1+D2 canonical).
+    """Target ``provider/uri`` canonical source shape.
 
     Attributes:
         provider: Full provider ID (e.g. ``"tributo.parquet"``). Short
@@ -259,7 +259,7 @@ _SQL_DIALECT_TYPES: dict[str, str] = {
 @PublicAPI(stability="beta")
 @dataclass(frozen=True)
 class LegacySourceInput:
-    """Explicit wrapper for legacy ``data_config`` dicts (D1+D2).
+    """Explicit wrapper for legacy ``data_config`` dicts.
 
     Carries the historical semantics of the old JSON shapes — ``type=csv``
     without an explicit ``format`` reads Parquet, ``type=s3`` routes by

@@ -1,7 +1,7 @@
-"""T3 Core: DNN 单 worker 资源安全测试。
+"""DNN 单 worker 资源安全测试。
 
 覆盖 DNNTrainingConfig 的 resource 预算默认值，以及 worker 内 train/val
-共享预算的超限 fail-fast（决策 D1/D2/D4）。worker 级测试通过 mock
+共享预算的超限 fail-fast。worker 级测试通过 mock
 ``ray.train`` 上下文运行，不依赖真实 Ray 集群。
 """
 
@@ -17,7 +17,7 @@ class TestDNNResourceConfig:
     """DNNTrainingConfig resource 配置。"""
 
     def test_default_resource_budget_is_active(self):
-        """决策 D1: 预算默认启用。"""
+        """预算默认启用。"""
         from tributo.training.dnn_trainer import DNNTrainingConfig
         from tributo.training.resource import MIB
 
@@ -47,7 +47,7 @@ class TestDNNResourceConfig:
 
 
 class TestDNNWorkerBudget:
-    """决策 D2/D4: worker 内预算校验（mock ray.train，无真实集群）。"""
+    """worker 内预算校验（mock ray.train，无真实集群）。"""
 
     def _patch_ray(self, monkeypatch, schema=None, batch=None):
         """Mock ray.train context + shards; returns the fake dataset factory."""
@@ -162,7 +162,7 @@ class TestDNNWorkerBudget:
     def test_worker_within_budget_trains_successfully(self, monkeypatch):
         """预算内正常路径：默认预算下小数据完整跑通 worker 训练。
 
-        覆盖决策 D1/D2/D4 的 happy path——train/val 共享预算、收集通过、
+        覆盖默认预算与共享预算的 happy path——train/val 共享预算、收集通过、
         训练循环执行、metrics 上报。mock ray.train，不依赖真实集群。
         """
         pytest.importorskip("torch")
@@ -223,7 +223,7 @@ class TestDNNWorkerBudget:
                 "loss": {"type": "bce"},
                 "pu_learning": {},
                 "training": {"epochs": 1, "batch_size": 8},
-                "resource": {},  # 默认预算（决策 D1）
+                "resource": {},  # 默认预算
             }
         )
         assert reported["epoch"] == 1  # 训练完成且 metrics 已上报

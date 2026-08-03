@@ -91,7 +91,7 @@ class PUConfig(StrictConfigModel):
 class PURayConfig(StrictConfigModel):
     """Ray cluster configuration (PU-specific, defaults to num_workers=1).
 
-    PU training is single-worker only (T3 Core): every worker loads the
+    PU training is single-worker only: every worker loads the
     *full* dataset itself, so ``num_workers > 1`` multiplies the
     materialization footprint.  Configuration with ``num_workers > 1`` is
     rejected at construction and re-checked inside the worker.  For
@@ -128,7 +128,7 @@ class PUTrainingConfig(StrictConfigModel):
     ray: PURayConfig = Field(default_factory=PURayConfig)
     resource: ResourceBudget = Field(
         default_factory=ResourceBudget,
-        description="Single-worker materialization budget (T3 Core)",
+        description="Single-worker materialization budget",
     )
     output: DNNOutputConfig = Field(default_factory=DNNOutputConfig)
     label_col: str = Field(default="label", description="Label column name")
@@ -190,24 +190,24 @@ def pu_train_loop_per_worker(config: dict[str, Any]) -> None:
     if source is None:
         raise ValueError("data.source is required for PU training")
 
-    # T3 Core: PU is single-worker only.  Every worker loads the full
+    # PU is single-worker only.  Every worker loads the full
     # dataset itself, so a second worker would duplicate the entire
     # materialization footprint.  Re-checked here (before any data is
     # read) even though construction already rejects num_workers > 1.
     world_size = ray.train.get_context().get_world_size()
     if world_size > 1:
         raise JobConfigurationError(
-            "PU training supports num_workers=1 only (T3 Core); got "
+            "PU training supports num_workers=1 only; got "
             f"world_size={world_size}. Use DNNTrainer with loss.type=nnpu "
             "for distributed PU training."
         )
 
     ds = load_ray_dataset_from_source(source)
 
-    # Convert to pandas under the worker materialization budget (T3 Core).
+    # Convert to pandas under the worker materialization budget.
     # Rows are never silently truncated: an over-budget input fails here,
     # before the unbounded concat could run.  prefetch_batches=0 keeps the
-    # prefetched batch out of the accounting blind spot (review P1-2).
+    # prefetched batch out of the accounting blind spot.
     import pandas as pd
 
     budget = ResourceBudget.model_validate(config.get("resource") or {})
@@ -462,11 +462,11 @@ class PUTrainerImpl(BaseTrainer):
         super().__init__(datasets, config, run_config, **kwargs)
         self._pu_config = _validated_config or PUTrainingConfig.model_validate(config)
         self._features = build_features_from_config(self._pu_config.features)
-        # T3 Core: PU is single-worker only — every worker re-loads the full
+        # PU is single-worker only — every worker re-loads the full
         # dataset, so num_workers > 1 multiplies the materialization footprint.
         if self._pu_config.ray.num_workers > 1:
             raise JobConfigurationError(
-                "PU training supports num_workers=1 only (T3 Core); got "
+                "PU training supports num_workers=1 only; got "
                 f"num_workers={self._pu_config.ray.num_workers}. "
                 "Use DNNTrainer with loss.type=nnpu for distributed training."
             )

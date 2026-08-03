@@ -1,6 +1,6 @@
 """Ray Tune hyperparameter tuning runner.
 
-Phase 3: receives pre-validated ``effective_config`` and a
+Receives the pre-validated ``effective_config`` and a
 ``SearchSpaceSpec`` IR.  Per-trial, applies dot-path overrides from
 sampled values and re-validates before constructing the trainer.
 """
@@ -86,7 +86,7 @@ class TuneRunner:
         search_space: SearchSpaceSpec,
         effective_config: dict[str, Any],
     ):
-        """Initialize TuneRunner (Phase 3).
+        """Initialize TuneRunner.
 
         Args:
             trainer_spec: Algorithm specification.

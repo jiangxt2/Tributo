@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 
 # XGBoost params reserved by Tributo: silently passing these as native
 # training parameters would change the execution path (e.g. external-memory
-# / data_iter) without going through the T3 Core budget contract.
+# / data_iter) without going through the materialization-budget contract.
 _RESERVED_XGB_PARAMS = frozenset({"external_memory", "data_iter"})
 
 logger = logging.getLogger(__name__)
@@ -85,7 +85,7 @@ class ModelConfig(StrictConfigModel):
 
     Reserved keys (``external_memory``, ``data_iter``) are rejected: they
     would silently switch the training path away from the budgeted
-    ``QuantileDMatrix`` route (T3 Core, review P2-6).
+    ``QuantileDMatrix`` route.
     """
 
     model_config = ConfigDict(extra="allow")
@@ -105,10 +105,9 @@ class ModelConfig(StrictConfigModel):
             for key in _RESERVED_XGB_PARAMS:
                 if key in data:
                     raise ValueError(
-                        f"XGBoost parameter {key!r} is reserved by Tributo "
-                        "(T3 Core): external-memory is not supported on the "
-                        "default QuantileDMatrix path; remove it from the "
-                        "model config."
+                        f"XGBoost parameter {key!r} is reserved by Tributo: "
+                        "external-memory is not supported on the default "
+                        "QuantileDMatrix path; remove it from the model config."
                     )
         return data
 
@@ -125,7 +124,7 @@ class TrainingParams(StrictConfigModel):
             "max_rows_per_worker", "max_input_rows_per_worker"
         ),
         description=(
-            "Row-count guard per worker (T3 Core): exceeding it fails fast, "
+            "Row-count guard per worker: exceeding it fails fast, "
             "training data is never silently truncated.  "
             "Alias: max_input_rows_per_worker."
         ),
@@ -172,7 +171,7 @@ class XGBoostTrainingConfig(StrictConfigModel):
     ray: RayConfig = Field(default_factory=RayConfig)
     resource: ResourceBudget = Field(
         default_factory=ResourceBudget,
-        description="Single-worker materialization budget (T3 Core)",
+        description="Single-worker materialization budget",
     )
     output: OutputConfig = Field(default_factory=OutputConfig)
 
@@ -362,9 +361,9 @@ def train_loop_per_worker(config: dict[str, Any]) -> None:
         label_col (str): Label column name, default "label".
         xgb_params (dict): XGBoost training parameters.
         num_rounds (int): Number of boosting rounds, default 100.
-        max_rows_per_worker (int | None): Row-count guard (T3 Core) — exceeding
+        max_rows_per_worker (int | None): Row-count guard — exceeding
             it fails fast; training data is never silently truncated.
-        resource (dict): Materialization budget (T3 Core); defaults always
+        resource (dict): Materialization budget; defaults always
             apply when absent.
     """
     import ray.train
@@ -375,7 +374,7 @@ def train_loop_per_worker(config: dict[str, Any]) -> None:
     _feature_names: dict[str, list[str]] = {}
     _rows_seen: dict[str, int] = {}
 
-    # T3 Core: one worker materialization budget shared by all splits —
+    # One worker materialization budget shared by all splits —
     # train/val/test matrices and the test label lists can all be alive at
     # the same time.  Over-budget inputs fail before the unbounded
     # concat_tables; rows are never truncated.
@@ -469,7 +468,7 @@ def train_loop_per_worker(config: dict[str, Any]) -> None:
             if collect_labels:
                 # Rank-0 evaluation labels: compact numpy arrays (not Python
                 # pylists — those can exceed the Arrow buffer severalfold),
-                # accounted against the shared budget (review P1-6).
+                # accounted against the shared budget.
                 label_array = batch.column(label_col).to_numpy()
                 collector.add_bytes(label_array.nbytes, split=dataset_key)
                 test_labels.append(label_array)
@@ -728,17 +727,17 @@ def build_trainer(
         JobConfigurationError: ``train_config`` contains a reserved XGBoost
             parameter (``external_memory``/``data_iter``) — the raw dict
             entry point enforces the same contract as ``ModelConfig``
-            (T3 Core, review P1-11).
+            (the raw dict entry point enforces the same contract as ``ModelConfig``).
     """
-    # T3 Core: the raw train_config entry point bypasses ModelConfig's
+    # The raw train_config entry point bypasses ModelConfig's
     # reserved-key rejection — enforce the same fail-fast contract here
     # (external_memory/data_iter would silently switch the execution path
     # away from the budgeted QuantileDMatrix route).
     reserved = _RESERVED_XGB_PARAMS & set(train_config.get("xgb_params", {}))
     if reserved:
         raise JobConfigurationError(
-            f"XGBoost parameter {sorted(reserved)[0]!r} is reserved by Tributo "
-            "(T3 Core): external-memory is not supported on the default "
+            f"XGBoost parameter {sorted(reserved)[0]!r} is reserved by Tributo: "
+            "external-memory is not supported on the default "
             "QuantileDMatrix path; remove it from train_config['xgb_params']."
         )
 

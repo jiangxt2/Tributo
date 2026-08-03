@@ -1,7 +1,7 @@
-"""Single-worker resource budgets and bounded materialization (T3 Core).
+"""Single-worker resource budgets and bounded materialization.
 
-T3 Core is the unconditional single-worker safety baseline: every training
-worker materializes input data under an explicit bytes-first budget.  A batch
+The unconditional single-worker safety baseline: every training worker
+materializes input data under an explicit bytes-first budget.  A batch
 that would exceed the budget fails fast *before* the unbounded
 ``pd.concat`` / ``pa.concat_tables`` call, and input rows are never silently
 truncated.
@@ -42,8 +42,8 @@ DEFAULT_BATCH_SIZE = 4096
 class ResourceBudget(StrictConfigModel):
     """Bytes-first materialization budget for a single training worker.
 
-    Defaults are always active — T3 Core is an unconditional safety baseline,
-    so omitting configuration never disables the budget.
+    Defaults are always active — an unconditional safety baseline, so
+    omitting configuration never disables the budget.
     """
 
     max_batch_bytes: int = Field(

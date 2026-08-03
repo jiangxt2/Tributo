@@ -9,7 +9,7 @@ Extends the legacy ``TrainerSpec`` with three semantic groups of fields:
 * **problem_types** — what ML problems it *solves* (classification, ranking, etc.).
 * **data_contract** — what data shape it *expects and produces*.
 
-Phase 3 adds:
+The canonical implementation adds:
 
 * **taxonomy** — ``AlgorithmStatus``, ``ProblemFamily``, ``DataLoadingMode``.
 * **lifecycle** — ``status``, ``deprecated_since``, ``replacement`` with

@@ -1,11 +1,11 @@
-"""Prototype: TransformCompiler for DAFT and RAY backends + D4 prototype types.
+"""Prototype: TransformCompiler for DAFT and RAY backends.
 
-Stability: prototype — validation only; not for production use. See D4.
+Stability: prototype — validation only; not for production use.
 
-This module is the D4 prototype home: the ``TransformSpec`` models, the
+This module is the prototype home: the ``TransformSpec`` models, the
 ``TransformCompiler`` for engine-native expressions, the lazy ``SourcePlan``
 handle, and the engine-oriented ``SourceProvider``/``SourceRouter`` routing
-prototype. None of these types enter the D1+D2 stable path — the stable
+prototype. None of these types enter the stable path — the stable
 provider contract lives in ``data/provider.py``.
 """
 

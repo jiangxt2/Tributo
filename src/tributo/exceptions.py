@@ -176,7 +176,7 @@ class PluginLoadIssue(TributoError):
         super().__init__(f"Plugin {group!r}/{entry_point_name!r}: {reason}")
 
 
-# ── Streaming exceptions (S0 fail-closed safety baseline) ───────────────────
+# ── Streaming exceptions (fail-closed safety baseline) ──────────────────────
 
 
 @PublicAPI(stability="beta")
@@ -236,12 +236,12 @@ class KafkaPoisonMessageError(StreamSourceError):
         super().__init__(message, topic=topic, partition=partition, offset=offset)
 
 
-# ── Training resource safety (T3 Core) ───────────────────────────────────────
+# ── Training resource safety ─────────────────────────────────────────────────
 
 
 @PublicAPI(stability="beta")
 class ResourceBudgetExceededError(TributoError):
-    """Single-worker materialization exceeded the configured budget (T3 Core).
+    """Single-worker materialization exceeded the configured budget.
 
     Raised *before* the unbounded concat — the batch that would exceed the
     budget is never appended.  Carries structured context for diagnostics:

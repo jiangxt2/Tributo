@@ -9,7 +9,7 @@ Design constraints:
 - Kafka partition ownership is decoupled from model replica scaling —
   source actors manage offset/rebalance independently; inference replicas
   receive micro-batches through internal queues.
-- Delivery semantics (S0 fail-closed): at-least-once is claimed only for
+- Delivery semantics (fail-closed): at-least-once is claimed only for
   batches that are actually committed.  A failed commit retains the
   pending offsets and raises a ``StreamSourceError`` subtype so the
   caller can retry; poisoned records raise instead of being skipped.

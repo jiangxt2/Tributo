@@ -114,7 +114,7 @@ def _validate_onnx(output_path: str, n_features: int) -> None:
         # Fail-closed: an unverifiable model is a failure, not a warning.
         # Silently swallowing the exception let unusable models through —
         # job scripts relying on validate=True never learned of the broken
-        # export (review P1-10).
+        # export.
         logger.error(
             "ONNX validation failed — the exported model is not usable with "
             "the installed onnxruntime. Path: %s",

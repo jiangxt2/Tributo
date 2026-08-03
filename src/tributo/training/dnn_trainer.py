@@ -158,7 +158,7 @@ class DNNTrainingConfig(StrictConfigModel):
     ray: DNNRayConfig = Field(default_factory=DNNRayConfig)
     resource: ResourceBudget = Field(
         default_factory=ResourceBudget,
-        description="Single-worker materialization budget (T3 Core)",
+        description="Single-worker materialization budget",
     )
     output: DNNOutputConfig = Field(default_factory=DNNOutputConfig)
     label_col: str = Field(default="label", description="Label column name")
@@ -479,7 +479,7 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
     train_ds = ray.train.get_dataset_shard("train")
     val_ds = ray.train.get_dataset_shard("val")
 
-    # Convert to pandas under the worker materialization budget (T3 Core).
+    # Convert to pandas under the worker materialization budget.
     # train and val share one budget — both frames stay alive together —
     # and either split exceeding it fails fast before the unbounded concat.
     # Rows are never silently truncated.
@@ -500,7 +500,7 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
         budget, algorithm="dnn", split="train", worker_rank=worker_rank
     )
     # prefetch_batches=0: a prefetched batch would be held outside the
-    # collector's accounting (T3 Core review P1-2).
+    # collector's accounting.
     train_batches = []
     for batch in train_ds.iter_batches(
         batch_size=DEFAULT_BATCH_SIZE,

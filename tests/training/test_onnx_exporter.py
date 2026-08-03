@@ -1,4 +1,4 @@
-"""ONNX exporter fail-closed validation tests (T3 Core, review P1-10).
+"""ONNX exporter fail-closed validation tests.
 
 ``export_from_checkpoint``/``export_to_onnx`` document that ONNX validation
 failures raise ``RuntimeError``.  The validator used to swallow inference

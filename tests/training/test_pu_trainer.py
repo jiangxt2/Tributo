@@ -320,10 +320,10 @@ class TestPUE2E:
 
 
 class TestPUTrainerResourceSafety:
-    """T3 Core: PU 单 worker 资源安全（决策 D1/D2/D3）。"""
+    """PU 单 worker 资源安全。"""
 
     def test_default_resource_budget_is_active(self):
-        """决策 D1: 预算默认启用。"""
+        """预算默认启用。"""
         from tributo.training.pu_trainer import PUTrainingConfig
         from tributo.training.resource import MIB
 
@@ -339,7 +339,7 @@ class TestPUTrainerResourceSafety:
         assert cfg.resource.max_batch_bytes == 1024
 
     def test_num_workers_gt_1_rejected_at_construction(self):
-        """决策 D3: 构造期拒绝 num_workers > 1（早于任何训练）。"""
+        """构造期拒绝 num_workers > 1（早于任何训练）。"""
         from tributo.exceptions import JobConfigurationError
         from tributo.training.pu_trainer import PUTrainerImpl
 
@@ -353,7 +353,7 @@ class TestPUTrainerResourceSafety:
         assert trainer._pu_config.ray.num_workers == 1
 
     def test_worker_loop_rejects_world_size_gt_1(self, monkeypatch):
-        """决策 D3: worker 入口二次拒绝，早于数据加载。"""
+        """worker 入口二次拒绝，早于数据加载。"""
         pytest.importorskip("torch")
         from types import SimpleNamespace
 
@@ -381,7 +381,7 @@ class TestPUTrainerResourceSafety:
             )
 
     def test_worker_budget_exceeded_fails_before_concat(self, monkeypatch):
-        """决策 D2: worker 加载超预算在 concat 前失败，不返回部分数据。"""
+        """worker 加载超预算在 concat 前失败，不返回部分数据。"""
         pytest.importorskip("torch")
         from types import SimpleNamespace
 
@@ -477,7 +477,7 @@ class TestPUTrainerResourceSafety:
     def test_worker_within_budget_trains_successfully(self, monkeypatch):
         """预算内正常路径：默认预算下小数据完整跑通 worker 训练。
 
-        覆盖决策 D1/D2 的 happy path——收集通过、训练循环执行、metrics 上报。
+        覆盖默认预算的 happy path——收集通过、训练循环执行、metrics 上报。
         mock ray.train 与数据源，不依赖真实集群。
         """
         pytest.importorskip("torch")
@@ -543,7 +543,7 @@ class TestPUTrainerResourceSafety:
                 "model": {"dnn_hidden_units": [8]},
                 "pu": {"loss_type": "nnpu"},
                 "training": {"epochs": 1, "batch_size": 8},
-                "resource": {},  # 默认预算（决策 D1）
+                "resource": {},  # 默认预算
             }
         )
         assert reported["epoch"] == 1  # 训练完成且 metrics 已上报

@@ -192,7 +192,7 @@ class TestModelConfig:
         assert cfg.eta == 0.3
 
     def test_reserved_external_memory_rejected(self):
-        """T3 Core (P2-6): external_memory 作为保留参数被结构化拒绝。"""
+        """external_memory 作为保留参数被结构化拒绝。"""
         with pytest.raises(ValidationError, match="external_memory"):
             XGBoostTrainingConfig.model_validate({"model": {"external_memory": True}})
 
@@ -278,7 +278,7 @@ class TestTrainingParams:
         assert cfg.max_rows_per_worker == 500
 
     def test_max_input_rows_per_worker_alias(self):
-        """max_input_rows_per_worker 是 max_rows_per_worker 的别名（T3 Core）。"""
+        """max_input_rows_per_worker 是 max_rows_per_worker 的别名。"""
         cfg = TrainingParams(max_input_rows_per_worker=500)
         assert cfg.max_rows_per_worker == 500
         # model_dump 保留旧字段名（train_loop_config 兼容）
@@ -297,7 +297,7 @@ class TestXGBoostTrainingConfig:
         assert cfg.output.onnx_opset == 12
 
     def test_default_resource_budget_is_active(self):
-        """决策 D1: resource 预算默认启用（无条件安全基线）。"""
+        """resource 预算默认启用（无条件安全基线）。"""
         from tributo.training.resource import MIB
 
         cfg = XGBoostTrainingConfig()

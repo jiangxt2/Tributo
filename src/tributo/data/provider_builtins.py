@@ -1,4 +1,4 @@
-"""Built-in providers for the D1+D2 stable path.
+"""Built-in providers for the stable path.
 
 Parquet, CSV, Iceberg, ClickHouse and Doris.  ``DataConnector`` (and the
 SQL client code migrated from ``training/data_loader.py``) remain internal

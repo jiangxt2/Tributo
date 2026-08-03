@@ -1,4 +1,4 @@
-"""Fail-closed safety tests for ``KafkaStreamSource`` (S0).
+"""Fail-closed safety tests for ``KafkaStreamSource``.
 
 ``confluent-kafka`` is an optional dependency, so the consumer is faked
 by injecting a fake ``confluent_kafka`` module into ``sys.modules``.
@@ -198,7 +198,7 @@ def test_batch_size_limits_collection(fake_kafka: None) -> None:
     it = source.poll()
     assert next(it) == {"a": [1, 1]}
     # A yielded batch must be committed before the next one is polled
-    # (S0 barrier); commit then continue.
+    # Fail-closed barrier; commit then continue.
     source.commit()
     assert next(it) == {"a": [1]}
     # The iterator runs until close() (the fake poll returns immediately
@@ -336,7 +336,7 @@ def test_poison_stops_iterator_and_never_commits_past_bad_offset(
 
 def test_poison_terminates_source_for_fresh_poll(fake_kafka: None) -> None:
     """After a poison record the source terminates itself: a fresh
-    ``poll()`` must not consume past the bad offset (S0 exit gate: never
+    ``poll()`` must not consume past the bad offset (exit gate: never
     commit N+1 through a restarted iterator)."""
     source = _open_source(
         [_msg(0, b'{"a": 1}'), _msg(1, b"bad-json"), _msg(2, b'{"a": 3}')]

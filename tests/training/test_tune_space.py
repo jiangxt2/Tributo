@@ -225,7 +225,7 @@ class TestResolveLocalOverrides:
 
 
 # ---------------------------------------------------------------------------
-# validate_search_targets — Phase 3 additions
+# validate_search_targets additions
 # ---------------------------------------------------------------------------
 
 

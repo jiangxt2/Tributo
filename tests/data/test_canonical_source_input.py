@@ -1,4 +1,4 @@
-"""Tests for D1+D2 canonical input models.
+"""Tests for canonical input models.
 
 Covers the target ``provider/uri`` shape (``ProviderSourceConfig``), the
 structural discrimination of ``CanonicalSourceInput`` (type-shaped vs

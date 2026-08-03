@@ -1,6 +1,6 @@
 """Ray Dataset distributed data loading.
 
-Canonical entry-point (D1+D2 — ProviderRegistry path)::
+Canonical entry-point (ProviderRegistry path)::
 
     from tributo.training.data_loader import load_ray_dataset_from_source
     ds = load_ray_dataset_from_source({"type": "parquet", "path": "s3://..."})
@@ -16,7 +16,7 @@ Legacy entry-point (deprecated, kept for old plugins)::
     ds = load_ray_dataset_from_config({"type": "s3", "uri": "s3://...", ...})
 
 ``TRIBUTO_DATA_BACKEND=legacy`` (read once at import) rolls back to the
-pre-D1+D2 direct dispatch.
+pre-registry direct dispatch.
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ logger = logging.getLogger(__name__)
 DATA_BACKEND = os.getenv("TRIBUTO_DATA_BACKEND", "provider")
 
 # ---------------------------------------------------------------------------
-# Canonical loader (Phase 3)
+# Canonical loader
 # ---------------------------------------------------------------------------
 
 
@@ -65,7 +65,7 @@ def load_ray_dataset_from_source(
     *,
     project_root_path: Path | None = None,
 ) -> "ray.data.Dataset":
-    """Load a Ray Dataset from a canonical source dict (D1+D2 provider path).
+    """Load a Ray Dataset from a canonical source dict (provider path).
 
     Validates *source* against ``CanonicalSourceInput`` (both the
     ``type/path/dialect`` and the ``provider/uri`` shapes) and routes it
@@ -149,7 +149,7 @@ def load_ray_dataset_from_config(
             cfg.model_dump(mode="python"),
             project_root_path=project_root_path,
         )
-    # D1+D2: the historical semantics (type=csv → Parquet default, type=s3
+    # Historical semantics (type=csv → Parquet default, type=s3
     # routing, ...) live only in the LegacySourceInput branch.
     return _load_via_provider(
         LegacySourceInput(raw=dict(data_config)),
@@ -158,7 +158,7 @@ def load_ray_dataset_from_config(
 
 
 # ---------------------------------------------------------------------------
-# D1+D2 provider path
+# Canonical provider path
 # ---------------------------------------------------------------------------
 
 
@@ -229,9 +229,9 @@ def _legacy_load_from_canonical_dict(
 ) -> "ray.data.Dataset":
     """Legacy direct dispatch — the ``TRIBUTO_DATA_BACKEND=legacy`` path.
 
-    Frozen copy of the pre-D1+D2 loader: validates against the
+    Frozen copy of the pre-registry loader: validates against the
     ``SourceConfig`` union and dispatches by ``isinstance``.  Kept intact
-    for the rollback switch; not evolved (the D1+D2 provider path fixes the
+    for the rollback switch; not evolved (the provider path fixes the
     S3-CSV and Iceberg connector issues).
     """
     adapter: TypeAdapter[Any] = TypeAdapter(SourceConfig)

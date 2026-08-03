@@ -1,4 +1,4 @@
-"""T3 Core: single-worker resource budget tests.
+"""Single-worker resource budget tests.
 
 Covers the algorithm-agnostic bounded collector: budget defaults, in-flight
 bytes accounting, concat-copy peak estimation, fail-fast before unbounded
@@ -37,7 +37,7 @@ def _table(n_rows: int) -> pa.Table:
 
 
 class TestResourceBudgetDefaults:
-    """决策 D1: 预算默认启用，默认值不允许为 None。"""
+    """预算默认启用，默认值不允许为 None。"""
 
     def test_defaults_are_always_active(self):
         budget = ResourceBudget()
@@ -55,7 +55,7 @@ class TestResourceBudgetDefaults:
 
 
 class TestBoundedCollector:
-    """决策 D2: 加载中累计 bytes，加入前检查，超限不 append 不 concat。"""
+    """加载中累计 bytes，加入前检查，超限不 append 不 concat。"""
 
     def test_collect_within_budget_returns_summary(self):
         budget = ResourceBudget(
@@ -130,7 +130,7 @@ class TestBoundedCollector:
             collector.add(_df(4))  # 4+4=8 > 5（显式 max_rows 更严格）
 
     def test_shared_collector_across_splits_accounts_together(self):
-        # 决策 D4: DNN train/val 共享 worker 预算。
+        # DNN train/val 共享 worker 预算。
         # 预算 = 2×6 行 int64（含 concat 副本）：train+val 通过，第三个超限。
         budget = ResourceBudget(
             max_batch_bytes=10**9,
@@ -181,7 +181,7 @@ class TestBoundedCollector:
 
 
 class TestXGBoostWorkerBudget:
-    """决策 D2/D5: XGBoost worker 内预算与行数守卫（mock ray.train）。"""
+    """XGBoost worker 内预算与行数守卫（mock ray.train）。"""
 
     def _patch_ray(self, monkeypatch, n_rows=100):
         from types import SimpleNamespace
@@ -251,7 +251,7 @@ class TestXGBoostWorkerBudget:
         assert excinfo.value.max_rows == 10
 
     def test_worker_within_budget_single_test_pass(self, monkeypatch):
-        """预算内正常收集；test split 只遍历一次（回归 review P1-3）。
+        """预算内正常收集；test split 只遍历一次（单次遍历回归）。
 
         max_rows=120 恰好容纳 train(40)+val(40)+test(40)。旧实现会在
         DMatrix 构建后二次遍历 test shard 并再次记账 → 160 > 120 误失败；
@@ -493,7 +493,7 @@ class TestXGBoostWorkerBudget:
 
 
 class TestPreflightEstimate:
-    """决策 D2: 加载前 schema 级估算，明显超限拒绝。"""
+    """加载前 schema 级估算，明显超限拒绝。"""
 
     def test_estimate_row_bytes_from_pyarrow_schema(self):
         schema = pa.schema(
@@ -572,7 +572,7 @@ class TestPreflightEstimate:
 
 
 class TestConcatCopyPeak:
-    """决策 D2: estimated_peak_bytes 必须覆盖 concat 输出副本（≈2×payload）。"""
+    """estimated_peak_bytes 必须覆盖 concat 输出副本（≈2×payload）。"""
 
     def test_peak_models_concat_output_copy(self):
         budget = ResourceBudget(
@@ -589,7 +589,7 @@ class TestConcatCopyPeak:
         assert summary.estimated_peak_bytes == 2 * summary.payload_bytes
 
     def test_concat_peak_exceeds_budget_while_payload_fits(self):
-        """回归（review P1-1）：payload 在预算内、但 concat 峰值（2×）超限时仍须失败。"""
+        """回归：payload 在预算内、但 concat 峰值（2×）超限时仍须失败。"""
         budget = ResourceBudget(
             max_batch_bytes=10**9,
             max_worker_materialization_bytes=6 * 8,  # 可容纳 payload 48

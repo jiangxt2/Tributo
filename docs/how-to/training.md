@@ -89,7 +89,7 @@ Three methods, in order of preference:
 | `use_gpu` | Only set to `True` if workers have GPUs and `xgboost-gpu` is installed. |
 | `num_cpus_per_worker` | Default 1. Increase if workers have spare CPU. |
 
-## Resource Budget (T3 Core)
+## Resource Budget
 
 Every training worker enforces an unconditional materialization budget.
 Over-budget inputs **fail fast** (a `ResourceBudgetExceededError` is raised

@@ -1,4 +1,4 @@
-"""Contract tests for the ``StreamSource`` protocol (S0).
+"""Contract tests for the ``StreamSource`` protocol.
 
 Lock the protocol semantics that S1/S2 (or third-party implementations)
 must preserve: abstract-only protocol, the ``open -> poll -> commit ->

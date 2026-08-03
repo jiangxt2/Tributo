@@ -154,7 +154,7 @@ def test_onnx_model_inference(job_client):
 
 @pytest.mark.slow
 def test_max_rows_per_worker_fails_fast_when_exceeded(job_client):
-    """T3 Core: max_rows_per_worker 超过限制时训练失败，不静默截断。
+    """max_rows_per_worker 超过限制时训练失败，不静默截断。
 
     每 worker shard 约 320 行 > MAX_ROWS_PER_WORKER=50 → 训练必须失败，
     不得像旧实现那样只使用前 50 行继续成功。
@@ -179,7 +179,7 @@ def test_max_rows_per_worker_fails_fast_when_exceeded(job_client):
 
 @pytest.mark.slow
 def test_max_rows_within_limit_uses_all_rows(job_client):
-    """T3 Core: 行数限制高于 shard 行数时训练成功且使用全部行。"""
+    """行数限制高于 shard 行数时训练成功且使用全部行。"""
     test_name = "test_max_rows_all_rows"
     job_id = submit_training_job(
         entrypoint="python tests/training/jobs/xgboost_train_job.py",
