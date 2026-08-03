@@ -222,6 +222,7 @@ class TestModelConfig:
 
     def test_build_trainer_raw_config_allows_normal_params(self):
         """非保留参数在 raw 入口继续透传（不误拒）。"""
+        pytest.importorskip("xgboost")  # build_trainer 内部 import ray.train.xgboost
         from unittest.mock import MagicMock
 
         from tributo.training.xgboost_trainer import build_trainer
