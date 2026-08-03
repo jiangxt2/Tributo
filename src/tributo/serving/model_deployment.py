@@ -12,6 +12,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
+from starlette.responses import JSONResponse
 
 from tributo.serving.schema import PredictRequest, PredictResponse, request_to_inputs
 
@@ -57,6 +58,7 @@ class ONNXModel:
         self._runtime: Any = None
         self._session: Any = None
         self.input_name = ""
+        self._input_names: tuple[str, ...] = ()
 
         if bundle_uri is not None:
             self._open_bundle(
@@ -85,6 +87,7 @@ class ONNXModel:
             bundle_uri, role=role, unsafe=unsafe, storage_profile=storage_profile
         )
         self.input_name = self._runtime.model.input_names[0]
+        self._input_names = tuple(self._runtime.model.input_names)
         logger.info(
             "Loaded bundle %r (role=%r). Inputs: %s, Outputs: %s",
             bundle_uri,
@@ -105,17 +108,26 @@ class ONNXModel:
         logger.info("Loading ONNX model from %s (legacy path)", model_path)
         self._session = ort.InferenceSession(model_path)
         self.input_name = self._session.get_inputs()[0].name
+        self._input_names = tuple(inp.name for inp in self._session.get_inputs())
         logger.info(
             "ONNX model loaded. Inputs: %s, Outputs: %s",
             [i.name for i in self._session.get_inputs()],
             [o.name for o in self._session.get_outputs()],
         )
 
-    async def __call__(self, request: Request) -> dict[str, Any]:
-        """Handle HTTP inference request."""
-        body = await request.json()
-        req = PredictRequest.model_validate(body)
-        return self._predict(req).model_dump()
+    async def __call__(self, request: Request) -> dict[str, Any] | JSONResponse:
+        """Handle HTTP inference request.
+
+        Client contract violations — malformed JSON body, unknown
+        datatype, shape mismatch, out-of-range integers, unknown input
+        names — return 400 instead of bubbling up as a 500 server error.
+        """
+        try:
+            body = await request.json()
+            req = PredictRequest.model_validate(body)
+            return self._predict(req).model_dump()
+        except (ValueError, TypeError, OverflowError) as exc:
+            return JSONResponse(status_code=400, content={"error": str(exc)})
 
     def _predict(self, request: PredictRequest) -> PredictResponse:
         """Execute inference and construct response."""
@@ -151,6 +163,15 @@ class ONNXModel:
         on raw model paths too (it is never silently dropped).
         """
         inputs = request_to_inputs(request, self.input_name)
+        if request.inputs is not None:
+            # Versioned inputs must match the model's input names exactly —
+            # a typo'd name would otherwise reach the runtime and surface
+            # as a server-side error instead of a client contract violation.
+            if set(inputs) != set(self._input_names):
+                raise ValueError(
+                    f"Input names {sorted(inputs)} do not match the model's "
+                    f"inputs {sorted(self._input_names)}"
+                )
         if self._runtime is not None:
             result = self._runtime.predict(inputs)
             return [

@@ -220,3 +220,46 @@ class TestXGBoostONNXPredictorRealFeatureNames:
 
         names = XGBoostONNXPredictor.get_feature_names(None, {}, bundle_uri=str(bundle))
         assert names == feature_names
+
+    def test_corrupt_feature_names_metadata_fails_fast(self, tmp_path):
+        """feature_names metadata 存在但 JSON 损坏 → fail-fast，不静默降级。"""
+        import onnx
+
+        from tests.serving.bundle_fixtures import make_dummy_onnx
+
+        onnx_path = make_dummy_onnx(tmp_path)
+        model = onnx.load(onnx_path)
+        prop = model.metadata_props.add()
+        prop.key = "feature_names"
+        prop.value = "{not-json"
+        onnx.save(model, onnx_path)
+
+        with pytest.raises(ValueError, match="feature_names.*corrupt"):
+            XGBoostONNXPredictor._load_feature_names(onnx_path)
+
+    @pytest.mark.parametrize(
+        "value",
+        ['{"a": 1}', '["float_input", 42]', "42"],
+    )
+    def test_non_list_feature_names_metadata_fails_fast(self, tmp_path, value):
+        """feature_names 非 list[str]（dict/混合/标量）→ fail-fast。"""
+        import onnx
+
+        from tests.serving.bundle_fixtures import make_dummy_onnx
+
+        onnx_path = make_dummy_onnx(tmp_path)
+        model = onnx.load(onnx_path)
+        prop = model.metadata_props.add()
+        prop.key = "feature_names"
+        prop.value = value
+        onnx.save(model, onnx_path)
+
+        with pytest.raises(ValueError, match="JSON list of strings"):
+            XGBoostONNXPredictor._load_feature_names(onnx_path)
+
+    def test_missing_feature_names_metadata_tolerated(self, tmp_path):
+        """无 feature_names metadata → 空列表（合法降级）。"""
+        from tests.serving.bundle_fixtures import make_dummy_onnx
+
+        onnx_path = make_dummy_onnx(tmp_path)
+        assert XGBoostONNXPredictor._load_feature_names(onnx_path) == []

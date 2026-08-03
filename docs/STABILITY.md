@@ -117,7 +117,7 @@ Last updated: 2026-08-03.
 | `tributo.serving.streaming_runner` | `beta` | Streaming runner |
 | `tributo.serving.composition` | `beta` | Composite model inference |
 | `tributo.serving.schema` | `beta` | Serving schema types |
-| `tributo.serving.proto.generated.*` | `developer` | Generated protobuf code |
+| `tributo.serving.proto.*` | `developer` | Generated protobuf code |
 
 ### Embeddings (tributo.embeddings.*)
 

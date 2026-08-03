@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -220,6 +221,47 @@ class TestOpenArtifact:
             assert not context_root.exists(), (
                 "S3 temp root must be removed when verification fails"
             )
+
+    def test_s3_copytree_failure_cleans_temp_root(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """S3 缓存复制失败 → 已创建的临时根目录必须清理。"""
+        import shutil
+        import tempfile
+
+        from tributo.exporting import bundle_reader as br
+
+        bundle_dir, _, _ = _create_test_bundle(tmp_path)
+        reader = BundleReader(cache_dir=tmp_path / "cache")
+        manifest = reader.read_manifest(str(bundle_dir)).model_copy(
+            update={"canonical_uri": "s3://bucket/prefix/x"}
+        )
+        artifact = manifest.artifacts[0]
+
+        class _FakeS3:
+            def head_object(self, **kwargs: Any) -> dict[str, int]:
+                af = next(
+                    f for f in artifact.files if kwargs["Key"].endswith(f.relative_path)
+                )
+                return {"ContentLength": af.size_bytes}
+
+            def download_file(self, bucket: str, key: str, filename: str) -> None:
+                del bucket, key
+                Path(filename).write_bytes(b"payload")
+
+        def _fail_copytree(*args: Any, **kwargs: Any) -> None:
+            del args, kwargs
+            raise RuntimeError("copy failed")
+
+        before = set(Path(tempfile.gettempdir()).glob("tributo-bundle-artifact-*"))
+        monkeypatch.setattr(br, "_s3_client", lambda *a, **k: _FakeS3())
+        monkeypatch.setattr(shutil, "copytree", _fail_copytree)
+
+        with pytest.raises(RuntimeError, match="copy failed"):
+            reader._download_artifact_s3(manifest, artifact, None)
+
+        after = set(Path(tempfile.gettempdir()).glob("tributo-bundle-artifact-*"))
+        assert after == before, "temp root must be cleaned when copytree fails"
 
 
 class TestResourceLimits:

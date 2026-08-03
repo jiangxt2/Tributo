@@ -7,6 +7,7 @@ avoiding reloading the ONNX model for each batch. Data is stream-processed end-t
 from __future__ import annotations
 
 import importlib.util
+import json
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -186,18 +187,34 @@ class XGBoostONNXPredictor(BasePredictor):
 
     @staticmethod
     def _load_feature_names(model_path: str | Path) -> list[str]:
-        """Read feature_names from ONNX model metadata."""
-        try:
-            import json
+        """Read feature_names from ONNX model metadata.
 
-            import onnx
+        A model without a ``feature_names`` property is fine (no names
+        recorded).  A present-but-corrupt value — unparsable JSON or not
+        a list of strings — is a packaging error and must fail fast:
+        silently dropping it would let batch inference proceed with
+        silently misnamed columns.
+        """
+        import onnx
 
-            model = onnx.load(model_path)
-            for prop in model.metadata_props:
-                if prop.key == "feature_names":
-                    return json.loads(prop.value)  # type: ignore[no-any-return]
-        except Exception:
-            logger.debug("Failed to load feature_names from ONNX metadata")
+        model = onnx.load(model_path)
+        for prop in model.metadata_props:
+            if prop.key != "feature_names":
+                continue
+            try:
+                names: Any = json.loads(prop.value)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"ONNX metadata 'feature_names' is corrupt: {exc}"
+                ) from exc
+            if not isinstance(names, list) or not all(
+                isinstance(n, str) for n in names
+            ):
+                raise ValueError(
+                    "ONNX metadata 'feature_names' must be a JSON list of "
+                    f"strings, got {type(names).__name__}"
+                )
+            return names
         return []
 
     def _resolve_model(self, model_uri: str) -> str:

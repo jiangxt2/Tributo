@@ -335,6 +335,21 @@ class ModelFactoryRegistry:
         return tuple(self._diagnostics)
 
 
+def build_factory_registry() -> ModelFactoryRegistry:
+    """Build a ``ModelFactoryRegistry`` loaded with entry-point plugins.
+
+    Mirrors the flavor registry assembly in ``runtime._build_flavor_registry``:
+    discovery happens here, once, so model reconstruction never consults
+    an empty registry when third-party factories are installed.
+    """
+    from tributo.plugin import discover_model_factory_plugins
+
+    registry = ModelFactoryRegistry()
+    for cls in discover_model_factory_plugins():
+        registry.register(cls)
+    return registry
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Candidate selection helpers
 # ═══════════════════════════════════════════════════════════════════════════════

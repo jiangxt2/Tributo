@@ -299,6 +299,31 @@ class TestModelFactoryRegistry:
         with pytest.raises(JobConfigurationError, match="Unknown architecture"):
             reg.get("unknown-arch")
 
+    def test_build_factory_registry_loads_plugins(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """build_factory_registry 加载 entry-point 插件 — 重建契约成功路径。
+
+        此前只有「缺 factory fail-fast」被测试；插件接线成功时 get 必须
+        返回注册的 factory 类，而非永远抛 Unknown architecture。
+        """
+        from tributo import plugin
+        from tributo.exporting.registries import build_factory_registry
+
+        monkeypatch.setattr(
+            plugin, "discover_model_factory_plugins", lambda: [_FakeFactory]
+        )
+        registry = build_factory_registry()
+        assert registry.get("tributo-dnn-v1") is _FakeFactory
+        assert registry.list_all() == ["tributo-dnn-v1"]
+
+    def test_build_factory_registry_without_plugins(self) -> None:
+        """无插件时返回空 registry，不抛错。"""
+        from tributo.exporting.registries import build_factory_registry
+
+        registry = build_factory_registry()
+        assert registry.list_all() == []
+
 
 class TestSelectCandidate:
     def test_selects_highest_priority(self) -> None:

@@ -48,6 +48,7 @@ _SUPPORTED_SCHEMA_VERSION = 1
 
 def _prepare_inputs(
     request: inference_pb2.PredictRequest,
+    expected_names: set[str] | None = None,
 ) -> dict[str, np.ndarray] | np.ndarray | None:
     """Convert request inputs to named arrays (versioned) or legacy matrix.
 
@@ -55,6 +56,11 @@ def _prepare_inputs(
     cannot represent int64 above 2**53); when present it takes precedence
     over ``data``, and an ``int64`` input without it fails fast instead
     of silently losing precision.
+
+    *expected_names* — the model's input names.  Versioned inputs must
+    match exactly: a typo'd name would otherwise fall through to the
+    runtime and surface as a server-side error instead of a client
+    contract violation.
     """
     if request.inputs:
         result: dict[str, np.ndarray] = {}
@@ -82,6 +88,11 @@ def _prepare_inputs(
                 datatype=t.datatype,
                 data=data,
             ).to_numpy()
+        if expected_names is not None and set(result) != expected_names:
+            raise ValueError(
+                f"Input names {sorted(result)} do not match the model's "
+                f"inputs {sorted(expected_names)}"
+            )
         return result
     return _validate_features(request)
 
@@ -89,16 +100,18 @@ def _prepare_inputs(
 def _prepare_inputs_or_invalid(
     request: inference_pb2.PredictRequest,
     context: RayServegRPCContext,
+    expected_names: set[str] | None = None,
 ) -> dict[str, np.ndarray] | np.ndarray | None:
     """Prepare inputs, converting protocol errors to INVALID_ARGUMENT.
 
-    Without this, a duplicate name, unknown datatype, or bad shape would
+    Without this, a duplicate name, unknown datatype, bad shape, an
+    out-of-range integer (``OverflowError``), or a type mismatch would
     bubble up as an UNKNOWN gRPC status — the caller's error is a client
     contract violation, so it must surface as INVALID_ARGUMENT.
     """
     try:
-        return _prepare_inputs(request)
-    except ValueError as exc:
+        return _prepare_inputs(request, expected_names)
+    except (ValueError, TypeError, OverflowError) as exc:
         _set_invalid_argument(context, str(exc))
         return None
 
@@ -120,6 +133,11 @@ class gRPCInferenceService:
     The decoration is handled by deploy_serve_app() to support parameter
     overrides like num_replicas.
     """
+
+    #: Model input names, populated on load.  Class-level default so
+    #: instances built without __init__ (tests, __new__) never hit a
+    #: missing attribute in the RPC input-name checks.
+    _input_names: tuple[str, ...] = ()
 
     def __init__(
         self,
@@ -148,6 +166,7 @@ class gRPCInferenceService:
         self._runtime: Any = None
         self._session: Any = None
         self._input_name = ""
+        self._input_names: tuple[str, ...] = ()
         self._output_names: tuple[str, ...] = ()
 
         if bundle_uri is not None:
@@ -174,6 +193,7 @@ class gRPCInferenceService:
             bundle_uri, role=role, unsafe=unsafe, storage_profile=storage_profile
         )
         self._input_name = self._runtime.model.input_names[0]
+        self._input_names = tuple(self._runtime.model.input_names)
         self._output_names = self._runtime.model.output_names
         logger.info(
             "gRPC bundle loaded from %s (role=%r), input_name=%s, inputs=%s",
@@ -195,6 +215,7 @@ class gRPCInferenceService:
 
         self._session = ort.InferenceSession(model_path)
         self._input_name = self._session.get_inputs()[0].name
+        self._input_names = tuple(inp.name for inp in self._session.get_inputs())
         self._output_names = tuple(
             out.name if out.name else f"output_{i}"
             for i, out in enumerate(self._session.get_outputs())
@@ -237,7 +258,9 @@ class gRPCInferenceService:
         Returns:
             Predict result.
         """
-        inputs = _prepare_inputs_or_invalid(request, grpc_context)
+        inputs = _prepare_inputs_or_invalid(
+            request, grpc_context, set(self._input_names)
+        )
         if inputs is None:
             return inference_pb2.PredictResponse()
 
@@ -271,7 +294,9 @@ class gRPCInferenceService:
         Yields:
             Batched predict results.
         """
-        inputs = _prepare_inputs_or_invalid(request, grpc_context)
+        inputs = _prepare_inputs_or_invalid(
+            request, grpc_context, set(self._input_names)
+        )
         if inputs is None:
             return
 
@@ -301,7 +326,9 @@ class gRPCInferenceService:
         """
         inputs_list = []
         async for request in request_stream:
-            inputs = _prepare_inputs_or_invalid(request, grpc_context)
+            inputs = _prepare_inputs_or_invalid(
+                request, grpc_context, set(self._input_names)
+            )
             if inputs is None:
                 return inference_pb2.PredictResponse()
             inputs_list.append(inputs)

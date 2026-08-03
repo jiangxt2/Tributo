@@ -232,10 +232,11 @@ def _reconstruct_model(
         model.load_state_dict(state_dict)
         return model
 
-    # Third-party architectures: use ModelFactoryRegistry.
-    from tributo.exporting.registries import ModelFactoryRegistry
+    # Third-party architectures: use the entry-point-loaded
+    # ModelFactoryRegistry (never an empty one).
+    from tributo.exporting.registries import build_factory_registry
 
-    factory_registry = ModelFactoryRegistry()
+    factory_registry = build_factory_registry()
     try:
         factory_cls = factory_registry.get(architecture_id)
         factory = factory_cls()

@@ -313,6 +313,66 @@ class TestPrepareInputs:
         assert ctx.code == grpc_module.StatusCode.INVALID_ARGUMENT
         assert "schema_version" in ctx.details
 
+    def test_int_overflow_becomes_invalid_argument(self):
+        """int32 越界整数 → INVALID_ARGUMENT（此前冒泡为 UNKNOWN）。"""
+        import grpc as grpc_module
+
+        from tributo.serving.grpc_deployment import _prepare_inputs_or_invalid
+
+        class _FakeContext:
+            def __init__(self) -> None:
+                self.code = None
+                self.details = None
+
+            def set_code(self, code: object) -> None:
+                self.code = code
+
+            def set_details(self, message: str) -> None:
+                self.details = message
+
+        ctx = _FakeContext()
+        req = inference_pb2.PredictRequest()
+        t = req.inputs.add()
+        t.schema_version = 1
+        t.name = "x"
+        t.datatype = "int32"
+        t.data.extend([2**40, 1])
+
+        result = _prepare_inputs_or_invalid(req, ctx)
+        assert result is None
+        assert ctx.code == grpc_module.StatusCode.INVALID_ARGUMENT
+        assert "out of bounds" in ctx.details
+
+    def test_input_name_mismatch_becomes_invalid_argument(self):
+        """输入名与模型 signature 不匹配 → INVALID_ARGUMENT。"""
+        import grpc as grpc_module
+
+        from tributo.serving.grpc_deployment import _prepare_inputs_or_invalid
+
+        class _FakeContext:
+            def __init__(self) -> None:
+                self.code = None
+                self.details = None
+
+            def set_code(self, code: object) -> None:
+                self.code = code
+
+            def set_details(self, message: str) -> None:
+                self.details = message
+
+        ctx = _FakeContext()
+        req = inference_pb2.PredictRequest()
+        t = req.inputs.add()
+        t.schema_version = 1
+        t.name = "typo_input"
+        t.datatype = "float32"
+        t.data.extend([0.5, 0.5])
+
+        result = _prepare_inputs_or_invalid(req, ctx, expected_names={"float_input"})
+        assert result is None
+        assert ctx.code == grpc_module.StatusCode.INVALID_ARGUMENT
+        assert "do not match" in ctx.details
+
 
 class TestGrpcBundleAndVersionedInputs:
     """E3 fix: gRPC 裸模型/versioned dict 输入与 bundle 真实加载。"""
@@ -430,9 +490,10 @@ class TestBatchPredictInputConsistency:
                 self.details = message
 
         async def run() -> _FakeContext:
-            # Skip __init__ (no model needed): the consistency check
+            # Skip __init__ (no model needed): the signature check
             # fires before any inference.
             service = gRPCInferenceService.__new__(gRPCInferenceService)
+            service._input_names = ("a",)
             ctx = _FakeContext()
 
             async def request_stream():
@@ -450,7 +511,10 @@ class TestBatchPredictInputConsistency:
 
         ctx = asyncio.run(run())
         assert ctx.code == grpc_module.StatusCode.INVALID_ARGUMENT
-        assert "Inconsistent input names" in ctx.details
+        # The per-request signature check catches the second request
+        # ("b" not in the model inputs) before the cross-request
+        # consistency pass would.
+        assert "do not match" in ctx.details
 
     def test_consistent_input_names_pass_fast(self):
         """请求间输入名一致时通过一致性检查（进入推理阶段报模型错）。"""
@@ -471,6 +535,7 @@ class TestBatchPredictInputConsistency:
 
         async def run() -> tuple[_FakeContext, list[dict[str, np.ndarray]]]:
             service = gRPCInferenceService.__new__(gRPCInferenceService)
+            service._input_names = ("a",)
             ctx = _FakeContext()
 
             calls: list[dict[str, np.ndarray]] = []
@@ -520,6 +585,7 @@ class TestBatchPredictInputConsistency:
 
         async def run() -> _FakeContext:
             service = gRPCInferenceService.__new__(gRPCInferenceService)
+            service._input_names = ("a",)
             ctx = _FakeContext()
 
             async def request_stream():
@@ -560,6 +626,7 @@ class TestBatchPredictInputConsistency:
 
         async def run() -> _FakeContext:
             service = gRPCInferenceService.__new__(gRPCInferenceService)
+            service._input_names = ("a",)
             ctx = _FakeContext()
 
             async def request_stream():

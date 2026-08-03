@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import warnings
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -207,3 +209,120 @@ class TestONNXModelLegacyVersionedInputs:
         deployment = ONNXModel(model_path=_make_dummy_onnx(tmp_path))
         resp = deployment._predict(PredictRequest(features=[[0.5, 0.5]]))
         assert len(resp.predictions) > 0
+
+
+def _http_request(body: bytes) -> Any:
+    """构造一个携带 JSON body 的 starlette Request（绕过 ASGI 服务）。"""
+    from starlette.requests import Request
+
+    async def _receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/predict",
+            "raw_path": b"/predict",
+            "query_string": b"",
+            "root_path": "",
+            "headers": [],
+            "client": ("127.0.0.1", 50000),
+            "server": ("127.0.0.1", 8000),
+        },
+        receive=_receive,
+    )
+
+
+@pytest.mark.asyncio
+async def test_http_shape_mismatch_returns_400(tmp_path: Path):
+    """版本化输入 shape 与 payload 不匹配 → 400（客户端契约错误）。"""
+    deployment = ONNXModel(model_path=_make_dummy_onnx(tmp_path))
+    body = json.dumps(
+        {
+            "inputs": [
+                {
+                    "name": "float_input",
+                    "shape": [2, 2],
+                    "datatype": "float32",
+                    "data": [1.0],
+                }
+            ]
+        }
+    ).encode()
+
+    resp = await deployment(_http_request(body))
+    assert resp.status_code == 400
+    assert "error" in json.loads(resp.body)
+
+
+@pytest.mark.asyncio
+async def test_http_int_overflow_returns_400(tmp_path: Path):
+    """int32 越界整数 → 400（此前冒泡为 500）。"""
+    deployment = ONNXModel(model_path=_make_dummy_onnx(tmp_path))
+    body = json.dumps(
+        {
+            "inputs": [
+                {
+                    "name": "float_input",
+                    "shape": [1, 2],
+                    "datatype": "int32",
+                    "data": [2**40, 1],
+                }
+            ]
+        }
+    ).encode()
+
+    resp = await deployment(_http_request(body))
+    assert resp.status_code == 400
+    assert "out of bounds" in json.loads(resp.body)["error"]
+
+
+@pytest.mark.asyncio
+async def test_http_malformed_json_returns_400(tmp_path: Path):
+    """非 JSON body → 400。"""
+    deployment = ONNXModel(model_path=_make_dummy_onnx(tmp_path))
+    resp = await deployment(_http_request(b"{not-json"))
+    assert resp.status_code == 400
+
+
+def test_versioned_input_unknown_name_rejected(tmp_path: Path):
+    """版本化输入名与模型 signature 不匹配 → 客户端错误而非运行时错误。"""
+    deployment = ONNXModel(model_path=_make_dummy_onnx(tmp_path))
+    req = PredictRequest(
+        inputs=[
+            {
+                "name": "typo_input",
+                "shape": [1, 2],
+                "datatype": "float32",
+                "data": [0.5, 0.5],
+            }
+        ]
+    )
+    with pytest.raises(ValueError, match="do not match"):
+        deployment._predict(req)
+
+
+@pytest.mark.asyncio
+async def test_http_unknown_input_name_returns_400(tmp_path: Path):
+    """输入名 typo 经 HTTP 返回 400，而非 500。"""
+    deployment = ONNXModel(model_path=_make_dummy_onnx(tmp_path))
+    body = json.dumps(
+        {
+            "inputs": [
+                {
+                    "name": "typo_input",
+                    "shape": [1, 2],
+                    "datatype": "float32",
+                    "data": [0.5, 0.5],
+                }
+            ]
+        }
+    ).encode()
+
+    resp = await deployment(_http_request(body))
+    assert resp.status_code == 400
+    assert "do not match" in json.loads(resp.body)["error"]

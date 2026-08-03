@@ -356,7 +356,13 @@ class BundleReader:
         # directory too, not just the artifact subtree.
         context_root = Path(tempfile.mkdtemp(prefix="tributo-bundle-artifact-"))
         context_dir = context_root / "artifact"
-        shutil.copytree(cache_root, context_dir)
+        try:
+            shutil.copytree(cache_root, context_dir)
+        except BaseException:
+            # A failed copy must not leak the staging root: the caller's
+            # cleanup (open_artifact) only knows roots that were returned.
+            shutil.rmtree(context_root, ignore_errors=True)
+            raise
         return context_root
 
     def _enforce_limits(self, artifact: LogicalArtifact) -> None:
