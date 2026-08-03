@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -23,10 +24,21 @@ def _make_dummy_onnx(tmp_path: Path) -> str:
 
     X = np.array([[0, 0], [0, 1], [1, 0], [1, 1]], dtype=np.float32)
     y = np.array([0, 1, 1, 0])
-    clf = LogisticRegression().fit(X, y)
+    # sklearn 1.6 passes an 'iprint' solver option that scipy >= 1.14
+    # warns about; pytest runs with filterwarnings=error, so silence the
+    # unrelated solver warning around the fit.
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore", message="Unknown solver options: iprint", category=Warning
+        )
+        clf = LogisticRegression().fit(X, y)
 
     initial_types = [("float_input", FloatTensorType([None, 2]))]
-    onnx_model = convert_sklearn(clf, initial_types=initial_types)
+    onnx_model = convert_sklearn(
+        clf,
+        initial_types=initial_types,
+        options={id(clf): {"zipmap": False}},
+    )  # plain float probability matrix, like the XGBoost ONNX path
 
     path = str(tmp_path / "dummy.onnx")
     with open(path, "wb") as f:
@@ -76,3 +88,122 @@ if __name__ == "__main__":
     import sys
 
     sys.exit(pytest.main(["-sv", __file__]))
+
+
+# ── E3 bundle serving path ─────────────────────────────────────────────────────
+
+
+class TestONNXModelBundle:
+    """ONNXModel 经 BundleModelLoader 加载 bundle_uri。"""
+
+    def _make_bundle(self, tmp_path: Path) -> str:
+        """构造带 typed signature 的本地 ONNX bundle。"""
+        from tests.serving.bundle_fixtures import build_test_bundle, make_dummy_onnx
+
+        onnx_path = make_dummy_onnx(tmp_path)
+        bundle = build_test_bundle(tmp_path, onnx_path=onnx_path)
+        return str(bundle)
+
+    def test_model_path_and_bundle_uri_mutually_exclusive(self, tmp_path: Path):
+        """model_path 与 bundle_uri 同时提供应报错。"""
+        with pytest.raises(ValueError, match="exactly one"):
+            ONNXModel(model_path="/x.onnx", bundle_uri="/y")
+
+    def test_neither_model_path_nor_bundle_uri_raises(self):
+        """两者都不提供应报错。"""
+        with pytest.raises(ValueError, match="exactly one"):
+            ONNXModel()
+
+    def test_bundle_loads_and_predicts(self, tmp_path: Path):
+        """bundle_uri 加载 + versioned inputs 推理。"""
+        bundle = self._make_bundle(tmp_path)
+        deployment = ONNXModel(bundle_uri=bundle, role="inference")
+
+        req = PredictRequest(
+            inputs=[
+                {
+                    "name": "float_input",
+                    "shape": [1, 2],
+                    "datatype": "float32",
+                    "data": [0.5, 0.5],
+                }
+            ]
+        )
+        resp = deployment._predict(req)
+        assert resp.model_path == bundle
+        assert len(resp.predictions) > 0
+
+    def test_bundle_legacy_features_compat(self, tmp_path: Path):
+        """bundle 场景下 legacy features 仍可推理（映射到第一个输入）。"""
+        bundle = self._make_bundle(tmp_path)
+        deployment = ONNXModel(bundle_uri=bundle)
+
+        req = PredictRequest(features=[[0.5, 0.5]])
+        resp = deployment._predict(req)
+        assert len(resp.predictions) > 0
+
+    def test_bundle_health(self, tmp_path: Path):
+        """bundle 场景 health() 返回 bundle_uri。"""
+        bundle = self._make_bundle(tmp_path)
+        deployment = ONNXModel(bundle_uri=bundle)
+        health = deployment.health()
+        assert health["status"] == "healthy"
+        assert health["model_path"] == bundle
+
+    def test_unknown_role_fails_fast(self, tmp_path: Path):
+        """未知 role 在部署启动时报错（fail-fast）。"""
+        bundle = self._make_bundle(tmp_path)
+        with pytest.raises(Exception, match="Role"):
+            ONNXModel(bundle_uri=bundle, role="serve")
+
+    def test_close_idempotent_and_predict_after_close(self, tmp_path: Path):
+        """close() 幂等；close 后 predict 仍可用（内存模型契约）。"""
+        bundle = self._make_bundle(tmp_path)
+        deployment = ONNXModel(bundle_uri=bundle)
+
+        deployment.close()
+        deployment.close()  # 第二次 close 是 no-op
+
+        req = PredictRequest(features=[[0.5, 0.5]])
+        resp = deployment._predict(req)
+        assert len(resp.predictions) > 0
+
+    def test_close_legacy_path_is_noop(self, tmp_path: Path):
+        """legacy model_path 路径 close() 为 no-op。"""
+        deployment = ONNXModel(model_path=_make_dummy_onnx(tmp_path))
+        deployment.close()  # 不抛即通过
+
+
+class TestONNXModelLegacyVersionedInputs:
+    """E3 fix: 裸模型 compat 路径也支持版本化输入（不再静默 nan）。"""
+
+    def test_legacy_model_accepts_versioned_inputs(self, tmp_path: Path):
+        """裸模型路径收到 versioned inputs 应正常推理。"""
+        deployment = ONNXModel(model_path=_make_dummy_onnx(tmp_path))
+
+        req = PredictRequest(
+            inputs=[
+                {
+                    "name": "float_input",
+                    "shape": [1, 2],
+                    "datatype": "float32",
+                    "data": [0.5, 0.5],
+                }
+            ]
+        )
+        resp = deployment._predict(req)
+        assert len(resp.predictions) > 0
+        # predictions 不含 nan（此前 np.array(None) 会静默产生 nan）
+        import math
+
+        for p in resp.predictions:
+            if isinstance(p, list):
+                assert all(not math.isnan(float(v)) for v in p)
+            else:
+                assert not math.isnan(float(p))
+
+    def test_legacy_model_features_still_work(self, tmp_path: Path):
+        """裸模型 + legacy features 保持兼容。"""
+        deployment = ONNXModel(model_path=_make_dummy_onnx(tmp_path))
+        resp = deployment._predict(PredictRequest(features=[[0.5, 0.5]]))
+        assert len(resp.predictions) > 0

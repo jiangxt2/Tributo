@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+from tributo.serving.grpc_deployment import _prepare_inputs
 from tributo.serving.proto.generated import inference_pb2
 
 
@@ -21,10 +23,21 @@ def _make_dummy_onnx(tmp_path: Path) -> str:
 
     X = np.array([[0, 0], [0, 1], [1, 0], [1, 1]], dtype=np.float32)
     y = np.array([0, 1, 1, 0])
-    clf = LogisticRegression().fit(X, y)
+    # sklearn 1.6 passes an 'iprint' solver option that scipy >= 1.14
+    # warns about; pytest runs with filterwarnings=error, so silence the
+    # unrelated solver warning around the fit.
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore", message="Unknown solver options: iprint", category=Warning
+        )
+        clf = LogisticRegression().fit(X, y)
 
     initial_types = [("float_input", FloatTensorType([None, 2]))]
-    onnx_model = convert_sklearn(clf, initial_types=initial_types)
+    onnx_model = convert_sklearn(
+        clf,
+        initial_types=initial_types,
+        options={id(clf): {"zipmap": False}},
+    )  # plain float probability matrix, like the XGBoost ONNX path
 
     path = str(tmp_path / "dummy.onnx")
     with open(path, "wb") as f:
@@ -135,7 +148,333 @@ def test_cli_grpc_commands():
     assert "gRPC inference service management" in result.output
 
 
+def test_cli_serve_start_exposes_e3_options():
+    """serve start 暴露 --unsafe / --storage-profile（E3 完整透传）。"""
+    from click.testing import CliRunner
+
+    from tributo.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["serve", "start", "--help"])
+
+    assert result.exit_code == 0
+    assert "--bundle-uri" in result.output
+    assert "--unsafe" in result.output
+    assert "--storage-profile" in result.output
+
+
+def test_cli_grpc_start_exposes_e3_options():
+    """grpc start 暴露 --unsafe / --storage-profile（E3 完整透传）。"""
+    from click.testing import CliRunner
+
+    from tributo.cli import main
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["serve", "grpc", "start", "--help"])
+
+    assert result.exit_code == 0
+    assert "--bundle-uri" in result.output
+    assert "--unsafe" in result.output
+    assert "--storage-profile" in result.output
+
+
 if __name__ == "__main__":
     import sys
 
     sys.exit(pytest.main(["-sv", __file__]))
+
+
+# ── E3 versioned input protocol (pure functions, no Ray needed) ────────────────
+
+
+class TestPrepareInputs:
+    """_prepare_inputs 归一化 gRPC 请求输入。"""
+
+    def test_versioned_inputs_to_named_arrays(self):
+        """InputTensor 列表转换为命名 numpy 数组。"""
+        from tributo.serving.grpc_deployment import _prepare_inputs
+
+        req = inference_pb2.PredictRequest()
+        t = req.inputs.add()
+        t.name = "float_input"
+        t.shape.extend([1, 2])
+        t.datatype = "float32"
+        t.data.extend([0.5, 0.5])
+
+        result = _prepare_inputs(req)
+        assert isinstance(result, dict)
+        assert set(result) == {"float_input"}
+        np.testing.assert_allclose(result["float_input"], [[0.5, 0.5]])
+
+    def test_legacy_features_fallback(self):
+        """无 inputs 时回退 legacy 平坦 features。"""
+        from tributo.serving.grpc_deployment import _prepare_inputs
+
+        req = inference_pb2.PredictRequest(features=[0.5, 0.5])
+        result = _prepare_inputs(req)
+        assert isinstance(result, np.ndarray)
+        assert result.shape == (1, 2)
+
+    def test_empty_request_returns_none(self):
+        """无输入时返回 None（由调用方置 INVALID_ARGUMENT）。"""
+        from tributo.serving.grpc_deployment import _prepare_inputs
+
+        req = inference_pb2.PredictRequest()
+        assert _prepare_inputs(req) is None
+
+    def test_int64_datatype(self):
+        """int64 datatype 经 int64_data 无损转换为 int64 数组。"""
+        from tributo.serving.grpc_deployment import _prepare_inputs
+
+        req = inference_pb2.PredictRequest()
+        t = req.inputs.add()
+        t.name = "ids"
+        t.datatype = "int64"
+        t.int64_data.extend([1, 2, 3])
+
+        result = _prepare_inputs(req)
+        assert isinstance(result, dict)
+        assert result["ids"].dtype == np.int64
+
+    def test_unsupported_schema_version_rejected(self):
+        """未知 schema_version 应 fail-fast。"""
+        from tributo.serving.grpc_deployment import _prepare_inputs
+
+        req = inference_pb2.PredictRequest()
+        t = req.inputs.add()
+        t.schema_version = 99
+        t.name = "x"
+        t.datatype = "float32"
+        t.data.extend([1.0])
+
+        with pytest.raises(ValueError, match="schema_version"):
+            _prepare_inputs(req)
+
+    def test_int64_without_int64_data_rejected(self):
+        """datatype=int64 但未用 int64_data → fail-fast（防 double 精度损失）。"""
+        from tributo.serving.grpc_deployment import _prepare_inputs
+
+        req = inference_pb2.PredictRequest()
+        t = req.inputs.add()
+        t.name = "ids"
+        t.datatype = "int64"
+        t.data.extend([2**60 + 1])  # double 承载会丢精度
+
+        with pytest.raises(ValueError, match="int64_data"):
+            _prepare_inputs(req)
+
+    def test_protocol_error_becomes_invalid_argument(self):
+        """协议错误经 _prepare_inputs_or_invalid 转为 INVALID_ARGUMENT。"""
+        import grpc as grpc_module
+
+        from tributo.serving.grpc_deployment import _prepare_inputs_or_invalid
+
+        class _FakeContext:
+            def __init__(self) -> None:
+                self.code = None
+                self.details = None
+
+            def set_code(self, code: object) -> None:
+                self.code = code
+
+            def set_details(self, message: str) -> None:
+                self.details = message
+
+        ctx = _FakeContext()
+        req = inference_pb2.PredictRequest()
+        t = req.inputs.add()
+        t.schema_version = 99
+        t.name = "x"
+        t.datatype = "float32"
+        t.data.extend([1.0])
+
+        result = _prepare_inputs_or_invalid(req, ctx)
+        assert result is None
+        assert ctx.code == grpc_module.StatusCode.INVALID_ARGUMENT
+        assert "schema_version" in ctx.details
+
+
+class TestGrpcBundleAndVersionedInputs:
+    """E3 fix: gRPC 裸模型/versioned dict 输入与 bundle 真实加载。"""
+
+    def test_legacy_session_accepts_versioned_dict(self, tmp_path: Path):
+        """裸模型 session 路径接受 versioned dict（此前 AssertionError）。"""
+        from tributo.serving.grpc_deployment import gRPCInferenceService
+
+        service = gRPCInferenceService(model_path=_make_dummy_onnx(tmp_path))
+        inputs = {"float_input": np.array([[0.5, 0.5]], dtype=np.float32)}
+        outputs = service._run(inputs)
+        assert len(outputs) == 2  # label + probabilities
+        assert outputs[0].shape == (1,)
+
+    def test_legacy_session_accepts_flat_matrix(self, tmp_path: Path):
+        """裸模型 + legacy 平坦矩阵保持兼容。"""
+        from tributo.serving.grpc_deployment import gRPCInferenceService
+
+        service = gRPCInferenceService(model_path=_make_dummy_onnx(tmp_path))
+        outputs = service._run(np.array([[0.5, 0.5]], dtype=np.float32))
+        assert len(outputs) == 2  # label + probabilities
+
+    def test_bundle_loads_and_predicts(self, tmp_path: Path):
+        """gRPC 经 bundle_uri 真实加载并推理。"""
+        from tests.serving.bundle_fixtures import build_test_bundle, make_dummy_onnx
+        from tributo.serving.grpc_deployment import gRPCInferenceService
+
+        onnx_path = make_dummy_onnx(tmp_path)
+        bundle = build_test_bundle(tmp_path, onnx_path=onnx_path)
+        service = gRPCInferenceService(bundle_uri=str(bundle), role="inference")
+
+        request = inference_pb2.PredictRequest()
+        t = request.inputs.add()
+        t.name = "float_input"
+        t.shape.extend([1, 2])
+        t.datatype = "float32"
+        t.data.extend([0.5, 0.5])
+
+        outputs = service._run(_prepare_inputs(request))
+        assert len(outputs) == 2  # label + probabilities
+        assert outputs[0].shape[0] == 1
+
+    def test_close_idempotent_and_predict_after_close(self, tmp_path: Path):
+        """close() 幂等；close 后 predict 仍可用。"""
+        from tests.serving.bundle_fixtures import build_test_bundle, make_dummy_onnx
+        from tributo.serving.grpc_deployment import gRPCInferenceService
+
+        onnx_path = make_dummy_onnx(tmp_path)
+        bundle = build_test_bundle(tmp_path, onnx_path=onnx_path)
+        service = gRPCInferenceService(bundle_uri=str(bundle), role="inference")
+
+        service.close()
+        service.close()  # 第二次 close 是 no-op
+
+        request = inference_pb2.PredictRequest()
+        t = request.inputs.add()
+        t.name = "float_input"
+        t.shape.extend([1, 2])
+        t.datatype = "float32"
+        t.data.extend([0.5, 0.5])
+
+        outputs = service._run(_prepare_inputs(request))
+        assert len(outputs) == 2
+
+    def test_prepare_inputs_int64_data(self):
+        """int64_data 无损承载整型输入。"""
+        from tributo.serving.grpc_deployment import _prepare_inputs
+
+        req = inference_pb2.PredictRequest()
+        t = req.inputs.add()
+        t.name = "ids"
+        t.datatype = "int64"
+        t.int64_data.extend([2**60, 2**60 + 1])  # 超出 double 精度
+
+        result = _prepare_inputs(req)
+        assert isinstance(result, dict)
+        assert result["ids"].dtype == np.int64
+        assert result["ids"].tolist() == [2**60, 2**60 + 1]
+
+    def test_prepare_inputs_duplicate_name_rejected(self):
+        """重复输入名应 fail-fast。"""
+        from tributo.serving.grpc_deployment import _prepare_inputs
+
+        req = inference_pb2.PredictRequest()
+        for _ in range(2):
+            t = req.inputs.add()
+            t.name = "x"
+            t.datatype = "float32"
+            t.data.extend([1.0])
+
+        with pytest.raises(ValueError, match="Duplicate input name"):
+            _prepare_inputs(req)
+
+
+class TestBatchPredictInputConsistency:
+    """BatchPredict 跨请求输入名一致性契约。"""
+
+    def test_inconsistent_input_names_rejected(self):
+        """请求间输入名集合不一致 → INVALID_ARGUMENT fail-fast。"""
+        import asyncio
+
+        import grpc as grpc_module
+
+        from tributo.serving.grpc_deployment import gRPCInferenceService
+
+        class _FakeContext:
+            def __init__(self) -> None:
+                self.code = None
+                self.details = None
+
+            def set_code(self, code: object) -> None:
+                self.code = code
+
+            def set_details(self, message: str) -> None:
+                self.details = message
+
+        async def run() -> _FakeContext:
+            # Skip __init__ (no model needed): the consistency check
+            # fires before any inference.
+            service = gRPCInferenceService.__new__(gRPCInferenceService)
+            ctx = _FakeContext()
+
+            async def request_stream():
+                for names in (("a",), ("b",)):
+                    req = inference_pb2.PredictRequest()
+                    for n in names:
+                        t = req.inputs.add()
+                        t.name = n
+                        t.datatype = "float32"
+                        t.data.extend([1.0])
+                    yield req
+
+            await service.BatchPredict(request_stream(), ctx)
+            return ctx
+
+        ctx = asyncio.run(run())
+        assert ctx.code == grpc_module.StatusCode.INVALID_ARGUMENT
+        assert "Inconsistent input names" in ctx.details
+
+    def test_consistent_input_names_pass_fast(self):
+        """请求间输入名一致时通过一致性检查（进入推理阶段报模型错）。"""
+        import asyncio
+
+        from tributo.serving.grpc_deployment import gRPCInferenceService
+
+        class _FakeContext:
+            def __init__(self) -> None:
+                self.code = None
+                self.details = None
+
+            def set_code(self, code: object) -> None:
+                self.code = code
+
+            def set_details(self, message: str) -> None:
+                self.details = message
+
+        async def run() -> tuple[_FakeContext, list[dict[str, np.ndarray]]]:
+            service = gRPCInferenceService.__new__(gRPCInferenceService)
+            ctx = _FakeContext()
+
+            calls: list[dict[str, np.ndarray]] = []
+
+            def fake_run(inputs: dict[str, np.ndarray]) -> list[np.ndarray]:
+                calls.append(inputs)
+                return [np.array([1.0])]
+
+            service._run = fake_run
+
+            async def request_stream():
+                for _ in range(2):
+                    req = inference_pb2.PredictRequest()
+                    t = req.inputs.add()
+                    t.name = "a"
+                    t.datatype = "float32"
+                    t.data.extend([1.0])
+                    yield req
+
+            await service.BatchPredict(request_stream(), ctx)
+            return ctx, calls
+
+        ctx, calls = asyncio.run(run())
+        # 一致性通过 → 未设置 INVALID_ARGUMENT，且推理收到拼接后的 batch
+        assert ctx.code is None
+        assert len(calls) == 1
+        assert calls[0]["a"].shape == (2,)

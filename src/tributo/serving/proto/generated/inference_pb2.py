@@ -4,36 +4,39 @@
 # source: inference.proto
 # Protobuf Python Version: 6.33.5
 """Generated protocol buffer code."""
-
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import descriptor_pool as _descriptor_pool
 from google.protobuf import runtime_version as _runtime_version
 from google.protobuf import symbol_database as _symbol_database
 from google.protobuf.internal import builder as _builder
-
 _runtime_version.ValidateProtobufRuntimeVersion(
-    _runtime_version.Domain.PUBLIC, 6, 33, 5, "", "inference.proto"
+    _runtime_version.Domain.PUBLIC,
+    6,
+    33,
+    5,
+    '',
+    'inference.proto'
 )
 # @@protoc_insertion_point(imports)
 
 _sym_db = _symbol_database.Default()
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(
-    b'\n\x0finference.proto\x12\x0ftributo.serving"6\n\x0ePredictRequest\x12\x10\n\x08\x66\x65\x61tures\x18\x01 \x03(\x02\x12\x12\n\nmodel_name\x18\x02 \x01(\t":\n\x0fPredictResponse\x12\x13\n\x0bpredictions\x18\x01 \x03(\x02\x12\x12\n\nconfidence\x18\x02 \x01(\x02\x32\x8b\x02\n\x10InferenceService\x12L\n\x07Predict\x12\x1f.tributo.serving.PredictRequest\x1a .tributo.serving.PredictResponse\x12T\n\rStreamPredict\x12\x1f.tributo.serving.PredictRequest\x1a .tributo.serving.PredictResponse0\x01\x12S\n\x0c\x42\x61tchPredict\x12\x1f.tributo.serving.PredictRequest\x1a .tributo.serving.PredictResponse(\x01\x62\x06proto3'
-)
+
+
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0finference.proto\x12\x0ftributo.serving\"v\n\x0bInputTensor\x12\x16\n\x0eschema_version\x18\x05 \x01(\x05\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\r\n\x05shape\x18\x02 \x03(\x05\x12\x10\n\x08\x64\x61tatype\x18\x03 \x01(\t\x12\x0c\n\x04\x64\x61ta\x18\x04 \x03(\x01\x12\x12\n\nint64_data\x18\x06 \x03(\x03\"d\n\x0ePredictRequest\x12,\n\x06inputs\x18\x03 \x03(\x0b\x32\x1c.tributo.serving.InputTensor\x12\x10\n\x08\x66\x65\x61tures\x18\x01 \x03(\x02\x12\x12\n\nmodel_name\x18\x02 \x01(\t\":\n\x0fPredictResponse\x12\x13\n\x0bpredictions\x18\x01 \x03(\x02\x12\x12\n\nconfidence\x18\x02 \x01(\x02\x32\x8b\x02\n\x10InferenceService\x12L\n\x07Predict\x12\x1f.tributo.serving.PredictRequest\x1a .tributo.serving.PredictResponse\x12T\n\rStreamPredict\x12\x1f.tributo.serving.PredictRequest\x1a .tributo.serving.PredictResponse0\x01\x12S\n\x0c\x42\x61tchPredict\x12\x1f.tributo.serving.PredictRequest\x1a .tributo.serving.PredictResponse(\x01\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
-_builder.BuildTopDescriptorsAndMessages(
-    DESCRIPTOR, "tributo.serving.proto.generated.inference_pb2", _globals
-)
+_builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'inference_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
-    DESCRIPTOR._loaded_options = None
-    _globals["_PREDICTREQUEST"]._serialized_start = 36
-    _globals["_PREDICTREQUEST"]._serialized_end = 90
-    _globals["_PREDICTRESPONSE"]._serialized_start = 92
-    _globals["_PREDICTRESPONSE"]._serialized_end = 150
-    _globals["_INFERENCESERVICE"]._serialized_start = 153
-    _globals["_INFERENCESERVICE"]._serialized_end = 420
+  DESCRIPTOR._loaded_options = None
+  _globals['_INPUTTENSOR']._serialized_start=36
+  _globals['_INPUTTENSOR']._serialized_end=154
+  _globals['_PREDICTREQUEST']._serialized_start=156
+  _globals['_PREDICTREQUEST']._serialized_end=256
+  _globals['_PREDICTRESPONSE']._serialized_start=258
+  _globals['_PREDICTRESPONSE']._serialized_end=316
+  _globals['_INFERENCESERVICE']._serialized_start=319
+  _globals['_INFERENCESERVICE']._serialized_end=586
 # @@protoc_insertion_point(module_scope)

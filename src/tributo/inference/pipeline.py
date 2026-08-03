@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from tributo.data.base import S3Config
     from tributo.inference.base import BasePredictor
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from tributo.exceptions import JobConfigurationError
 from tributo.util.annotations import PublicAPI
@@ -53,7 +53,11 @@ class InferenceConfig(BaseModel):
         s3_config: S3 auth configuration.
         clickhouse_config: ClickHouse connection config (required when type=clickhouse).
         output_uri: Output URI for inference results.
-        model_uri: Model path (local or s3://).
+        model_uri: Model path (local or s3://) — legacy compat entry.
+        bundle_uri: Published bundle URI — stable model entry point.
+        model_role: Artifact role to serve from the bundle (default inference).
+        unsafe_model: Permit bundles without typed signatures or unsafe flavors.
+        storage_profile: Storage profile name for S3 bundles.
         feature_columns: List of feature column names needed for inference (column pruning).
         predictor_config: Passthrough dict for predictor-specific config.
     """
@@ -62,7 +66,19 @@ class InferenceConfig(BaseModel):
 
     input_uri: str = Field(min_length=1)
     output_uri: str = Field(min_length=1)
-    model_uri: str = Field(min_length=1)
+    model_uri: str | None = Field(default=None, min_length=1)
+    bundle_uri: str | None = Field(default=None, min_length=1)
+    model_role: str = "inference"
+    unsafe_model: bool = False
+    storage_profile: str | None = None
+
+    @model_validator(mode="after")
+    def _check_model_entry(self) -> "InferenceConfig":
+        if (self.model_uri is None) == (self.bundle_uri is None):
+            raise ValueError(
+                "exactly one of 'model_uri' (legacy) or 'bundle_uri' must be provided"
+            )
+        return self
 
     # Data source type: s3 | csv | clickhouse
     data_type: str = "csv"
@@ -132,12 +148,24 @@ def run_batch_inference(
         predictor_config["s3_config"] = config.s3_config
     predictor_config["feature_names"] = config.feature_columns or None
 
-    # If feature_columns is not set, auto-read from model metadata
+    # If feature_columns is not set, auto-read from the model entry
+    # (bundle signature or legacy ONNX metadata).
     feature_columns = config.feature_columns
     if not feature_columns:
-        feature_columns = predictor_cls.get_feature_names(
-            config.model_uri, predictor_config
-        )
+        if config.bundle_uri is not None:
+            feature_columns = predictor_cls.get_feature_names(
+                None,
+                predictor_config,
+                bundle_uri=config.bundle_uri,
+                role=config.model_role,
+                unsafe=config.unsafe_model,
+                storage_profile=config.storage_profile,
+            )
+        else:
+            assert config.model_uri is not None  # mutually exclusive with bundle_uri
+            feature_columns = predictor_cls.get_feature_names(
+                config.model_uri, predictor_config
+            )
         if not feature_columns:
             raise JobConfigurationError(
                 "feature_columns is empty and model has no feature_names metadata. "
@@ -177,20 +205,33 @@ def run_batch_inference(
         ds = ray.data.read_parquet(config.input_uri, columns=feature_columns or None)
 
     # ── 2. Distributed inference (ActorPoolStrategy keeps models resident) ──
+    model_ref = config.bundle_uri if config.bundle_uri is not None else config.model_uri
     logger.info(
         "Starting inference: predictor=%s model=%s concurrency=%d batch_size=%d "
         "cpus_per_actor=%.1f gpus_per_actor=%.1f",
         predictor_cls.__name__,
-        config.model_uri,
+        model_ref,
         config.concurrency,
         config.batch_size,
         config.num_cpus_per_actor,
         config.num_gpus_per_actor,
     )
 
+    if config.bundle_uri is not None:
+        constructor_args: tuple[Any, ...] = (
+            None,
+            predictor_config,
+            config.bundle_uri,
+            config.model_role,
+            config.unsafe_model,
+            config.storage_profile,
+        )
+    else:
+        constructor_args = (config.model_uri, predictor_config)
+
     ds = ds.map_batches(
         predictor_cls,
-        fn_constructor_args=(config.model_uri, predictor_config),
+        fn_constructor_args=constructor_args,
         batch_size=config.batch_size,
         compute=ray.data.ActorPoolStrategy(
             min_size=config.concurrency,
@@ -249,7 +290,9 @@ def run_inference_from_json(config_path: str) -> dict[str, Any]:
             endpoint: http://minio:9000
 
         model:
-          uri: s3://bucket/models/model.onnx   # or local path
+          uri: s3://bucket/models/model.onnx   # or local path (legacy)
+          bundle_uri: /tmp/models/bundle       # published bundle (stable entry)
+          role: inference                      # artifact role (default inference)
           return_probs: true                    # passed through to predictor_config
 
         output:
@@ -277,6 +320,7 @@ def run_inference_from_json(config_path: str) -> dict[str, Any]:
 
     input_uri = data_cfg.get("uri") or data_cfg.get("input", "")
     model_uri = model_cfg.get("uri") or model_cfg.get("path", "")
+    bundle_uri = model_cfg.get("bundle_uri")
     output_uri = output_cfg.get("uri") or output_cfg.get("path", "")
 
     if data_cfg.get("input") and not data_cfg.get("uri"):
@@ -331,7 +375,13 @@ def run_inference_from_json(config_path: str) -> dict[str, Any]:
         config = InferenceConfig(
             input_uri=input_uri,
             output_uri=output_uri,
-            model_uri=model_uri,
+            model_uri=model_uri or None,
+            bundle_uri=bundle_uri,
+            model_role=model_cfg.get("role", "inference"),
+            # Passed through to Pydantic for strict parsing — bool("false")
+            # is True, so the raw JSON value must reach the model field.
+            unsafe_model=model_cfg.get("unsafe", False),
+            storage_profile=model_cfg.get("storage_profile"),
             data_type=data_type,
             feature_columns=data_cfg.get("feature_columns", []),
             predictor_config=predictor_config,

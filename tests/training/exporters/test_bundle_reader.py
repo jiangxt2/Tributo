@@ -168,6 +168,35 @@ class TestOpenArtifact:
         with reader.open_artifact(str(bundle_dir), role="inference") as ra:
             assert ra.descriptor.entrypoint == "model.onnx"
 
+    def test_s3_integrity_failure_cleans_temp_root(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """S3 下载后完整性校验失败 → 临时根目录必须被清理，不泄漏。"""
+        import tempfile
+
+        bundle_dir, _, _ = _create_test_bundle(tmp_path)
+        reader = BundleReader()
+
+        # 模拟"已下载"的 S3 临时目录：内容与 manifest 声明不符 → 校验失败
+        context_root = Path(tempfile.mkdtemp(prefix="tributo-bundle-artifact-"))
+        (context_root / "artifact").mkdir()
+        (context_root / "artifact" / "model.onnx").write_bytes(b"tampered-content")
+
+        manifest = reader.read_manifest(str(bundle_dir))
+        monkeypatch.setattr(reader, "read_manifest", lambda *a, **k: manifest)
+        monkeypatch.setattr(
+            reader, "_download_artifact_s3", lambda *a, **k: context_root
+        )
+
+        try:
+            with pytest.raises(ValueError, match="expected"):
+                with reader.open_artifact("s3://bucket/prefix/x", artifact_name="fp32"):
+                    pytest.fail("must not yield on verification failure")
+        finally:
+            assert not context_root.exists(), (
+                "S3 temp root must be removed when verification fails"
+            )
+
 
 class TestResourceLimits:
     def test_default_limits(self) -> None:

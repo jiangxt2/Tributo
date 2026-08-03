@@ -149,3 +149,143 @@ class TestRunInferenceFromJson:
 
 if __name__ == "__main__":
     sys.exit(pytest.main(["-sv", __file__]))
+
+
+class TestInferenceConfigBundleEntry:
+    """E3: bundle_uri 作为稳定模型入口的校验。"""
+
+    def test_bundle_uri_alone_valid(self):
+        """仅 bundle_uri 应通过校验。"""
+        cfg = InferenceConfig(
+            input_uri="s3://bucket/input.parquet",
+            output_uri="s3://bucket/output/",
+            bundle_uri="/models/bundle",
+        )
+        assert cfg.bundle_uri == "/models/bundle"
+        assert cfg.model_role == "inference"
+        assert cfg.unsafe_model is False
+
+    def test_bundle_uri_and_model_uri_mutually_exclusive(self):
+        """bundle_uri 与 model_uri 同时提供应 fail-fast。"""
+        with pytest.raises(ValidationError, match="exactly one"):
+            InferenceConfig(
+                input_uri="s3://bucket/input.parquet",
+                output_uri="s3://bucket/output/",
+                model_uri="s3://bucket/model.onnx",
+                bundle_uri="/models/bundle",
+            )
+
+    def test_neither_model_entry_raises(self):
+        """model_uri 与 bundle_uri 都不提供应 fail-fast。"""
+        with pytest.raises(ValidationError, match="exactly one"):
+            InferenceConfig(
+                input_uri="s3://bucket/input.parquet",
+                output_uri="s3://bucket/output/",
+            )
+
+    def test_legacy_model_uri_still_valid(self):
+        """仅 model_uri 的旧配置继续有效（compat）。"""
+        cfg = InferenceConfig(
+            input_uri="s3://bucket/input.parquet",
+            output_uri="s3://bucket/output/",
+            model_uri="s3://bucket/model.onnx",
+        )
+        assert cfg.model_uri == "s3://bucket/model.onnx"
+        assert cfg.bundle_uri is None
+
+
+class TestRunInferenceJsonBundleEntry:
+    """run_inference_from_json 的 bundle 模型入口解析。"""
+
+    def _write_json(self, data: dict) -> str:
+        """写入临时 JSON 文件并返回路径。"""
+        f = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
+        json.dump(data, f)
+        f.close()
+        return f.name
+
+    @patch("tributo.inference.pipeline.run_batch_inference")
+    def test_bundle_uri_parsed(self, mock_run):
+        """model.bundle_uri 应解析进 InferenceConfig。"""
+        from tributo.inference.pipeline import run_inference_from_json
+
+        mock_run.return_value = {"status": "completed"}
+        path = self._write_json(
+            {
+                "data": {"uri": "s3://bucket/input.parquet"},
+                "model": {
+                    "bundle_uri": "/models/bundle",
+                    "role": "inference",
+                    "unsafe": True,
+                },
+                "output": {"uri": "s3://bucket/output/"},
+            }
+        )
+        run_inference_from_json(path)
+
+        call_cfg = mock_run.call_args[0][0]
+        assert call_cfg.bundle_uri == "/models/bundle"
+        assert call_cfg.model_role == "inference"
+        assert call_cfg.unsafe_model is True
+        assert call_cfg.model_uri is None
+
+
+class TestUnsafeStrictParsing:
+    """E3 fix: unsafe 配置必须严格布尔解析，禁止字符串绕过。"""
+
+    def _write_json(self, data: dict) -> str:
+        """写入临时 JSON 文件并返回路径。"""
+        f = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
+        json.dump(data, f)
+        f.close()
+        return f.name
+
+    @patch("tributo.inference.pipeline.run_batch_inference")
+    def test_unsafe_false_string_is_false(self, mock_run):
+        """ "unsafe": "false" 必须解析为 False（不能 bool() 字符串）。"""
+        from tributo.inference.pipeline import run_inference_from_json
+
+        mock_run.return_value = {"status": "completed"}
+        path = self._write_json(
+            {
+                "data": {"uri": "s3://bucket/input.parquet"},
+                "model": {"bundle_uri": "/models/bundle", "unsafe": "false"},
+                "output": {"uri": "s3://bucket/output/"},
+            }
+        )
+        run_inference_from_json(path)
+        call_cfg = mock_run.call_args[0][0]
+        assert call_cfg.unsafe_model is False
+
+    @patch("tributo.inference.pipeline.run_batch_inference")
+    def test_unsafe_true_string_is_true(self, mock_run):
+        """ "unsafe": "true" 解析为 True。"""
+        from tributo.inference.pipeline import run_inference_from_json
+
+        mock_run.return_value = {"status": "completed"}
+        path = self._write_json(
+            {
+                "data": {"uri": "s3://bucket/input.parquet"},
+                "model": {"bundle_uri": "/models/bundle", "unsafe": "true"},
+                "output": {"uri": "s3://bucket/output/"},
+            }
+        )
+        run_inference_from_json(path)
+        call_cfg = mock_run.call_args[0][0]
+        assert call_cfg.unsafe_model is True
+
+    @patch("tributo.inference.pipeline.run_batch_inference")
+    def test_unsafe_garbage_rejected(self, mock_run):
+        """非法布尔值应校验失败（fail-fast）。"""
+        from tributo.inference.pipeline import run_inference_from_json
+
+        path = self._write_json(
+            {
+                "data": {"uri": "s3://bucket/input.parquet"},
+                "model": {"bundle_uri": "/models/bundle", "unsafe": "garbage"},
+                "output": {"uri": "s3://bucket/output/"},
+            }
+        )
+        with pytest.raises(JobConfigurationError, match="Invalid inference config"):
+            run_inference_from_json(path)
+        mock_run.assert_not_called()

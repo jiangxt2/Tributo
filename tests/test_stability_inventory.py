@@ -91,8 +91,11 @@ STABILITY_MAP: dict[str, str] = {
     "tributo.exporting.records": "beta",
     "tributo.exporting.gc": "beta",
     "tributo.exporting.hooks": "beta",
+    "tributo.exporting.runtime": "beta",
     # Integrations — beta
     "tributo.integrations.exporters": "beta",
+    "tributo.integrations.flavors": "beta",
+    "tributo.integrations.flavors.onnx_runtime": "beta",
     "tributo.integrations.validators": "beta",
     "tributo.integrations.sources": "beta",
     "tributo.integrations.storage": "beta",

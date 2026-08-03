@@ -199,27 +199,32 @@ class BundleReader:
         self._enforce_limits(artifact)
 
         # Resolve to local directory.
+        cleanup_root: Path | None = None
         if manifest_or_bundle_uri.startswith("s3://"):
-            artifact_dir = self._download_artifact_s3(
+            context_root = self._download_artifact_s3(
                 manifest, artifact, storage_profile
             )
+            artifact_dir = context_root / "artifact"
+            cleanup_root = context_root
             is_temp = True
         else:
             # Local bundle.
-            bundle_dir = _resolve_local_bundle_dir(manifest_or_bundle_uri)
+            bundle_dir = _resolve_local_bundle_dir(
+                _strip_file_scheme(manifest_or_bundle_uri)
+            )
             artifact_dir = bundle_dir / "artifacts" / artifact.name
             is_temp = False
 
-        # Verify integrity.
-        _verify_artifact_integrity(artifact, artifact_dir)
-
-        ra = ResolvedArtifact(descriptor=artifact, root_dir=artifact_dir)
-
+        # Verify integrity and yield inside the same try/finally so a
+        # verification failure (tampered file, digest mismatch) also
+        # removes the S3 temp root — never leak it on the rejection path.
         try:
+            _verify_artifact_integrity(artifact, artifact_dir)
+            ra = ResolvedArtifact(descriptor=artifact, root_dir=artifact_dir)
             yield ra
         finally:
-            if is_temp and artifact_dir.exists():
-                shutil.rmtree(artifact_dir, ignore_errors=True)
+            if is_temp and cleanup_root is not None and cleanup_root.exists():
+                shutil.rmtree(cleanup_root, ignore_errors=True)
 
     # ── Internal helpers ──────────────────────────────────────────────────
 
@@ -232,7 +237,7 @@ class BundleReader:
         """
         if uri.startswith("s3://"):
             return self._fetch_manifest_s3(uri, storage_profile)
-        return self._fetch_manifest_local(uri)
+        return self._fetch_manifest_local(_strip_file_scheme(uri))
 
     def _fetch_manifest_local(self, uri: str) -> tuple[bytes, str | None]:
         path = _resolve_manifest_path(Path(uri))
@@ -336,11 +341,13 @@ class BundleReader:
                     if tmp_path.exists():
                         tmp_path.unlink(missing_ok=True)
 
-        # Fresh per-context copy of the shared cache.
+        # Fresh per-context copy of the shared cache.  The caller
+        # receives the full temp root so cleanup removes the parent
+        # directory too, not just the artifact subtree.
         context_root = Path(tempfile.mkdtemp(prefix="tributo-bundle-artifact-"))
         context_dir = context_root / "artifact"
         shutil.copytree(cache_root, context_dir)
-        return context_dir
+        return context_root
 
     def _enforce_limits(self, artifact: LogicalArtifact) -> None:
         """Check artifact against configured resource limits."""
@@ -388,6 +395,17 @@ def _s3_get_json(client: Any, bucket: str, key: str) -> Any:
         if exc.response["Error"]["Code"] == "NoSuchKey":
             return None
         raise
+
+
+def _strip_file_scheme(uri: str) -> str:
+    """Strip a ``file://`` scheme so local URIs work as plain paths.
+
+    ``BundleOutputConfig`` accepts ``file://`` URIs; the reader treats
+    everything that is not ``s3://`` as a local path.
+    """
+    if uri.startswith("file://"):
+        return uri[len("file://") :]
+    return uri
 
 
 def _resolve_manifest_path(path: Path) -> Path:

@@ -4300,6 +4300,7 @@ dev = [
     { name = "pytest-metadata" },
     { name = "pytest-timeout" },
     { name = "redis" },
+    { name = "skl2onnx" },
 ]
 phase2a-daft-core = [
     { name = "daft", extra = ["ray"] },
@@ -4382,6 +4383,7 @@ dev = [
     { name = "pytest-metadata", specifier = ">=3.1.1" },
     { name = "pytest-timeout", specifier = ">=2.4.0" },
     { name = "redis", specifier = ">=8.0.0" },
+    { name = "skl2onnx", specifier = ">=1.17.0" },
 ]
 phase2a-daft-core = [{ name = "daft", extras = ["ray"], specifier = ">=0.7.0,<0.8.0" }]
 

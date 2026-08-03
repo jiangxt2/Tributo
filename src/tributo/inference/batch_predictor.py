@@ -9,9 +9,12 @@ from __future__ import annotations
 import importlib.util
 import logging
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from tributo.exporting.runtime import BundleModelRuntime
 
 from tributo.exceptions import DataSourceError, JobConfigurationError
 from tributo.inference.base import BasePredictor
@@ -29,6 +32,9 @@ class XGBoostONNXPredictor(BasePredictor):
     2. __call__ runs inference on each batch, returning the batch with a prediction column;
     3. The session is released automatically when the Actor is reclaimed.
 
+    The model may be loaded from a published bundle (``bundle_uri`` +
+    explicit ``role``) or from a raw ``model_uri`` path (legacy compat).
+
     predictor_config dict keys:
         return_probs (bool): True returns probability matrix, False returns class labels, default True.
         prediction_column (str): Output column name, default "prediction".
@@ -38,8 +44,12 @@ class XGBoostONNXPredictor(BasePredictor):
 
     def __init__(
         self,
-        model_uri: str,
+        model_uri: str | None = None,
         predictor_config: dict[str, Any] | None = None,
+        bundle_uri: str | None = None,
+        role: str = "inference",
+        unsafe: bool = False,
+        storage_profile: str | None = None,
     ) -> None:
         self.return_probs = (predictor_config or {}).get("return_probs", True)
         self.prediction_column = (predictor_config or {}).get(
@@ -47,31 +57,60 @@ class XGBoostONNXPredictor(BasePredictor):
         )
         self._s3_config = (predictor_config or {}).get("s3_config") or {}
         self.feature_names: list[str] = []
+        self._bundle_uri = bundle_uri
+        self._role = role
+        self._unsafe = unsafe
+        self._storage_profile = storage_profile
+        self._runtime: "BundleModelRuntime | None" = None
+        self._output_names: tuple[str, ...] = ()
 
-        super().__init__(model_uri, predictor_config)
+        if (model_uri is None) == (bundle_uri is None):
+            raise ValueError(
+                "exactly one of 'model_uri' (legacy) or 'bundle_uri' must be provided"
+            )
 
-    def _load_model(self) -> None:
-        """Resolve model path → download → initialize ONNX session → load feature_names."""
-        local_path = self._resolve_model(self.model_uri)
-        self._init_session(local_path)
-
-        explicit = self.predictor_config.get("feature_names")
-        if explicit:
-            self.feature_names = explicit
+        if bundle_uri is not None:
+            self.model_uri = bundle_uri
+            self.predictor_config = predictor_config or {}
+            self._load_model()
         else:
-            self.feature_names = self._load_feature_names(local_path)
-            if self.feature_names:
-                logger.info(
-                    "Loaded feature_names from ONNX metadata: %s", self.feature_names
-                )
+            assert model_uri is not None  # guarded by the exclusivity check above
+            super().__init__(model_uri, predictor_config)
 
     @classmethod
     def get_feature_names(
         cls,
-        model_uri: str,
+        model_uri: str | None = None,
         predictor_config: dict[str, Any] | None = None,
+        *,
+        bundle_uri: str | None = None,
+        role: str = "inference",
+        unsafe: bool = False,
+        storage_profile: str | None = None,
     ) -> list[str]:
-        """Read feature_names from ONNX model metadata (without loading a session)."""
+        """Read feature column names from a bundle or ONNX metadata.
+
+        The bundle path reads ONNX ``feature_names`` metadata first
+        (the *table* feature names used to select Dataset columns) and
+        falls back to the manifest's typed input signature (a
+        *tensor*-level contract); the legacy path reads ONNX metadata.
+        """
+        if bundle_uri is not None:
+            from tributo.exporting.runtime import BundleModelLoader
+
+            loader = BundleModelLoader()
+            runtime = loader.open(
+                bundle_uri,
+                role=role,
+                unsafe=unsafe,
+                storage_profile=storage_profile,
+            )
+            try:
+                return _feature_names_from_bundle(runtime)
+            finally:
+                runtime.close()
+
+        assert model_uri is not None
         s3_config = (predictor_config or {}).get("s3_config") or {}
 
         if model_uri.startswith("s3://"):
@@ -103,6 +142,47 @@ class XGBoostONNXPredictor(BasePredictor):
                 raise DataSourceError(f"ONNX model not found: {model_uri}")
 
         return cls._load_feature_names(local_path)
+
+    def _load_model(self) -> None:
+        """Load the model: bundle path (shared runtime) or legacy raw path."""
+        if self._bundle_uri is not None:
+            self._load_model_from_bundle()
+            return
+        local_path = self._resolve_model(self.model_uri)
+        self._init_session(local_path)
+
+        explicit = self.predictor_config.get("feature_names")
+        if explicit:
+            self.feature_names = explicit
+        else:
+            self.feature_names = self._load_feature_names(local_path)
+            if self.feature_names:
+                logger.info(
+                    "Loaded feature_names from ONNX metadata: %s", self.feature_names
+                )
+
+    def _load_model_from_bundle(self) -> None:
+        """Open the bundle through the shared BundleModelLoader."""
+        from tributo.exporting.runtime import BundleModelLoader
+
+        assert self._bundle_uri is not None
+        loader = BundleModelLoader()
+        self._runtime = loader.open(
+            self._bundle_uri,
+            role=self._role,
+            unsafe=self._unsafe,
+            storage_profile=self._storage_profile,
+        )
+        self.input_name = self._runtime.model.input_names[0]
+        self._output_names = self._runtime.model.output_names
+
+        explicit = self.predictor_config.get("feature_names")
+        if explicit:
+            self.feature_names = explicit
+        else:
+            self.feature_names = _feature_names_from_bundle(self._runtime)
+            if self.feature_names:
+                logger.info("Loaded feature_names from bundle: %s", self.feature_names)
 
     @staticmethod
     def _load_feature_names(model_path: str | Path) -> list[str]:
@@ -210,6 +290,16 @@ class XGBoostONNXPredictor(BasePredictor):
             output_names,
         )
 
+    def close(self) -> None:
+        """Release bundle resources (idempotent).
+
+        Call when the Ray Actor's lifetime ends (e.g. from a driver-side
+        shutdown helper); prediction keeps working after close because
+        the model is in memory.  No-op on the legacy ``model_uri`` path.
+        """
+        if self._runtime is not None:
+            self._runtime.close()
+
     def __call__(self, batch: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         """Run inference on a batch.
 
@@ -237,7 +327,11 @@ class XGBoostONNXPredictor(BasePredictor):
                 np.float32
             )
 
-        outputs = self.session.run(None, {self.input_name: features})
+        if self._runtime is not None:
+            result = self._runtime.predict({self.input_name: features})
+            outputs = [np.asarray(result[n]) for n in self._output_names]
+        else:
+            outputs = self.session.run(None, {self.input_name: features})
 
         if self.return_probs and len(outputs) >= 2:
             # XGBoost classification model: outputs[1] is the probability matrix
@@ -247,3 +341,23 @@ class XGBoostONNXPredictor(BasePredictor):
 
         batch[self.prediction_column] = predictions
         return batch
+
+
+def _feature_names_from_bundle(runtime: "BundleModelRuntime") -> list[str]:
+    """Feature column names for a bundle: ONNX metadata first, manifest
+    signature as fallback.
+
+    The manifest signature is a *tensor*-level contract (names of the
+    model graph inputs), while batch inference selects Dataset columns
+    by *table* feature names.  XGBoost ONNX bundles record the original
+    feature names in ONNX metadata (``feature_names``), which is exactly
+    what the legacy raw-path reads — so the bundle path reads the same
+    metadata first and only falls back to the signature.
+    """
+    metadata_names = XGBoostONNXPredictor._load_feature_names(
+        runtime.resolved_artifact.entrypoint_path
+    )
+    if metadata_names:
+        return metadata_names
+    fields = runtime.manifest.input_signature.input_fields
+    return [f.name for f in fields]

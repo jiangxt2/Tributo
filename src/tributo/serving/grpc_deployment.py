@@ -2,6 +2,10 @@
 
 Based on Ray Serve's gRPC support, provides Unary, Server streaming,
 and Client streaming RPC modes.
+
+The primary loading path is a ``bundle_uri`` plus an explicit ``role``,
+routed through the shared ``BundleModelLoader``; a raw ``model_path``
+remains as a compatibility adapter.
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ import grpc
 import numpy as np
 
 from tributo.serving.proto.generated import inference_pb2
+from tributo.serving.schema import PredictInput
 
 if TYPE_CHECKING:
     from ray.serve.grpc_util import RayServegRPCContext, gRPCInputStream
@@ -24,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 def _validate_features(request: inference_pb2.PredictRequest) -> np.ndarray | None:
-    """Validate and convert request features.
+    """Validate and convert legacy flat request features.
 
     Args:
         request: gRPC predict request.
@@ -35,6 +40,67 @@ def _validate_features(request: inference_pb2.PredictRequest) -> np.ndarray | No
     if not request.features:
         return None
     return np.array(request.features, dtype=np.float32).reshape(1, -1)
+
+
+#: Input protocol schema version understood by this service.
+_SUPPORTED_SCHEMA_VERSION = 1
+
+
+def _prepare_inputs(
+    request: inference_pb2.PredictRequest,
+) -> dict[str, np.ndarray] | np.ndarray | None:
+    """Convert request inputs to named arrays (versioned) or legacy matrix.
+
+    ``int64_data`` is the lossless integer carrier (``repeated double``
+    cannot represent int64 above 2**53); when present it takes precedence
+    over ``data``, and an ``int64`` input without it fails fast instead
+    of silently losing precision.
+    """
+    if request.inputs:
+        result: dict[str, np.ndarray] = {}
+        for t in request.inputs:
+            if t.schema_version > _SUPPORTED_SCHEMA_VERSION:
+                raise ValueError(
+                    f"Unsupported input schema_version {t.schema_version!r} "
+                    f"(supported: {_SUPPORTED_SCHEMA_VERSION})"
+                )
+            if t.name in result:
+                raise ValueError(f"Duplicate input name {t.name!r}")
+            if t.datatype == "int64" and not t.int64_data:
+                raise ValueError(
+                    f"Input {t.name!r} declares datatype 'int64' but carries "
+                    "no int64_data — the double 'data' field loses precision "
+                    "above 2**53, use int64_data"
+                )
+            if t.int64_data:
+                data: list[Any] = list(t.int64_data)
+            else:
+                data = list(t.data)
+            result[t.name] = PredictInput(
+                name=t.name,
+                shape=list(t.shape),
+                datatype=t.datatype,
+                data=data,
+            ).to_numpy()
+        return result
+    return _validate_features(request)
+
+
+def _prepare_inputs_or_invalid(
+    request: inference_pb2.PredictRequest,
+    context: RayServegRPCContext,
+) -> dict[str, np.ndarray] | np.ndarray | None:
+    """Prepare inputs, converting protocol errors to INVALID_ARGUMENT.
+
+    Without this, a duplicate name, unknown datatype, or bad shape would
+    bubble up as an UNKNOWN gRPC status — the caller's error is a client
+    contract violation, so it must surface as INVALID_ARGUMENT.
+    """
+    try:
+        return _prepare_inputs(request)
+    except ValueError as exc:
+        _set_invalid_argument(context, str(exc))
+        return None
 
 
 def _set_invalid_argument(context: RayServegRPCContext, message: str) -> None:
@@ -55,12 +121,71 @@ class gRPCInferenceService:
     overrides like num_replicas.
     """
 
-    def __init__(self, model_path: str):
+    def __init__(
+        self,
+        model_path: str | None = None,
+        *,
+        bundle_uri: str | None = None,
+        role: str = "inference",
+        unsafe: bool = False,
+        storage_profile: str | None = None,
+    ):
         """Initialize gRPC inference service.
 
         Args:
-            model_path: ONNX model file path.
+            model_path: ONNX model file path (legacy compat adapter).
+            bundle_uri: Published bundle URI (stable serving entry point).
+            role: Artifact role to serve; defaults to ``inference``.
+            unsafe: Permit loading bundles without typed signatures or
+                flavors that are not safe.
+            storage_profile: Storage profile name for S3 bundles.
         """
+        if (model_path is None) == (bundle_uri is None):
+            raise ValueError(
+                "exactly one of 'model_path' (legacy) or 'bundle_uri' must be provided"
+            )
+
+        self._runtime: Any = None
+        self._session: Any = None
+        self._input_name = ""
+        self._output_names: tuple[str, ...] = ()
+
+        if bundle_uri is not None:
+            self._open_bundle(
+                bundle_uri, role=role, unsafe=unsafe, storage_profile=storage_profile
+            )
+            return
+
+        self._open_legacy(model_path)
+
+    def _open_bundle(
+        self,
+        bundle_uri: str,
+        *,
+        role: str,
+        unsafe: bool,
+        storage_profile: str | None,
+    ) -> None:
+        """Load the model through the shared BundleModelLoader."""
+        from tributo.exporting.runtime import BundleModelLoader
+
+        loader = BundleModelLoader()
+        self._runtime = loader.open(
+            bundle_uri, role=role, unsafe=unsafe, storage_profile=storage_profile
+        )
+        self._input_name = self._runtime.model.input_names[0]
+        self._output_names = self._runtime.model.output_names
+        logger.info(
+            "gRPC bundle loaded from %s (role=%r), input_name=%s, inputs=%s",
+            bundle_uri,
+            role,
+            self._input_name,
+            self._runtime.model.input_names,
+        )
+
+    def _open_legacy(self, model_path: str | None) -> None:
+        """Legacy compat path: raw ONNX file, no bundle manifest."""
+        assert model_path is not None  # guarded by the exclusivity check
         try:
             import onnxruntime as ort
         except ImportError as e:
@@ -70,12 +195,33 @@ class gRPCInferenceService:
 
         self._session = ort.InferenceSession(model_path)
         self._input_name = self._session.get_inputs()[0].name
+        self._output_names = tuple(
+            out.name if out.name else f"output_{i}"
+            for i, out in enumerate(self._session.get_outputs())
+        )
         logger.info(
             "gRPC model loaded from %s, input_name=%s, inputs=%s",
             model_path,
             self._input_name,
             [inp.name for inp in self._session.get_inputs()],
         )
+
+    def _run(self, inputs: dict[str, np.ndarray] | np.ndarray) -> list[np.ndarray]:
+        """Run the model and return outputs as a list of arrays.
+
+        The legacy session path accepts both named inputs (versioned
+        protocol) and the flat legacy matrix (mapped to the first input).
+        """
+        if self._runtime is not None:
+            assert isinstance(inputs, dict)
+            result = self._runtime.predict(inputs)
+            return [np.asarray(result[name]) for name in self._output_names]
+        assert self._session is not None
+        if isinstance(inputs, dict):
+            feed = inputs
+        else:
+            feed = {self._input_name: inputs}
+        return [np.asarray(o) for o in self._session.run(None, feed)]
 
     async def Predict(
         self,
@@ -91,19 +237,17 @@ class gRPCInferenceService:
         Returns:
             Predict result.
         """
-        features = _validate_features(request)
-        if features is None:
-            _set_invalid_argument(grpc_context, "features cannot be empty")
+        inputs = _prepare_inputs_or_invalid(request, grpc_context)
+        if inputs is None:
             return inference_pb2.PredictResponse()
 
         start = time.perf_counter()
-        result = self._session.run(None, {self._input_name: features})
-        predictions = result[0].flatten().tolist()
+        outputs = self._run(inputs)
+        predictions = outputs[0].flatten().tolist()
         elapsed_ms = (time.perf_counter() - start) * 1000
 
         logger.debug(
-            "gRPC Predict: features_shape=%s, predictions_len=%d, time=%.2fms",
-            features.shape,
+            "gRPC Predict: predictions_len=%d, time=%.2fms",
             len(predictions),
             elapsed_ms,
         )
@@ -127,13 +271,12 @@ class gRPCInferenceService:
         Yields:
             Batched predict results.
         """
-        features = _validate_features(request)
-        if features is None:
-            _set_invalid_argument(grpc_context, "features cannot be empty")
+        inputs = _prepare_inputs_or_invalid(request, grpc_context)
+        if inputs is None:
             return
 
-        result = self._session.run(None, {self._input_name: features})
-        predictions = result[0].flatten().tolist()
+        outputs = self._run(inputs)
+        predictions = outputs[0].flatten().tolist()
 
         # Server streaming: return predictions one by one, suitable for real-time intermediate result display
         for pred in predictions:
@@ -156,26 +299,59 @@ class gRPCInferenceService:
         Returns:
             Merged predict results.
         """
-        features_list = []
+        inputs_list = []
         async for request in request_stream:
-            features = _validate_features(request)
-            if features is None:
-                _set_invalid_argument(grpc_context, "features cannot be empty")
+            inputs = _prepare_inputs_or_invalid(request, grpc_context)
+            if inputs is None:
                 return inference_pb2.PredictResponse()
-            features_list.append(features)
+            inputs_list.append(inputs)
 
-        if not features_list:
+        if not inputs_list:
             _set_invalid_argument(grpc_context, "request stream cannot be empty")
             return inference_pb2.PredictResponse()
 
-        batch = np.concatenate(features_list, axis=0)
-        result = self._session.run(None, {self._input_name: batch})
-        all_predictions = result[0].flatten().tolist()
+        if isinstance(inputs_list[0], dict):
+            # Versioned inputs: every request must carry the same input
+            # names — concatenate each named tensor across requests.
+            expected_names = set(inputs_list[0])
+            for item in inputs_list[1:]:
+                assert isinstance(item, dict)
+                if set(item) != expected_names:
+                    _set_invalid_argument(
+                        grpc_context,
+                        "Inconsistent input names across batch requests: "
+                        f"expected {sorted(expected_names)}, got {sorted(item)}",
+                    )
+                    return inference_pb2.PredictResponse()
+            named: dict[str, list[np.ndarray]] = {}
+            for item in inputs_list:
+                assert isinstance(item, dict)
+                for name, arr in item.items():
+                    named.setdefault(name, []).append(arr)
+            batch = {
+                name: np.concatenate(parts, axis=0) for name, parts in named.items()
+            }
+            outputs = self._run(batch)
+        else:
+            batch = np.concatenate([np.asarray(i) for i in inputs_list], axis=0)
+            outputs = self._run(batch)
+
+        all_predictions = outputs[0].flatten().tolist()
 
         return inference_pb2.PredictResponse(
             predictions=all_predictions,
             confidence=max(all_predictions) if all_predictions else 0.0,
         )
+
+    def close(self) -> None:
+        """Release bundle resources (idempotent).
+
+        Call when the gRPC deployment is torn down; prediction keeps
+        working after close (in-memory model contract).  No-op on the
+        legacy session path.
+        """
+        if self._runtime is not None:
+            self._runtime.close()
 
     async def health(self) -> dict[str, Any]:
         """Health check.
@@ -185,6 +361,6 @@ class gRPCInferenceService:
         """
         return {
             "status": "healthy",
-            "model_loaded": self._session is not None,
-            "input_names": [inp.name for inp in self._session.get_inputs()],
+            "model_loaded": self._runtime is not None or self._session is not None,
+            "input_names": [self._input_name] if self._input_name else [],
         }

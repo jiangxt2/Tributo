@@ -14,9 +14,33 @@ service InferenceService {
   rpc BatchPredict(stream PredictRequest) returns (PredictResponse);
 }
 
+// 版本化输入张量：name/shape/datatype/data（E3 输入协议）
+message InputTensor {
+  // 输入协议版本（1 = name/shape/datatype/data）
+  int32 schema_version = 5;
+
+  // 输入名称，对应模型签名中的字段名
+  string name = 1;
+
+  // 形状；动态维度省略或置 0
+  repeated int32 shape = 2;
+
+  // 数据类型：float32 / int64 / float64 等框架中立类型名
+  string datatype = 3;
+
+  // 浮点数值载体（float32/float64；按 datatype 转换）
+  repeated double data = 4;
+
+  // 整型数值载体（int64 无损承载；datatype=int64 时优先于此字段）
+  repeated int64 int64_data = 6;
+}
+
 // 预测请求
 message PredictRequest {
-  // 输入特征向量
+  // 版本化输入张量列表（E3 新协议）
+  repeated InputTensor inputs = 3;
+
+  // 输入特征向量（legacy 兼容协议）
   repeated float features = 1;
 
   // 模型名称（可选，用于多模型场景）
