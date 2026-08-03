@@ -9,8 +9,11 @@ Design constraints:
 - Kafka partition ownership is decoupled from model replica scaling —
   source actors manage offset/rebalance independently; inference replicas
   receive micro-batches through internal queues.
-- Delivery semantics: at-least-once (consumer commit after durable sink
-  acceptance); duplicates handled by downstream idempotency keys.
+- Delivery semantics (S0 fail-closed): at-least-once is claimed only for
+  batches that are actually committed.  A failed commit retains the
+  pending offsets and raises a ``StreamSourceError`` subtype so the
+  caller can retry; poisoned records raise instead of being skipped.
+  Duplicates are handled by downstream idempotency keys.
 """
 
 from __future__ import annotations
@@ -56,4 +59,8 @@ class StreamSource(ABC):
 
     @abstractmethod
     def close(self) -> None:
-        """Gracefully close the source, flushing pending commits."""
+        """Gracefully close the source and release resources.
+
+        Pending offsets are NOT committed here — an uncommitted batch
+        is replayed from the broker after a restart (fail-closed, S0).
+        """

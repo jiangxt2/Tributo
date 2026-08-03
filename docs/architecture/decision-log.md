@@ -72,7 +72,13 @@ package registers a Tributo entry point outside the `tributo` package itself.
 |------|----------|----------|---------|
 | 2026-08-02 | **NO-GO** | Zero third-party packages registered on PyPI with Tributo entry points | @jiangxt2 |
 
-### Streaming (S1/S2)
+### Streaming (S0/S1/S2)
+
+**S0 status**: The unconditional fail-closed safety baseline is delivered
+(2026-08-03): commit failures retain pending offsets for retry, poisoned
+records stop the source instead of being skipped, and an uncommitted batch
+blocks further polling. The `StreamSource` contract tests are added in
+`tests/streaming/`. S1/S2 remain NO-GO (see table below).
 
 **Trigger**: A0 is complete AND a Kafka source runs continuously for ≥ 24 hours
 in a production or equivalent pre-production environment.
