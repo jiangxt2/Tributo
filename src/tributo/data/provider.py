@@ -1,4 +1,4 @@
-"""Stable DataSourceProvider contract for bounded data reads (D1+D2).
+"""Stable DataSourceProvider contract for bounded data reads.
 
 The stable runtime boundary (ADR 001)::
 
@@ -11,7 +11,7 @@ The stable runtime boundary (ADR 001)::
 ``ResolvedSource`` separates *identity* options (everything that changes the
 data — columns, snapshot, SQL digest, partition/filter) from *runtime*
 options (connection credentials etc.). Credentials never appear in ``repr``,
-logs, errors, ``DatasetRef`` or benchmark output.  The D4 prototypes
+logs, errors, ``DatasetRef`` or benchmark output.  The prototype types
 (``SourcePlan``, ``TransformCompiler``, ``SourceRouter``) live in
 ``data/transform_compiler.py`` and are not part of this contract.
 """
@@ -129,7 +129,7 @@ class ResolvedSource:
 
 @PublicAPI(stability="beta")
 class DataSourceProvider(ABC):
-    """Logical data-source provider (D1+D2 stable contract).
+    """Logical data-source provider (stable contract).
 
     Subclasses declare a unique ``provider_id`` and optional default
     ``aliases``; conflict checks and alias resolution live in the

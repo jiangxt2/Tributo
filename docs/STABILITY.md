@@ -1,7 +1,7 @@
 # API Stability Inventory
 
 Canonical stability classification for every Tributo module.
-Last updated: 2026-08-03 (S0 fail-closed streaming baseline).
+Last updated: 2026-08-03.
 
 ## Stability Levels
 
@@ -57,8 +57,8 @@ Last updated: 2026-08-03 (S0 fail-closed streaming baseline).
 | Module | Level | Notes |
 |--------|-------|-------|
 | `tributo.data.source_config` — `SourceConfig` | `beta` | Canonical data source config (JSON only) |
-| `tributo.data.provider` — `DataSourceProvider` | `beta` | Stable bounded-read contract (D1+D2) |
-| `tributo.data.transform_compiler` | `prototype` | Under active design (D4) |
+| `tributo.data.provider` — `DataSourceProvider` | `beta` | Stable bounded-read contract |
+| `tributo.data.transform_compiler` | `prototype` | Under active design |
 | `tributo.data.graph` | `beta` | Graph data abstraction (GNN; @PublicAPI says beta) |
 | `tributo.data.base` — `DataConnector` | `beta` | Connector base class |
 | `tributo.data.lance` | `beta` | Lance connector |
@@ -133,7 +133,7 @@ Last updated: 2026-08-03 (S0 fail-closed streaming baseline).
 | Module | Level | Notes |
 |--------|-------|-------|
 | `tributo.streaming.protocol` — `StreamSource` | `beta` | Streaming protocol |
-| `tributo.streaming.kafka_source` | `alpha` | Kafka source (S0 fail-closed safety baseline: commit retention, poison-message stop, uncommitted-batch barrier; S1/S2 still NO-GO per decision log) |
+| `tributo.streaming.kafka_source` | `alpha` | Kafka source (fail-closed safety baseline: commit retention, poison-message stop, uncommitted-batch barrier) |
 
 ### Pipeline (tributo.pipeline.*)
 
@@ -176,7 +176,7 @@ Last updated: 2026-08-03 (S0 fail-closed streaming baseline).
 | `tributo.training.exporters.*` | `tributo.exporting.*` + `tributo.integrations.exporters.*` | v1.0.0 | ≥ 2 minor versions (E4) |
 | `tributo.training.onnx_exporter` | `tributo.exporting.service.BundleExportService` | v1.0.0 | ≥ 2 minor versions (E4) |
 | `tributo.exporting.protocols.SourceProvider` (name) | `ExportSourceProvider` (E1) | After E1 merge | 2 minor versions with DeprecationWarning |
-| Legacy `data_loader` dispatch | `tributo.data.provider.DataSourceProvider` (D1+D2) | After D1+D2 merge | Legacy compat adapter retained until D3 complete |
+| Legacy `data_loader` dispatch | `tributo.data.provider.DataSourceProvider` (canonical path) | After canonical-path merge | Legacy compat adapter retained until the legacy dispatch is removed |
 
 ## Unannotated Code
 

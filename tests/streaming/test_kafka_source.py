@@ -1,10 +1,10 @@
-"""Fail-closed safety tests for ``KafkaStreamSource`` (S0).
+"""Fail-closed safety tests for ``KafkaStreamSource``.
 
 ``confluent-kafka`` is an optional dependency, so the consumer is faked
 by injecting a fake ``confluent_kafka`` module into ``sys.modules``.
 ``KafkaStreamSource.open()`` instantiates the consumer itself, so the
 fake is programmed via class attributes (message queue + commit
-failure) rather than instance injection.  Each test asserts the S0 exit
+failure) rather than instance injection.  Each test asserts the exit
 gates: pending offsets are never overwritten, failed commits retain
 offsets for retry, and poisoned records stop the source instead of
 being skipped (offsets beyond a failed record are never committed).
@@ -198,7 +198,7 @@ def test_batch_size_limits_collection(fake_kafka: None) -> None:
     it = source.poll()
     assert next(it) == {"a": [1, 1]}
     # A yielded batch must be committed before the next one is polled
-    # (S0 barrier); commit then continue.
+    # Fail-closed barrier; commit then continue.
     source.commit()
     assert next(it) == {"a": [1]}
     # The iterator runs until close() (the fake poll returns immediately
@@ -336,7 +336,7 @@ def test_poison_stops_iterator_and_never_commits_past_bad_offset(
 
 def test_poison_terminates_source_for_fresh_poll(fake_kafka: None) -> None:
     """After a poison record the source terminates itself: a fresh
-    ``poll()`` must not consume past the bad offset (S0 exit gate: never
+    ``poll()`` must not consume past the bad offset (exit gate: never
     commit N+1 through a restarted iterator)."""
     source = _open_source(
         [_msg(0, b'{"a": 1}'), _msg(1, b"bad-json"), _msg(2, b'{"a": 3}')]
@@ -414,7 +414,7 @@ def test_reopen_same_instance_rejected(fake_kafka: None) -> None:
     """close() terminates the source: open() on the same instance is
     rejected before any consumer is created, so no Kafka connection
     leaks.  Restarting requires a new instance (documented in
-    open()/poll() — S0 does not promise in-place recovery)."""
+    open()/poll() — no in-place recovery is promised)."""
     source = _open_source([_msg(0)])
     source.close()
 

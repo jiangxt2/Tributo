@@ -1,6 +1,6 @@
-"""Integration tests for Phase 3 — catalog integrity, pipeline E2E, snapshot freshness.
+"""Integration tests — catalog integrity, pipeline E2E, snapshot freshness.
 
-These tests validate that the whole Phase 3A stack works correctly:
+These tests validate that the full integration stack works correctly:
 1. Integrity gate fires on bad replacement graphs at import time.
 2. AlgorithmCatalog sees live registrations (snapshot freshness).
 3. build_effective_config → validate_and_normalize → validate_execution

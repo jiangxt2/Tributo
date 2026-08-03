@@ -184,7 +184,7 @@ for _ep_spec in discover_trainer_plugins():
             _ep_spec.name,
         )
 
-# Phase 3 integrity gate: validate replacement graph after all plugins loaded.
+# Integrity gate: validate replacement graph after all plugins loaded.
 try:
     _get_catalog().validate_integrity()
 except JobConfigurationError:

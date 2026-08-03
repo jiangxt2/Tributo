@@ -25,6 +25,13 @@ from tributo.training.features.column_types import (
     features_from_dicts,
 )
 from tributo.training.registry import register
+from tributo.training.resource import (
+    DEFAULT_BATCH_SIZE,
+    BoundedCollector,
+    ResourceBudget,
+    estimate_row_bytes_from_schema,
+    preflight_check,
+)
 from tributo.util.annotations import PublicAPI
 
 if TYPE_CHECKING:
@@ -149,6 +156,10 @@ class DNNTrainingConfig(StrictConfigModel):
     pu_learning: PULearningConfig = Field(default_factory=PULearningConfig)
     training: DNNTrainingParams = Field(default_factory=DNNTrainingParams)
     ray: DNNRayConfig = Field(default_factory=DNNRayConfig)
+    resource: ResourceBudget = Field(
+        default_factory=ResourceBudget,
+        description="Single-worker materialization budget",
+    )
     output: DNNOutputConfig = Field(default_factory=DNNOutputConfig)
     label_col: str = Field(default="label", description="Label column name")
 
@@ -246,6 +257,7 @@ class DNNTrainerImpl(BaseTrainer):
             "loss": cfg.loss.model_dump(),
             "pu_learning": cfg.pu_learning.model_dump(),
             "training": cfg.training.model_dump(),
+            "resource": cfg.resource.model_dump(),
         }
 
         # Auto-detect storage_path
@@ -467,29 +479,68 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
     train_ds = ray.train.get_dataset_shard("train")
     val_ds = ray.train.get_dataset_shard("val")
 
-    # Convert to pandas and preprocess
+    # Convert to pandas under the worker materialization budget.
+    # train and val share one budget — both frames stay alive together —
+    # and either split exceeding it fails fast before the unbounded concat.
+    # Rows are never silently truncated.
     import pandas as pd
 
-    train_batches = list(
-        train_ds.iter_batches(
-            batch_size=None,
-            batch_format="pandas",
-            prefetch_batches=1,
-        )
+    budget = ResourceBudget.model_validate(config.get("resource") or {})
+    worker_rank = ray.train.get_context().get_world_rank()
+    row_bytes = estimate_row_bytes_from_schema(train_ds.schema())
+    preflight_check(
+        rows=None,
+        row_bytes=row_bytes,
+        budget=budget,
+        algorithm="dnn",
+        split="train",
+        worker_rank=worker_rank,
     )
+    collector = BoundedCollector(
+        budget, algorithm="dnn", split="train", worker_rank=worker_rank
+    )
+    # prefetch_batches=0: a prefetched batch would be held outside the
+    # collector's accounting.
+    train_batches = []
+    for batch in train_ds.iter_batches(
+        batch_size=DEFAULT_BATCH_SIZE,
+        batch_format="pandas",
+        prefetch_batches=0,
+    ):
+        collector.add(batch)
+        train_batches.append(batch)
     train_df = pd.concat(train_batches, ignore_index=True)
+    del train_batches  # release the input list — the concat copy is the peak
 
     val_df = None
     if val_ds is not None:
-        val_batches = list(
-            val_ds.iter_batches(
-                batch_size=None,
-                batch_format="pandas",
-                prefetch_batches=1,
+        if row_bytes is not None:
+            preflight_check(
+                rows=None,
+                row_bytes=row_bytes,
+                budget=budget,
+                algorithm="dnn",
+                split="val",
+                worker_rank=worker_rank,
             )
-        )
+        val_batches = []
+        for batch in val_ds.iter_batches(
+            batch_size=DEFAULT_BATCH_SIZE,
+            batch_format="pandas",
+            prefetch_batches=0,
+        ):
+            collector.add(batch, split="val")
+            val_batches.append(batch)
         if val_batches:
             val_df = pd.concat(val_batches, ignore_index=True)
+            del val_batches
+
+    logger.info(
+        "DNN worker materialization: rows=%d payload=%dB peak=%dB",
+        collector.summary.rows_seen,
+        collector.summary.payload_bytes,
+        collector.summary.estimated_peak_bytes,
+    )
 
     # Prepare data
     feature_names = [f.name for f in features]

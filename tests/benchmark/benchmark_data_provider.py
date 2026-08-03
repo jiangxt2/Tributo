@@ -1,10 +1,10 @@
-"""D1+D2 benchmark instance: provider path vs legacy baseline (data loading).
+"""Benchmark instance: provider path vs legacy baseline (data loading).
 
 Follows benchmark-protocol.md §Measurement Rules: at least 1 warm-up
 iteration (discarded) and ≥ 3 measured iterations, reporting mean/std/min/max
 wall-clock and peak driver RSS.
 
-Baseline (legacy): the pre-D1+D2 canonical loader dispatch
+Baseline (legacy): the pre-registry canonical loader dispatch
 (``TRIBUTO_DATA_BACKEND=legacy``).  Candidate (provider): the default
 ProviderRegistry path.  Both read the same fixed Parquet dataset generated
 by ``generate_data.py``.
@@ -143,7 +143,7 @@ def main() -> None:
     print("\n| Path | mean (s) | stdev (s) | min (s) | max (s) | peak RSS (MB) |")
     print("|------|----------|-----------|---------|---------|---------------|")
     print(_fmt("legacy (baseline)", legacy))
-    print(_fmt("provider (D1+D2)", provider))
+    print(_fmt("provider (canonical)", provider))
 
 
 if __name__ == "__main__":

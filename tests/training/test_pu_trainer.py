@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -316,6 +317,236 @@ class TestPUE2E:
         assert "pu_f1" in metrics
         assert "pu_auc" in metrics
         assert 0.0 <= metrics["pu_auc"] <= 1.0
+
+
+class TestPUTrainerResourceSafety:
+    """PU 单 worker 资源安全。"""
+
+    def test_default_resource_budget_is_active(self):
+        """预算默认启用。"""
+        from tributo.training.pu_trainer import PUTrainingConfig
+        from tributo.training.resource import MIB
+
+        cfg = PUTrainingConfig()
+        assert cfg.resource.max_batch_bytes == 64 * MIB
+        assert cfg.resource.max_worker_materialization_bytes == 1024 * MIB
+        assert cfg.resource.max_input_rows_per_worker is None
+
+    def test_custom_resource_budget(self):
+        from tributo.training.pu_trainer import PUTrainingConfig
+
+        cfg = PUTrainingConfig(resource={"max_batch_bytes": 1024})
+        assert cfg.resource.max_batch_bytes == 1024
+
+    def test_num_workers_gt_1_rejected_at_construction(self):
+        """构造期拒绝 num_workers > 1（早于任何训练）。"""
+        from tributo.exceptions import JobConfigurationError
+        from tributo.training.pu_trainer import PUTrainerImpl
+
+        with pytest.raises(JobConfigurationError, match="num_workers=1"):
+            PUTrainerImpl(datasets={}, config={"ray": {"num_workers": 2}})
+
+    def test_num_workers_1_constructs(self):
+        from tributo.training.pu_trainer import PUTrainerImpl
+
+        trainer = PUTrainerImpl(datasets={}, config={"ray": {"num_workers": 1}})
+        assert trainer._pu_config.ray.num_workers == 1
+
+    def test_worker_loop_rejects_world_size_gt_1(self, monkeypatch):
+        """worker 入口二次拒绝，早于数据加载。"""
+        pytest.importorskip("torch")
+        from types import SimpleNamespace
+
+        import ray.train
+
+        from tributo.exceptions import JobConfigurationError
+        from tributo.training.pu_trainer import pu_train_loop_per_worker
+
+        monkeypatch.setattr(
+            ray.train,
+            "get_context",
+            lambda: SimpleNamespace(get_world_size=lambda: 2, get_world_rank=lambda: 0),
+        )
+        with pytest.raises(JobConfigurationError, match="world_size=2"):
+            pu_train_loop_per_worker(
+                {
+                    "data": {"source": {"type": "parquet", "path": "x"}},
+                    "features": [],
+                    "label_col": "label",
+                    "model": {},
+                    "pu": {},
+                    "training": {},
+                    "resource": {},
+                }
+            )
+
+    def test_worker_budget_exceeded_fails_before_concat(self, monkeypatch):
+        """worker 加载超预算在 concat 前失败，不返回部分数据。"""
+        pytest.importorskip("torch")
+        from types import SimpleNamespace
+
+        import pandas as pd
+        import ray.train
+
+        import tributo.training.data_loader as data_loader_mod
+        from tributo.exceptions import ResourceBudgetExceededError
+        from tributo.training.pu_trainer import pu_train_loop_per_worker
+
+        monkeypatch.setattr(
+            ray.train,
+            "get_context",
+            lambda: SimpleNamespace(get_world_size=lambda: 1, get_world_rank=lambda: 0),
+        )
+
+        class FakeDataset:
+            def schema(self):
+                return None
+
+            def iter_batches(self, **kwargs):
+                yield pd.DataFrame({"a": list(range(10))})
+
+        monkeypatch.setattr(
+            data_loader_mod,
+            "load_ray_dataset_from_source",
+            lambda source: FakeDataset(),
+        )
+        with pytest.raises(ResourceBudgetExceededError) as excinfo:
+            pu_train_loop_per_worker(
+                {
+                    "data": {"source": {"type": "parquet", "path": "x"}},
+                    "features": [],
+                    "label_col": "label",
+                    "model": {},
+                    "pu": {},
+                    "training": {},
+                    "resource": {"max_worker_materialization_bytes": 10},
+                }
+            )
+        assert excinfo.value.algorithm == "pu"
+        assert excinfo.value.split == "train"
+
+    def test_worker_row_guard_fails_fast_no_truncation(self, monkeypatch):
+        """max_input_rows_per_worker 超限 → fail-fast，不截断。"""
+        pytest.importorskip("torch")
+        from types import SimpleNamespace
+
+        import pandas as pd
+        import ray.train
+
+        import tributo.training.data_loader as data_loader_mod
+        from tributo.exceptions import ResourceBudgetExceededError
+        from tributo.training.pu_trainer import pu_train_loop_per_worker
+
+        monkeypatch.setattr(
+            ray.train,
+            "get_context",
+            lambda: SimpleNamespace(get_world_size=lambda: 1, get_world_rank=lambda: 0),
+        )
+
+        class FakeDataset:
+            def schema(self):
+                return None
+
+            def iter_batches(self, **kwargs):
+                yield pd.DataFrame({"a": list(range(40))})
+
+        monkeypatch.setattr(
+            data_loader_mod,
+            "load_ray_dataset_from_source",
+            lambda source: FakeDataset(),
+        )
+        with pytest.raises(ResourceBudgetExceededError) as excinfo:
+            pu_train_loop_per_worker(
+                {
+                    "data": {"source": {"type": "parquet", "path": "x"}},
+                    "features": [],
+                    "label_col": "label",
+                    "model": {},
+                    "pu": {},
+                    "training": {},
+                    "resource": {
+                        "max_input_rows_per_worker": 10,
+                        "max_batch_bytes": 10**9,
+                        "max_worker_materialization_bytes": 10**9,
+                    },
+                }
+            )
+        assert excinfo.value.observed_rows == 40  # 不截断为 10
+        assert excinfo.value.max_rows == 10
+
+    def test_worker_within_budget_trains_successfully(self, monkeypatch):
+        """预算内正常路径：默认预算下小数据完整跑通 worker 训练。
+
+        覆盖默认预算的 happy path——收集通过、训练循环执行、metrics 上报。
+        mock ray.train 与数据源，不依赖真实集群。
+        """
+        pytest.importorskip("torch")
+        from types import SimpleNamespace
+
+        import numpy as np
+        import pyarrow as pa
+        import ray.train
+
+        import tributo.training.data_loader as data_loader_mod
+        from tributo.training.pu_trainer import pu_train_loop_per_worker
+
+        n = 32
+        rng = np.random.default_rng(0)
+        df = pd.DataFrame(
+            {
+                "f0": rng.normal(size=n).astype(np.float32),
+                "f1": rng.normal(size=n).astype(np.float32),
+                "label": (rng.random(n) > 0.5).astype(np.float32),
+            }
+        )
+        schema = pa.schema(
+            [
+                ("f0", pa.float32()),
+                ("f1", pa.float32()),
+                ("label", pa.float32()),
+            ]
+        )
+
+        reported: dict[str, Any] = {}
+
+        def fake_report(metrics, checkpoint=None):
+            reported.update(metrics)
+
+        monkeypatch.setattr(ray.train, "report", fake_report)
+        monkeypatch.setattr(
+            ray.train,
+            "get_context",
+            lambda: SimpleNamespace(get_world_size=lambda: 1, get_world_rank=lambda: 0),
+        )
+
+        class FakeDataset:
+            def schema(self):
+                return schema
+
+            def iter_batches(self, **kwargs):
+                yield df
+
+        monkeypatch.setattr(
+            data_loader_mod,
+            "load_ray_dataset_from_source",
+            lambda source: FakeDataset(),
+        )
+
+        pu_train_loop_per_worker(
+            {
+                "data": {"source": {"type": "parquet", "path": "x"}},
+                "features": [
+                    {"name": "f0", "type": "dense"},
+                    {"name": "f1", "type": "dense"},
+                ],
+                "label_col": "label",
+                "model": {"dnn_hidden_units": [8]},
+                "pu": {"loss_type": "nnpu"},
+                "training": {"epochs": 1, "batch_size": 8},
+                "resource": {},  # 默认预算
+            }
+        )
+        assert reported["epoch"] == 1  # 训练完成且 metrics 已上报
 
 
 if __name__ == "__main__":

@@ -174,7 +174,7 @@ class TestResolveBuiltin:
         cfg = TypeAdapter(CanonicalSourceInput).validate_python(
             {"type": "sql", "dialect": dialect, "sql": "SELECT 1"}
         )
-        with pytest.raises(JobConfigurationError, match=r"not part of D1\+D2"):
+        with pytest.raises(JobConfigurationError, match=r"unsupported"):
             resolve_provider(cfg)
 
     def test_builtin_route_missing_provider(self) -> None:
@@ -217,7 +217,7 @@ class TestResolveLegacy:
 
     @pytest.mark.parametrize("dialect", ["mysql", "postgresql"])
     def test_legacy_unsupported_sql(self, dialect: str) -> None:
-        with pytest.raises(JobConfigurationError, match=r"not part of D1\+D2"):
+        with pytest.raises(JobConfigurationError, match=r"unsupported"):
             resolve_provider(
                 LegacySourceInput(raw={"type": dialect, "sql": "SELECT 1"})
             )

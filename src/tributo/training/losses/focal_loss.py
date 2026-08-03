@@ -117,7 +117,8 @@ if HAS_TORCH:
             Loss value.
         """
         criterion = FocalLoss(alpha=alpha, gamma=gamma)
-        return criterion(logits, labels)
+        loss: torch.Tensor = criterion(logits, labels)
+        return loss
 
 else:
     # Placeholder when PyTorch is not installed

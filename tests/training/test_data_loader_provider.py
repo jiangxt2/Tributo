@@ -1,4 +1,4 @@
-"""D1+D2 loader contract: three-entry semantics, rollback switch, parity."""
+"""Loader contract: three-entry semantics, rollback switch, parity."""
 
 from __future__ import annotations
 

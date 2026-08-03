@@ -1,4 +1,4 @@
-"""ProviderRegistry — atomic registration + explicit three-layer resolution (D1+D2).
+"""ProviderRegistry — atomic registration + explicit three-layer resolution.
 
 Resolution order (ADR 001): exact provider ID → alias → built-in legacy
 mapping.  Once a layer matches, resolution stops — providers are never
@@ -46,15 +46,15 @@ _CANONICAL_TYPE_ROUTES: dict[str, str] = {
     "iceberg": "tributo.iceberg",
 }
 
-# SQL dialects without a D1+D2 provider — unsupported/experimental, with
+# SQL dialects without a canonical provider — unsupported/experimental, with
 # explicit diagnostics instead of silent routing.
 _UNSUPPORTED_SQL_DIALECTS: dict[str, str] = {
-    "postgresql": "ConnectorX path is experimental and not part of D1+D2",
-    "mysql": "MySQL is unsupported in D1+D2; use tributo.doris (MySQL protocol)",
+    "postgresql": "ConnectorX path is experimental and unsupported",
+    "mysql": "MySQL is unsupported; use tributo.doris (MySQL protocol)",
 }
 _DEFERRED_PROVIDER_DIAGNOSTICS: dict[str, str] = {
-    "tributo.lance": "Lance is deferred and has no D1+D2 provider; use a supported file provider",
-    "lance": "Lance is deferred and has no D1+D2 provider; use a supported file provider",
+    "tributo.lance": "Lance is deferred; use a supported file provider",
+    "lance": "Lance is deferred; use a supported file provider",
 }
 
 
@@ -216,7 +216,7 @@ class ProviderRegistry:
             route_key = f"sql_{source.dialect}"
             if source.dialect in _UNSUPPORTED_SQL_DIALECTS:
                 raise JobConfigurationError(
-                    f"SQL dialect {source.dialect!r} is not part of D1+D2: "
+                    f"SQL dialect {source.dialect!r} is unsupported: "
                     f"{_UNSUPPORTED_SQL_DIALECTS[source.dialect]}"
                 )
         else:
@@ -264,7 +264,7 @@ class ProviderRegistry:
             provider_id = "tributo.iceberg"
         elif data_type in _UNSUPPORTED_SQL_DIALECTS:
             raise JobConfigurationError(
-                f"SQL dialect {data_type!r} is not part of D1+D2: "
+                f"SQL dialect {data_type!r} is unsupported: "
                 f"{_UNSUPPORTED_SQL_DIALECTS[data_type]}"
             )
         elif data_type == "lance":

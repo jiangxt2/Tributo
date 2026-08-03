@@ -5,7 +5,7 @@ setting up a Ray cluster would be overkill.  Ray is still required as a
 library (``ray.data`` for local data loading), but no cluster or head
 node is needed.
 
-Phase 3 (canonical)::
+Canonical path::
 
     from tributo.training.local_runner import run_local_trial
     from tributo.training.config import build_effective_config
@@ -49,14 +49,14 @@ def run_local_trial(
     Accepts either:
 
     * ``effective_config`` — a fully-merged, validated config dict
-      (preferred Phase 3 path), or
+      (preferred canonical path), or
     * ``training_config`` — raw user config (legacy path; the runner
       merges ``default_config`` internally).
 
     Args:
         trainer_spec: An ``AlgorithmSpec`` from the registry.
         output_path: Directory for exported model artifacts.
-        effective_config: Pre-validated canonical config (Phase 3).
+        effective_config: Pre-validated canonical config.
         training_config: Raw user config dict (legacy; must contain
             ``data`` section for driver-mode algorithms).
 
@@ -74,7 +74,7 @@ def run_local_trial(
     elif training_config is not None:
         # Legacy path: shallow merge (not recursive).  Only top-level keys from
         # *training_config* replace those in *default_config*; nested sections
-        # are replaced wholesale, not deeply merged.  Prefer the Phase 3
+        # are replaced wholesale, not deeply merged.  Prefer the canonical
         # ``effective_config`` path for recursive merge semantics.
         config = {**trainer_spec.default_config, **training_config}
     else:

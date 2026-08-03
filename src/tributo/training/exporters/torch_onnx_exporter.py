@@ -101,7 +101,8 @@ def export_pytorch_to_onnx(
             def forward(self, *args: torch.Tensor) -> torch.Tensor:
                 """Convert positional args to dict then call original model."""
                 inputs = dict(zip(self.input_names, args))
-                return self.model(inputs)
+                out: torch.Tensor = self.model(inputs)
+                return out
 
         # Wrap model
         wrapper = ONNXWrapper(model, input_names)

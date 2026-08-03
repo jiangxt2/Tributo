@@ -1,4 +1,4 @@
-"""DS1/DS2: Parquet + CSV correctness — Daft vs PyArrow canonical baseline."""
+"""Parquet + CSV correctness — Daft vs PyArrow canonical baseline."""
 
 from __future__ import annotations
 
@@ -109,11 +109,11 @@ def assert_tables_equal(
 
 
 # ---------------------------------------------------------------------------
-# DS1: Parquet correctness
+# Parquet correctness
 # ---------------------------------------------------------------------------
 
 
-class TestDS1Parquet:
+class TestParquetDaft:
     def setup_method(self) -> None:
         import daft
 
@@ -199,12 +199,12 @@ class TestDS1Parquet:
 
 
 # ---------------------------------------------------------------------------
-# DS1: S3/MinIO Parquet correctness
+# S3/MinIO Parquet correctness
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.s3
-class TestDS1ParquetS3:
+class TestParquetS3Daft:
     def setup_method(self) -> None:
         import daft
         from daft.io import IOConfig, S3Config
@@ -266,11 +266,11 @@ class TestDS1ParquetS3:
 
 
 # ---------------------------------------------------------------------------
-# DS2: CSV correctness
+# CSV correctness
 # ---------------------------------------------------------------------------
 
 
-class TestDS2CSV:
+class TestCSVCorrectness:
     def setup_method(self) -> None:
         import daft
 

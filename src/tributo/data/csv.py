@@ -1,6 +1,6 @@
 """CSV data connector — local files and S3.
 
-D1+D2 addition: the legacy S3 CSV path crashed with ``Unknown connector:
+The legacy S3 CSV path crashed with ``Unknown connector:
 'csv'`` (only parquet/iceberg/lance connectors existed).  The CSV provider
 routes reads through this connector.
 """

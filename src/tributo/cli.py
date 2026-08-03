@@ -1281,7 +1281,7 @@ def tune_run(
 
         trainer_spec = get_trainer(trainer)
 
-        # Phase 3 prep order: parse → merge → validate → search check → data → runner
+        # Prep order: parse → merge → validate → search check → data → runner
         from tributo.training.config import (
             apply_dot_overrides,
             build_effective_config,

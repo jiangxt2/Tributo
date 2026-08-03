@@ -84,7 +84,7 @@ __all__ = [
     "get_connector",
     "register_connector",
     "list_connectors",
-    # Provider contract (D1+D2)
+    # Provider contract
     "DataSourceProvider",
     "ResolvedSource",
     "DatasetHandle",

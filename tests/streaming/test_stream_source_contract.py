@@ -1,6 +1,6 @@
-"""Contract tests for the ``StreamSource`` protocol (S0).
+"""Contract tests for the ``StreamSource`` protocol.
 
-Lock the protocol semantics that S1/S2 (or third-party implementations)
+Lock the protocol semantics that future implementations
 must preserve: abstract-only protocol, the ``open -> poll -> commit ->
 close`` lifecycle, idempotent close, and safe commit without pending
 offsets.  Kafka-specific fail-closed behavior lives in

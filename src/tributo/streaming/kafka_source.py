@@ -4,7 +4,7 @@ Reads feature events from a Kafka topic as micro-batches.  Designed to
 run as a Ray actor independent of inference replicas — partition
 ownership and offset management are decoupled from model scaling.
 
-Delivery semantics (S0 fail-closed safety baseline): at-least-once is
+Delivery semantics (fail-closed safety baseline): at-least-once is
 claimed only for batches that are actually committed.  A failed commit
 retains the pending offsets and raises ``KafkaCommitError`` so the
 caller can retry; poisoned records (message errors, tombstones, decode
@@ -133,7 +133,7 @@ class KafkaStreamSource(StreamSource):
         each batch as a columnar dict.  The iterator runs until
         ``close()`` is called.
 
-        Fail-closed (S0): a batch that was yielded but not committed
+        Fail-closed: a batch that was yielded but not committed
         blocks the next ``poll()`` with ``StreamSourceError`` until the
         caller commits or closes; poisoned records raise
         ``KafkaPoisonMessageError`` and terminate the iterator instead
@@ -157,7 +157,7 @@ class KafkaStreamSource(StreamSource):
                 Re-``open()`` on the same instance does not resume
                 polling — create a new ``KafkaStreamSource`` to restart
                 (the broker re-delivers from the last committed offset;
-                an explicit poison handling strategy is S1 scope).
+                an explicit poison handling strategy is future scope).
             RuntimeError: If ``open()`` was not called first (``call
                 open() first``), or after a plain ``close()`` (``create
                 a new KafkaStreamSource``).
@@ -204,7 +204,7 @@ class KafkaStreamSource(StreamSource):
                     # poison message — keep polling for other partitions.
                     # _PARTITION_EOF (-191) is confluent-kafka's internal
                     # code; verify against the installed version in the
-                    # real-broker integration run (S1/S2 scope).
+                    # real-broker integration run.
                     if err.code() == KafkaError._PARTITION_EOF:
                         continue
                     # Fail-closed: terminate the source before raising so
@@ -284,7 +284,7 @@ class KafkaStreamSource(StreamSource):
         yielded message + 1 (at-least-once semantics).  Skipped /
         errored / tombstone records are never committed.
 
-        Fail-closed (S0): on failure the pending offsets are retained
+        Fail-closed: on failure the pending offsets are retained
         and ``KafkaCommitError`` is raised, so the caller can retry
         ``commit()`` — offsets are cleared only after a successful
         commit.  The uncommitted batch also blocks further ``poll()``.
@@ -326,7 +326,7 @@ class KafkaStreamSource(StreamSource):
 
         Pending offsets are left uncommitted (no automatic commit): a
         batch yielded but not committed is replayed from the broker
-        after a restart (fail-closed, S0).
+        after a restart (fail-closed).
         """
         if self._closed:
             return

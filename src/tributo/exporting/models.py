@@ -146,7 +146,7 @@ class BundleOutputConfig(BaseModel):
                         raise ValueError(f"target {t.name!r} cannot depend on itself")
             for role_name, _target_name in self.roles.items():
                 _validate_safe_name(role_name, "role name")
-                # Roles are validated by the planner (Phase 3): references
+                # Roles are validated by the planner: references
                 # to implicit targets are rejected there, not here.
         if self.alias is not None:
             if (

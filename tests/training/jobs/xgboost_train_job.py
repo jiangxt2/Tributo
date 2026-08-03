@@ -14,7 +14,6 @@ import numpy as np
 import pandas as pd
 import ray
 from ray.data import from_pandas
-from sklearn.model_selection import train_test_split
 
 
 def main():
@@ -31,6 +30,8 @@ def main():
     early_stopping = os.environ.get("EARLY_STOPPING_ROUNDS")
     max_rows = os.environ.get("MAX_ROWS_PER_WORKER")
     use_val = os.environ.get("USE_VAL", "true").lower() == "true"
+
+    from sklearn.model_selection import train_test_split
 
     # Generate synthetic data
     rng = np.random.default_rng(42)
@@ -98,6 +99,10 @@ def main():
 
     with open(result_json_path, "w") as f:
         json.dump(result_data, f, indent=2)
+
+    # 结果通过 stdout 回传（产物在容器内，宿主机测试侧从 logs 解析，
+    # 不依赖任何宿主机挂载路径——任何集群部署均可运行）
+    print(f"RESULT: {json.dumps(result_data)}")
 
     print(f"Training completed. Result written to {result_json_path}")
     print(f"ONNX model: {onnx_output}")

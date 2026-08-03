@@ -107,17 +107,29 @@ def _validate_onnx(output_path: str, n_features: int) -> None:
         outputs = session.run(None, {input_name: dummy})
         if not outputs:
             raise RuntimeError("ONNX validation failed: empty output from onnxruntime")
+        # Output batch dimension must match the input — a model with a
+        # mismatched batch axis is not usable for scoring.
+        if outputs[0].shape[0] != dummy.shape[0]:
+            raise RuntimeError(
+                f"ONNX validation failed: output batch dimension "
+                f"{outputs[0].shape[0]} does not match input "
+                f"{dummy.shape[0]}"
+            )
         logger.info(
             "ONNX validation passed, output shapes: %s", [o.shape for o in outputs]
         )
-    except Exception:
-        logger.warning(
-            "ONNX validation with onnxruntime failed — "
-            "the model was exported successfully but may require a newer onnxruntime version. "
-            "Path: %s",
+    except Exception as exc:
+        # Fail-closed: an unverifiable model is a failure, not a warning.
+        # Silently swallowing the exception let unusable models through —
+        # job scripts relying on validate=True never learned of the broken
+        # export.
+        logger.error(
+            "ONNX validation failed — the exported model is not usable with "
+            "the installed onnxruntime. Path: %s",
             output_path,
             exc_info=True,
         )
+        raise RuntimeError(f"ONNX validation failed for {output_path}: {exc}") from exc
 
 
 def export_from_checkpoint(

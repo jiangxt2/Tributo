@@ -1,4 +1,4 @@
-"""D1+D2 contract tests: ResolvedSource immutability/redaction + DatasetHandle lifecycle."""
+"""Provider contract tests: ResolvedSource immutability/redaction + DatasetHandle lifecycle."""
 
 from __future__ import annotations
 

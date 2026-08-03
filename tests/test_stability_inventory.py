@@ -10,7 +10,7 @@ Two checks:
 2. **Inventory completeness**: any module with ``@PublicAPI`` symbols must have an
    explicit entry in STABILITY_MAP (not just fallback to ``developer`` default).
 
-This is A0's "API inventory check" gate.
+This is the "API inventory check" gate.
 """
 
 from __future__ import annotations
@@ -150,6 +150,7 @@ _SYMBOL_OVERRIDES: dict[str, str] = {
     "tributo.exceptions.StreamSourceError": "beta",
     "tributo.exceptions.KafkaCommitError": "beta",
     "tributo.exceptions.KafkaPoisonMessageError": "beta",
+    "tributo.exceptions.ResourceBudgetExceededError": "beta",
 }
 
 

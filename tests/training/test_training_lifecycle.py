@@ -180,7 +180,7 @@ class TestLegacyFlow:
     ) -> None:
         """The production entry ``run_local_trial`` reaches
         ``TrainingLifecycle`` through ``BaseTrainer.run()``'s thin
-        delegation — the T1-R exit gate.
+        delegation — the exit gate.
 
         The loader must never inline the orchestration again: this test
         fails if the delegation chain from the entry point to the
