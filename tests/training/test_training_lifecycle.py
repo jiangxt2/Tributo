@@ -8,9 +8,11 @@ from typing import Any
 
 import pytest
 
+from tributo.training.algorithm_spec import AlgorithmSpec, DataLoadingMode
 from tributo.training.base import BaseTrainer, TrainerCallback
 from tributo.training.callbacks import CallbackDispatcher
 from tributo.training.lifecycle import TrainingLifecycle
+from tributo.training.local_runner import run_local_trial
 
 
 class _FakeTrainer(BaseTrainer):
@@ -42,6 +44,28 @@ class _SummaryWritingTrainer(_FakeTrainer):
 
     def export_model(self, checkpoint: Any, output_path: str) -> None:
         self._summary["metrics"] = {"accuracy": 0.9}
+
+
+class _EntryTrainer(BaseTrainer):
+    """Production-shaped trainer: accepts ``datasets``/``config`` like
+    ``run_local_trial`` constructs them (``trainer_cls(datasets=...,
+    config=...)``) — ``_FakeTrainer`` pins those to fixed values instead."""
+
+    def __init__(
+        self,
+        datasets: dict[str, Any],
+        config: dict[str, Any],
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(datasets=datasets, config=config, **kwargs)
+        self.events: list[str] = []
+
+    def setup(self) -> None:
+        self.events.append("setup")
+
+    def training_loop(self) -> Any:
+        self.events.append("training_loop")
+        return "checkpoint"
 
 
 class _RecordingCallback:
@@ -97,12 +121,102 @@ class TestLegacyFlow:
         ]
         assert summary == {"status": "succeeded"}
 
-    def test_base_trainer_run_delegates_to_lifecycle(self) -> None:
-        trainer = _FakeTrainer()
-        summary = trainer.run()
+    def test_base_trainer_run_delegates_to_lifecycle(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``BaseTrainer.run()`` must delegate to ``TrainingLifecycle``, not
+        inline the orchestration.
 
-        assert summary == {"status": "succeeded"}
-        assert trainer.events == ["setup", "training_loop"]
+        The historical version of this test only asserted the run contract
+        and stayed green when the delegation was broken by the E1 inline
+        regression; the spy below pins the actual delegation chain (trainer
+        + callback dispatcher construction, argument forwarding, and the
+        return value passing straight through).
+        """
+        constructed: list[tuple[BaseTrainer, CallbackDispatcher]] = []
+        invoked: dict[str, Any] = {}
+
+        class _SpyLifecycle:
+            def __init__(
+                self, trainer: BaseTrainer, dispatcher: CallbackDispatcher
+            ) -> None:
+                constructed.append((trainer, dispatcher))
+
+            # Mirror the real TrainingLifecycle.run signature (keyword-only
+            # bundle_config) so the spy guards the invocation shape too.
+            def run(
+                self, output_path: str = "", *, bundle_config: Any = None
+            ) -> dict[str, Any]:
+                invoked["output_path"] = output_path
+                invoked["bundle_config"] = bundle_config
+                return {"status": "succeeded", "delegated": True}
+
+        # base.py imports TrainingLifecycle inside run(), so the spy must
+        # replace the attribute on the lifecycle module itself.
+        monkeypatch.setattr(
+            "tributo.training.lifecycle.TrainingLifecycle", _SpyLifecycle
+        )
+
+        trainer = _FakeTrainer()
+        bundle_config = SimpleNamespace(targets=[1])
+        summary = trainer.run("/tmp/out", bundle_config=bundle_config)
+
+        # The return value comes straight from the lifecycle, not from
+        # inline logic.
+        assert summary == {"status": "succeeded", "delegated": True}
+        # Exactly one lifecycle was constructed, with this trainer and a
+        # CallbackDispatcher wrapping its callbacks.
+        assert len(constructed) == 1
+        delegate, dispatcher = constructed[0]
+        assert delegate is trainer
+        assert isinstance(dispatcher, CallbackDispatcher)
+        assert invoked == {
+            "output_path": "/tmp/out",
+            "bundle_config": bundle_config,
+        }
+
+    def test_run_local_trial_entry_reaches_lifecycle(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The production entry ``run_local_trial`` reaches
+        ``TrainingLifecycle`` through ``BaseTrainer.run()``'s thin
+        delegation — the T1-R exit gate.
+
+        The loader must never inline the orchestration again: this test
+        fails if the delegation chain from the entry point to the
+        lifecycle is broken.
+        """
+        delegated: list[tuple[str, Any]] = []
+
+        class _SpyLifecycle:
+            def __init__(self, trainer: BaseTrainer, dispatcher: Any) -> None:
+                pass
+
+            # Mirror the real TrainingLifecycle.run signature so the spy
+            # guards the invocation shape through the production entry too.
+            def run(
+                self, output_path: str = "", *, bundle_config: Any = None
+            ) -> dict[str, Any]:
+                delegated.append((output_path, bundle_config))
+                return {"status": "succeeded"}
+
+        monkeypatch.setattr(
+            "tributo.training.lifecycle.TrainingLifecycle", _SpyLifecycle
+        )
+
+        spec = AlgorithmSpec(
+            name="t1r-probe",
+            trainer_cls=_EntryTrainer,
+            data_loading=DataLoadingMode.CANONICAL_TRAINER,
+        )
+        # CANONICAL_TRAINER always requires data.source (PU rule), though
+        # the trainer itself loads data — supply the minimal shape.
+        summary = run_local_trial(
+            spec, "/tmp/out", effective_config={"data": {"source": {}}}
+        )
+
+        assert summary["status"] == "succeeded"
+        assert delegated == [("/tmp/out", None)]
 
     def test_no_export_override_warns_but_succeeds(
         self, caplog: pytest.LogCaptureFixture
