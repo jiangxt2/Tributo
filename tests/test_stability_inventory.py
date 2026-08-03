@@ -150,6 +150,7 @@ _SYMBOL_OVERRIDES: dict[str, str] = {
     "tributo.exceptions.StreamSourceError": "beta",
     "tributo.exceptions.KafkaCommitError": "beta",
     "tributo.exceptions.KafkaPoisonMessageError": "beta",
+    "tributo.exceptions.ResourceBudgetExceededError": "beta",
 }
 
 

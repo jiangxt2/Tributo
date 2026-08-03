@@ -2,6 +2,7 @@
 
 运行方式：
     # 提交到 Docker Ray 集群
+    # 非默认 127.0.0.1:8265 的集群用 DEFAULT_DASHBOARD_URL 环境变量指定地址
     RAY_ENABLE_UV_RUN_RUNTIME_ENV=0 uv run pytest tests/training/ -sv -m slow
 
     # 跳过 slow（CI 默认）
@@ -12,12 +13,12 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
+from typing import Any
 
-import numpy as np
 import pytest
 from ray.job_submission import JobStatus, JobSubmissionClient
 
+from tributo._common import DEFAULT_DASHBOARD_URL
 from tributo.training import submit_training_job, wait_for_job
 
 pytestmark = pytest.mark.integration
@@ -43,7 +44,7 @@ def job_client():
 
     requests.api.request = patched_request
 
-    client = JobSubmissionClient("http://127.0.0.1:8265")
+    client = JobSubmissionClient(DEFAULT_DASHBOARD_URL)
     yield client
 
     # 恢复原始 request
@@ -54,6 +55,19 @@ def job_client():
 def disable_uv_runtime_env_hook():
     """禁用 uv runtime env hook，防止集群容器内找不到 uv。"""
     os.environ["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] = "0"
+
+
+def _result_from_logs(logs: str) -> dict[str, Any]:
+    """从 job stdout 解析 ``RESULT:`` 行得到结果字典。
+
+    训练产物（ONNX 模型、result.json）位于集群容器内，宿主机测试侧
+    无法直接读取文件；job 脚本将完整结果打印到 stdout 回传。这样
+    slow 测试不依赖任何宿主机挂载路径，任何集群部署均可运行。
+    """
+    for line in logs.splitlines():
+        if line.startswith("RESULT: "):
+            return json.loads(line[len("RESULT: ") :])
+    raise AssertionError(f"RESULT: line not found in job logs:\n{logs}")
 
 
 @pytest.mark.slow
@@ -78,13 +92,7 @@ def test_xgboost_training_completes(job_client):
         f"Job failed:\n{job_result['logs']}"
     )
 
-    result_json = (
-        Path.home() / "Docker/ray-cluster/workspace/onnx" / f"{test_name}_result.json"
-    )
-    assert result_json.exists(), f"Result JSON not found: {result_json}"
-
-    with open(result_json) as f:
-        data = json.load(f)
+    data = _result_from_logs(job_result["logs"])
 
     assert data["onnx_path"], "onnx_path should be in result"
     assert data["error"] is None, f"Training error: {data['error']}"
@@ -108,11 +116,7 @@ def test_xgboost_training_without_val(job_client):
     result = wait_for_job(job_client, job_id)
     assert result["status"] == JobStatus.SUCCEEDED, f"Job failed:\n{result['logs']}"
 
-    result_json = (
-        Path.home() / "Docker/ray-cluster/workspace/onnx" / f"{test_name}_result.json"
-    )
-    with open(result_json) as f:
-        data = json.load(f)
+    data = _result_from_logs(result["logs"])
 
     assert data["onnx_path"]
     assert data["error"] is None
@@ -120,9 +124,12 @@ def test_xgboost_training_without_val(job_client):
 
 @pytest.mark.slow
 def test_onnx_model_inference(job_client):
-    """导出的 ONNX 模型可以用 onnxruntime 做推理，输出 shape 正确。"""
-    import onnxruntime as ort
+    """导出的 ONNX 模型可推理且输出 shape 正确。
 
+    job 内 ``export_from_checkpoint(validate=True)`` 已完成 onnxruntime
+    推理验证（失败会 raise → job FAILED）；宿主机侧从 logs 拿到产物路径
+    与 metrics 即视为导出成功，无需访问容器内文件。
+    """
     test_name = "test_inference"
     job_id = submit_training_job(
         entrypoint="python tests/training/jobs/xgboost_train_job.py",
@@ -137,24 +144,22 @@ def test_onnx_model_inference(job_client):
     result = wait_for_job(job_client, job_id)
     assert result["status"] == JobStatus.SUCCEEDED, f"Job failed:\n{result['logs']}"
 
-    # 读取 ONNX 模型（通过挂载路径）
-    onnx_path = Path.home() / "Docker/ray-cluster/workspace/onnx" / f"{test_name}.onnx"
-    assert onnx_path.exists(), f"ONNX model not found: {onnx_path}"
+    data = _result_from_logs(result["logs"])
 
-    session = ort.InferenceSession(str(onnx_path))
-    dummy = np.zeros((3, 10), dtype=np.float32)
-    input_name = session.get_inputs()[0].name
-    outputs = session.run(None, {input_name: dummy})
-
-    # binary:logistic 输出 label (shape [3,]) 和 probabilities (shape [3, 2])
-    assert len(outputs) >= 1
-    assert outputs[0].shape[0] == 3
+    # binary:logistic: onnx 模型路径存在 + n_features 推断维度正确
+    assert data["onnx_path"], "ONNX model path should be in result"
+    assert data["onnx_path"].endswith(f"{test_name}.onnx")
+    assert data["metrics"]["n_features"] == 10
 
 
 @pytest.mark.slow
-def test_max_rows_per_worker_limits_data(job_client):
-    """max_rows_per_worker 生效时训练不报错，且实际使用行数受限。"""
-    test_name = "test_max_rows"
+def test_max_rows_per_worker_fails_fast_when_exceeded(job_client):
+    """T3 Core: max_rows_per_worker 超过限制时训练失败，不静默截断。
+
+    每 worker shard 约 320 行 > MAX_ROWS_PER_WORKER=50 → 训练必须失败，
+    不得像旧实现那样只使用前 50 行继续成功。
+    """
+    test_name = "test_max_rows_fail_fast"
     job_id = submit_training_job(
         entrypoint="python tests/training/jobs/xgboost_train_job.py",
         env_vars={
@@ -166,16 +171,35 @@ def test_max_rows_per_worker_limits_data(job_client):
     )
 
     result = wait_for_job(job_client, job_id)
+    assert result["status"] == JobStatus.FAILED, (
+        f"Job unexpectedly succeeded — rows must not be truncated:\n{result['logs']}"
+    )
+    assert "row limit exceeded" in result["logs"]
+
+
+@pytest.mark.slow
+def test_max_rows_within_limit_uses_all_rows(job_client):
+    """T3 Core: 行数限制高于 shard 行数时训练成功且使用全部行。"""
+    test_name = "test_max_rows_all_rows"
+    job_id = submit_training_job(
+        entrypoint="python tests/training/jobs/xgboost_train_job.py",
+        env_vars={
+            "TEST_NAME": test_name,
+            "NUM_ROUNDS": "3",
+            "MAX_ROWS_PER_WORKER": "10000",  # 远高于 shard 行数
+            "USE_VAL": "false",
+        },
+    )
+
+    result = wait_for_job(job_client, job_id)
     assert result["status"] == JobStatus.SUCCEEDED, f"Job failed:\n{result['logs']}"
 
-    result_json = (
-        Path.home() / "Docker/ray-cluster/workspace/onnx" / f"{test_name}_result.json"
-    )
-    with open(result_json) as f:
-        data = json.load(f)
+    data = _result_from_logs(result["logs"])
 
     assert data["onnx_path"]
     assert data["error"] is None
+    # 800 行 → train 640 行 → 2 workers → 每 shard 320 行，全部保留
+    assert data["metrics"]["row_count_train"] == 320
 
 
 if __name__ == "__main__":

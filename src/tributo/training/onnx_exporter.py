@@ -110,14 +110,18 @@ def _validate_onnx(output_path: str, n_features: int) -> None:
         logger.info(
             "ONNX validation passed, output shapes: %s", [o.shape for o in outputs]
         )
-    except Exception:
-        logger.warning(
-            "ONNX validation with onnxruntime failed — "
-            "the model was exported successfully but may require a newer onnxruntime version. "
-            "Path: %s",
+    except Exception as exc:
+        # Fail-closed: an unverifiable model is a failure, not a warning.
+        # Silently swallowing the exception let unusable models through —
+        # job scripts relying on validate=True never learned of the broken
+        # export (review P1-10).
+        logger.error(
+            "ONNX validation failed — the exported model is not usable with "
+            "the installed onnxruntime. Path: %s",
             output_path,
             exc_info=True,
         )
+        raise RuntimeError(f"ONNX validation failed for {output_path}: {exc}") from exc
 
 
 def export_from_checkpoint(

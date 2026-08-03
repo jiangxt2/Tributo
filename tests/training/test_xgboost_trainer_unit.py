@@ -191,6 +191,58 @@ class TestModelConfig:
         assert cfg.max_depth == 6
         assert cfg.eta == 0.3
 
+    def test_reserved_external_memory_rejected(self):
+        """T3 Core (P2-6): external_memory 作为保留参数被结构化拒绝。"""
+        with pytest.raises(ValidationError, match="external_memory"):
+            XGBoostTrainingConfig.model_validate({"model": {"external_memory": True}})
+
+    def test_reserved_data_iter_rejected(self):
+        """data_iter（DataIter 回调）同样被拒绝。"""
+        with pytest.raises(ValidationError, match="data_iter"):
+            XGBoostTrainingConfig.model_validate({"model": {"data_iter": lambda: None}})
+
+    def test_build_trainer_raw_config_rejects_reserved(self):
+        """P1-11: build_trainer（raw dict 入口）同样拒绝保留参数。"""
+        from unittest.mock import MagicMock
+
+        from tributo.exceptions import JobConfigurationError
+        from tributo.training.xgboost_trainer import build_trainer
+
+        with pytest.raises(JobConfigurationError, match="external_memory"):
+            build_trainer(
+                ray_dataset=MagicMock(),
+                train_config={
+                    "xgb_params": {
+                        "objective": "binary:logistic",
+                        "external_memory": True,
+                    },
+                    "num_rounds": 3,
+                },
+            )
+
+    def test_build_trainer_raw_config_allows_normal_params(self):
+        """非保留参数在 raw 入口继续透传（不误拒）。"""
+        from unittest.mock import MagicMock
+
+        from tributo.training.xgboost_trainer import build_trainer
+
+        # 校验发生在 ray import 之前——MagicMock dataset 足够到达校验点
+        result = build_trainer(
+            ray_dataset=MagicMock(),
+            train_config={
+                "xgb_params": {"objective": "binary:logistic", "max_depth": 8},
+                "num_rounds": 3,
+            },
+        )
+        assert result is not None
+
+    def test_normal_extra_params_still_allowed(self):
+        """非保留的 native 参数继续透传。"""
+        cfg = XGBoostTrainingConfig.model_validate(
+            {"model": {"max_depth": 8, "eta": 0.1}}
+        )
+        assert cfg.model.max_depth == 8
+
     def test_num_class_extra_fields_preserved(self):
         """model_dump(exclude={'objective'}) 应保留 num_class。"""
         cfg = ModelConfig(objective="multi:softprob", num_class=3, max_depth=6)
@@ -221,6 +273,17 @@ class TestTrainingParams:
         cfg = TrainingParams(val_size=0.0)
         assert cfg.val_size == 0.0
 
+    def test_max_rows_per_worker_legacy_name(self):
+        cfg = TrainingParams(max_rows_per_worker=500)
+        assert cfg.max_rows_per_worker == 500
+
+    def test_max_input_rows_per_worker_alias(self):
+        """max_input_rows_per_worker 是 max_rows_per_worker 的别名（T3 Core）。"""
+        cfg = TrainingParams(max_input_rows_per_worker=500)
+        assert cfg.max_rows_per_worker == 500
+        # model_dump 保留旧字段名（train_loop_config 兼容）
+        assert cfg.model_dump()["max_rows_per_worker"] == 500
+
 
 class TestXGBoostTrainingConfig:
     """XGBoostTrainingConfig 完整配置测试。"""
@@ -232,6 +295,22 @@ class TestXGBoostTrainingConfig:
         assert cfg.training.num_rounds == 100
         assert cfg.ray.num_workers == 4
         assert cfg.output.onnx_opset == 12
+
+    def test_default_resource_budget_is_active(self):
+        """决策 D1: resource 预算默认启用（无条件安全基线）。"""
+        from tributo.training.resource import MIB
+
+        cfg = XGBoostTrainingConfig()
+        assert cfg.resource.max_batch_bytes == 64 * MIB
+        assert cfg.resource.max_worker_materialization_bytes == 1024 * MIB
+        assert cfg.resource.max_input_rows_per_worker is None
+
+    def test_custom_resource_budget(self):
+        cfg = XGBoostTrainingConfig(
+            resource={"max_batch_bytes": 1024, "max_input_rows_per_worker": 100}
+        )
+        assert cfg.resource.max_batch_bytes == 1024
+        assert cfg.resource.max_input_rows_per_worker == 100
 
     def test_full_config(self):
         cfg = XGBoostTrainingConfig(

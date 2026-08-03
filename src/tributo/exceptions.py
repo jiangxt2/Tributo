@@ -234,3 +234,37 @@ class KafkaPoisonMessageError(StreamSourceError):
     ) -> None:
         self.reason = reason
         super().__init__(message, topic=topic, partition=partition, offset=offset)
+
+
+# ── Training resource safety (T3 Core) ───────────────────────────────────────
+
+
+@PublicAPI(stability="beta")
+class ResourceBudgetExceededError(TributoError):
+    """Single-worker materialization exceeded the configured budget (T3 Core).
+
+    Raised *before* the unbounded concat — the batch that would exceed the
+    budget is never appended.  Carries structured context for diagnostics:
+    algorithm, split, worker/rank, observed bytes and the budget that was hit.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        algorithm: str | None = None,
+        split: str | None = None,
+        worker_rank: str | int | None = None,
+        observed_bytes: int | None = None,
+        budget_bytes: int | None = None,
+        observed_rows: int | None = None,
+        max_rows: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.algorithm = algorithm
+        self.split = split
+        self.worker_rank = worker_rank
+        self.observed_bytes = observed_bytes
+        self.budget_bytes = budget_bytes
+        self.observed_rows = observed_rows
+        self.max_rows = max_rows

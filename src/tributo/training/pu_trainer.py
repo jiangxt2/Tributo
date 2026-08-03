@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any, Literal, Optional
 from pydantic import Field
 
 from tributo._common.config import StrictConfigModel
+from tributo.exceptions import JobConfigurationError
 from tributo.training.algorithm_spec import (
     AlgorithmSpec,
     Capability,
@@ -48,6 +49,13 @@ from tributo.training.dnn_trainer import (
     build_features_from_config,
 )
 from tributo.training.registry import register
+from tributo.training.resource import (
+    DEFAULT_BATCH_SIZE,
+    ResourceBudget,
+    collect_bounded,
+    estimate_row_bytes_from_schema,
+    preflight_check,
+)
 from tributo.util.annotations import PublicAPI
 
 if TYPE_CHECKING:
@@ -83,13 +91,15 @@ class PUConfig(StrictConfigModel):
 class PURayConfig(StrictConfigModel):
     """Ray cluster configuration (PU-specific, defaults to num_workers=1).
 
-    PU training currently does not support DDP; multiple workers train
-    independently and non-rank-0 results are discarded.  For distributed
-    training use DNNTrainer + loss.type=nnpu.
+    PU training is single-worker only (T3 Core): every worker loads the
+    *full* dataset itself, so ``num_workers > 1`` multiplies the
+    materialization footprint.  Configuration with ``num_workers > 1`` is
+    rejected at construction and re-checked inside the worker.  For
+    distributed training use DNNTrainer + loss.type=nnpu.
     """
 
     num_workers: int = Field(
-        default=1, ge=1, description="Number of workers (PU defaults to 1)"
+        default=1, ge=1, description="Number of workers (PU is single-worker only)"
     )
     use_gpu: bool = Field(default=False)
     storage_path: Optional[str] = None
@@ -116,6 +126,10 @@ class PUTrainingConfig(StrictConfigModel):
     pu: PUConfig = Field(default_factory=PUConfig)
     training: DNNTrainingParams = Field(default_factory=DNNTrainingParams)
     ray: PURayConfig = Field(default_factory=PURayConfig)
+    resource: ResourceBudget = Field(
+        default_factory=ResourceBudget,
+        description="Single-worker materialization budget (T3 Core)",
+    )
     output: DNNOutputConfig = Field(default_factory=DNNOutputConfig)
     label_col: str = Field(default="label", description="Label column name")
 
@@ -175,19 +189,56 @@ def pu_train_loop_per_worker(config: dict[str, Any]) -> None:
     source = data_cfg.get("source")
     if source is None:
         raise ValueError("data.source is required for PU training")
+
+    # T3 Core: PU is single-worker only.  Every worker loads the full
+    # dataset itself, so a second worker would duplicate the entire
+    # materialization footprint.  Re-checked here (before any data is
+    # read) even though construction already rejects num_workers > 1.
+    world_size = ray.train.get_context().get_world_size()
+    if world_size > 1:
+        raise JobConfigurationError(
+            "PU training supports num_workers=1 only (T3 Core); got "
+            f"world_size={world_size}. Use DNNTrainer with loss.type=nnpu "
+            "for distributed PU training."
+        )
+
     ds = load_ray_dataset_from_source(source)
 
-    # Convert to pandas (worker loads full data internally)
+    # Convert to pandas under the worker materialization budget (T3 Core).
+    # Rows are never silently truncated: an over-budget input fails here,
+    # before the unbounded concat could run.  prefetch_batches=0 keeps the
+    # prefetched batch out of the accounting blind spot (review P1-2).
     import pandas as pd
 
-    batches = list(
+    budget = ResourceBudget.model_validate(config.get("resource") or {})
+    worker_rank = ray.train.get_context().get_world_rank()
+    preflight_check(
+        rows=None,
+        row_bytes=estimate_row_bytes_from_schema(ds.schema()),
+        budget=budget,
+        algorithm="pu",
+        split="train",
+        worker_rank=worker_rank,
+    )
+    batches, summary = collect_bounded(
         ds.iter_batches(
-            batch_size=None,
+            batch_size=DEFAULT_BATCH_SIZE,
             batch_format="pandas",
-            prefetch_batches=1,
-        )
+            prefetch_batches=0,
+        ),
+        budget,
+        algorithm="pu",
+        split="train",
+        worker_rank=worker_rank,
+    )
+    logger.info(
+        "PU worker materialization: rows=%d payload=%dB peak=%dB",
+        summary.rows_seen,
+        summary.payload_bytes,
+        summary.estimated_peak_bytes,
     )
     df = pd.concat(batches, ignore_index=True)
+    del batches  # release the input list — the concat copy is the peak
 
     # Prepare data
     feature_names = [f.name for f in features]
@@ -411,6 +462,14 @@ class PUTrainerImpl(BaseTrainer):
         super().__init__(datasets, config, run_config, **kwargs)
         self._pu_config = _validated_config or PUTrainingConfig.model_validate(config)
         self._features = build_features_from_config(self._pu_config.features)
+        # T3 Core: PU is single-worker only — every worker re-loads the full
+        # dataset, so num_workers > 1 multiplies the materialization footprint.
+        if self._pu_config.ray.num_workers > 1:
+            raise JobConfigurationError(
+                "PU training supports num_workers=1 only (T3 Core); got "
+                f"num_workers={self._pu_config.ray.num_workers}. "
+                "Use DNNTrainer with loss.type=nnpu for distributed training."
+            )
 
     def setup(self) -> None:
         """Build feature columns. Data loading is deferred to workers."""
@@ -442,6 +501,7 @@ class PUTrainerImpl(BaseTrainer):
             "model": cfg.model.model_dump(),
             "pu": cfg.pu.model_dump(),
             "training": cfg.training.model_dump(),
+            "resource": cfg.resource.model_dump(),
         }
 
         # Auto-detect storage_path

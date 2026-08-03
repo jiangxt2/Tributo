@@ -5,10 +5,11 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any, Optional
 
-from pydantic import ConfigDict, Field
+from pydantic import AliasChoices, ConfigDict, Field, model_validator
 
 from tributo._common.config import StrictConfigModel
 from tributo.data.base import S3Config
+from tributo.exceptions import JobConfigurationError
 from tributo.integrations.broker import CancellationChecker
 from tributo.training.algorithm_spec import (
     AlgorithmSpec,
@@ -19,11 +20,23 @@ from tributo.training.algorithm_spec import (
 )
 from tributo.training.base import BaseTrainer
 from tributo.training.registry import register
+from tributo.training.resource import (
+    DEFAULT_BATCH_SIZE,
+    BoundedCollector,
+    ResourceBudget,
+    estimate_row_bytes_from_schema,
+    preflight_check,
+)
 from tributo.util.annotations import PublicAPI
 
 if TYPE_CHECKING:
     import ray.data
     from ray.train.xgboost import XGBoostTrainer
+
+# XGBoost params reserved by Tributo: silently passing these as native
+# training parameters would change the execution path (e.g. external-memory
+# / data_iter) without going through the T3 Core budget contract.
+_RESERVED_XGB_PARAMS = frozenset({"external_memory", "data_iter"})
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +81,12 @@ class XGBoostDataConfig(StrictConfigModel):
 
 
 class ModelConfig(StrictConfigModel):
-    """XGBoost model parameters — extra fields allowed for native params."""
+    """XGBoost model parameters — extra fields allowed for native params.
+
+    Reserved keys (``external_memory``, ``data_iter``) are rejected: they
+    would silently switch the training path away from the budgeted
+    ``QuantileDMatrix`` route (T3 Core, review P2-6).
+    """
 
     model_config = ConfigDict(extra="allow")
 
@@ -79,13 +97,39 @@ class ModelConfig(StrictConfigModel):
         description="Number of multi-class categories, only needed for multi:softprob/multi:softmax",
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_reserved_params(cls, data: Any) -> Any:
+        """Structured fail-fast for reserved XGBoost parameters."""
+        if isinstance(data, dict):
+            for key in _RESERVED_XGB_PARAMS:
+                if key in data:
+                    raise ValueError(
+                        f"XGBoost parameter {key!r} is reserved by Tributo "
+                        "(T3 Core): external-memory is not supported on the "
+                        "default QuantileDMatrix path; remove it from the "
+                        "model config."
+                    )
+        return data
+
 
 class TrainingParams(StrictConfigModel):
     """Training hyperparameters."""
 
     num_rounds: int = Field(default=100, ge=1, description="Number of boosting rounds")
     early_stopping_rounds: Optional[int] = Field(default=None, ge=1)
-    max_rows_per_worker: Optional[int] = Field(default=None, ge=1)
+    max_rows_per_worker: Optional[int] = Field(
+        default=None,
+        ge=1,
+        validation_alias=AliasChoices(
+            "max_rows_per_worker", "max_input_rows_per_worker"
+        ),
+        description=(
+            "Row-count guard per worker (T3 Core): exceeding it fails fast, "
+            "training data is never silently truncated.  "
+            "Alias: max_input_rows_per_worker."
+        ),
+    )
     val_size: float = Field(
         default=0.2, ge=0.0, lt=1.0, description="Validation set proportion"
     )
@@ -126,6 +170,10 @@ class XGBoostTrainingConfig(StrictConfigModel):
     model: ModelConfig = Field(default_factory=ModelConfig)
     training: TrainingParams = Field(default_factory=TrainingParams)
     ray: RayConfig = Field(default_factory=RayConfig)
+    resource: ResourceBudget = Field(
+        default_factory=ResourceBudget,
+        description="Single-worker materialization budget (T3 Core)",
+    )
     output: OutputConfig = Field(default_factory=OutputConfig)
 
 
@@ -201,6 +249,7 @@ class XGBoostTrainerImpl(BaseTrainer):
             "xgb_params": xgb_params,
             "num_rounds": cfg.training.num_rounds,
             "max_rows_per_worker": cfg.training.max_rows_per_worker,
+            "resource": cfg.resource.model_dump(),
         }
         val_ds = self.datasets.get("val")
         test_ds = self.datasets.get("test")
@@ -313,7 +362,10 @@ def train_loop_per_worker(config: dict[str, Any]) -> None:
         label_col (str): Label column name, default "label".
         xgb_params (dict): XGBoost training parameters.
         num_rounds (int): Number of boosting rounds, default 100.
-        max_rows_per_worker (int | None): Maximum rows per worker, safety valve.
+        max_rows_per_worker (int | None): Row-count guard (T3 Core) — exceeding
+            it fails fast; training data is never silently truncated.
+        resource (dict): Materialization budget (T3 Core); defaults always
+            apply when absent.
     """
     import ray.train
     import xgboost
@@ -321,6 +373,26 @@ def train_loop_per_worker(config: dict[str, Any]) -> None:
     label_col = config.get("label_col", "label")
     max_rows = config.get("max_rows_per_worker")
     _feature_names: dict[str, list[str]] = {}
+    _rows_seen: dict[str, int] = {}
+
+    # T3 Core: one worker materialization budget shared by all splits —
+    # train/val/test matrices and the test label lists can all be alive at
+    # the same time.  Over-budget inputs fail before the unbounded
+    # concat_tables; rows are never truncated.
+    budget = ResourceBudget.model_validate(config.get("resource") or {})
+    worker_rank = ray.train.get_context().get_world_rank()
+    collector = BoundedCollector(
+        budget,
+        algorithm="xgboost",
+        split="train",
+        worker_rank=worker_rank,
+        max_rows=max_rows,
+    )
+
+    # Test labels collected on the *first* pass over the test shard (inside
+    # _make_quantile_dmatrix) so the shard is never iterated twice — a second
+    # pass would double-count bytes and rows against the shared budget.
+    test_labels: list[Any] = []
 
     # Cancel signal — inject CancellationChecker via config when using a broker.
     # TODO(v1.1): _tributo_cancel_key and _tributo_cancel_checker are dead code
@@ -349,8 +421,18 @@ def train_loop_per_worker(config: dict[str, Any]) -> None:
     def _make_quantile_dmatrix(
         dataset_key: str,
         ref: xgboost.QuantileDMatrix | None = None,
+        *,
+        collect_labels: bool = False,
     ) -> xgboost.QuantileDMatrix | None:
-        """Build QuantileDMatrix streamingly from a Ray Dataset shard."""
+        """Build QuantileDMatrix streamingly from a Ray Dataset shard.
+
+        Collects the shard under the shared materialization budget.  If
+        ``max_rows`` / ``max_input_rows_per_worker`` is configured and the
+        shard exceeds it, collection fails fast — the shard is never
+        silently truncated.  With ``collect_labels`` the label column is
+        also captured during this single pass (used for the test split, so
+        the shard is never iterated twice).
+        """
         try:
             shard = ray.train.get_dataset_shard(dataset_key)
         except KeyError:
@@ -358,17 +440,40 @@ def train_loop_per_worker(config: dict[str, Any]) -> None:
         if shard is None:
             return None
 
+        # Phase-1 preflight: schema-level estimate (cheap, no row count
+        # required); the in-flight collector remains the hard guarantee.
+        row_bytes = None
+        schema = getattr(shard, "schema", None)
+        if callable(schema):
+            try:
+                row_bytes = estimate_row_bytes_from_schema(schema())
+            except Exception:
+                row_bytes = None
+        preflight_check(
+            rows=None,
+            row_bytes=row_bytes,
+            budget=budget,
+            algorithm="xgboost",
+            split=dataset_key,
+            worker_rank=worker_rank,
+        )
+
         batches = []
-        rows_seen = 0
-        for batch in shard.iter_batches(batch_format="pyarrow", batch_size=4096):
-            if max_rows is not None and rows_seen >= max_rows:
-                break
-            if max_rows is not None:
-                remaining = max_rows - rows_seen
-                if batch.num_rows > remaining:
-                    batch = batch.slice(0, remaining)
+        split_rows = 0
+        for batch in shard.iter_batches(
+            batch_format="pyarrow", batch_size=DEFAULT_BATCH_SIZE
+        ):
+            collector.add(batch, split=dataset_key)
             batches.append(batch)
-            rows_seen += batch.num_rows
+            split_rows += batch.num_rows
+            if collect_labels:
+                # Rank-0 evaluation labels: compact numpy arrays (not Python
+                # pylists — those can exceed the Arrow buffer severalfold),
+                # accounted against the shared budget (review P1-6).
+                label_array = batch.column(label_col).to_numpy()
+                collector.add_bytes(label_array.nbytes, split=dataset_key)
+                test_labels.append(label_array)
+        _rows_seen[dataset_key] = split_rows
 
         import pyarrow as pa
 
@@ -411,32 +516,15 @@ def train_loop_per_worker(config: dict[str, Any]) -> None:
     # Build test DMatrix on *all* ranks so Ray Train doesn't hang
     # get_dataset_shard splits data across workers; every rank must
     # consume its partition even if only rank 0 does sklearn evaluation.
-    dtest = _make_quantile_dmatrix("test", ref=dtrain)
-    test_labels: list[Any] = []
-    if dtest is not None:
-        test_shard = ray.train.get_dataset_shard("test")
-        rows_seen = 0
-        for batch in test_shard.iter_batches(batch_format="pyarrow", batch_size=4096):
-            if max_rows is not None and rows_seen >= max_rows:
-                break
-            if max_rows is not None:
-                remaining = max_rows - rows_seen
-                if batch.num_rows > remaining:
-                    batch = batch.slice(0, remaining)
-            test_labels.append(batch.column(label_col).to_pylist())
-            rows_seen += batch.num_rows
+    # Labels are captured during this single pass, on rank 0 only, as
+    # compact numpy arrays accounted against the shared budget (P1-6) —
+    # the shard is never iterated twice, so test bytes/rows are counted
+    # once per worker.
+    dtest = _make_quantile_dmatrix("test", ref=dtrain, collect_labels=world_rank == 0)
 
-    # Row counts per split (all ranks participate)
-    row_info = {}
-    for key in ("train", "val", "test"):
-        try:
-            shard = ray.train.get_dataset_shard(key)
-            total = 0
-            for batch in shard.iter_batches(batch_format="pyarrow", batch_size=4096):
-                total += batch.num_rows
-            row_info[f"row_count_{key}"] = total
-        except Exception:
-            pass  # split not available; will be filled by rank 0 below
+    # Row counts per split, collected once during DMatrix construction
+    # (no second full shard iteration)
+    row_info = {f"row_count_{key}": rows for key, rows in _rows_seen.items()}
 
     if world_rank == 0:
         from ray.train.xgboost import XGBoostCheckpoint
@@ -452,6 +540,15 @@ def train_loop_per_worker(config: dict[str, Any]) -> None:
 
         # Worker-side sklearn evaluation
         if dtest is not None and test_labels:
+            # test_labels are rank-0 numpy arrays (see collect_labels).
+            # concat 输出副本与源数组并存 → 评估峰值 = 2 × labels 总量；
+            # 源数组已在收集阶段逐批记账（add_bytes），此处补记 concat
+            # 副本（1×）。检查发生在 concat 之前——超限则 fail-fast，
+            # 不分配副本。记账独立于 try 块：评估库（sklearn）缺失时
+            # 预算契约仍然生效。
+            concat_copy_bytes = sum(a.nbytes for a in test_labels)
+            collector.add_bytes(concat_copy_bytes, split="test")
+
             try:
                 import numpy as np
                 from sklearn.metrics import (
@@ -464,7 +561,7 @@ def train_loop_per_worker(config: dict[str, Any]) -> None:
                     roc_curve,
                 )
 
-                y_true = np.array([v for chunk in test_labels for v in chunk])
+                y_true = np.concatenate(test_labels)
                 xgb_params = config.get("xgb_params", {})
                 is_multiclass = xgb_params.get("objective", "").startswith("multi:")
 
@@ -626,7 +723,25 @@ def build_trainer(
 
     Returns:
         An unstarted XGBoostTrainer; call ``.fit()`` to begin training.
+
+    Raises:
+        JobConfigurationError: ``train_config`` contains a reserved XGBoost
+            parameter (``external_memory``/``data_iter``) — the raw dict
+            entry point enforces the same contract as ``ModelConfig``
+            (T3 Core, review P1-11).
     """
+    # T3 Core: the raw train_config entry point bypasses ModelConfig's
+    # reserved-key rejection — enforce the same fail-fast contract here
+    # (external_memory/data_iter would silently switch the execution path
+    # away from the budgeted QuantileDMatrix route).
+    reserved = _RESERVED_XGB_PARAMS & set(train_config.get("xgb_params", {}))
+    if reserved:
+        raise JobConfigurationError(
+            f"XGBoost parameter {sorted(reserved)[0]!r} is reserved by Tributo "
+            "(T3 Core): external-memory is not supported on the default "
+            "QuantileDMatrix path; remove it from train_config['xgb_params']."
+        )
+
     import os
     import tempfile
 
