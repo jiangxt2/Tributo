@@ -211,7 +211,7 @@ class TestONNXModelLegacyVersionedInputs:
         assert len(resp.predictions) > 0
 
 
-def _http_request(body: bytes) -> Any:
+def _http_request(body: bytes, headers: list[tuple[bytes, bytes]] | None = None) -> Any:
     """构造一个携带 JSON body 的 starlette Request（绕过 ASGI 服务）。"""
     from starlette.requests import Request
 
@@ -229,7 +229,7 @@ def _http_request(body: bytes) -> Any:
             "raw_path": b"/predict",
             "query_string": b"",
             "root_path": "",
-            "headers": [],
+            "headers": headers or [],
             "client": ("127.0.0.1", 50000),
             "server": ("127.0.0.1", 8000),
         },
@@ -326,3 +326,67 @@ async def test_http_unknown_input_name_returns_400(tmp_path: Path):
     resp = await deployment(_http_request(body))
     assert resp.status_code == 400
     assert "do not match" in json.loads(resp.body)["error"]
+
+
+@pytest.mark.asyncio
+async def test_http_response_carries_e3_context(tmp_path: Path):
+    """HTTP success responses carry request, trace, and model identity."""
+    deployment = ONNXModel(bundle_uri=TestONNXModelBundle()._make_bundle(tmp_path))
+    traceparent = "00-" + "1" * 32 + "-" + "2" * 16 + "-01"
+    body = json.dumps({"features": [[0.5, 0.5]]}).encode()
+
+    resp = await deployment(
+        _http_request(
+            body,
+            headers=[
+                (b"x-request-id", b"http-request-123"),
+                (b"traceparent", traceparent.encode()),
+            ],
+        )
+    )
+
+    payload = json.loads(resp.body)
+    assert resp.status_code == 200
+    assert payload["request_id"] == "http-request-123"
+    assert payload["trace_id"] == "1" * 32
+    assert payload["traceparent"] == traceparent
+    assert payload["bundle_id"] == "bundle-e3-test"
+    assert payload["model_version"] == "bundle-e3-test"
+    assert resp.headers["x-request-id"] == "http-request-123"
+    assert resp.headers["traceparent"] == traceparent
+    assert resp.headers["x-bundle-id"] == "bundle-e3-test"
+    assert resp.headers["x-model-version"] == "bundle-e3-test"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("datatype", "data", "expected_error"),
+    [
+        ("int64", [1, 2], "dtype"),
+        ("float32", [1.0, 2.0, 3.0], "fixed dimension"),
+    ],
+)
+async def test_http_input_signature_mismatch_returns_400(
+    tmp_path: Path,
+    datatype: str,
+    data: list[float | int],
+    expected_error: str,
+):
+    """HTTP dtype/shape contract violations are client errors, not 500s."""
+    deployment = ONNXModel(model_path=_make_dummy_onnx(tmp_path))
+    body = json.dumps(
+        {
+            "inputs": [
+                {
+                    "name": "float_input",
+                    "shape": [1, len(data)],
+                    "datatype": datatype,
+                    "data": data,
+                }
+            ]
+        }
+    ).encode()
+
+    resp = await deployment(_http_request(body))
+    assert resp.status_code == 400
+    assert expected_error in json.loads(resp.body)["error"]

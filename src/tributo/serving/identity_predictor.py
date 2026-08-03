@@ -196,18 +196,12 @@ class IdentityPredictor:
     def _load_aux_files(self, resolved: Any, artifact: Any) -> None:
         """Read preprocessor/config files from an artifact (by file role)."""
         for file_entry in artifact.files:
-            if (
-                file_entry.role == "preprocessor"
-                and file_entry.relative_path == "preprocessor.json"
-            ):
+            if file_entry.role == "preprocessor":
                 self.transformer = FeatureTransformer.load(
                     resolved.path_for(file_entry.relative_path)
                 )
                 logger.info("Loaded preprocessor from %s", file_entry.relative_path)
-            elif (
-                file_entry.role == "config"
-                and file_entry.relative_path == "model_config.json"
-            ):
+            elif file_entry.role == "config":
                 config = json.loads(
                     resolved.path_for(file_entry.relative_path).read_text()
                 )

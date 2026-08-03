@@ -200,7 +200,7 @@ class TestOpenArtifact:
         import tempfile
 
         bundle_dir, _, _ = _create_test_bundle(tmp_path)
-        reader = BundleReader()
+        reader = BundleReader(cache_dir=tmp_path / "cache")
 
         # 模拟"已下载"的 S3 临时目录：内容与 manifest 声明不符 → 校验失败
         context_root = Path(tempfile.mkdtemp(prefix="tributo-bundle-artifact-"))
@@ -208,6 +208,9 @@ class TestOpenArtifact:
         (context_root / "artifact" / "model.onnx").write_bytes(b"tampered-content")
 
         manifest = reader.read_manifest(str(bundle_dir))
+        cache_root = reader._cache_dir / manifest.artifacts[0].tree_digest
+        cache_root.mkdir(parents=True)
+        (cache_root / "model.onnx").write_bytes(b"tampered-cache")
         monkeypatch.setattr(reader, "read_manifest", lambda *a, **k: manifest)
         monkeypatch.setattr(
             reader, "_download_artifact_s3", lambda *a, **k: context_root
@@ -220,6 +223,9 @@ class TestOpenArtifact:
         finally:
             assert not context_root.exists(), (
                 "S3 temp root must be removed when verification fails"
+            )
+            assert not cache_root.exists(), (
+                "A failed integrity check must invalidate the shared digest cache"
             )
 
     def test_s3_copytree_failure_cleans_temp_root(

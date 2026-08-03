@@ -67,6 +67,40 @@ def test_bundle_loads_aux_artifact_by_role(tmp_path: Path):
     assert predictor.features[0].name == "user_id"
 
 
+def test_auxiliary_file_role_is_used_without_filename_guessing(tmp_path: Path):
+    """A config file is loaded by file role even with a nonstandard path."""
+    from tests.serving.bundle_fixtures import build_test_bundle, make_dummy_onnx
+
+    onnx_path = make_dummy_onnx(tmp_path)
+    bundle = build_test_bundle(
+        tmp_path,
+        onnx_path=onnx_path,
+        roles={"inference": "model", "feature_config": "config_art"},
+        extra_artifacts={
+            "config_art": {
+                "nested/features.json": (
+                    "config",
+                    json.dumps(
+                        {
+                            "features": [
+                                {
+                                    "name": "age",
+                                    "vocab_size": 100,
+                                    "embedding_dim": 4,
+                                }
+                            ]
+                        }
+                    ).encode("utf-8"),
+                )
+            }
+        },
+    )
+
+    predictor = IdentityPredictor(bundle_uri=str(bundle), role="inference")
+
+    assert [feature.name for feature in predictor.features] == ["age"]
+
+
 def test_bundle_without_aux_files_tolerated(tmp_path: Path):
     """无辅助文件的 bundle：transformer/features 为空（与 legacy 一致）。"""
     from tests.serving.bundle_fixtures import build_test_bundle, make_dummy_onnx

@@ -210,12 +210,14 @@ class BundleReader:
 
         # Resolve to local directory.
         cleanup_root: Path | None = None
+        cache_root: Path | None = None
         if manifest_or_bundle_uri.startswith("s3://"):
             context_root = self._download_artifact_s3(
                 manifest, artifact, storage_profile
             )
             artifact_dir = context_root / "artifact"
             cleanup_root = context_root
+            cache_root = self._cache_dir / artifact.tree_digest
             is_temp = True
         else:
             # Local bundle.
@@ -229,7 +231,16 @@ class BundleReader:
         # verification failure (tampered file, digest mismatch) also
         # removes the S3 temp root — never leak it on the rejection path.
         try:
-            _verify_artifact_integrity(artifact, artifact_dir)
+            try:
+                _verify_artifact_integrity(artifact, artifact_dir)
+            except BaseException:
+                # A failed verification means the shared digest cache must
+                # not be reused.  Otherwise a tampered file would survive
+                # the per-context cleanup and make every later load fail
+                # without attempting a fresh download.
+                if cache_root is not None and cache_root.exists():
+                    shutil.rmtree(cache_root, ignore_errors=True)
+                raise
             ra = ResolvedArtifact(descriptor=artifact, root_dir=artifact_dir)
             yield ra
         finally:

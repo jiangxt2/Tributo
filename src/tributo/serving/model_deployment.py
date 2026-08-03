@@ -14,6 +14,13 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from starlette.responses import JSONResponse
 
+from tributo._common.model_input_contract import (
+    canonical_onnx_dtype,
+    is_onnx_invalid_argument,
+    normalize_model_shape,
+    validate_named_inputs,
+)
+from tributo.serving.observability import InferenceContext, log_inference_audit
 from tributo.serving.schema import PredictRequest, PredictResponse, request_to_inputs
 
 if TYPE_CHECKING:
@@ -59,6 +66,10 @@ class ONNXModel:
         self._session: Any = None
         self.input_name = ""
         self._input_names: tuple[str, ...] = ()
+        self._input_dtypes: tuple[str | None, ...] = ()
+        self._input_shapes: tuple[tuple[int | None, ...] | None, ...] = ()
+        self._bundle_id: str | None = None
+        self._model_version: str | None = None
 
         if bundle_uri is not None:
             self._open_bundle(
@@ -88,6 +99,10 @@ class ONNXModel:
         )
         self.input_name = self._runtime.model.input_names[0]
         self._input_names = tuple(self._runtime.model.input_names)
+        self._input_dtypes = tuple(self._runtime.model.input_dtypes)
+        self._input_shapes = tuple(self._runtime.model.input_shapes)
+        self._bundle_id = self._runtime.bundle_id
+        self._model_version = self._runtime.model_version
         logger.info(
             "Loaded bundle %r (role=%r). Inputs: %s, Outputs: %s",
             bundle_uri,
@@ -107,29 +122,112 @@ class ONNXModel:
 
         logger.info("Loading ONNX model from %s (legacy path)", model_path)
         self._session = ort.InferenceSession(model_path)
-        self.input_name = self._session.get_inputs()[0].name
-        self._input_names = tuple(inp.name for inp in self._session.get_inputs())
+        session_inputs = self._session.get_inputs()
+        self.input_name = session_inputs[0].name
+        self._input_names = tuple(inp.name for inp in session_inputs)
+        self._input_dtypes = tuple(
+            canonical_onnx_dtype(getattr(inp, "type", None)) for inp in session_inputs
+        )
+        self._input_shapes = tuple(
+            normalize_model_shape(getattr(inp, "shape", None)) for inp in session_inputs
+        )
         logger.info(
             "ONNX model loaded. Inputs: %s, Outputs: %s",
             [i.name for i in self._session.get_inputs()],
             [o.name for o in self._session.get_outputs()],
         )
 
-    async def __call__(self, request: Request) -> dict[str, Any] | JSONResponse:
+    async def __call__(self, request: Request) -> JSONResponse:
         """Handle HTTP inference request.
 
         Client contract violations — malformed JSON body, unknown
         datatype, shape mismatch, out-of-range integers, unknown input
         names — return 400 instead of bubbling up as a 500 server error.
         """
+        context = InferenceContext.from_http(request)
+        started = time.perf_counter()
         try:
             body = await request.json()
             req = PredictRequest.model_validate(body)
-            return self._predict(req).model_dump()
+            response = self._predict(req, context=context)
+            log_inference_audit(
+                logger,
+                context,
+                bundle_id=self._bundle_id,
+                model_version=self._model_version,
+                status="ok",
+                duration_ms=(time.perf_counter() - started) * 1000,
+            )
+            return JSONResponse(
+                content=response.model_dump(),
+                headers=context.response_headers(
+                    bundle_id=self._bundle_id,
+                    model_version=self._model_version,
+                ),
+            )
         except (ValueError, TypeError, OverflowError) as exc:
-            return JSONResponse(status_code=400, content={"error": str(exc)})
+            log_inference_audit(
+                logger,
+                context,
+                bundle_id=self._bundle_id,
+                model_version=self._model_version,
+                status="invalid_argument",
+                duration_ms=(time.perf_counter() - started) * 1000,
+            )
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": str(exc),
+                    **context.response_fields(
+                        bundle_id=self._bundle_id,
+                        model_version=self._model_version,
+                    ),
+                },
+                headers=context.response_headers(
+                    bundle_id=self._bundle_id,
+                    model_version=self._model_version,
+                ),
+            )
+        except Exception as exc:
+            if not is_onnx_invalid_argument(exc):
+                log_inference_audit(
+                    logger,
+                    context,
+                    bundle_id=self._bundle_id,
+                    model_version=self._model_version,
+                    status="error",
+                    duration_ms=(time.perf_counter() - started) * 1000,
+                )
+                raise
+            log_inference_audit(
+                logger,
+                context,
+                bundle_id=self._bundle_id,
+                model_version=self._model_version,
+                status="invalid_argument",
+                duration_ms=(time.perf_counter() - started) * 1000,
+            )
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": str(exc),
+                    **context.response_fields(
+                        bundle_id=self._bundle_id,
+                        model_version=self._model_version,
+                    ),
+                },
+                headers=context.response_headers(
+                    bundle_id=self._bundle_id,
+                    model_version=self._model_version,
+                ),
+            )
 
-    def _predict(self, request: PredictRequest) -> PredictResponse:
+    def _predict(
+        self,
+        request: PredictRequest,
+        *,
+        context: InferenceContext | None = None,
+    ) -> PredictResponse:
         """Execute inference and construct response."""
         start = time.perf_counter()
         outputs = self._run_outputs(request)
@@ -149,11 +247,18 @@ class ONNXModel:
             elapsed_ms,
         )
 
-        return PredictResponse(
+        response = PredictResponse(
             predictions=predictions,
             model_path=self.model_path,
             inference_time_ms=round(elapsed_ms, 2),
         )
+        if context is not None:
+            for field, value in context.response_fields(
+                bundle_id=self._bundle_id,
+                model_version=self._model_version,
+            ).items():
+                setattr(response, field, value)
+        return response
 
     def _run_outputs(self, request: PredictRequest) -> list[np.ndarray]:
         """Run the model and return outputs as a list of arrays.
@@ -163,15 +268,12 @@ class ONNXModel:
         on raw model paths too (it is never silently dropped).
         """
         inputs = request_to_inputs(request, self.input_name)
-        if request.inputs is not None:
-            # Versioned inputs must match the model's input names exactly —
-            # a typo'd name would otherwise reach the runtime and surface
-            # as a server-side error instead of a client contract violation.
-            if set(inputs) != set(self._input_names):
-                raise ValueError(
-                    f"Input names {sorted(inputs)} do not match the model's "
-                    f"inputs {sorted(self._input_names)}"
-                )
+        validate_named_inputs(
+            inputs,
+            expected_names=self._input_names,
+            expected_dtypes=self._input_dtypes or None,
+            expected_shapes=self._input_shapes or None,
+        )
         if self._runtime is not None:
             result = self._runtime.predict(inputs)
             return [
@@ -231,4 +333,6 @@ class ONNXModel:
             "status": "healthy",
             "model_path": self.model_path,
             "input_name": self.input_name,
+            "bundle_id": self._bundle_id,
+            "model_version": self._model_version,
         }

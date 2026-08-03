@@ -17,6 +17,13 @@ from typing import TYPE_CHECKING, Any
 import grpc
 import numpy as np
 
+from tributo._common.model_input_contract import (
+    canonical_onnx_dtype,
+    is_onnx_invalid_argument,
+    normalize_model_shape,
+    validate_named_inputs,
+)
+from tributo.serving.observability import InferenceContext, log_inference_audit
 from tributo.serving.proto import inference_pb2
 from tributo.serving.schema import PredictInput
 
@@ -48,7 +55,9 @@ _SUPPORTED_SCHEMA_VERSION = 1
 
 def _prepare_inputs(
     request: inference_pb2.PredictRequest,
-    expected_names: set[str] | None = None,
+    expected_names: tuple[str, ...] | set[str] | None = None,
+    expected_dtypes: tuple[str | None, ...] | None = None,
+    expected_shapes: tuple[tuple[int | None, ...] | None, ...] | None = None,
 ) -> dict[str, np.ndarray] | np.ndarray | None:
     """Convert request inputs to named arrays (versioned) or legacy matrix.
 
@@ -57,18 +66,30 @@ def _prepare_inputs(
     over ``data``, and an ``int64`` input without it fails fast instead
     of silently losing precision.
 
-    *expected_names* — the model's input names.  Versioned inputs must
-    match exactly: a typo'd name would otherwise fall through to the
-    runtime and surface as a server-side error instead of a client
-    contract violation.
+    *expected_names*, *expected_dtypes*, and *expected_shapes* — the model's
+    typed input signature.  Every versioned request is checked before it
+    reaches ONNX Runtime; legacy flat features are restricted to a single
+    model input and are checked against that same signature.
     """
+    if isinstance(expected_names, (set, frozenset)) and (
+        expected_dtypes is not None or expected_shapes is not None
+    ):
+        raise ValueError(
+            "expected_names must be an ordered sequence when typed dtypes or "
+            "shapes are provided; a set cannot preserve signature alignment"
+        )
+    expected_names_tuple = (
+        tuple(sorted(expected_names))
+        if isinstance(expected_names, (set, frozenset))
+        else expected_names
+    )
     if request.inputs:
         result: dict[str, np.ndarray] = {}
         for t in request.inputs:
-            if t.schema_version > _SUPPORTED_SCHEMA_VERSION:
+            if t.schema_version != _SUPPORTED_SCHEMA_VERSION:
                 raise ValueError(
-                    f"Unsupported input schema_version {t.schema_version!r} "
-                    f"(supported: {_SUPPORTED_SCHEMA_VERSION})"
+                    f"Unsupported input schema_version {t.schema_version!r}; "
+                    f"expected {_SUPPORTED_SCHEMA_VERSION}"
                 )
             if t.name in result:
                 raise ValueError(f"Duplicate input name {t.name!r}")
@@ -88,19 +109,37 @@ def _prepare_inputs(
                 datatype=t.datatype,
                 data=data,
             ).to_numpy()
-        if expected_names is not None and set(result) != expected_names:
-            raise ValueError(
-                f"Input names {sorted(result)} do not match the model's "
-                f"inputs {sorted(expected_names)}"
+        if expected_names_tuple is not None:
+            validate_named_inputs(
+                result,
+                expected_names=expected_names_tuple,
+                expected_dtypes=expected_dtypes,
+                expected_shapes=expected_shapes,
             )
         return result
-    return _validate_features(request)
+    legacy = _validate_features(request)
+    if legacy is None or expected_names_tuple is None:
+        return legacy
+    if len(expected_names_tuple) != 1:
+        raise ValueError(
+            "Legacy features support exactly one model input; use versioned "
+            "inputs for a multi-input model"
+        )
+    validate_named_inputs(
+        {expected_names_tuple[0]: legacy},
+        expected_names=expected_names_tuple,
+        expected_dtypes=expected_dtypes,
+        expected_shapes=expected_shapes,
+    )
+    return legacy
 
 
 def _prepare_inputs_or_invalid(
     request: inference_pb2.PredictRequest,
     context: RayServegRPCContext,
-    expected_names: set[str] | None = None,
+    expected_names: tuple[str, ...] | set[str] | None = None,
+    expected_dtypes: tuple[str | None, ...] | None = None,
+    expected_shapes: tuple[tuple[int | None, ...] | None, ...] | None = None,
 ) -> dict[str, np.ndarray] | np.ndarray | None:
     """Prepare inputs, converting protocol errors to INVALID_ARGUMENT.
 
@@ -110,7 +149,18 @@ def _prepare_inputs_or_invalid(
     contract violation, so it must surface as INVALID_ARGUMENT.
     """
     try:
-        return _prepare_inputs(request, expected_names)
+        result = _prepare_inputs(
+            request,
+            expected_names,
+            expected_dtypes,
+            expected_shapes,
+        )
+        if result is None:
+            _set_invalid_argument(
+                context,
+                "request must contain versioned inputs or legacy features",
+            )
+        return result
     except (ValueError, TypeError, OverflowError) as exc:
         _set_invalid_argument(context, str(exc))
         return None
@@ -120,6 +170,24 @@ def _set_invalid_argument(context: RayServegRPCContext, message: str) -> None:
     """Set gRPC INVALID_ARGUMENT status code and details."""
     context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
     context.set_details(message)
+
+
+def _run_or_invalid(
+    run: Any,
+    inputs: dict[str, np.ndarray] | np.ndarray,
+    context: RayServegRPCContext,
+) -> list[np.ndarray] | None:
+    """Run inference and map client-shaped runtime errors to gRPC status."""
+    try:
+        return run(inputs)
+    except (ValueError, TypeError, OverflowError) as exc:
+        _set_invalid_argument(context, str(exc))
+        return None
+    except Exception as exc:
+        if not is_onnx_invalid_argument(exc):
+            raise
+        _set_invalid_argument(context, str(exc))
+        return None
 
 
 @PublicAPI(stability="beta")
@@ -138,6 +206,10 @@ class gRPCInferenceService:
     #: instances built without __init__ (tests, __new__) never hit a
     #: missing attribute in the RPC input-name checks.
     _input_names: tuple[str, ...] = ()
+    _input_dtypes: tuple[str | None, ...] = ()
+    _input_shapes: tuple[tuple[int | None, ...] | None, ...] = ()
+    _bundle_id: str | None = None
+    _model_version: str | None = None
 
     def __init__(
         self,
@@ -167,7 +239,11 @@ class gRPCInferenceService:
         self._session: Any = None
         self._input_name = ""
         self._input_names: tuple[str, ...] = ()
+        self._input_dtypes: tuple[str | None, ...] = ()
+        self._input_shapes: tuple[tuple[int | None, ...] | None, ...] = ()
         self._output_names: tuple[str, ...] = ()
+        self._bundle_id: str | None = None
+        self._model_version: str | None = None
 
         if bundle_uri is not None:
             self._open_bundle(
@@ -194,7 +270,11 @@ class gRPCInferenceService:
         )
         self._input_name = self._runtime.model.input_names[0]
         self._input_names = tuple(self._runtime.model.input_names)
+        self._input_dtypes = tuple(self._runtime.model.input_dtypes)
+        self._input_shapes = tuple(self._runtime.model.input_shapes)
         self._output_names = self._runtime.model.output_names
+        self._bundle_id = self._runtime.bundle_id
+        self._model_version = self._runtime.model_version
         logger.info(
             "gRPC bundle loaded from %s (role=%r), input_name=%s, inputs=%s",
             bundle_uri,
@@ -214,8 +294,15 @@ class gRPCInferenceService:
             ) from e
 
         self._session = ort.InferenceSession(model_path)
-        self._input_name = self._session.get_inputs()[0].name
-        self._input_names = tuple(inp.name for inp in self._session.get_inputs())
+        session_inputs = self._session.get_inputs()
+        self._input_name = session_inputs[0].name
+        self._input_names = tuple(inp.name for inp in session_inputs)
+        self._input_dtypes = tuple(
+            canonical_onnx_dtype(getattr(inp, "type", None)) for inp in session_inputs
+        )
+        self._input_shapes = tuple(
+            normalize_model_shape(getattr(inp, "shape", None)) for inp in session_inputs
+        )
         self._output_names = tuple(
             out.name if out.name else f"output_{i}"
             for i, out in enumerate(self._session.get_outputs())
@@ -244,6 +331,30 @@ class gRPCInferenceService:
             feed = {self._input_name: inputs}
         return [np.asarray(o) for o in self._session.run(None, feed)]
 
+    def _response(
+        self,
+        predictions: list[Any] | None = None,
+        *,
+        context: InferenceContext | None = None,
+    ) -> inference_pb2.PredictResponse:
+        """Build a response carrying E3 correlation/version metadata."""
+        values: dict[str, Any] = {
+            "predictions": predictions or [],
+            "confidence": max(predictions) if predictions else 0.0,
+        }
+        if context is not None:
+            values.update(
+                {
+                    key: value
+                    for key, value in context.response_fields(
+                        bundle_id=self._bundle_id,
+                        model_version=self._model_version,
+                    ).items()
+                    if value is not None
+                }
+            )
+        return inference_pb2.PredictResponse(**values)
+
     async def Predict(
         self,
         request: inference_pb2.PredictRequest,
@@ -258,14 +369,49 @@ class gRPCInferenceService:
         Returns:
             Predict result.
         """
+        context = InferenceContext.from_grpc(grpc_context)
+        started = time.perf_counter()
         inputs = _prepare_inputs_or_invalid(
-            request, grpc_context, set(self._input_names)
+            request,
+            grpc_context,
+            self._input_names,
+            self._input_dtypes or None,
+            self._input_shapes or None,
         )
         if inputs is None:
-            return inference_pb2.PredictResponse()
+            log_inference_audit(
+                logger,
+                context,
+                bundle_id=self._bundle_id,
+                model_version=self._model_version,
+                status="invalid_argument",
+                duration_ms=(time.perf_counter() - started) * 1000,
+            )
+            return self._response(context=context)
 
         start = time.perf_counter()
-        outputs = self._run(inputs)
+        try:
+            outputs = _run_or_invalid(self._run, inputs, grpc_context)
+        except Exception:
+            log_inference_audit(
+                logger,
+                context,
+                bundle_id=self._bundle_id,
+                model_version=self._model_version,
+                status="error",
+                duration_ms=(time.perf_counter() - started) * 1000,
+            )
+            raise
+        if outputs is None:
+            log_inference_audit(
+                logger,
+                context,
+                bundle_id=self._bundle_id,
+                model_version=self._model_version,
+                status="invalid_argument",
+                duration_ms=(time.perf_counter() - started) * 1000,
+            )
+            return self._response(context=context)
         predictions = outputs[0].flatten().tolist()
         elapsed_ms = (time.perf_counter() - start) * 1000
 
@@ -275,10 +421,15 @@ class gRPCInferenceService:
             elapsed_ms,
         )
 
-        return inference_pb2.PredictResponse(
-            predictions=predictions,
-            confidence=max(predictions) if predictions else 0.0,
+        log_inference_audit(
+            logger,
+            context,
+            bundle_id=self._bundle_id,
+            model_version=self._model_version,
+            status="ok",
+            duration_ms=(time.perf_counter() - started) * 1000,
         )
+        return self._response(predictions, context=context)
 
     async def StreamPredict(
         self,
@@ -294,21 +445,63 @@ class gRPCInferenceService:
         Yields:
             Batched predict results.
         """
+        context = InferenceContext.from_grpc(grpc_context)
+        started = time.perf_counter()
         inputs = _prepare_inputs_or_invalid(
-            request, grpc_context, set(self._input_names)
+            request,
+            grpc_context,
+            self._input_names,
+            self._input_dtypes or None,
+            self._input_shapes or None,
         )
         if inputs is None:
+            log_inference_audit(
+                logger,
+                context,
+                bundle_id=self._bundle_id,
+                model_version=self._model_version,
+                status="invalid_argument",
+                duration_ms=(time.perf_counter() - started) * 1000,
+            )
             return
 
-        outputs = self._run(inputs)
+        try:
+            outputs = _run_or_invalid(self._run, inputs, grpc_context)
+        except Exception:
+            log_inference_audit(
+                logger,
+                context,
+                bundle_id=self._bundle_id,
+                model_version=self._model_version,
+                status="error",
+                duration_ms=(time.perf_counter() - started) * 1000,
+            )
+            raise
+        if outputs is None:
+            log_inference_audit(
+                logger,
+                context,
+                bundle_id=self._bundle_id,
+                model_version=self._model_version,
+                status="invalid_argument",
+                duration_ms=(time.perf_counter() - started) * 1000,
+            )
+            return
         predictions = outputs[0].flatten().tolist()
+        log_inference_audit(
+            logger,
+            context,
+            bundle_id=self._bundle_id,
+            model_version=self._model_version,
+            status="ok",
+            duration_ms=(time.perf_counter() - started) * 1000,
+        )
 
         # Server streaming: return predictions one by one, suitable for real-time intermediate result display
         for pred in predictions:
-            yield inference_pb2.PredictResponse(
-                predictions=[pred],
-                confidence=pred,
-            )
+            response = self._response([pred], context=context)
+            response.confidence = pred
+            yield response
 
     async def BatchPredict(
         self,
@@ -324,18 +517,40 @@ class gRPCInferenceService:
         Returns:
             Merged predict results.
         """
+        context = InferenceContext.from_grpc(grpc_context)
+        started = time.perf_counter()
         inputs_list = []
         async for request in request_stream:
             inputs = _prepare_inputs_or_invalid(
-                request, grpc_context, set(self._input_names)
+                request,
+                grpc_context,
+                self._input_names,
+                self._input_dtypes or None,
+                self._input_shapes or None,
             )
             if inputs is None:
-                return inference_pb2.PredictResponse()
+                log_inference_audit(
+                    logger,
+                    context,
+                    bundle_id=self._bundle_id,
+                    model_version=self._model_version,
+                    status="invalid_argument",
+                    duration_ms=(time.perf_counter() - started) * 1000,
+                )
+                return self._response(context=context)
             inputs_list.append(inputs)
 
         if not inputs_list:
             _set_invalid_argument(grpc_context, "request stream cannot be empty")
-            return inference_pb2.PredictResponse()
+            log_inference_audit(
+                logger,
+                context,
+                bundle_id=self._bundle_id,
+                model_version=self._model_version,
+                status="invalid_argument",
+                duration_ms=(time.perf_counter() - started) * 1000,
+            )
+            return self._response(context=context)
 
         if isinstance(inputs_list[0], dict):
             # Versioned inputs: every request must use the same mode, the
@@ -348,7 +563,15 @@ class gRPCInferenceService:
                         "Mixed input modes across batch requests: versioned "
                         "inputs and legacy features cannot be combined",
                     )
-                    return inference_pb2.PredictResponse()
+                    log_inference_audit(
+                        logger,
+                        context,
+                        bundle_id=self._bundle_id,
+                        model_version=self._model_version,
+                        status="invalid_argument",
+                        duration_ms=(time.perf_counter() - started) * 1000,
+                    )
+                    return self._response(context=context)
             expected_names = set(inputs_list[0])
             for item in inputs_list[1:]:
                 assert isinstance(item, dict)
@@ -358,7 +581,15 @@ class gRPCInferenceService:
                         "Inconsistent input names across batch requests: "
                         f"expected {sorted(expected_names)}, got {sorted(item)}",
                     )
-                    return inference_pb2.PredictResponse()
+                    log_inference_audit(
+                        logger,
+                        context,
+                        bundle_id=self._bundle_id,
+                        model_version=self._model_version,
+                        status="invalid_argument",
+                        duration_ms=(time.perf_counter() - started) * 1000,
+                    )
+                    return self._response(context=context)
             first = inputs_list[0]
             for item in inputs_list[1:]:
                 assert isinstance(item, dict)
@@ -371,7 +602,15 @@ class gRPCInferenceService:
                             "— non-batch dimensions must match across "
                             "batch requests",
                         )
-                        return inference_pb2.PredictResponse()
+                        log_inference_audit(
+                            logger,
+                            context,
+                            bundle_id=self._bundle_id,
+                            model_version=self._model_version,
+                            status="invalid_argument",
+                            duration_ms=(time.perf_counter() - started) * 1000,
+                        )
+                        return self._response(context=context)
             named: dict[str, list[np.ndarray]] = {}
             for item in inputs_list:
                 assert isinstance(item, dict)
@@ -380,7 +619,18 @@ class gRPCInferenceService:
             batch = {
                 name: np.concatenate(parts, axis=0) for name, parts in named.items()
             }
-            outputs = self._run(batch)
+            try:
+                outputs = _run_or_invalid(self._run, batch, grpc_context)
+            except Exception:
+                log_inference_audit(
+                    logger,
+                    context,
+                    bundle_id=self._bundle_id,
+                    model_version=self._model_version,
+                    status="error",
+                    duration_ms=(time.perf_counter() - started) * 1000,
+                )
+                raise
         else:
             for item in inputs_list[1:]:
                 if not isinstance(item, np.ndarray):
@@ -389,7 +639,15 @@ class gRPCInferenceService:
                         "Mixed input modes across batch requests: legacy "
                         "features and versioned inputs cannot be combined",
                     )
-                    return inference_pb2.PredictResponse()
+                    log_inference_audit(
+                        logger,
+                        context,
+                        bundle_id=self._bundle_id,
+                        model_version=self._model_version,
+                        status="invalid_argument",
+                        duration_ms=(time.perf_counter() - started) * 1000,
+                    )
+                    return self._response(context=context)
                 if item.shape[1:] != inputs_list[0].shape[1:]:
                     _set_invalid_argument(
                         grpc_context,
@@ -398,16 +656,50 @@ class gRPCInferenceService:
                         "— non-batch dimensions must match across batch "
                         "requests",
                     )
-                    return inference_pb2.PredictResponse()
+                    log_inference_audit(
+                        logger,
+                        context,
+                        bundle_id=self._bundle_id,
+                        model_version=self._model_version,
+                        status="invalid_argument",
+                        duration_ms=(time.perf_counter() - started) * 1000,
+                    )
+                    return self._response(context=context)
             batch = np.concatenate([np.asarray(i) for i in inputs_list], axis=0)
-            outputs = self._run(batch)
+            try:
+                outputs = _run_or_invalid(self._run, batch, grpc_context)
+            except Exception:
+                log_inference_audit(
+                    logger,
+                    context,
+                    bundle_id=self._bundle_id,
+                    model_version=self._model_version,
+                    status="error",
+                    duration_ms=(time.perf_counter() - started) * 1000,
+                )
+                raise
+
+        if outputs is None:
+            log_inference_audit(
+                logger,
+                context,
+                bundle_id=self._bundle_id,
+                model_version=self._model_version,
+                status="invalid_argument",
+                duration_ms=(time.perf_counter() - started) * 1000,
+            )
+            return self._response(context=context)
 
         all_predictions = outputs[0].flatten().tolist()
-
-        return inference_pb2.PredictResponse(
-            predictions=all_predictions,
-            confidence=max(all_predictions) if all_predictions else 0.0,
+        log_inference_audit(
+            logger,
+            context,
+            bundle_id=self._bundle_id,
+            model_version=self._model_version,
+            status="ok",
+            duration_ms=(time.perf_counter() - started) * 1000,
         )
+        return self._response(all_predictions, context=context)
 
     def close(self) -> None:
         """Release bundle resources (idempotent).
@@ -428,5 +720,7 @@ class gRPCInferenceService:
         return {
             "status": "healthy",
             "model_loaded": self._runtime is not None or self._session is not None,
-            "input_names": [self._input_name] if self._input_name else [],
+            "input_names": list(self._input_names),
+            "bundle_id": self._bundle_id,
+            "model_version": self._model_version,
         }

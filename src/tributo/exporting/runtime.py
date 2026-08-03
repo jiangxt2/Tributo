@@ -33,6 +33,7 @@ from typing import Any, ClassVar, Protocol, runtime_checkable
 
 import numpy as np
 
+from tributo._common.model_input_contract import validate_named_inputs
 from tributo.exceptions import (
     JobConfigurationError,
     ModelLoadError,
@@ -186,7 +187,9 @@ class FlavorSupportEntry:
     consumers get a deterministic answer instead of a runtime surprise.
     ``loader`` is the import path of the loader class (same format as
     entry points), resolved lazily — the actual routing key is always
-    the registry.
+    the registry. ``trainer_types`` and ``producer_ids`` document which
+    vertical slices select the primary artifact represented by the row;
+    ``verticals`` includes non-trainer consumers such as O1.
     """
 
     flavor_id: str
@@ -195,11 +198,15 @@ class FlavorSupportEntry:
     dependencies: tuple[str, ...]
     signature_required: bool
     security_mode: str
+    verticals: tuple[str, ...] = ()
+    trainer_types: tuple[str, ...] = ()
+    producer_ids: tuple[str, ...] = ()
 
 
-#: Frozen serveable flavor support matrix (E3).  Covers the primary
-#: artifacts of the walking skeleton (XGBoost → ONNX) and of the
-#: DNN/PU/XGBoost bundle paths, all of which publish ``onnx-runtime-v1``.
+#: Frozen serveable flavor support matrix (E3).  The selected primary
+#: artifact for O1, DNN, PU, and XGBoost is ONNX Runtime.  The trainer and
+#: producer columns make that decision explicit instead of relying on a
+#: comment or on the ``format`` field.
 #: Other flavor IDs produced by exporters (``safetensors-v1``,
 #: ``torch-export-v1``, ``xgboost-native-v1``, ``hf-onnx-v1``,
 #: ``onnx-int8-v1``) are explicitly unsupported until their loaders are
@@ -212,6 +219,9 @@ SERVEABLE_FLAVOR_MATRIX: tuple[FlavorSupportEntry, ...] = (
         dependencies=("onnxruntime",),
         signature_required=True,
         security_mode=SECURITY_MODE_SAFE,
+        verticals=("o1", "dnn", "pu", "xgboost"),
+        trainer_types=("dnn", "pu", "xgboost"),
+        producer_ids=("torch-onnx-v1", "xgboost-onnx-v1"),
     ),
 )
 
@@ -313,7 +323,10 @@ class BundleModelLoader:
             )
 
         # Dependency pre-check with an install hint.
-        _check_dependencies(artifact.flavor_id, flavor_cls.required_dependencies)
+        dependencies = tuple(
+            dict.fromkeys(entry.dependencies + flavor_cls.required_dependencies)
+        )
+        _check_dependencies(artifact.flavor_id, dependencies)
 
         # Signature gate: serveable roles need non-empty typed signatures.
         if entry.signature_required:
@@ -442,6 +455,22 @@ class BundleModelRuntime:
         return self._artifact
 
     @property
+    def bundle_id(self) -> str:
+        """Stable identifier of the loaded bundle."""
+        return self._manifest.bundle_id
+
+    @property
+    def model_version(self) -> str:
+        """Manifest-v1 model version used for serving correlation.
+
+        Manifest v1 has no separate mutable model-version field.  Its
+        immutable ``bundle_id`` is therefore the model version exposed by
+        E3; a future manifest schema can add a distinct version without
+        changing the serving response shape.
+        """
+        return self._manifest.bundle_id
+
+    @property
     def model(self) -> BundleModel:
         """The loaded model."""
         return self._model
@@ -470,6 +499,12 @@ class BundleModelRuntime:
         prediction keeps working after :meth:`close` — close only releases
         the bundle's temp files.
         """
+        validate_named_inputs(
+            inputs,
+            expected_names=self._model.input_names,
+            expected_dtypes=self._model.input_dtypes,
+            expected_shapes=self._model.input_shapes,
+        )
         return self._model.predict(inputs)
 
 
@@ -497,6 +532,7 @@ def _build_flavor_registry() -> FlavorRegistry:
         if getattr(cls, "flavor_id", None) in builtin_ids:
             continue
         registry.register(cls)
+    _validate_matrix_registry(registry)
     return registry
 
 
@@ -510,6 +546,41 @@ def _matrix_entry(flavor_id: str) -> FlavorSupportEntry:
         f"matrix. Supported flavors: {known}. Use a bundle whose primary "
         "artifact is serveable, or register a loader in SERVEABLE_FLAVOR_MATRIX."
     )
+
+
+def _validate_matrix_registry(registry: FlavorRegistry) -> None:
+    """Verify matrix metadata matches the registered built-in flavor classes."""
+    for entry in SERVEABLE_FLAVOR_MATRIX:
+        try:
+            flavor_cls = registry.get(entry.flavor_id)
+        except JobConfigurationError as exc:
+            raise JobConfigurationError(
+                f"Serveable matrix flavor {entry.flavor_id!r} is not registered"
+            ) from exc
+
+        expected_loader = f"{flavor_cls.__module__}:{flavor_cls.__qualname__}"
+        if entry.loader != expected_loader:
+            raise JobConfigurationError(
+                f"Serveable matrix loader for {entry.flavor_id!r} is "
+                f"{entry.loader!r}, but the registry provides {expected_loader!r}"
+            )
+        if entry.security_mode != getattr(flavor_cls, "security_mode", None):
+            raise JobConfigurationError(
+                f"Serveable matrix security_mode for {entry.flavor_id!r} "
+                "does not match the registered flavor"
+            )
+        if entry.signature_required != getattr(flavor_cls, "signature_required", None):
+            raise JobConfigurationError(
+                f"Serveable matrix signature_required for {entry.flavor_id!r} "
+                "does not match the registered flavor"
+            )
+        matrix_dependencies = set(entry.dependencies)
+        flavor_dependencies = set(getattr(flavor_cls, "required_dependencies", ()))
+        if not flavor_dependencies.issubset(matrix_dependencies):
+            raise JobConfigurationError(
+                f"Serveable matrix dependencies for {entry.flavor_id!r} "
+                "omit dependencies required by the registered flavor"
+            )
 
 
 def _find_artifact(manifest: ExportManifest, artifact_name: str) -> LogicalArtifact:
@@ -558,9 +629,12 @@ def _require_typed_signature(
         return
     raise UnsupportedArtifactFormat(
         f"Artifact {artifact.name!r} has no typed {', '.join(missing)} "
-        "signature. Bundles without a typed signature cannot be served; "
-        "re-export the model, or pass unsafe=True to load it anyway "
-        "(compat-only, signature validation skipped)."
+        "signature. This bundle was published without the typed "
+        "input/output contract required by the default Serving path. "
+        "Re-exporting through a pipeline that does not populate "
+        "ManifestSignature will not fix this; publish typed fields, or "
+        "pass unsafe=True only for explicit legacy compatibility "
+        "(signature validation is skipped)."
     )
 
 

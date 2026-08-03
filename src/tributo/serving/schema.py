@@ -22,7 +22,11 @@ _DTYPE_MAP: dict[str, np.dtype[Any]] = {
     "int32": np.dtype(np.int32),
     "int64": np.dtype(np.int64),
     "bool": np.dtype(np.bool_),
+    "float16": np.dtype(np.float16),
+    "uint8": np.dtype(np.uint8),
+    "int8": np.dtype(np.int8),
 }
+_INTEGER_DATATYPES = frozenset({"int8", "int32", "int64", "uint8"})
 
 
 @PublicAPI(stability="beta")
@@ -33,7 +37,9 @@ class PredictInput(BaseModel):
         name: Input name, matching the model signature field.
         shape: Shape; dynamic dimensions are omitted or 0.
         datatype: Canonical dtype name (``float32``, ``int64``, ...).
-        data: Flat numeric payload (float64 carrier, cast per datatype).
+        data: Flat numeric payload. Integer datatypes require JSON integer
+            values; floating-point carriers are rejected to prevent silent
+            truncation and loss above the JSON exact-integer range.
     """
 
     name: str = Field(..., min_length=1)
@@ -49,12 +55,27 @@ class PredictInput(BaseModel):
             )
         return self
 
-    def to_numpy(self) -> np.ndarray:
-        """Convert this input to a numpy array (validating datatype)."""
+    def to_numpy(self, *, reject_integer_floats: bool = False) -> np.ndarray:
+        """Convert this input to numpy, optionally rejecting integer floats.
+
+        The HTTP JSON adapter sets ``reject_integer_floats=True`` because a
+        JSON floating-point carrier can already have lost integer precision.
+        The gRPC adapter leaves it disabled for legacy int32 data carried by
+        protobuf ``double`` values; int64 gRPC inputs use ``int64_data``.
+        """
         if self.datatype not in _DTYPE_MAP:
             raise ValueError(
                 f"Unsupported datatype {self.datatype!r}. "
                 f"Supported: {sorted(_DTYPE_MAP)}"
+            )
+        if (
+            reject_integer_floats
+            and self.datatype in _INTEGER_DATATYPES
+            and any(isinstance(value, (float, np.floating)) for value in self.data)
+        ):
+            raise ValueError(
+                f"datatype {self.datatype!r} requires integer JSON values; "
+                "floating-point values are rejected to prevent precision loss"
             )
         arr = np.asarray(self.data, dtype=_DTYPE_MAP[self.datatype])
         if 0 in self.shape:
@@ -137,11 +158,21 @@ class PredictResponse(BaseModel):
             Regression: list[float].
         model_path: ONNX model path used for this inference.
         inference_time_ms: Inference time in milliseconds.
+        request_id: Request correlation identifier.
+        trace_id: W3C trace identifier.
+        traceparent: W3C trace context returned for downstream propagation.
+        bundle_id: Immutable bundle identifier, when serving a bundle.
+        model_version: E3 model version; manifest-v1 uses bundle_id.
     """
 
     predictions: list[Any]
     model_path: str
     inference_time_ms: float
+    request_id: str | None = None
+    trace_id: str | None = None
+    traceparent: str | None = None
+    bundle_id: str | None = None
+    model_version: str | None = None
 
 
 def request_to_inputs(
@@ -159,7 +190,7 @@ def request_to_inputs(
                 raise ValueError(
                     f"Duplicate input name {inp.name!r} in versioned inputs"
                 )
-            result[inp.name] = inp.to_numpy()
+            result[inp.name] = inp.to_numpy(reject_integer_floats=True)
         return result
     features = request.features
     assert features is not None  # guarded by the model validator

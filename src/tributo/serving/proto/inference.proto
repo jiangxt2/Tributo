@@ -16,7 +16,7 @@ service InferenceService {
 
 // 版本化输入张量：name/shape/datatype/data（E3 输入协议）
 message InputTensor {
-  // 输入协议版本（1 = name/shape/datatype/data）
+  // 输入协议版本（必须为 1；proto3 默认值 0 对版本化输入无效）
   int32 schema_version = 5;
 
   // 输入名称，对应模型签名中的字段名
@@ -54,4 +54,13 @@ message PredictResponse {
 
   // 置信度
   float confidence = 2;
+
+  // E3 request correlation and W3C trace context
+  string request_id = 3;
+  string trace_id = 4;
+  string traceparent = 5;
+
+  // Immutable bundle/model version association
+  string bundle_id = 6;
+  string model_version = 7;
 }

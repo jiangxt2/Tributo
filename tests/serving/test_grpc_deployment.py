@@ -45,6 +45,24 @@ def _make_dummy_onnx(tmp_path: Path) -> str:
     return path
 
 
+class _RpcContext:
+    """Small Ray/gRPC context double for status and metadata assertions."""
+
+    def __init__(self, metadata: tuple[tuple[str, str], ...] = ()) -> None:
+        self.code = None
+        self.details = None
+        self._metadata = metadata
+
+    def set_code(self, code: object) -> None:
+        self.code = code
+
+    def set_details(self, message: str) -> None:
+        self.details = message
+
+    def invocation_metadata(self) -> tuple[tuple[str, str], ...]:
+        return self._metadata
+
+
 def test_grpc_deployment_import():
     """gRPCInferenceService 可以正常导入。"""
     from tributo.serving.grpc_deployment import gRPCInferenceService
@@ -216,6 +234,7 @@ class TestPrepareInputs:
 
         req = inference_pb2.PredictRequest()
         t = req.inputs.add()
+        t.schema_version = 1
         t.name = "float_input"
         t.shape.extend([1, 2])
         t.datatype = "float32"
@@ -248,6 +267,7 @@ class TestPrepareInputs:
 
         req = inference_pb2.PredictRequest()
         t = req.inputs.add()
+        t.schema_version = 1
         t.name = "ids"
         t.datatype = "int64"
         t.int64_data.extend([1, 2, 3])
@@ -256,13 +276,14 @@ class TestPrepareInputs:
         assert isinstance(result, dict)
         assert result["ids"].dtype == np.int64
 
-    def test_unsupported_schema_version_rejected(self):
-        """未知 schema_version 应 fail-fast。"""
+    @pytest.mark.parametrize("schema_version", [0, -1, 99])
+    def test_unsupported_schema_version_rejected(self, schema_version: int):
+        """Only schema_version 1 is accepted for versioned tensors."""
         from tributo.serving.grpc_deployment import _prepare_inputs
 
         req = inference_pb2.PredictRequest()
         t = req.inputs.add()
-        t.schema_version = 99
+        t.schema_version = schema_version
         t.name = "x"
         t.datatype = "float32"
         t.data.extend([1.0])
@@ -270,12 +291,32 @@ class TestPrepareInputs:
         with pytest.raises(ValueError, match="schema_version"):
             _prepare_inputs(req)
 
+    def test_unordered_typed_signature_is_rejected(self):
+        """An unordered name set cannot be aligned with typed metadata."""
+        from tributo.serving.grpc_deployment import _prepare_inputs
+
+        req = inference_pb2.PredictRequest()
+        for name in ("z", "a"):
+            tensor = req.inputs.add()
+            tensor.schema_version = 1
+            tensor.name = name
+            tensor.datatype = "float32"
+            tensor.data.extend([1.0])
+
+        with pytest.raises(ValueError, match="ordered sequence"):
+            _prepare_inputs(
+                req,
+                expected_names={"z", "a"},
+                expected_dtypes=("float32", "int64"),
+            )
+
     def test_int64_without_int64_data_rejected(self):
         """datatype=int64 但未用 int64_data → fail-fast（防 double 精度损失）。"""
         from tributo.serving.grpc_deployment import _prepare_inputs
 
         req = inference_pb2.PredictRequest()
         t = req.inputs.add()
+        t.schema_version = 1
         t.name = "ids"
         t.datatype = "int64"
         t.data.extend([2**60 + 1])  # double 承载会丢精度
@@ -406,6 +447,7 @@ class TestGrpcBundleAndVersionedInputs:
 
         request = inference_pb2.PredictRequest()
         t = request.inputs.add()
+        t.schema_version = 1
         t.name = "float_input"
         t.shape.extend([1, 2])
         t.datatype = "float32"
@@ -429,6 +471,7 @@ class TestGrpcBundleAndVersionedInputs:
 
         request = inference_pb2.PredictRequest()
         t = request.inputs.add()
+        t.schema_version = 1
         t.name = "float_input"
         t.shape.extend([1, 2])
         t.datatype = "float32"
@@ -437,12 +480,114 @@ class TestGrpcBundleAndVersionedInputs:
         outputs = service._run(_prepare_inputs(request))
         assert len(outputs) == 2
 
+    @pytest.mark.asyncio
+    async def test_predict_response_carries_e3_context(self, tmp_path: Path):
+        """Unary gRPC responses carry request, trace, and bundle identity."""
+        from tributo.serving.grpc_deployment import gRPCInferenceService
+
+        service = gRPCInferenceService(model_path=_make_dummy_onnx(tmp_path))
+        request = inference_pb2.PredictRequest(features=[0.5, 0.5])
+        traceparent = "00-" + "3" * 32 + "-" + "4" * 16 + "-01"
+        context = _RpcContext(
+            (
+                ("x-request-id", "grpc-request-123"),
+                ("traceparent", traceparent),
+            )
+        )
+
+        response = await service.Predict(request, context)
+
+        assert context.code is None
+        assert response.request_id == "grpc-request-123"
+        assert response.trace_id == "3" * 32
+        assert response.traceparent == traceparent
+        assert response.bundle_id == ""
+        assert response.model_version == ""
+
+    @pytest.mark.asyncio
+    async def test_empty_unary_request_is_invalid_argument(self):
+        """Empty unary requests fail with INVALID_ARGUMENT."""
+        from tributo.serving.grpc_deployment import gRPCInferenceService
+
+        service = gRPCInferenceService.__new__(gRPCInferenceService)
+        service._input_names = ("float_input",)
+        context = _RpcContext()
+
+        response = await service.Predict(inference_pb2.PredictRequest(), context)
+
+        import grpc as grpc_module
+
+        assert response.predictions == []
+        assert context.code == grpc_module.StatusCode.INVALID_ARGUMENT
+        assert "must contain" in context.details
+
+    @pytest.mark.asyncio
+    async def test_empty_stream_request_is_invalid_argument(self):
+        """Empty server-streaming requests fail with INVALID_ARGUMENT."""
+        from tributo.serving.grpc_deployment import gRPCInferenceService
+
+        service = gRPCInferenceService.__new__(gRPCInferenceService)
+        service._input_names = ("float_input",)
+        context = _RpcContext()
+
+        responses = [
+            item
+            async for item in service.StreamPredict(
+                inference_pb2.PredictRequest(), context
+            )
+        ]
+
+        import grpc as grpc_module
+
+        assert responses == []
+        assert context.code == grpc_module.StatusCode.INVALID_ARGUMENT
+        assert "must contain" in context.details
+
+    @pytest.mark.asyncio
+    async def test_health_reports_all_bundle_input_names(self):
+        """Health metadata exposes every input of a multi-input model."""
+        from tributo.serving.grpc_deployment import gRPCInferenceService
+
+        service = gRPCInferenceService.__new__(gRPCInferenceService)
+        service._input_name = "first"
+        service._input_names = ("first", "second")
+        service._runtime = None
+        service._session = object()
+
+        health = await service.health()
+
+        assert health["input_names"] == ["first", "second"]
+
+    @pytest.mark.asyncio
+    async def test_predict_dtype_mismatch_is_invalid_argument(self, tmp_path: Path):
+        """Typed gRPC input mismatches are rejected before ONNX Runtime."""
+        import grpc as grpc_module
+
+        from tributo.serving.grpc_deployment import gRPCInferenceService
+
+        service = gRPCInferenceService(model_path=_make_dummy_onnx(tmp_path))
+        request = inference_pb2.PredictRequest()
+        tensor = request.inputs.add()
+        tensor.schema_version = 1
+        tensor.name = "float_input"
+        tensor.shape.extend([1, 2])
+        tensor.datatype = "int64"
+        tensor.int64_data.extend([1, 2])
+        context = _RpcContext()
+
+        response = await service.Predict(request, context)
+
+        assert response.predictions == []
+        assert context.code == grpc_module.StatusCode.INVALID_ARGUMENT
+        assert "dtype" in context.details
+
     def test_prepare_inputs_int64_data(self):
         """int64_data 无损承载整型输入。"""
         from tributo.serving.grpc_deployment import _prepare_inputs
 
         req = inference_pb2.PredictRequest()
         t = req.inputs.add()
+        t.schema_version = 1
         t.name = "ids"
         t.datatype = "int64"
         t.int64_data.extend([2**60, 2**60 + 1])  # 超出 double 精度
@@ -459,6 +604,7 @@ class TestGrpcBundleAndVersionedInputs:
         req = inference_pb2.PredictRequest()
         for _ in range(2):
             t = req.inputs.add()
+            t.schema_version = 1
             t.name = "x"
             t.datatype = "float32"
             t.data.extend([1.0])
@@ -501,6 +647,7 @@ class TestBatchPredictInputConsistency:
                     req = inference_pb2.PredictRequest()
                     for n in names:
                         t = req.inputs.add()
+                        t.schema_version = 1
                         t.name = n
                         t.datatype = "float32"
                         t.data.extend([1.0])
@@ -550,6 +697,7 @@ class TestBatchPredictInputConsistency:
                 for _ in range(2):
                     req = inference_pb2.PredictRequest()
                     t = req.inputs.add()
+                    t.schema_version = 1
                     t.name = "a"
                     t.datatype = "float32"
                     t.data.extend([1.0])
@@ -592,6 +740,7 @@ class TestBatchPredictInputConsistency:
                 for shape in ((1, 2), (1, 3)):  # 非 batch 维 2 vs 3
                     req = inference_pb2.PredictRequest()
                     t = req.inputs.add()
+                    t.schema_version = 1
                     t.name = "a"
                     t.shape.extend(list(shape))
                     t.datatype = "float32"
@@ -633,6 +782,7 @@ class TestBatchPredictInputConsistency:
                 # 第一条：versioned inputs
                 req1 = inference_pb2.PredictRequest()
                 t = req1.inputs.add()
+                t.schema_version = 1
                 t.name = "a"
                 t.datatype = "float32"
                 t.data.extend([1.0])

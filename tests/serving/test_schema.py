@@ -72,6 +72,23 @@ class TestPredictInput:
         assert arr.dtype == np.int64
         assert arr.shape == (3,)
 
+    def test_int64_preserves_large_json_integer(self):
+        """JSON integer values above 2**53 remain exact on the HTTP path."""
+        from tributo.serving.schema import PredictInput
+
+        value = 2**53 + 1
+        arr = PredictInput(name="ids", datatype="int64", data=[value]).to_numpy()
+        assert arr.tolist() == [value]
+
+    def test_integer_datatype_rejects_float_payload(self):
+        """Integer inputs reject float carriers instead of silently truncating."""
+        from tributo.serving.schema import PredictInput
+
+        with pytest.raises(ValueError, match="requires integer JSON values"):
+            PredictInput(name="ids", datatype="int64", data=[1.5]).to_numpy(
+                reject_integer_floats=True
+            )
+
     def test_unsupported_datatype_raises(self):
         """未知 datatype 应 fail-fast。"""
         from tributo.serving.schema import PredictInput
@@ -178,6 +195,16 @@ class TestPredictRequestVersioned:
 class TestRequestToInputs:
     """request_to_inputs 归一化为命名 numpy 输入。"""
 
+    def test_http_int64_rejects_float_payload(self):
+        """HTTP versioned inputs reject lossy float carriers for int64."""
+        from tributo.serving.schema import request_to_inputs
+
+        req = PredictRequest(
+            inputs=[{"name": "ids", "datatype": "int64", "data": [1.5]}]
+        )
+        with pytest.raises(ValueError, match="requires integer JSON values"):
+            request_to_inputs(req, input_name="ignored")
+
     def test_versioned_inputs_used_as_is(self):
         """versioned inputs 按名字转换为数组。"""
         from tributo.serving.schema import request_to_inputs
@@ -187,6 +214,23 @@ class TestRequestToInputs:
         )
         result = request_to_inputs(req, input_name="ignored")
         assert set(result) == {"x"}
+
+    def test_versioned_multiple_inputs_are_all_converted(self):
+        """Every named tensor in a versioned request reaches the result."""
+        from tributo.serving.schema import request_to_inputs
+
+        req = PredictRequest(
+            inputs=[
+                {"name": "a", "datatype": "float32", "data": [1.0]},
+                {"name": "b", "datatype": "float32", "data": [2.0]},
+            ]
+        )
+
+        result = request_to_inputs(req, input_name="ignored")
+
+        assert set(result) == {"a", "b"}
+        np.testing.assert_allclose(result["a"], [1.0])
+        np.testing.assert_allclose(result["b"], [2.0])
 
     def test_legacy_features_map_to_first_input(self):
         """legacy features 映射到第一个输入名。"""

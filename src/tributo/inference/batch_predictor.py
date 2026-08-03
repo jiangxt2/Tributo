@@ -91,10 +91,10 @@ class XGBoostONNXPredictor(BasePredictor):
     ) -> list[str]:
         """Read feature column names from a bundle or ONNX metadata.
 
-        The bundle path reads ONNX ``feature_names`` metadata first
-        (the *table* feature names used to select Dataset columns) and
-        falls back to the manifest's typed input signature (a
-        *tensor*-level contract); the legacy path reads ONNX metadata.
+        The bundle path reads ONNX ``feature_names`` metadata (the *table*
+        feature names used to select Dataset columns).  It does not infer
+        table columns from the manifest signature because that is a
+        *tensor*-level contract; the legacy path reads ONNX metadata.
         """
         if bundle_uri is not None:
             from tributo.exporting.runtime import BundleModelLoader
@@ -174,16 +174,25 @@ class XGBoostONNXPredictor(BasePredictor):
             unsafe=self._unsafe,
             storage_profile=self._storage_profile,
         )
-        self.input_name = self._runtime.model.input_names[0]
-        self._output_names = self._runtime.model.output_names
+        try:
+            self.input_name = self._runtime.model.input_names[0]
+            self._output_names = self._runtime.model.output_names
 
-        explicit = self.predictor_config.get("feature_names")
-        if explicit:
-            self.feature_names = explicit
-        else:
-            self.feature_names = _feature_names_from_bundle(self._runtime)
-            if self.feature_names:
-                logger.info("Loaded feature_names from bundle: %s", self.feature_names)
+            explicit = self.predictor_config.get("feature_names")
+            if explicit:
+                self.feature_names = explicit
+            else:
+                self.feature_names = _feature_names_from_bundle(self._runtime)
+                if self.feature_names:
+                    logger.info(
+                        "Loaded feature_names from bundle: %s", self.feature_names
+                    )
+        except BaseException:
+            # Runtime ownership starts once ``loader.open`` succeeds.  Any
+            # later initialization failure must release staged bundle files
+            # deterministically; ``__del__`` is only a best-effort fallback.
+            self._runtime.close()
+            raise
 
     @staticmethod
     def _load_feature_names(model_path: str | Path) -> list[str]:
@@ -195,14 +204,19 @@ class XGBoostONNXPredictor(BasePredictor):
         silently dropping it would let batch inference proceed with
         silently misnamed columns.
         """
-        import onnx
+        try:
+            import onnxruntime as ort
+        except ImportError as exc:
+            raise JobConfigurationError(
+                "onnxruntime is required to read ONNX feature metadata."
+            ) from exc
 
-        model = onnx.load(model_path)
-        for prop in model.metadata_props:
-            if prop.key != "feature_names":
-                continue
+        session = ort.InferenceSession(str(model_path))
+        metadata = session.get_modelmeta().custom_metadata_map
+        raw_value = metadata.get("feature_names")
+        if raw_value is not None:
             try:
-                names: Any = json.loads(prop.value)
+                names: Any = json.loads(raw_value)
             except json.JSONDecodeError as exc:
                 raise ValueError(
                     f"ONNX metadata 'feature_names' is corrupt: {exc}"
@@ -232,31 +246,16 @@ class XGBoostONNXPredictor(BasePredictor):
 
     @staticmethod
     def _build_s3_client(s3_config: dict[str, Any]) -> Any:
-        """Build a boto3 S3 client from config dict + environment variables."""
-        import os
+        """Build an S3 client through the shared storage resolver.
 
-        import boto3
+        Legacy raw-model downloads and BundleReader must resolve endpoint,
+        credentials, and region in exactly the same way.  Keeping this
+        adapter on the common factory prevents the two serving paths from
+        drifting when storage configuration evolves.
+        """
+        from tributo._common.storage import get_boto3_client_from_config
 
-        endpoint = (
-            s3_config.get("endpoint")
-            or os.environ.get("AWS_ENDPOINT_URL")
-            or os.environ.get("S3_ENDPOINT")
-        )
-        access_key = s3_config.get("access_key_id") or os.environ.get(
-            "AWS_ACCESS_KEY_ID"
-        )
-        secret_key = s3_config.get("secret_access_key") or os.environ.get(
-            "AWS_SECRET_ACCESS_KEY"
-        )
-        region = s3_config.get("region") or os.environ.get("AWS_REGION", "us-east-1")
-
-        return boto3.client(
-            "s3",
-            endpoint_url=endpoint,
-            aws_access_key_id=access_key,
-            aws_secret_access_key=secret_key,
-            region_name=region,
-        )
+        return get_boto3_client_from_config(s3_config)
 
     def _download_from_s3(self, s3_uri: str) -> str:
         """Download the ONNX model from S3 to a local temp directory."""
@@ -361,20 +360,22 @@ class XGBoostONNXPredictor(BasePredictor):
 
 
 def _feature_names_from_bundle(runtime: "BundleModelRuntime") -> list[str]:
-    """Feature column names for a bundle: ONNX metadata first, manifest
-    signature as fallback.
+    """Read table feature names from ONNX metadata in a bundle.
 
-    The manifest signature is a *tensor*-level contract (names of the
-    model graph inputs), while batch inference selects Dataset columns
-    by *table* feature names.  XGBoost ONNX bundles record the original
-    feature names in ONNX metadata (``feature_names``), which is exactly
-    what the legacy raw-path reads — so the bundle path reads the same
-    metadata first and only falls back to the signature.
+    The manifest signature is a *tensor*-level contract (names of the model
+    graph inputs), while batch inference selects Dataset columns by *table*
+    feature names.  Falling back to signature names would turn a tensor name
+    such as ``float_input`` into a guessed table column and can silently
+    select the wrong data.  Callers must provide explicit feature columns or
+    publish the original feature names in ONNX metadata.
     """
     metadata_names = XGBoostONNXPredictor._load_feature_names(
         runtime.resolved_artifact.entrypoint_path
     )
     if metadata_names:
         return metadata_names
-    fields = runtime.manifest.input_signature.input_fields
-    return [f.name for f in fields]
+    raise JobConfigurationError(
+        "Bundle ONNX artifact has no 'feature_names' metadata. Manifest "
+        "input names describe model tensors, not Dataset columns; specify "
+        "feature_columns explicitly or publish ONNX feature_names metadata."
+    )

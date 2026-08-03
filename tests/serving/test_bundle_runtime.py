@@ -98,6 +98,36 @@ class _RebuildFlavor(_EchoFlavor):
         return _EchoModel()
 
 
+class _EchoFactory:
+    """Test factory proving architecture routing reaches a discovered class."""
+
+    api_version = 1
+    architecture_id = "test-dnn-v1"
+
+    def build(self, model_config: dict[str, Any]) -> _EchoModel:
+        del model_config
+        return _EchoModel()
+
+
+class _FactoryRebuildFlavor(_EchoFlavor):
+    """Flavor that obtains its model skeleton from the factory registry."""
+
+    def load(
+        self,
+        artifact: Any,
+        *,
+        role: str,
+        unsafe: bool = False,
+        architecture_id: str | None = None,
+    ) -> BundleModel:
+        del artifact, role, unsafe
+        from tributo.exporting.registries import build_factory_registry
+
+        assert architecture_id == "test-dnn-v1"
+        factory_cls = build_factory_registry().get(architecture_id)
+        return factory_cls().build({})
+
+
 def _loader(flavor: type[Any] = _EchoFlavor) -> BundleModelLoader:
     registry = FlavorRegistry()
     registry.register(flavor)
@@ -148,6 +178,12 @@ class TestFlavorSupportMatrix:
         assert entry.security_mode == SECURITY_MODE_SAFE
         assert entry.signature_required is True
         assert "onnxruntime" in entry.dependencies
+        assert entry.verticals == ("o1", "dnn", "pu", "xgboost")
+        assert entry.trainer_types == ("dnn", "pu", "xgboost")
+        assert set(entry.producer_ids) == {
+            "torch-onnx-v1",
+            "xgboost-onnx-v1",
+        }
 
 
 # ── Role selection ─────────────────────────────────────────────────────────────
@@ -221,6 +257,27 @@ class TestFlavorRouting:
         with pytest.raises(JobConfigurationError, match="Unknown architecture"):
             _loader(_RebuildFlavor).open(str(bundle), role="inference")
 
+    def test_loader_rebuilds_through_discovered_factory(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """architecture_id is routed through the real factory registry path."""
+        import tributo.plugin
+
+        monkeypatch.setattr(
+            tributo.plugin,
+            "discover_model_factory_plugins",
+            lambda: [_EchoFactory],
+        )
+        bundle = build_test_bundle(tmp_path, architecture_id="test-dnn-v1")
+        runtime = _loader(_FactoryRebuildFlavor).open(str(bundle), role="inference")
+        try:
+            result = runtime.predict(
+                {"float_input": np.array([[1.0, 2.0]], dtype=np.float32)}
+            )
+            np.testing.assert_allclose(result["probabilities"], [[2.0, 3.0]])
+        finally:
+            runtime.close()
+
 
 class TestSecurityGate:
     """pickle / remote-code 默认拒绝，unsafe 显式开启。"""
@@ -254,7 +311,10 @@ class TestSignatureValidation:
 
     def test_empty_signature_refused_by_default(self, tmp_path: Path) -> None:
         bundle = build_test_bundle(tmp_path, with_signature=False)
-        with pytest.raises(UnsupportedArtifactFormat, match="no typed"):
+        with pytest.raises(
+            UnsupportedArtifactFormat,
+            match="published without the typed input/output contract",
+        ):
             _loader().open(str(bundle), role="inference")
 
     def test_empty_signature_loads_with_unsafe_flag(self, tmp_path: Path) -> None:
@@ -262,11 +322,28 @@ class TestSignatureValidation:
         runtime = _loader().open(str(bundle), role="inference", unsafe=True)
         try:
             result = runtime.predict(
-                {"float_input": np.array([[1.0]], dtype=np.float32)}
+                {"float_input": np.array([[1.0, 1.0]], dtype=np.float32)}
             )
             assert "probabilities" in result
         finally:
             runtime.close()
+
+    def test_matrix_dependency_superset_is_accepted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The matrix may document dependencies beyond flavor internals."""
+        import tributo.exporting.runtime as runtime_module
+
+        entry = runtime_module.FlavorSupportEntry(
+            flavor_id=_EchoFlavor.flavor_id,
+            artifact_role="model",
+            loader=f"{_EchoFlavor.__module__}:{_EchoFlavor.__qualname__}",
+            dependencies=("onnxruntime", "numpy"),
+            signature_required=True,
+            security_mode=SECURITY_MODE_SAFE,
+        )
+        monkeypatch.setattr(runtime_module, "SERVEABLE_FLAVOR_MATRIX", (entry,))
+        runtime_module._validate_matrix_registry(_loader()._flavors)
 
     def test_signature_mismatch_fails_fast(self, tmp_path: Path) -> None:
         """manifest 签名与实际模型输入不一致 → ModelSchemaMismatchError。"""
@@ -401,8 +478,10 @@ class TestRuntimeLifecycle:
         bundle = build_test_bundle(tmp_path)
         runtime = _loader().open(str(bundle), role="inference")
         runtime.close()
-        result = runtime.predict({"float_input": np.array([[5.0]], dtype=np.float32)})
-        np.testing.assert_allclose(result["probabilities"], [[6.0]])
+        result = runtime.predict(
+            {"float_input": np.array([[5.0, 5.0]], dtype=np.float32)}
+        )
+        np.testing.assert_allclose(result["probabilities"], [[6.0, 6.0]])
 
     def test_failed_load_closes_artifact_context(self, tmp_path: Path) -> None:
         """flavor.load 抛错时 reader context 必须被正确关闭。"""

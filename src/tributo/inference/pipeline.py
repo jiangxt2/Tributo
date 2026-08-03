@@ -169,7 +169,8 @@ def run_batch_inference(
         if not feature_columns:
             raise JobConfigurationError(
                 "feature_columns is empty and model has no feature_names metadata. "
-                "Either specify feature_columns in config JSON or re-export the model."
+                "Either specify feature_columns in config JSON or publish ONNX "
+                "feature_names metadata."
             )
         predictor_config["feature_names"] = feature_columns
         logger.info(

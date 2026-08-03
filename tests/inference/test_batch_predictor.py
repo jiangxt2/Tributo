@@ -98,6 +98,32 @@ class TestXGBoostONNXPredictorConfig:
                 "/nonexistent/model.onnx", {"s3_config": {}}
             )
 
+    def test_legacy_s3_client_uses_shared_storage_resolver(self, monkeypatch):
+        """Raw-model S3 downloads share BundleReader's client resolution."""
+        captured = {}
+
+        def fake_client(config):
+            captured.update(config)
+            return object()
+
+        monkeypatch.setattr(
+            "tributo._common.storage.get_boto3_client_from_config", fake_client
+        )
+        XGBoostONNXPredictor._build_s3_client(
+            {
+                "endpoint": "http://minio:9000",
+                "access_key_id": "key",
+                "secret_access_key": "secret",
+                "region": "test-region",
+            }
+        )
+        assert captured == {
+            "endpoint": "http://minio:9000",
+            "access_key_id": "key",
+            "secret_access_key": "secret",
+            "region": "test-region",
+        }
+
 
 if __name__ == "__main__":
     sys.exit(pytest.main(["-sv", __file__]))
@@ -123,7 +149,12 @@ class TestXGBoostONNXPredictorBundle:
         """bundle 加载后批量推理返回预测列。"""
         bundle = self._make_bundle(tmp_path)
         predictor = XGBoostONNXPredictor(
-            bundle_uri=bundle, role="inference", predictor_config={"return_probs": True}
+            bundle_uri=bundle,
+            role="inference",
+            predictor_config={
+                "return_probs": True,
+                "feature_names": ["float_input"],
+            },
         )
         assert predictor.feature_names == ["float_input"]
         batch = {"float_input": np.array([[0.5, 0.5], [0.1, 0.9]], dtype=np.float32)}
@@ -145,7 +176,11 @@ class TestXGBoostONNXPredictorBundle:
     def test_close_idempotent_and_predict_after_close(self, tmp_path):
         """close() 幂等；close 后 predict 仍可用（内存模型契约）。"""
         bundle = self._make_bundle(tmp_path)
-        predictor = XGBoostONNXPredictor(bundle_uri=bundle, role="inference")
+        predictor = XGBoostONNXPredictor(
+            bundle_uri=bundle,
+            role="inference",
+            predictor_config={"feature_names": ["float_input"]},
+        )
 
         predictor.close()
         predictor.close()  # 第二次 close 是 no-op
@@ -163,8 +198,38 @@ class TestXGBoostONNXPredictorBundle:
         with pytest.raises(Exception, match="no typed"):
             XGBoostONNXPredictor(bundle_uri=str(bundle))
         # unsafe=True 允许 compat 加载
-        predictor = XGBoostONNXPredictor(bundle_uri=str(bundle), unsafe=True)
-        assert predictor.feature_names == []
+        predictor = XGBoostONNXPredictor(
+            bundle_uri=str(bundle),
+            unsafe=True,
+            predictor_config={"feature_names": ["float_input"]},
+        )
+        assert predictor.feature_names == ["float_input"]
+
+    def test_bundle_without_metadata_requires_explicit_feature_columns(
+        self, tmp_path, monkeypatch
+    ):
+        """Tensor names must not be guessed as Dataset column names."""
+        from tests.serving.bundle_fixtures import build_test_bundle, make_dummy_onnx
+        from tributo.exporting.runtime import BundleModelLoader
+
+        onnx_path = make_dummy_onnx(tmp_path)
+        bundle = build_test_bundle(tmp_path, onnx_path=onnx_path)
+
+        captured = []
+        original_open = BundleModelLoader.open
+
+        def capturing_open(self, *args, **kwargs):
+            runtime = original_open(self, *args, **kwargs)
+            captured.append(runtime)
+            return runtime
+
+        monkeypatch.setattr(BundleModelLoader, "open", capturing_open)
+
+        with pytest.raises(JobConfigurationError, match="Dataset columns"):
+            XGBoostONNXPredictor(bundle_uri=str(bundle))
+
+        assert len(captured) == 1
+        assert captured[0].closed is True
 
 
 class TestXGBoostONNXPredictorRealFeatureNames:
@@ -262,4 +327,7 @@ class TestXGBoostONNXPredictorRealFeatureNames:
         from tests.serving.bundle_fixtures import make_dummy_onnx
 
         onnx_path = make_dummy_onnx(tmp_path)
-        assert XGBoostONNXPredictor._load_feature_names(onnx_path) == []
+        # The runtime dependency is onnxruntime; the optional authoring
+        # package ``onnx`` must not be required by the batch read path.
+        with patch.dict(sys.modules, {"onnx": None}):
+            assert XGBoostONNXPredictor._load_feature_names(onnx_path) == []
