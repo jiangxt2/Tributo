@@ -68,9 +68,13 @@ STABILITY_MAP: dict[str, str] = {
     "tributo.data.source_config": "beta",
     "tributo.data.parquet": "alpha",
     "tributo.data.iceberg": "beta",
-    # Data — prototype
-    "tributo.data.provider": "prototype",
+    "tributo.data.csv": "beta",
+    "tributo.data.provider_registry": "beta",
+    "tributo.data.refs": "beta",
+    # Data — beta
+    "tributo.data.provider": "beta",
     "tributo.data.graph": "beta",
+    # Data — prototype
     "tributo.data.transform_compiler": "prototype",
     # Exporting — beta
     "tributo.exporting.service": "beta",

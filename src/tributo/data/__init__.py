@@ -18,12 +18,28 @@ import logging
 
 from tributo.data.base import DataConnector, S3Config, WriteMode
 from tributo.data.graph import GraphDataBundle, GraphSchema
+from tributo.data.provider import DatasetHandle, DataSourceProvider, ResolvedSource
+from tributo.data.provider_registry import (
+    list_providers,
+    register_provider,
+    resolve_provider,
+    unregister_provider,
+)
+from tributo.data.refs import (
+    DatasetRef,
+    compute_ref_id,
+    digest,
+    schema_fingerprint,
+)
 from tributo.data.registry import get_connector, list_connectors, register_connector
 from tributo.data.source_config import (
+    CanonicalSourceInput,
     CsvSourceConfig,
     IcebergSourceConfig,
     LegacyConfigNormalizer,
+    LegacySourceInput,
     ParquetSourceConfig,
+    ProviderSourceConfig,
     RawSourceConfig,
     SourceConfig,
     SourceInput,
@@ -51,6 +67,10 @@ try:
 except ImportError:
     pass
 importlib.import_module("tributo.data.parquet")
+importlib.import_module("tributo.data.csv")
+# Built-in providers register themselves via module-level register_provider()
+# calls in provider_builtins.py.
+importlib.import_module("tributo.data.provider_builtins")
 
 __all__ = [
     # Abstract base classes and config
@@ -60,16 +80,33 @@ __all__ = [
     # Graph data abstraction
     "GraphSchema",
     "GraphDataBundle",
-    # Registry
+    # Connector registry
     "get_connector",
     "register_connector",
     "list_connectors",
+    # Provider contract (D1+D2)
+    "DataSourceProvider",
+    "ResolvedSource",
+    "DatasetHandle",
+    # Provider registry
+    "register_provider",
+    "resolve_provider",
+    "unregister_provider",
+    "list_providers",
+    # Dataset identity
+    "DatasetRef",
+    "compute_ref_id",
+    "digest",
+    "schema_fingerprint",
     # Source configuration
     "SourceConfig",
     "ParquetSourceConfig",
     "CsvSourceConfig",
     "SqlSourceConfig",
     "IcebergSourceConfig",
+    "ProviderSourceConfig",
+    "CanonicalSourceInput",
+    "LegacySourceInput",
     "LegacyConfigNormalizer",
     "RawSourceConfig",
     "SourceInput",

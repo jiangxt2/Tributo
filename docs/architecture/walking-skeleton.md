@@ -4,8 +4,15 @@ The walking skeleton is the minimum end-to-end path that validates the core
 architecture contracts. It exercises every major subsystem boundary:
 
 ```
-SourceConfig(parquet) → XGBoostTrainer → Bundle → BundleReader → batch predict
+ProviderSourceConfig(parquet) → XGBoostTrainer → Bundle → BundleReader → batch predict
 ```
+
+This is the target canonical path for D1+D2. The current beta JSON shapes
+(`type/path/dialect`) remain readable through the compatibility normalizer;
+both shapes are normalized by the selected provider into the same
+credential-free `ResolvedSource` before `open()`. The `provider/uri` shape
+below is therefore a target canonical representation, not permission to
+silently break existing configs.
 
 ## Why This Path
 
@@ -21,7 +28,7 @@ SourceConfig(parquet) → XGBoostTrainer → Bundle → BundleReader → batch p
 
 | Step | Contract | What it validates |
 |------|----------|-------------------|
-| 1. `SourceConfig(provider="tributo.parquet", uri=...)` | `DataSourceProvider` | Provider ID resolution, JSON-only config, `extra="forbid"` |
+| 1. `ProviderSourceConfig(provider="tributo.parquet", uri=...)` → `ProviderRegistry.resolve()` → provider `normalize()` → `ResolvedSource` | `DataSourceProvider` | Provider ID resolution (exact → alias → built-in mapping), JSON-only config, `extra="forbid"`, legacy normalization |
 | 2. `XGBoostTrainer.run(source_config, ...)` | `TrainingLifecycle` + `CallbackDispatcher` | Trainer receives canonical `SourceConfig`, not legacy config dict |
 | 3. `BundleExportService.export(result)` | `ModelExporter` + `ExportSourceProvider` | Exporter ID resolution, required artifact status |
 | 4. `BundleReader.open(bundle_path)` | `ExportManifest` + `ManifestSignature` | Manifest v1 read, schema version check, digest verification |
@@ -29,25 +36,36 @@ SourceConfig(parquet) → XGBoostTrainer → Bundle → BundleReader → batch p
 
 ## Step-by-Step Design
 
-### Step 1: SourceConfig → DataSourceProvider
+### Step 1: ProviderSourceConfig → DataSourceProvider
 
 ```python
-from tributo.data import SourceConfig, resolve_provider
+from pydantic import TypeAdapter
 
-config = SourceConfig.model_validate_json("""
+from tributo.data import resolve_provider
+from tributo.data.source_config import CanonicalSourceInput
+
+config = TypeAdapter(CanonicalSourceInput).validate_json("""
 {
   "provider": "tributo.parquet",
-  "uri": "synthetic_data/train.parquet",
-  "format_options": {}
+  "uri": "file:///abs/path/synthetic_data/train.parquet",
+  "options": {}
 }
 """)
-provider = resolve_provider(config.provider)
-handle = provider.open(config)
-dataset = handle.to_ray_dataset()
+provider = resolve_provider(config)
+resolved = provider.normalize(config)
+handle = provider.open(resolved)
+try:
+    dataset = handle.to_ray_dataset()
+finally:
+    handle.close()
 ```
 
-Expected: `resolve_provider("tributo.parquet")` returns a `DataSourceProvider`.
-Legacy `SourceInput` is NOT on this path.
+Expected: `resolve_provider(config)` returns a `DataSourceProvider`, its
+`normalize()` yields a credential-free `ResolvedSource`, and `open()` returns a
+bounded `DatasetHandle`. `SourcePlan` and transform pushdown are not part of
+this D1+D2 path. Legacy `SourceInput` is normalized into the same
+`ResolvedSource`; it is not deleted until the data migration exit gates are
+satisfied.
 
 ### Step 2: XGBoostTrainer with SourceConfig
 

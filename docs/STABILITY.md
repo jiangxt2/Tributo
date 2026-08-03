@@ -56,7 +56,7 @@ Last updated: 2026-08-02 (A0 baseline).
 | Module | Level | Notes |
 |--------|-------|-------|
 | `tributo.data.source_config` — `SourceConfig` | `beta` | Canonical data source config (JSON only) |
-| `tributo.data.provider` — `DataSourceProvider` | `prototype` | Under active design (D1+D2) |
+| `tributo.data.provider` — `DataSourceProvider` | `beta` | Stable bounded-read contract (D1+D2) |
 | `tributo.data.transform_compiler` | `prototype` | Under active design (D4) |
 | `tributo.data.graph` | `beta` | Graph data abstraction (GNN; @PublicAPI says beta) |
 | `tributo.data.base` — `DataConnector` | `beta` | Connector base class |
@@ -192,7 +192,6 @@ This is informative only — `STABILITY.md` is the canonical reference.
 
 ### Marked as prototype
 
-- `tributo.data.provider` — "Phase 2a provider architecture prototypes"
 - `tributo.data.transform_compiler` — "Phase 2a TransformCompiler implementation"
 
 ### Marked as deprecated

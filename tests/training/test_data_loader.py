@@ -12,7 +12,8 @@ from tributo.training.data_loader import load_ray_dataset_from_source
 
 
 def test_s3_parquet_uses_parquet_connector():
-    with patch("tributo.data.get_connector") as mock_get_connector:
+    # D1+D2: the provider path calls get_connector via provider_builtins.
+    with patch("tributo.data.provider_builtins.get_connector") as mock_get_connector:
         mock_connector = MagicMock()
         mock_connector.read.return_value = MagicMock()
         mock_get_connector.return_value = mock_connector
@@ -23,7 +24,7 @@ def test_s3_parquet_uses_parquet_connector():
 
 
 def test_s3_csv_uses_csv_connector():
-    with patch("tributo.data.get_connector") as mock_get_connector:
+    with patch("tributo.data.provider_builtins.get_connector") as mock_get_connector:
         mock_connector = MagicMock()
         mock_connector.read.return_value = MagicMock()
         mock_get_connector.return_value = mock_connector
