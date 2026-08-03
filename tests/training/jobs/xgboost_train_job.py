@@ -14,7 +14,6 @@ import numpy as np
 import pandas as pd
 import ray
 from ray.data import from_pandas
-from sklearn.model_selection import train_test_split
 
 
 def main():
@@ -31,6 +30,8 @@ def main():
     early_stopping = os.environ.get("EARLY_STOPPING_ROUNDS")
     max_rows = os.environ.get("MAX_ROWS_PER_WORKER")
     use_val = os.environ.get("USE_VAL", "true").lower() == "true"
+
+    from sklearn.model_selection import train_test_split
 
     # Generate synthetic data
     rng = np.random.default_rng(42)

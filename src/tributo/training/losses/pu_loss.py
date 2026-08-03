@@ -149,7 +149,8 @@ if HAS_TORCH:
             gamma=gamma,
             loss_type="nnpu",
         )
-        return criterion(logits, labels)
+        loss: torch.Tensor = criterion(logits, labels)
+        return loss
 
     def compute_class_prior(
         positive_count: int,

@@ -285,7 +285,7 @@ class TestXGBoostWorkerBudget:
                 return 2
 
         class FakeBooster:
-            def get_score(self, importance_type="gain"):  # noqa: ARG002
+            def get_score(self, importance_type="gain"):
                 return {}
 
         monkeypatch.setattr(ray.train, "report", fake_report)
@@ -358,7 +358,7 @@ class TestXGBoostWorkerBudget:
                 return 2
 
         class FakeBooster:
-            def get_score(self, importance_type="gain"):  # noqa: ARG002
+            def get_score(self, importance_type="gain"):
                 return {}
 
         monkeypatch.setattr(ray.train, "report", lambda *a, **k: None)
@@ -437,7 +437,7 @@ class TestXGBoostWorkerBudget:
                 return 2
 
         class FakeBooster:
-            def get_score(self, importance_type="gain"):  # noqa: ARG002
+            def get_score(self, importance_type="gain"):
                 return {}
 
         monkeypatch.setattr(ray.train, "report", lambda *a, **k: None)

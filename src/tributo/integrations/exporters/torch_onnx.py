@@ -114,7 +114,10 @@ class TorchONNXExporter:
             if dynamo:
                 try:
                     if hasattr(torch.onnx, "dynamo_export"):
-                        export_options = torch.onnx.ExportOptions(
+                        # ExportOptions 在较旧 torch 的 stub 中缺失（运行时由
+                        # hasattr 守卫）——Any 访问避免 mypy attr-defined。
+                        onnx_module: Any = torch.onnx
+                        export_options = onnx_module.ExportOptions(
                             dynamic_shapes=True,
                             onnx_registry=None,
                         )
