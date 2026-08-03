@@ -204,7 +204,7 @@ class KafkaStreamSource(StreamSource):
                     # poison message — keep polling for other partitions.
                     # _PARTITION_EOF (-191) is confluent-kafka's internal
                     # code; verify against the installed version in the
-                    # real-broker integration run (S1/S2 scope).
+                    # real-broker integration run.
                     if err.code() == KafkaError._PARTITION_EOF:
                         continue
                     # Fail-closed: terminate the source before raising so

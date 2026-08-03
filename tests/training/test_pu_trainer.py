@@ -426,7 +426,7 @@ class TestPUTrainerResourceSafety:
         assert excinfo.value.split == "train"
 
     def test_worker_row_guard_fails_fast_no_truncation(self, monkeypatch):
-        """P2-7: max_input_rows_per_worker 超限 → fail-fast，不截断。"""
+        """max_input_rows_per_worker 超限 → fail-fast，不截断。"""
         pytest.importorskip("torch")
         from types import SimpleNamespace
 

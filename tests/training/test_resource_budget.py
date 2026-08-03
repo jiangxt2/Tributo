@@ -333,7 +333,7 @@ class TestXGBoostWorkerBudget:
         assert reported["row_count_test"] == 40  # 只计一次
 
     def test_worker_label_arrays_counted_against_budget(self, monkeypatch):
-        """P1-6: rank-0 评估 labels（源数组）计入共享预算。
+        """rank-0 评估 labels（源数组）计入共享预算。
 
         batch payload（f0 int64 + label int32, 40 行）= 480B；train+test 的
         concat 峰值 2×960=1920 恰在预算内；labels 收集 160B 使峰值

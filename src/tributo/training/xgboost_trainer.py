@@ -516,7 +516,7 @@ def train_loop_per_worker(config: dict[str, Any]) -> None:
     # get_dataset_shard splits data across workers; every rank must
     # consume its partition even if only rank 0 does sklearn evaluation.
     # Labels are captured during this single pass, on rank 0 only, as
-    # compact numpy arrays accounted against the shared budget (P1-6) —
+    # compact numpy arrays accounted against the shared budget —
     # the shard is never iterated twice, so test bytes/rows are counted
     # once per worker.
     dtest = _make_quantile_dmatrix("test", ref=dtrain, collect_labels=world_rank == 0)

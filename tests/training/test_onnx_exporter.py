@@ -53,6 +53,30 @@ class TestOnnxValidationFailClosed:
         with pytest.raises(RuntimeError, match="empty output"):
             _validate_onnx("/tmp/model.onnx", n_features=5)
 
+    def test_batch_dimension_mismatch_raises(self, monkeypatch):
+        """输出 batch 维度与输入不一致 → RuntimeError（模型不可用于打分）。"""
+        from tributo.training.onnx_exporter import _validate_onnx
+
+        class WrongBatchSession:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def get_inputs(self):
+                return [type("In", (), {"name": "float_input"})()]
+
+            def run(self, *args, **kwargs):
+                # 输入 1 行，输出 2 行 → batch 维度不匹配
+                import numpy as np
+
+                return [np.zeros((2, 3), dtype=np.float32)]
+
+        fake_ort = ModuleType("onnxruntime")
+        fake_ort.InferenceSession = WrongBatchSession
+        monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
+
+        with pytest.raises(RuntimeError, match="batch dimension"):
+            _validate_onnx("/tmp/model.onnx", n_features=5)
+
 
 if __name__ == "__main__":
     sys.exit(pytest.main(["-sv", __file__]))

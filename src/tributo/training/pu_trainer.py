@@ -19,7 +19,7 @@ Usage::
         "features": [...],
         "pu": {"loss_type": "nnpu", "class_prior_method": "label_frequency"},
         "training": {"epochs": 20},
-        "ray": {"num_workers": 2},
+        "ray": {"num_workers": 1},
         "output": {"onnx_path": "/tmp/model_output"},
     })
 """

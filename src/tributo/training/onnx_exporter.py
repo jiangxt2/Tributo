@@ -107,6 +107,14 @@ def _validate_onnx(output_path: str, n_features: int) -> None:
         outputs = session.run(None, {input_name: dummy})
         if not outputs:
             raise RuntimeError("ONNX validation failed: empty output from onnxruntime")
+        # Output batch dimension must match the input — a model with a
+        # mismatched batch axis is not usable for scoring.
+        if outputs[0].shape[0] != dummy.shape[0]:
+            raise RuntimeError(
+                f"ONNX validation failed: output batch dimension "
+                f"{outputs[0].shape[0]} does not match input "
+                f"{dummy.shape[0]}"
+            )
         logger.info(
             "ONNX validation passed, output shapes: %s", [o.shape for o in outputs]
         )

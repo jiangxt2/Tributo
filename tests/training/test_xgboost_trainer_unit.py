@@ -202,7 +202,7 @@ class TestModelConfig:
             XGBoostTrainingConfig.model_validate({"model": {"data_iter": lambda: None}})
 
     def test_build_trainer_raw_config_rejects_reserved(self):
-        """P1-11: build_trainer（raw dict 入口）同样拒绝保留参数。"""
+        """build_trainer（raw dict 入口）同样拒绝保留参数。"""
         from unittest.mock import MagicMock
 
         from tributo.exceptions import JobConfigurationError
