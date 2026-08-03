@@ -62,5 +62,5 @@ class StreamSource(ABC):
         """Gracefully close the source and release resources.
 
         Pending offsets are NOT committed here — an uncommitted batch
-        is replayed from the broker after a restart (fail-closed, S0).
+        is replayed from the broker after a restart (fail-closed).
         """

@@ -4,7 +4,7 @@
 by injecting a fake ``confluent_kafka`` module into ``sys.modules``.
 ``KafkaStreamSource.open()`` instantiates the consumer itself, so the
 fake is programmed via class attributes (message queue + commit
-failure) rather than instance injection.  Each test asserts the S0 exit
+failure) rather than instance injection.  Each test asserts the exit
 gates: pending offsets are never overwritten, failed commits retain
 offsets for retry, and poisoned records stop the source instead of
 being skipped (offsets beyond a failed record are never committed).
@@ -414,7 +414,7 @@ def test_reopen_same_instance_rejected(fake_kafka: None) -> None:
     """close() terminates the source: open() on the same instance is
     rejected before any consumer is created, so no Kafka connection
     leaks.  Restarting requires a new instance (documented in
-    open()/poll() — S0 does not promise in-place recovery)."""
+    open()/poll() — no in-place recovery is promised)."""
     source = _open_source([_msg(0)])
     source.close()
 

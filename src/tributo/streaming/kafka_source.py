@@ -157,7 +157,7 @@ class KafkaStreamSource(StreamSource):
                 Re-``open()`` on the same instance does not resume
                 polling — create a new ``KafkaStreamSource`` to restart
                 (the broker re-delivers from the last committed offset;
-                an explicit poison handling strategy is S1 scope).
+                an explicit poison handling strategy is future scope).
             RuntimeError: If ``open()`` was not called first (``call
                 open() first``), or after a plain ``close()`` (``create
                 a new KafkaStreamSource``).
@@ -326,7 +326,7 @@ class KafkaStreamSource(StreamSource):
 
         Pending offsets are left uncommitted (no automatic commit): a
         batch yielded but not committed is replayed from the broker
-        after a restart (fail-closed, S0).
+        after a restart (fail-closed).
         """
         if self._closed:
             return

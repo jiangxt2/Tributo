@@ -412,7 +412,7 @@ class TestXGBoostWorkerBudget:
         assert excinfo.value.observed_bytes == 2 * (960 + 40 * 4)  # 含 labels
 
     def test_worker_label_concat_copy_counted_against_budget(self, monkeypatch):
-        """P1-9: 评估阶段 np.concatenate 的输出副本计入共享预算。
+        """评估阶段 np.concatenate 的输出副本计入共享预算。
 
         预算 2400：labels 收集段峰值 2×1120=2240 放行；concat 副本 160B
         使峰值 2×1280=2560 超限 → 在 concat 执行前失败（fail-fast，
