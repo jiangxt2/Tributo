@@ -14,31 +14,31 @@ import os
 
 import ray
 
+from tributo.data import ParquetSourceConfig
 from tributo.inference import InferenceConfig, run_batch_inference
 
 ray.init(address="ray://127.0.0.1:10001", ignore_reinit_error=True)
 
 # ── Mode 1: Python API ────────────────────────────────────────────────────────
 config = InferenceConfig(
-    s3_input_path="s3://your-bucket/input/*.parquet",
-    s3_output_path="s3://your-bucket/output/predictions/",
+    source=ParquetSourceConfig(
+        path="s3://your-bucket/input/*.parquet",
+        # For MinIO / private S3-compatible storage. Omit when using IAM roles.
+        s3={
+            "access_key_id": os.environ.get("S3_ACCESS_KEY_ID", "<your-access-key>"),
+            "secret_access_key": os.environ.get(
+                "S3_SECRET_ACCESS_KEY", "<your-secret-key>"
+            ),
+            "endpoint": os.environ.get("S3_ENDPOINT", "http://127.0.0.1:9000"),
+            "region": os.environ.get("S3_REGION", "us-east-1"),
+        },
+    ),
+    output_uri="s3://your-bucket/output/predictions/",
     model_uri="s3://your-bucket/models/xgboost_model.onnx",
-    # feature_columns defaults to auto-detection from ONNX model metadata
-    feature_columns=[],
-    prediction_column="prediction",
-    return_probs=True,
+    predictor_config={"prediction_column": "prediction", "return_probs": True},
     batch_size=4096,
     concurrency=4,
     num_cpus_per_actor=1.0,
-    # For MinIO / private S3-compatible storage. Omit s3_config when using IAM roles.
-    s3_config={
-        "access_key_id": os.environ.get("S3_ACCESS_KEY_ID", "<your-access-key>"),
-        "secret_access_key": os.environ.get(
-            "S3_SECRET_ACCESS_KEY", "<your-secret-key>"
-        ),
-        "endpoint": os.environ.get("S3_ENDPOINT", "http://127.0.0.1:9000"),
-        "region": os.environ.get("S3_REGION", "us-east-1"),
-    },
 )
 
 result = run_batch_inference(config)

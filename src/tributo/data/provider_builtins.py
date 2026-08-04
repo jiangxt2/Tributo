@@ -54,15 +54,25 @@ _FILE_IDENTITY_KEYS: frozenset[str] = frozenset({"columns"})
 _ICEBERG_IDENTITY_KEYS: frozenset[str] = frozenset(
     {"selected_fields", "snapshot_id", "row_filter"}
 )
-# SQL identity is always derived (digests) — raw text/params stay runtime.
-_SQL_IDENTITY_KEYS: frozenset[str] = frozenset()
+# SQL text and parameters are represented by digests; projection is safe to
+# retain directly because it is a bounded list of result column names.
+_SQL_IDENTITY_KEYS: frozenset[str] = frozenset({"columns"})
 
 # Option-key whitelists for the provider/uri shape: an unrecognized key is a
 # configuration error (never silently ignored — that would read the wrong
 # data instead of failing loudly).
 _FILE_OPTION_KEYS: frozenset[str] = frozenset({"columns", "s3"})
 _SQL_OPTION_KEYS: frozenset[str] = frozenset(
-    {"sql", "params", "host", "port", "database", "user", "password"}
+    {
+        "sql",
+        "params",
+        "host",
+        "port",
+        "database",
+        "user",
+        "password",
+        "columns",
+    }
 )
 _ICEBERG_OPTION_KEYS: frozenset[str] = frozenset(
     {
@@ -331,6 +341,7 @@ _FILE_OPTION_TYPES: dict[str, type] = {
 _SQL_OPTION_TYPES: dict[str, type] = {
     "sql": str,
     "params": dict,
+    "columns": list,
     "host": str,
     "port": int,
     "database": str,
@@ -357,6 +368,34 @@ def _check_option_keys(
         raise JobConfigurationError(
             f"{provider_id}: unknown option(s) {unknown}; supported: {sorted(allowed)}"
         )
+
+
+def _project_sql(sql: str, columns: Any) -> str:
+    """Wrap a SQL query with a validated identifier-only projection.
+
+    Projection names are quoted as identifiers rather than interpolated as
+    expressions.  This keeps feature names such as ``user-name`` usable
+    without allowing a caller to inject SQL through the projection option.
+    The derived-table wrapper is intentional: it lets ClickHouse and Doris
+    apply projection without changing the caller's SQL expression semantics.
+    Provider-specific plan pushdown remains subject to the D3 benchmark gate.
+    """
+    if columns is None or columns == [] or columns == ():
+        return sql
+    if not isinstance(columns, (list, tuple)) or not all(
+        isinstance(column, str) and column for column in columns
+    ):
+        raise JobConfigurationError(
+            "SQL source option 'columns' must be a non-empty list of strings"
+        )
+    column_names = list(columns)
+    inner = sql.strip()
+    if inner.endswith(";"):
+        inner = inner[:-1].rstrip()
+    if not inner:
+        raise JobConfigurationError("SQL source query must be non-empty")
+    quoted = ", ".join(f"`{column.replace('`', '``')}`" for column in column_names)
+    return f"SELECT {quoted} FROM ({inner}) AS tributo_source_projection"
 
 
 # Sensitive query parameter names/prefixes live in ``refs`` (shared with the
@@ -688,7 +727,10 @@ def _clickhouse_read(resolved: ResolvedSource) -> "ray.data.Dataset":
         database=database,
     )
     try:
-        table = client.query_arrow(sql, parameters=rt.get("params"))
+        table = client.query_arrow(
+            _project_sql(sql, resolved.identity_options.get("columns")),
+            parameters=rt.get("params"),
+        )
     finally:
         client.close()
 
@@ -731,7 +773,7 @@ def _doris_read(resolved: ResolvedSource) -> "ray.data.Dataset":
     )
     try:
         with conn.cursor() as cursor:
-            cursor.execute(sql)
+            cursor.execute(_project_sql(sql, resolved.identity_options.get("columns")))
             if cursor.description is None:
                 raise ValueError(
                     "Doris query returned no result set "
@@ -816,6 +858,7 @@ class _SqlProvider(DataSourceProvider):
             options = dict(source.options)
             sql = options.pop("sql", None)
             params = options.pop("params", None)
+            columns = options.pop("columns", None)
             if params == {}:
                 params = None
             if not sql or not str(sql).strip():
@@ -856,6 +899,8 @@ class _SqlProvider(DataSourceProvider):
             identity: dict[str, Any] = {"sql_digest": digest(str(sql))}
             if params is not None:
                 identity["params_digest"] = _params_digest(self.provider_id, params)
+            if columns:
+                identity["columns"] = list(columns)
             runtime = {
                 k: v
                 for k, v in options.items()
@@ -905,6 +950,8 @@ class _SqlProvider(DataSourceProvider):
                 builtin_identity["params_digest"] = _params_digest(
                     self.provider_id, source.params
                 )
+            if source.columns:
+                builtin_identity["columns"] = list(source.columns)
             runtime = {
                 "host": source.host,
                 "port": source.port,

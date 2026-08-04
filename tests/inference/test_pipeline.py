@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import json
+import logging
 import sys
 import tempfile
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
 
+from tributo.data.source_config import (
+    ParquetSourceConfig,
+    ProviderSourceConfig,
+    SqlSourceConfig,
+)
 from tributo.exceptions import JobConfigurationError
 from tributo.inference.pipeline import InferenceConfig
 
@@ -63,6 +69,26 @@ class TestInferenceConfig:
                 model_uri="",
             )
 
+    def test_canonical_source_rejects_legacy_fields(self):
+        """Direct construction must fail fast on mixed source shapes."""
+        with pytest.raises(ValidationError, match="cannot be combined"):
+            InferenceConfig(
+                source=ParquetSourceConfig(path="data.parquet"),
+                output_uri="out",
+                model_uri="model.onnx",
+                feature_columns=["feature"],
+            )
+
+    def test_canonical_source_accepts_empty_feature_columns(self):
+        """An explicit empty legacy projection is equivalent to no projection."""
+        cfg = InferenceConfig(
+            source=ParquetSourceConfig(path="data.parquet"),
+            output_uri="out",
+            model_uri="model.onnx",
+            feature_columns=[],
+        )
+        assert isinstance(cfg.source, ParquetSourceConfig)
+
 
 class TestRunInferenceFromJson:
     """run_inference_from_json 解析测试。"""
@@ -110,7 +136,9 @@ class TestRunInferenceFromJson:
         run_inference_from_json(path)
 
         call_cfg = mock_run.call_args[0][0]
-        assert call_cfg.input_uri == "s3://bucket/input.parquet"
+        assert isinstance(call_cfg.source, ParquetSourceConfig)
+        assert call_cfg.source.path == "s3://bucket/input.parquet"
+        assert call_cfg.source.columns == ["f0", "f1"]
         assert call_cfg.model_uri == "s3://bucket/model.onnx"
         assert call_cfg.output_uri == "s3://bucket/output/"
 
@@ -138,13 +166,171 @@ class TestRunInferenceFromJson:
         run_inference_from_json(path)
 
         call_cfg = mock_run.call_args[0][0]
-        assert call_cfg.input_uri == "s3://bucket/input.parquet"
+        assert isinstance(call_cfg.source, ParquetSourceConfig)
+        assert call_cfg.source.path == "s3://bucket/input.parquet"
+        assert call_cfg.source.columns == ["f0"]
         assert call_cfg.model_uri == "s3://bucket/model.onnx"
         assert call_cfg.predictor_config["return_probs"] is False
         assert call_cfg.predictor_config["prediction_column"] == "score"
         assert call_cfg.output_compression == "snappy"
         assert call_cfg.concurrency == 8
         assert call_cfg.batch_size == 2048
+
+    @patch("tributo.inference.pipeline.run_batch_inference")
+    def test_legacy_s3_shape_preserves_uri(self, mock_run):
+        """Legacy type=s3 JSON must retain its URI during normalization."""
+        from tributo.inference.pipeline import run_inference_from_json
+
+        mock_run.return_value = {"status": "completed"}
+        path = self._write_json(
+            {
+                "data": {
+                    "type": "s3",
+                    "uri": "s3://bucket/input.parquet",
+                },
+                "model": {"uri": "model.onnx"},
+                "output": {"uri": "output"},
+            }
+        )
+        run_inference_from_json(path)
+
+        source = mock_run.call_args.args[0].source
+        assert isinstance(source, ParquetSourceConfig)
+        assert source.path == "s3://bucket/input.parquet"
+
+    @patch("tributo.inference.pipeline.run_batch_inference")
+    def test_legacy_doris_preserves_parquet_semantics(self, mock_run, caplog):
+        """Unsupported historical SQL types must not silently change routing."""
+        from tributo.inference.pipeline import run_inference_from_json
+
+        mock_run.return_value = {"status": "completed"}
+        path = self._write_json(
+            {
+                "data": {
+                    "type": "doris",
+                    "uri": "s3://bucket/input.parquet",
+                },
+                "model": {"uri": "model.onnx"},
+                "output": {"uri": "output"},
+            }
+        )
+        with caplog.at_level(logging.WARNING, logger="tributo.inference.pipeline"):
+            run_inference_from_json(path)
+
+        source = mock_run.call_args.args[0].source
+        assert isinstance(source, ParquetSourceConfig)
+        assert "preserves historical Parquet semantics" in caplog.text
+
+    @patch("tributo.inference.pipeline.run_batch_inference")
+    def test_legacy_clickhouse_shape_is_normalized(self, mock_run):
+        """Nested legacy ClickHouse fields should become SqlSourceConfig."""
+        from tributo.inference.pipeline import run_inference_from_json
+
+        mock_run.return_value = {"status": "completed"}
+        path = self._write_json(
+            {
+                "data": {
+                    "type": "clickhouse",
+                    "clickhouse": {
+                        "host": "clickhouse.local",
+                        "database": "analytics",
+                        "user": "reader",
+                        "password": "secret",
+                        "sql": "SELECT * FROM events",
+                    },
+                },
+                "model": {"uri": "model.onnx"},
+                "output": {"uri": "output"},
+            }
+        )
+        run_inference_from_json(path)
+
+        source = mock_run.call_args.args[0].source
+        assert isinstance(source, SqlSourceConfig)
+        assert source.dialect == "clickhouse"
+        assert source.host == "clickhouse.local"
+        assert source.sql == "SELECT * FROM events"
+
+    @patch("ray.data.ActorPoolStrategy")
+    @patch("tributo.training.data_loader.load_ray_dataset_from_source")
+    def test_batch_pipeline_loads_canonical_source(
+        self, mock_load, mock_pool, tmp_path
+    ):
+        """Inference must route canonical input through the provider loader."""
+        from tributo.inference.pipeline import run_batch_inference
+
+        dataset = MagicMock()
+        dataset.map_batches.return_value = dataset
+        mock_load.return_value = dataset
+
+        class Predictor:
+            pass
+
+        config = InferenceConfig(
+            source=ParquetSourceConfig(
+                path="data.parquet",
+                columns=["feature"],
+            ),
+            output_uri=str(tmp_path / "output"),
+            model_uri="model.onnx",
+        )
+        result = run_batch_inference(config, predictor_cls=Predictor)
+
+        mock_load.assert_called_once_with(
+            {
+                "type": "parquet",
+                "path": "data.parquet",
+                "columns": ["feature"],
+                "s3": None,
+            }
+        )
+        dataset.map_batches.assert_called_once()
+        dataset.write_parquet.assert_called_once()
+        assert result["input_path"] == "data.parquet"
+        mock_pool.assert_called_once()
+
+    @patch("tributo.inference.pipeline.run_batch_inference")
+    def test_canonical_source(self, mock_run):
+        """Canonical source JSON should reach the pipeline unchanged."""
+        from tributo.inference.pipeline import run_inference_from_json
+
+        mock_run.return_value = {"status": "completed"}
+        path = self._write_json(
+            {
+                "source": {
+                    "provider": "tributo.parquet",
+                    "uri": "s3://bucket/input.parquet",
+                    "options": {"columns": ["f0", "f1"]},
+                },
+                "model": {"uri": "s3://bucket/model.onnx"},
+                "output": {"uri": "s3://bucket/output/"},
+            }
+        )
+        run_inference_from_json(path)
+
+        call_cfg = mock_run.call_args.args[0]
+        assert isinstance(call_cfg.source, ProviderSourceConfig)
+        assert call_cfg.source.options == {"columns": ["f0", "f1"]}
+
+    @patch("tributo.inference.pipeline.run_batch_inference")
+    def test_canonical_source_rejects_legacy_data_fields(self, mock_run):
+        """Canonical and legacy data fields must not be mixed."""
+        from tributo.inference.pipeline import run_inference_from_json
+
+        path = self._write_json(
+            {
+                "source": {
+                    "provider": "tributo.parquet",
+                    "uri": "s3://bucket/input.parquet",
+                },
+                "data": {"feature_columns": ["f0"]},
+                "model": {"uri": "s3://bucket/model.onnx"},
+                "output": {"uri": "s3://bucket/output/"},
+            }
+        )
+        with pytest.raises(JobConfigurationError, match="cannot be combined"):
+            run_inference_from_json(path)
+        mock_run.assert_not_called()
 
 
 if __name__ == "__main__":
@@ -157,7 +343,7 @@ class TestInferenceConfigBundleEntry:
     def test_bundle_uri_alone_valid(self):
         """仅 bundle_uri 应通过校验。"""
         cfg = InferenceConfig(
-            input_uri="s3://bucket/input.parquet",
+            source=ParquetSourceConfig(path="s3://bucket/input.parquet"),
             output_uri="s3://bucket/output/",
             bundle_uri="/models/bundle",
         )
@@ -169,7 +355,7 @@ class TestInferenceConfigBundleEntry:
         """bundle_uri 与 model_uri 同时提供应 fail-fast。"""
         with pytest.raises(ValidationError, match="exactly one"):
             InferenceConfig(
-                input_uri="s3://bucket/input.parquet",
+                source=ParquetSourceConfig(path="s3://bucket/input.parquet"),
                 output_uri="s3://bucket/output/",
                 model_uri="s3://bucket/model.onnx",
                 bundle_uri="/models/bundle",
@@ -179,14 +365,14 @@ class TestInferenceConfigBundleEntry:
         """model_uri 与 bundle_uri 都不提供应 fail-fast。"""
         with pytest.raises(ValidationError, match="exactly one"):
             InferenceConfig(
-                input_uri="s3://bucket/input.parquet",
+                source=ParquetSourceConfig(path="s3://bucket/input.parquet"),
                 output_uri="s3://bucket/output/",
             )
 
     def test_legacy_model_uri_still_valid(self):
         """仅 model_uri 的旧配置继续有效（compat）。"""
         cfg = InferenceConfig(
-            input_uri="s3://bucket/input.parquet",
+            source=ParquetSourceConfig(path="s3://bucket/input.parquet"),
             output_uri="s3://bucket/output/",
             model_uri="s3://bucket/model.onnx",
         )
@@ -212,7 +398,10 @@ class TestRunInferenceJsonBundleEntry:
         mock_run.return_value = {"status": "completed"}
         path = self._write_json(
             {
-                "data": {"uri": "s3://bucket/input.parquet"},
+                "source": {
+                    "type": "parquet",
+                    "path": "s3://bucket/input.parquet",
+                },
                 "model": {
                     "bundle_uri": "/models/bundle",
                     "role": "inference",
@@ -248,7 +437,10 @@ class TestUnsafeStrictParsing:
         mock_run.return_value = {"status": "completed"}
         path = self._write_json(
             {
-                "data": {"uri": "s3://bucket/input.parquet"},
+                "source": {
+                    "type": "parquet",
+                    "path": "s3://bucket/input.parquet",
+                },
                 "model": {"bundle_uri": "/models/bundle", "unsafe": "false"},
                 "output": {"uri": "s3://bucket/output/"},
             }
@@ -265,7 +457,10 @@ class TestUnsafeStrictParsing:
         mock_run.return_value = {"status": "completed"}
         path = self._write_json(
             {
-                "data": {"uri": "s3://bucket/input.parquet"},
+                "source": {
+                    "type": "parquet",
+                    "path": "s3://bucket/input.parquet",
+                },
                 "model": {"bundle_uri": "/models/bundle", "unsafe": "true"},
                 "output": {"uri": "s3://bucket/output/"},
             }
@@ -281,7 +476,10 @@ class TestUnsafeStrictParsing:
 
         path = self._write_json(
             {
-                "data": {"uri": "s3://bucket/input.parquet"},
+                "source": {
+                    "type": "parquet",
+                    "path": "s3://bucket/input.parquet",
+                },
                 "model": {"bundle_uri": "/models/bundle", "unsafe": "garbage"},
                 "output": {"uri": "s3://bucket/output/"},
             }

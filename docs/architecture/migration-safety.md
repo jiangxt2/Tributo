@@ -36,6 +36,36 @@ Exit gates before removing legacy adapter:
 Rollback: Set `TRIBUTO_DATA_BACKEND=legacy` environment variable (or equivalent
 feature flag) to bypass the Provider router and use the old dispatch.
 
+### D3 Delivery Record
+
+Migration impact:
+
+- `InferenceConfig.source` is the canonical input for new callers.
+- Legacy `input_uri`, flat ClickHouse fields, `data.uri`, `data.input`, and
+  embedding `--input`/`s3_input_path` remain compatibility inputs.
+- Feature and text column selection is expressed through provider-native
+  projection.
+- Output sinks are unchanged.
+
+Rollback:
+
+- Keep the legacy adapters enabled; no legacy input path is removed by D3.
+- `TRIBUTO_DATA_BACKEND=legacy` remains the data-loader rollback switch.
+- A caller can continue using the legacy inference and embedding input forms
+  while migrating source configuration.
+
+Deprecation window:
+
+Legacy inputs remain supported for at least two minor versions or six months,
+whichever is longer. Warning emission and adapter removal are separate follow-up
+work after the data migration exit gates are satisfied.
+
+Exit gate:
+
+Pending. Do not remove the legacy adapters until the provider contract/golden
+comparison, training/inference/embedding route audit, benchmark thresholds, and
+compatibility window requirements above are satisfied.
+
 During D1+D2, existing `DataConnector` and SQL loaders remain implementation
 details behind Provider adapters. Provider IDs identify logical data sources
 (`tributo.parquet`, `tributo.clickhouse`, etc.); engine/backend selectors are

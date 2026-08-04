@@ -117,6 +117,16 @@ class TestFileProviderNormalize:
                 )
             )
 
+    def test_provider_shape_accepts_sql_projection(self) -> None:
+        resolved = ClickHouseProvider().normalize(
+            ProviderSourceConfig(
+                provider="tributo.clickhouse",
+                uri="clickhouse://x/db",
+                options={"sql": "SELECT * FROM events", "columns": ["id", "user-name"]},
+            )
+        )
+        assert resolved.identity_options["columns"] == ("id", "user-name")
+
     def test_provider_mismatch_rejected(self) -> None:
         with pytest.raises(JobConfigurationError, match="cannot be normalized"):
             ParquetProvider().normalize(
@@ -648,17 +658,112 @@ class TestSqlProviderNormalize:
                     "password": "p@ss",
                     "sql": "SELECT * FROM t",
                     "params": {"x": 1},
+                    "columns": ["id", "score"],
                 }
             )
         )
         assert resolved.provider_id == "tributo.clickhouse"
         assert resolved.identity_options["sql_digest"] == digest("SELECT * FROM t")
         assert resolved.identity_options["params_digest"] == digest({"x": 1})
+        assert resolved.identity_options["columns"] == ("id", "score")
         assert "password" not in resolved.identity_options
         assert resolved.runtime_options["password"] == "p@ss"
         assert resolved.runtime_options["sql"] == "SELECT * FROM t"
         # Credential-free URI: host/database only.
         assert "p@ss" not in resolved.canonical_uri
+
+    def test_sql_projection_quotes_identifiers(self) -> None:
+        from tributo.data.provider_builtins import _project_sql
+
+        assert _project_sql("SELECT * FROM events;", ["id", "user-name"]) == (
+            "SELECT `id`, `user-name` FROM (SELECT * FROM events) "
+            "AS tributo_source_projection"
+        )
+
+    def test_sql_projection_escapes_backticks(self) -> None:
+        from tributo.data.provider_builtins import _project_sql
+
+        assert _project_sql("SELECT * FROM events", ["a`b"]) == (
+            "SELECT `a``b` FROM (SELECT * FROM events) AS tributo_source_projection"
+        )
+
+    def test_sql_projection_rejects_empty_query(self) -> None:
+        from tributo.data.provider_builtins import _project_sql
+
+        with pytest.raises(JobConfigurationError, match="non-empty"):
+            _project_sql("  ", ["id"])
+
+    def test_sql_projection_rejects_non_list_columns(self) -> None:
+        from tributo.data.provider_builtins import _project_sql
+
+        with pytest.raises(JobConfigurationError, match="non-empty list"):
+            _project_sql("SELECT 1", "id")
+
+    def test_clickhouse_reader_executes_projected_query(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import sys
+
+        from tributo.data.provider_builtins import _clickhouse_read
+
+        client = MagicMock()
+        client.query_arrow.return_value = pa.table({"id": [1]})
+        clickhouse_connect = MagicMock()
+        clickhouse_connect.get_client.return_value = client
+        monkeypatch.setitem(sys.modules, "clickhouse_connect", clickhouse_connect)
+        dataset = MagicMock()
+        with patch("ray.data.from_arrow", return_value=dataset):
+            resolved = ClickHouseProvider().normalize(
+                cfg(
+                    {
+                        "type": "sql",
+                        "dialect": "clickhouse",
+                        "sql": "SELECT * FROM events;",
+                        "columns": ["id"],
+                    }
+                )
+            )
+            assert _clickhouse_read(resolved) is dataset
+
+        client.query_arrow.assert_called_once_with(
+            "SELECT `id` FROM (SELECT * FROM events) AS tributo_source_projection",
+            parameters=None,
+        )
+        client.close.assert_called_once()
+
+    def test_doris_reader_executes_projected_query(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import sys
+
+        from tributo.data.provider_builtins import _doris_read
+
+        cursor = MagicMock()
+        cursor.description = [("id",)]
+        cursor.fetchall.return_value = [(1,)]
+        connection = MagicMock()
+        connection.cursor.return_value.__enter__.return_value = cursor
+        pymysql = MagicMock()
+        pymysql.connect.return_value = connection
+        monkeypatch.setitem(sys.modules, "pymysql", pymysql)
+        dataset = MagicMock()
+        with patch("ray.data.from_arrow", return_value=dataset):
+            resolved = DorisProvider().normalize(
+                cfg(
+                    {
+                        "type": "sql",
+                        "dialect": "doris",
+                        "sql": "SELECT * FROM events;",
+                        "columns": ["id"],
+                    }
+                )
+            )
+            assert _doris_read(resolved) is dataset
+
+        cursor.execute.assert_called_once_with(
+            "SELECT `id` FROM (SELECT * FROM events) AS tributo_source_projection"
+        )
+        connection.close.assert_called_once()
 
     def test_doris_builtin_shape(self) -> None:
         resolved = DorisProvider().normalize(

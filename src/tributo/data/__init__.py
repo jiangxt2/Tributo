@@ -45,6 +45,8 @@ from tributo.data.source_config import (
     SourceInput,
     SqlPartitioning,
     SqlSourceConfig,
+    apply_source_projection,
+    source_projection,
 )
 from tributo.exceptions import JobConfigurationError
 from tributo.plugin import discover_connector_plugins
@@ -111,6 +113,8 @@ __all__ = [
     "RawSourceConfig",
     "SourceInput",
     "SqlPartitioning",
+    "source_projection",
+    "apply_source_projection",
 ]
 
 # Auto-discover third-party connector plugins via entry_points

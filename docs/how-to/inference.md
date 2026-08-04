@@ -5,14 +5,17 @@ Run distributed batch inference with XGBoost + ONNX models across a Ray cluster.
 ## Quick Start
 
 ```python
+from tributo.data import ParquetSourceConfig
 from tributo.inference import InferenceConfig, run_batch_inference
 
 config = InferenceConfig(
-    s3_input_path="s3://your-bucket/input/*.parquet",
-    s3_output_path="s3://your-bucket/output/predictions/",
+    source=ParquetSourceConfig(
+        path="s3://your-bucket/input/*.parquet",
+        columns=["feature_0", "feature_1"],
+    ),
+    output_uri="s3://your-bucket/output/predictions/",
     model_uri="s3://your-bucket/models/xgboost_model.onnx",
-    prediction_column="prediction",
-    return_probs=True,
+    predictor_config={"prediction_column": "prediction", "return_probs": True},
     batch_size=4096,
     concurrency=4,
 )
@@ -21,22 +24,37 @@ result = run_batch_inference(config)
 print(f"Inference complete: {result['input_path']} -> {result['output_path']}")
 ```
 
+`result["input_path"]` is a credential-free display identifier. For SQL
+sources it includes the dialect, host, port when non-default, and database;
+it is not a connection string for re-use.
+
 ## JSON Configuration
 
 Create `inference.json`:
 
 ```json
 {
-  "s3_input_path": "s3://your-bucket/input/*.parquet",
-  "s3_output_path": "s3://your-bucket/output/",
-  "model_uri": "s3://your-bucket/models/xgboost_model.onnx",
-  "prediction_column": "prediction",
-  "return_probs": true,
-  "batch_size": 4096,
-  "concurrency": 4,
-  "num_cpus_per_actor": 1.0
+  "source": {
+    "type": "parquet",
+    "path": "s3://your-bucket/input/*.parquet",
+    "columns": ["feature_0", "feature_1"]
+  },
+  "model": {
+    "uri": "s3://your-bucket/models/xgboost_model.onnx",
+    "return_probs": true
+  },
+  "output": {
+    "uri": "s3://your-bucket/output/",
+    "prediction_column": "prediction"
+  },
+  "ray": {"batch_size": 4096, "concurrency": 4, "num_cpus_per_actor": 1.0}
 }
 ```
+
+`source` accepts the same canonical `SourceConfig` and `provider`/`uri`
+shapes used by training and embeddings. The historical `data.uri`,
+`data.input`, and ClickHouse fields remain compatible and are normalized
+before execution; they must not be mixed with `source`.
 
 ```python
 from tributo.inference import run_inference_from_json
@@ -59,19 +77,25 @@ print(f"Job submitted: {job_id}")
 
 | Field | Type | Description |
 |---|---|---|
-| `s3_input_path` | str | S3 glob pattern for input Parquet files. |
-| `s3_output_path` | str | S3 directory for output predictions. |
+| `source` | object | Canonical bounded input source. |
+| `input_uri` | str | Legacy input URI accepted by direct Python callers. |
+| `output_uri` | str | S3 or local directory for output predictions. |
 | `model_uri` | str | S3 or local path to ONNX model. |
-| `feature_columns` | list[str] | Feature column names. Empty = auto-detect from ONNX metadata. |
+| `bundle_uri` | str | Published model bundle URI, mutually exclusive with `model_uri`. |
+| `source.columns` | list[str] | Provider-native feature projection. Omit to auto-detect from ONNX metadata. |
 | `prediction_column` | str | Name of the output prediction column. Default: `prediction`. |
-| `return_probs` | bool | Include probability scores. Default: `false`. |
+| `return_probs` | bool | Include probability scores. Default: `true`. |
 | `batch_size` | int | Rows per inference batch. Default: `4096`. |
 | `concurrency` | int | Number of parallel inference actors. Default: `4`. |
 | `num_cpus_per_actor` | float | CPUs per actor. Default: `1.0`. |
 
 ## S3 Authentication
 
-Same three methods as [training](training.md#s3-authentication): IAM Role (preferred), environment variables, or explicit `s3_config` dict with `access_key_id` / `secret_access_key` / `endpoint`.
+Same three methods as [training](training.md#s3-authentication): IAM Role (preferred), environment variables, or explicit `source.s3` configuration with `access_key_id` / `secret_access_key` / `endpoint`. Legacy direct callers may continue to use `s3_config`.
+
+For a canonical SQL input with an S3 output, the output sink remains separate
+from the SQL connection. Configure output credentials through IAM or the AWS
+environment; SQL connection credentials are not reused as S3 credentials.
 
 ## See Also
 

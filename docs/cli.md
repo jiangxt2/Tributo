@@ -82,7 +82,7 @@ Batch text embedding and model management.
 ```bash
 # Run batch embedding
 uv run tributo embed batch \
-  --input s3://bucket/data.parquet \
+  --source '{"provider":"tributo.parquet","uri":"s3://bucket/data.parquet"}' \
   --output s3://bucket/embedded.lance \
   --model bge-small-zh \
   --text-column content \
@@ -101,6 +101,9 @@ uv run tributo embed serve status
 uv run tributo embed serve stop
 ```
 
+`--source` accepts canonical source JSON. Exactly one of `--source` and
+`--input` must be supplied; the legacy `--input` form remains supported.
+
 ## `tributo tune`
 
 Run hyperparameter optimization.
@@ -108,4 +111,3 @@ Run hyperparameter optimization.
 ```bash
 uv run tributo tune run --config tune_config.json
 ```
-

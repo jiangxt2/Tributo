@@ -53,26 +53,22 @@ details. `SourcePlan` and transform pushdown are deferred to D4.
 ```
 User code
   ↓
-InferenceConfig.model_validate_json(...)           ← Pydantic model
+InferenceConfig(source=... or legacy input fields)
   ↓
 run_batch_inference(config: InferenceConfig)       ← main public entry
   ↓
-  data_type dispatch (lines 151-):
-    ├── data_type == "clickhouse"
-    │     → load_ray_dataset_from_config({"type": "clickhouse", ...})
-    │       → _load_clickhouse()  ← deprecated loader wrapper
-    │
-    ├── input_uri.startswith("s3://")
-    │     → S3 connector (boto3 → ray.data.read_parquet)
-    │
-    └── else (local)
-          → ray.data.read_parquet(input_uri)
+_legacy_source(config) or canonical source
+  ↓
+load_ray_dataset_from_source(source.model_dump(mode="python"))
+  ↓
+ProviderRegistry.resolve() → provider.normalize()
+  ↓
+provider.open(resolved) → DatasetHandle.to_ray_dataset()
 ```
 
-**Key issue**: ClickHouse branch goes through the deprecated loader wrapper;
-S3 and local paths go directly to Ray Data or connector. These three paths are
-not unified — `InferenceConfig.data_type` has its own routing, separate from
-`training.data_loader`'s `SourceConfig`.
+Legacy JSON enters through `_legacy_json_source()` and is normalized to the same
+canonical source object before the provider loader is called. Feature columns
+are applied through the provider's native projection option.
 
 **Secondary entry**: `run_inference_from_json(config_path)` — reads JSON → builds
 `InferenceConfig` → calls `run_batch_inference()`.
@@ -84,14 +80,21 @@ not unified — `InferenceConfig.data_type` has its own routing, separate from
 ```
 CLI / Python API
   ↓
-submit_embedding_job(config_path, ...)
+submit_embedding_job(source=... or s3_input_path=...)
   ↓
 Ray Job submission (entrypoint script runs inside Ray cluster)
   ↓
-Embedding runner (daft → Ray inference → Lance)
+embeddings.batch_job._resolve_embedding_source()
   ↓
-Daft reads source data → Ray Data → model inference → Lance write
+load_ray_dataset_from_source(source.model_dump(mode="python"))
+  ↓
+ProviderRegistry.resolve() → provider.normalize() → DatasetHandle
+  ↓
+Ray Data → model inference → output writer
 ```
+
+Ray Job entrypoints carry only credential-free source configuration; credentials
+are resolved from the cluster environment or IAM.
 
 ### 4. CLI Data Entry
 

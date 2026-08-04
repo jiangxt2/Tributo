@@ -226,8 +226,18 @@ def _is_credential_key(key: str) -> bool:
     )
 
 
-def _credential_paths(value: Any, prefix: str = "") -> list[str]:
+def _credential_paths(
+    value: Any,
+    prefix: str = "",
+    *,
+    text_exempt_keys: frozenset[str] = frozenset(),
+    _skip_text_scan: bool = False,
+) -> list[str]:
     """Find credential-looking keys or URI values recursively.
+
+    ``text_exempt_keys`` identifies fields whose free-form strings are
+    execution payloads rather than credential configuration. Credential keys
+    nested inside those fields and URI credential checks remain enforced.
 
     The returned paths contain field names/positions only, never the values
     that triggered the check.
@@ -240,12 +250,29 @@ def _credential_paths(value: Any, prefix: str = "") -> list[str]:
             if _is_credential_key(key_text):
                 leaked.append(path)
             else:
-                leaked.extend(_credential_paths(nested, path))
+                leaked.extend(
+                    _credential_paths(
+                        nested,
+                        path,
+                        text_exempt_keys=text_exempt_keys,
+                        _skip_text_scan=(
+                            _skip_text_scan or key_text.lower() in text_exempt_keys
+                        ),
+                    )
+                )
     elif isinstance(value, (list, tuple)):
         for index, nested in enumerate(value):
-            leaked.extend(_credential_paths(nested, f"{prefix}[{index}]"))
+            leaked.extend(
+                _credential_paths(
+                    nested,
+                    f"{prefix}[{index}]",
+                    text_exempt_keys=text_exempt_keys,
+                    _skip_text_scan=_skip_text_scan,
+                )
+            )
     elif isinstance(value, str) and (
-        _uri_has_credentials(value) or _CREDENTIAL_TEXT_RE.search(value)
+        _uri_has_credentials(value)
+        or (not _skip_text_scan and _CREDENTIAL_TEXT_RE.search(value))
     ):
         leaked.append(prefix or "<value>")
     return leaked
