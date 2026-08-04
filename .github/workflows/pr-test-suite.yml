@@ -288,3 +288,42 @@ jobs:
           uv venv /tmp/smoke-venv --python 3.12
           uv pip install --python /tmp/smoke-venv/bin/python dist/*.whl
           /tmp/smoke-venv/bin/tributo --help
+
+  # Branch protection requires the code checks (Lint, Unit Tests, Package
+  # Build) to report success before a PR can merge. On docs-only changes
+  # those jobs are skipped by the paths filter, and GitHub treats a skipped
+  # required check as not-yet-reported, which blocks the merge. Report them
+  # as completed/success here so docs-only PRs stay mergeable.
+  report-skipped-checks:
+    name: Report Skipped Required Checks
+    runs-on: ubuntu-latest
+    needs: paths-filter
+    if: needs.paths-filter.outputs.code == 'false'
+    permissions:
+      checks: write
+    steps:
+      - uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        with:
+          script: |
+            const required = [
+              "Lint",
+              "Unit Tests (Python 3.12)",
+              "Unit Tests (Python 3.13)",
+              "Package Build & Smoke Test",
+            ];
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+            for (const name of required) {
+              await github.rest.checks.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name,
+                head_sha: context.sha,
+                status: "completed",
+                conclusion: "success",
+                details_url: runUrl,
+                output: {
+                  title: "Skipped — docs-only change",
+                  summary: "No files matching the code filters changed; the job was skipped by the paths filter. Reported as success so branch protection does not block the merge.",
+                },
+              });
+            }
