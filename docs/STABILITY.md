@@ -168,6 +168,7 @@ Last updated: 2026-08-03.
 | Module | Level | Notes |
 |--------|-------|-------|
 | `tributo._common.storage_profiles` | `beta` | Storage profile resolution |
+| `tributo._common.dependencies` | `beta` | Unified dependency probing layer |
 | All other `tributo._common.*` | `developer` | Internal shared utilities |
 
 ## Deprecation Schedule
