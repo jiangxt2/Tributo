@@ -864,10 +864,15 @@ def embed():
 
 
 @embed.command("batch")
-@click.option("--input", "input_path", required=True, help="S3 input Parquet path")
+@click.option(
+    "--source",
+    "source_json",
+    help="Canonical source configuration as a JSON object",
+)
+@click.option("--input", "input_path", help="Legacy S3 input Parquet path")
 @click.option("--output", "output_path", required=True, help="S3 output path")
 @click.option("--model", "model_name", default="bge-small-zh", help="Model name")
-@click.option("--text-column", default="text", help="Text column name")
+@click.option("--text-column", default=None, help="Text column name")
 @click.option("--batch-size", default=64, type=int, help="Inference batch size")
 @click.option("--concurrency", default=4, type=int, help="Number of actors")
 @click.option(
@@ -876,10 +881,11 @@ def embed():
     help="Ray Dashboard address",
 )
 def embed_batch(
-    input_path: str,
+    source_json: str | None,
+    input_path: str | None,
     output_path: str,
     model_name: str,
-    text_column: str,
+    text_column: str | None,
     batch_size: int,
     concurrency: int,
     address: str,
@@ -887,8 +893,20 @@ def embed_batch(
     """Submit a batch embedding job to the Ray cluster."""
     from tributo.embeddings.job_runner import submit_embedding_job
 
+    if (source_json is None) == (input_path is None):
+        raise click.UsageError("provide exactly one of --source or --input")
+    source = None
+    if source_json is not None:
+        try:
+            source = json.loads(source_json)
+        except json.JSONDecodeError as exc:
+            raise click.BadParameter(
+                f"invalid source JSON: {exc}", param_hint="--source"
+            ) from exc
+
     try:
         job_id = submit_embedding_job(
+            source=source,
             s3_input_path=input_path,
             s3_output_path=output_path,
             model_name=model_name,

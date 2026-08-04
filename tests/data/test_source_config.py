@@ -15,6 +15,8 @@ from tributo.data.source_config import (
     LegacyConfigNormalizer,
     ParquetSourceConfig,
     SqlSourceConfig,
+    apply_source_projection,
+    source_projection,
 )
 
 
@@ -223,3 +225,34 @@ class TestPydanticValidation:
     def test_csv_requires_path(self) -> None:
         with pytest.raises(ValidationError):
             CsvSourceConfig(path="")  # type: ignore[arg-type]
+
+
+class TestSourceProjection:
+    """Provider-native projection helpers."""
+
+    def test_sql_projection_is_preserved(self) -> None:
+        source = SqlSourceConfig(
+            dialect="clickhouse",
+            sql="SELECT * FROM events",
+            columns=["id", "score"],
+        )
+        assert source_projection(source) == ["id", "score"]
+        narrowed = apply_source_projection(source, ["score"])
+        assert isinstance(narrowed, SqlSourceConfig)
+        assert narrowed.columns == ["score"]
+
+    def test_projection_outside_existing_columns_fails(self) -> None:
+        source = ParquetSourceConfig(path="data.parquet", columns=["id"])
+        with pytest.raises(ValueError, match="outside the configured"):
+            apply_source_projection(source, ["missing"])
+
+    def test_provider_projection_uses_native_option(self) -> None:
+        from tributo.data.source_config import ProviderSourceConfig
+
+        source = ProviderSourceConfig(
+            provider="tributo.parquet",
+            uri="data.parquet",
+        )
+        projected = apply_source_projection(source, ["text"])
+        assert isinstance(projected, ProviderSourceConfig)
+        assert projected.options == {"columns": ["text"]}

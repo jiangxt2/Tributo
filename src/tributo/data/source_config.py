@@ -74,6 +74,8 @@ class SqlSourceConfig(StrictConfigModel):
         sql: SQL query string.
         params: Query parameter dict for parameterized SQL (clickhouse_connect
             ``parameters``).  ``None`` = no parameters.
+        columns: Column names to project in the SQL reader (``None`` = all
+            columns).
     """
 
     type: Literal["sql"] = "sql"  # noqa: A003
@@ -85,6 +87,7 @@ class SqlSourceConfig(StrictConfigModel):
     password: str | None = None
     sql: str = ""
     params: dict[str, Any] | None = None
+    columns: list[str] | None = None
     partitioning: SqlPartitioning | None = None
 
     @model_validator(mode="after")
@@ -188,6 +191,83 @@ class ProviderSourceConfig(StrictConfigModel):
 # (a dict containing "provider" resolves to ProviderSourceConfig; the mixed
 # shape carrying both "provider" and "type" fails against both members).
 CanonicalSourceInput = BuiltinSourceConfig | ProviderSourceConfig
+
+
+_PROJECTION_OPTIONS: dict[str, str] = {
+    "tributo.parquet": "columns",
+    "parquet": "columns",
+    "tributo.csv": "columns",
+    "csv": "columns",
+    "tributo.clickhouse": "columns",
+    "clickhouse": "columns",
+    "tributo.doris": "columns",
+    "doris": "columns",
+    "tributo.iceberg": "selected_fields",
+    "iceberg": "selected_fields",
+}
+
+
+@PublicAPI(stability="beta")
+def source_projection(source: CanonicalSourceInput) -> list[str] | None:
+    """Return the provider-native projection configured on ``source``.
+
+    The helper deliberately only handles providers with a documented
+    projection option.  Unknown providers must define their own projection
+    contract instead of receiving a silently ignored option.
+    """
+    if isinstance(source, (ParquetSourceConfig, CsvSourceConfig, SqlSourceConfig)):
+        return list(source.columns) if source.columns else None
+    if isinstance(source, IcebergSourceConfig):
+        return list(source.selected_fields) if source.selected_fields else None
+    option_name = _PROJECTION_OPTIONS.get(source.provider)
+    if option_name is None:
+        return None
+    value = source.options.get(option_name)
+    if value is None:
+        return None
+    if not isinstance(value, list) or not all(
+        isinstance(column, str) for column in value
+    ):
+        raise ValueError(f"source option {option_name!r} must be a list of strings")
+    return list(value) if value else None
+
+
+@PublicAPI(stability="beta")
+def apply_source_projection(
+    source: CanonicalSourceInput, columns: list[str]
+) -> CanonicalSourceInput:
+    """Apply ``columns`` using the source's native projection option.
+
+    An existing projection may be narrowed only when every requested column
+    is already present.  Requesting a column outside the existing projection
+    fails before the provider opens a dataset, preventing a partial read.
+    """
+    if not columns:
+        return source
+    if not all(isinstance(column, str) and column for column in columns):
+        raise ValueError("source projection columns must be non-empty strings")
+
+    existing = source_projection(source)
+    if existing is not None and any(column not in existing for column in columns):
+        missing = [column for column in columns if column not in existing]
+        raise ValueError(
+            "requested projection contains columns outside the configured "
+            f"source projection: {missing!r}"
+        )
+
+    if isinstance(source, (ParquetSourceConfig, CsvSourceConfig, SqlSourceConfig)):
+        return source.model_copy(update={"columns": list(columns)})
+    if isinstance(source, IcebergSourceConfig):
+        return source.model_copy(update={"selected_fields": list(columns)})
+
+    option_name = _PROJECTION_OPTIONS.get(source.provider)
+    if option_name is None:
+        raise ValueError(
+            f"provider {source.provider!r} does not declare a projection option"
+        )
+    options = dict(source.options)
+    options[option_name] = list(columns)
+    return source.model_copy(update={"options": options})
 
 
 @PublicAPI(stability="beta")

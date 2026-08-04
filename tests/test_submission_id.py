@@ -78,6 +78,99 @@ class TestJobRunnerSubmissionId:
         assert "submission_id" in call_kwargs
         assert call_kwargs["submission_id"].startswith("tributo-embed-")
 
+    def test_canonical_source_with_inline_credentials_is_rejected(self):
+        """Ray entrypoints must never carry inline source credentials."""
+        from tributo.embeddings.job_runner import submit_embedding_job
+
+        mock_client = MagicMock()
+        with patch(
+            "tributo.embeddings.job_runner.JobSubmissionClient",
+            return_value=mock_client,
+        ):
+            with pytest.raises(ValueError, match="environment variables"):
+                submit_embedding_job(
+                    source={
+                        "provider": "tributo.clickhouse",
+                        "uri": "clickhouse://host/db",
+                        "options": {
+                            "sql": "SELECT * FROM events",
+                            "password": "inline-secret",
+                        },
+                    },
+                    s3_output_path="s3://bucket/out.lance",
+                )
+
+        mock_client.submit_job.assert_not_called()
+
+    def test_canonical_sql_text_allows_credential_like_column_literals(self):
+        """SQL business text should not be rejected by credential heuristics."""
+        from tributo.embeddings.job_runner import submit_embedding_job
+
+        mock_client = MagicMock()
+        mock_client.submit_job.return_value = "job-sql"
+        with patch(
+            "tributo.embeddings.job_runner.JobSubmissionClient",
+            return_value=mock_client,
+        ):
+            job_id = submit_embedding_job(
+                source={
+                    "provider": "tributo.clickhouse",
+                    "uri": "clickhouse://host/db",
+                    "options": {"sql": "SELECT * FROM users WHERE password = 'x'"},
+                },
+                s3_output_path="s3://bucket/out.lance",
+            )
+
+        assert job_id == "job-sql"
+        entrypoint = mock_client.submit_job.call_args.kwargs["entrypoint"]
+        assert "password" in entrypoint
+        assert "SELECT" in entrypoint
+
+    def test_canonical_source_with_credential_params_is_rejected(self):
+        """Parameterized credentials must not enter the Ray entrypoint."""
+        from tributo.embeddings.job_runner import submit_embedding_job
+
+        mock_client = MagicMock()
+        with patch(
+            "tributo.embeddings.job_runner.JobSubmissionClient",
+            return_value=mock_client,
+        ):
+            with pytest.raises(ValueError, match="environment variables"):
+                submit_embedding_job(
+                    source={
+                        "provider": "tributo.clickhouse",
+                        "uri": "clickhouse://host/db",
+                        "options": {
+                            "sql": "SELECT * FROM users WHERE id = {id}",
+                            "params": {"password": "inline-secret"},
+                        },
+                    },
+                    s3_output_path="s3://bucket/out.lance",
+                )
+
+        mock_client.submit_job.assert_not_called()
+
+    def test_canonical_source_with_uri_userinfo_is_rejected(self):
+        """URI userinfo must not enter the Ray entrypoint."""
+        from tributo.embeddings.job_runner import submit_embedding_job
+
+        mock_client = MagicMock()
+        with patch(
+            "tributo.embeddings.job_runner.JobSubmissionClient",
+            return_value=mock_client,
+        ):
+            with pytest.raises(ValueError, match="environment variables"):
+                submit_embedding_job(
+                    source={
+                        "provider": "tributo.clickhouse",
+                        "uri": "clickhouse://user:pass@host/db",
+                        "options": {"sql": "SELECT 1"},
+                    },
+                    s3_output_path="s3://bucket/out.lance",
+                )
+
+        mock_client.submit_job.assert_not_called()
+
     def test_training_job_passes_submission_id(self):
         """training/job_submitter 应将 submission_id 传给 Ray API。"""
         mock_client = MagicMock()

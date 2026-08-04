@@ -6,7 +6,7 @@ Generate embeddings for large text datasets using BGE models, distributed across
 
 ```bash
 uv run tributo embed batch \
-  --input s3://bucket/articles/*.parquet \
+  --source '{"provider":"tributo.parquet","uri":"s3://bucket/articles/*.parquet"}' \
   --output s3://bucket/articles_embedded.lance \
   --model bge-small-zh \
   --text-column content \
@@ -27,7 +27,10 @@ for spec in list_models():
 
 # Submit a batch embedding job via Ray Jobs API
 job_id = submit_embedding_job(
-    s3_input_path="s3://bucket/data.parquet",
+    source={
+        "provider": "tributo.parquet",
+        "uri": "s3://bucket/data.parquet",
+    },
     s3_output_path="s3://bucket/embedded.lance",
     model_name="bge-small-zh",
     text_column="content",
@@ -35,6 +38,21 @@ job_id = submit_embedding_job(
     concurrency=4,
 )
 ```
+
+`--source` and `source=` use the canonical provider/URI contract. The legacy
+`--input` and `s3_input_path=` forms remain supported for Parquet input. Supply
+`--text-column` / `text_column` when the source projection contains multiple
+columns; the job applies the text projection through the provider.
+
+Ray Jobs entrypoints must not carry configuration credentials.
+`submit_embedding_job` and `tributo embed batch` reject inline passwords, URI
+userinfo, and credential options in `source`; configure source credentials
+through the Ray cluster environment (for example
+`TRIBUTO_CLICKHOUSE_PASSWORD` or AWS environment variables) or IAM. SQL text
+is execution input and may contain business literals such as
+`password = 'x'`, but real credentials must not be embedded in SQL text or
+parameter values. Direct local provider calls may still use explicit source
+credentials where the provider contract supports them.
 
 ## Available Models
 

@@ -275,6 +275,46 @@ class TestEmbedCommand:
             assert result.exit_code == 1
             assert "S3 error" in result.output
 
+    def test_embed_batch_accepts_source(self, runner):
+        """embed batch should accept the canonical source option."""
+        with patch("tributo.embeddings.job_runner.submit_embedding_job") as mock_submit:
+            mock_submit.return_value = "embed-job-2"
+            result = runner.invoke(
+                main,
+                [
+                    "embed",
+                    "batch",
+                    "--source",
+                    '{"provider":"tributo.parquet","uri":"s3://bucket/in.parquet"}',
+                    "--output",
+                    "s3://bucket/out.lance",
+                ],
+            )
+            assert result.exit_code == 0
+            assert "embed-job-2" in result.output
+            assert mock_submit.call_args.kwargs["source"] == {
+                "provider": "tributo.parquet",
+                "uri": "s3://bucket/in.parquet",
+            }
+
+    def test_embed_batch_rejects_mixed_input_options(self, runner):
+        """--source and legacy --input are mutually exclusive."""
+        result = runner.invoke(
+            main,
+            [
+                "embed",
+                "batch",
+                "--source",
+                '{"provider":"tributo.parquet","uri":"s3://bucket/in.parquet"}',
+                "--input",
+                "s3://bucket/legacy.parquet",
+                "--output",
+                "s3://bucket/out.lance",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "exactly one" in result.output or "provide exactly one" in result.output
+
 
 # --- version ---
 
