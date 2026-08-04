@@ -46,6 +46,7 @@ from tributo.training.dnn_trainer import (
     DNNOutputConfig,
     DNNTrainingParams,
     FeatureItemConfig,
+    build_export_checkpoint_config,
     build_features_from_config,
 )
 from tributo.training.registry import register
@@ -429,6 +430,20 @@ def pu_train_loop_per_worker(config: dict[str, Any]) -> None:
             }
             (checkpoint_dir / "preprocessor.json").write_text(
                 json.dumps(preprocessor_state, ensure_ascii=False, default=str)
+            )
+
+            model_config = build_export_checkpoint_config(
+                [f.__dict__ for f in features],
+                model_cfg,
+                trainer_type="pu",
+                task_type="pu_classification",
+                framework_version=torch.__version__,
+                extra_metadata={
+                    "pu": {**pu_cfg, "class_prior": class_prior},
+                },
+            )
+            (checkpoint_dir / "model_config.json").write_text(
+                json.dumps(model_config, ensure_ascii=False, default=str)
             )
 
             checkpoint = Checkpoint.from_directory(str(checkpoint_dir))
