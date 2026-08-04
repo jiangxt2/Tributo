@@ -41,8 +41,18 @@ def _available_port() -> int:
 
 
 @pytest.fixture()
-def local_ray_runtime(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Own the two-CPU Ray runtime used by the required walking skeleton."""
+def local_ray_runtime(
+    minio_service: S3Service,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[None]:
+    """Own the two-CPU Ray runtime used by the required walking skeleton.
+
+    Depends on ``minio_service`` so the MinIO env vars (endpoint,
+    credentials, storage profile) are set before ``ray.init``: Ray
+    workers and Serve replicas inherit the environment captured at init
+    time, and the Serve replica resolves ``storage_profile="test"`` via
+    ``TRIBUTO_STORAGE_PROFILE_TEST``.
+    """
     import ray
     from ray._private import ray_constants
 
@@ -62,7 +72,6 @@ def local_ray_runtime(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO", "0")
     try:
         ray.init(include_dashboard=False, num_cpus=2)
-        print("[ws] ray initialized", flush=True)
         yield
     finally:
         if ray.is_initialized():
@@ -74,11 +83,14 @@ def local_ray_runtime(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 def minio_service(monkeypatch: pytest.MonkeyPatch) -> Iterator[S3Service]:
     """Own a required MinIO service without converting outages to skips."""
     service = S3Service.start_minio()
-    print("[ws] minio started", flush=True)
     monkeypatch.setenv("S3_ENDPOINT", service.endpoint)
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "minioadmin")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "minioadmin123")
     monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+    monkeypatch.setenv(
+        "TRIBUTO_STORAGE_PROFILE_TEST",
+        json.dumps({"path_style": True}),
+    )
     try:
         yield service
     finally:
@@ -94,14 +106,9 @@ def minio_bucket(
 
     from tributo._common.storage import get_boto3_client
 
-    monkeypatch.setenv(
-        "TRIBUTO_STORAGE_PROFILE_TEST",
-        json.dumps({"path_style": True}),
-    )
     client = get_boto3_client(path_style=True)
     bucket = f"tributo-walking-skeleton-{uuid.uuid4().hex[:12]}"
     client.create_bucket(Bucket=bucket)
-    print(f"[ws] bucket created {bucket}", flush=True)
     try:
         yield bucket
     finally:
@@ -194,7 +201,6 @@ def test_walking_skeleton(
     ]
     parquet_path = tmp_path / "training-data"
     ray.data.from_items(rows).write_parquet(str(parquet_path))
-    print("[ws] parquet written", flush=True)
 
     source = {
         "provider": "tributo.parquet",
@@ -202,24 +208,19 @@ def test_walking_skeleton(
         "options": {},
     }
     dataset = load_ray_dataset_from_source(source)
-    print("[ws] dataset loaded", flush=True)
     trainer = XGBoostTrainerImpl(
         datasets={"train": dataset},
         config=_training_config(source, tmp_path / "ray-results"),
     )
-    print("[ws] trainer built", flush=True)
 
     bundle_uri = f"s3://{minio_bucket}/models"
-    print("[ws] trainer.run start", flush=True)
     summary = trainer.run(bundle_config=_bundle_config(bundle_uri))
-    print(f"[ws] trainer.run done: {summary['status']}", flush=True)
 
     assert summary["status"] == "succeeded"
     assert summary["canonical_uri"].startswith(bundle_uri)
 
     reader = BundleReader()
     manifest = reader.read_manifest(summary["canonical_uri"], storage_profile="test")
-    print("[ws] manifest read", flush=True)
     assert manifest.schema_version == 1
     assert manifest.input_signature is not None
     assert manifest.output_signature is not None
@@ -230,7 +231,6 @@ def test_walking_skeleton(
         predictor_config={"return_probs": False},
         storage_profile="test",
     )
-    print("[ws] predictor built", flush=True)
     try:
         predictions = predictor(
             {
@@ -238,7 +238,6 @@ def test_walking_skeleton(
                 "feature_b": np.asarray([1.0, 0.0], dtype=np.float32),
             }
         )
-        print("[ws] predictor done", flush=True)
         assert predictions["prediction"].shape == (2,)
     finally:
         predictor.close()
@@ -248,11 +247,9 @@ def test_walking_skeleton(
     serve_started = False
     try:
         try:
-            print("[ws] serve.start", flush=True)
             serve.start(
                 http_options={"host": "127.0.0.1", "port": port},
             )
-            print("[ws] serve started", flush=True)
         except BaseException:
             # Serve may have started its controller before a proxy/deployment
             # error is raised; preserve the original failure after cleanup.
@@ -264,7 +261,6 @@ def test_walking_skeleton(
             name="tributo-walking-skeleton-model",
             num_replicas=1,
         )(ONNXModel)
-        print("[ws] serve.run start", flush=True)
         serve.run(
             deployment.bind(
                 bundle_uri=summary["canonical_uri"],
@@ -274,9 +270,7 @@ def test_walking_skeleton(
             name=app_name,
             route_prefix="/predict",
         )
-        print("[ws] serve running", flush=True)
 
-        print("[ws] http request", flush=True)
         response = httpx.post(
             f"http://127.0.0.1:{port}/predict",
             json={
@@ -292,7 +286,6 @@ def test_walking_skeleton(
             },
             timeout=30.0,
         )
-        print("[ws] http done", flush=True)
         assert response.status_code == 200, response.text
         payload = response.json()
         assert len(payload["predictions"]) == 2
