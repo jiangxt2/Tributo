@@ -44,20 +44,30 @@ def _available_port() -> int:
 def local_ray_runtime(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Own the two-CPU Ray runtime used by the required walking skeleton."""
     import ray
+    from ray._private import ray_constants
 
     if ray.is_initialized():
         raise RuntimeError(
             "walking skeleton requires an uninitialized local Ray runtime"
         )
 
+    # CI launches pytest under `uv run`. Ray 2.55 then propagates the uv
+    # runtime environment to workers by default, so raylet rebuilds the
+    # project env inside the uploaded working dir, fails, and falls back to
+    # the system interpreter (no ray module): worker startup repeatedly
+    # fails and Ray Data tasks never schedule. Mirror the conftest.py
+    # ray_local_runtime fixture and disable the propagation.
+    previous_uv_runtime_env = ray_constants.RAY_ENABLE_UV_RUN_RUNTIME_ENV
+    ray_constants.RAY_ENABLE_UV_RUN_RUNTIME_ENV = False
     monkeypatch.setenv("RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO", "0")
-    ray.init(include_dashboard=False, num_cpus=2)
-    print("[ws] ray initialized", flush=True)
     try:
+        ray.init(include_dashboard=False, num_cpus=2)
+        print("[ws] ray initialized", flush=True)
         yield
     finally:
         if ray.is_initialized():
             ray.shutdown()
+        ray_constants.RAY_ENABLE_UV_RUN_RUNTIME_ENV = previous_uv_runtime_env
 
 
 @pytest.fixture()
