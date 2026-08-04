@@ -127,7 +127,10 @@ def _bundle_config(bundle_uri: str) -> Any:
             ExportTarget(
                 name="xgboost-onnx",
                 format="onnx",
-                options={"opset": 18},
+                # XGBoostONNXOptions locks opset to 12 (onnxmltools
+                # constraint); 18 is the TorchONNXOptions value used by the
+                # DNN/PU vertical slices.
+                options={"opset": 12},
             )
         ],
         roles={"inference": "xgboost-onnx"},
