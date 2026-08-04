@@ -5,6 +5,8 @@ on:
     branches: [master]
   push:
     branches: [master]
+  merge_group:
+    types: [checks_requested]
 
 concurrency:
   group: pr-tests-${{ github.event.pull_request.number || github.ref }}
@@ -17,21 +19,25 @@ jobs:
     name: Paths Filter
     runs-on: ubuntu-latest
     outputs:
-      code: ${{ steps.filter.outputs.code }}
+      # Merge queue runs have no pull_request path context; execute the full
+      # PR matrix so required checks cannot remain pending or be skipped.
+      code: ${{ github.event_name == 'merge_group' || steps.filter.outputs.code == 'true' }}
       # model_export is a subset of code: the export-contract job runs
       # only when the export framework or its tests changed.
-      model_export: ${{ steps.filter.outputs.model_export }}
-      trainer_bundle: ${{ steps.filter.outputs.trainer_bundle }}
+      model_export: ${{ github.event_name == 'merge_group' || steps.filter.outputs.model_export == 'true' }}
+      trainer_bundle: ${{ github.event_name == 'merge_group' || steps.filter.outputs.trainer_bundle == 'true' }}
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
       - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36
         id: filter
+        if: github.event_name != 'merge_group'
         with:
           filters: |
             code:
               - "src/**"
               - "tests/**"
               - "pyproject.toml"
+              - "uv.lock"
               - ".github/actions/**"
               - ".github/workflows/**"
               - "scripts/**"
@@ -53,16 +59,30 @@ jobs:
   dco:
     name: DCO Check
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+    env:
+      EVENT_NAME: ${{ github.event_name }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           fetch-depth: 0
       - name: Check Signed-off-by
         run: |
-          git fetch origin "${{ github.event.pull_request.base.sha }}"
+          # merge_group.head_sha is a synthetic queue commit and may be a
+          # squash commit without a DCO trailer. The required pull_request
+          # check has already validated its contributing commits before the
+          # PR can enter the merge queue, so publish a pass-through result.
+          if [ "$EVENT_NAME" = "merge_group" ]; then
+            echo "DCO was validated on pull_request before queue admission"
+            exit 0
+          fi
+
+          git fetch origin "$BASE_SHA"
           FAIL=0
-          for commit in $(git log --format='%H' "${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"); do
+          COMMITS=$(git log --format='%H' "$BASE_SHA..$HEAD_SHA")
+          for commit in $COMMITS; do
             if ! git log -1 --format='%B' "$commit" | grep -qE "^Signed-off-by: [^<]+ <[^>]+>$"; then
               echo "❌ Commit $commit is missing Signed-off-by"
               FAIL=1
@@ -327,3 +347,123 @@ jobs:
                 },
               });
             }
+
+  # O1 Core: this job is the required PR walking-skeleton gate.  It is
+  # controlled by paths-filter at job level, never by workflow-level path
+  # filters, so the core-gate aggregator can always report a terminal result.
+  core-walking-skeleton:
+    name: Core Walking Skeleton
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: paths-filter
+    if: needs.paths-filter.outputs.code == 'true'
+    env:
+      OMP_NUM_THREADS: "1"
+      RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO: "0"
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+
+      - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
+        with:
+          python-version: "3.12"
+
+      - name: Install locked integration and training dependencies
+        run: uv sync --extra dev --extra test-integration --extra training --locked
+
+      - name: Verify walking-skeleton dependencies
+        run: |
+          uv run --locked --no-sync python -c \
+            "import boto3, httpx, onnxmltools, onnxruntime, ray, xgboost"
+
+      - name: Run walking skeleton
+        run: |
+          uv run --locked --no-sync python -m pytest \
+            -m tributo_walking_skeleton tests/integration/test_walking_skeleton.py \
+            -v --tb=short --timeout=600
+
+  # Keep this aggregator independent from DCO.  DCO is a separate required
+  # check, runs on pull_request/merge_group, and remains skipped on push/master.
+  # The shell assertions make failure/cancelled terminal states fail the gate;
+  # skipped is accepted only when the corresponding paths-filter output says
+  # that the job is not applicable.
+  core-gate:
+    name: core-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: always()
+    needs:
+      - paths-filter
+      - lint
+      - unit-tests
+      - export-contract
+      - trainer-bundle-it
+      - export-s3
+      - ray-runtime-env
+      - build
+      - core-walking-skeleton
+    steps:
+      - name: Validate required job outcomes
+        env:
+          PATHS_RESULT: ${{ needs.paths-filter.result }}
+          CODE: ${{ needs.paths-filter.outputs.code }}
+          MODEL_EXPORT: ${{ needs.paths-filter.outputs.model_export }}
+          TRAINER_BUNDLE: ${{ needs.paths-filter.outputs.trainer_bundle }}
+          LINT_RESULT: ${{ needs.lint.result }}
+          UNIT_RESULT: ${{ needs.unit-tests.result }}
+          EXPORT_CONTRACT_RESULT: ${{ needs.export-contract.result }}
+          TRAINER_BUNDLE_RESULT: ${{ needs.trainer-bundle-it.result }}
+          EXPORT_S3_RESULT: ${{ needs.export-s3.result }}
+          RAY_RUNTIME_RESULT: ${{ needs.ray-runtime-env.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          WALKING_RESULT: ${{ needs.core-walking-skeleton.result }}
+        run: |
+          set -eu
+
+          fail() {
+            echo "core-gate: $1" >&2
+            exit 1
+          }
+
+          require_success() {
+            name="$1"
+            result="$2"
+            [ "$result" = "success" ] || fail "$name finished with $result"
+          }
+
+          require_skipped() {
+            name="$1"
+            result="$2"
+            [ "$result" = "skipped" ] || fail "$name was expected to skip but finished with $result"
+          }
+
+          [ "$PATHS_RESULT" = "success" ] || fail "paths-filter finished with $PATHS_RESULT"
+
+          if [ "$CODE" = "true" ]; then
+            require_success lint "$LINT_RESULT"
+            require_success unit-tests "$UNIT_RESULT"
+            require_success export-s3 "$EXPORT_S3_RESULT"
+            require_success ray-runtime-env "$RAY_RUNTIME_RESULT"
+            require_success build "$BUILD_RESULT"
+            require_success core-walking-skeleton "$WALKING_RESULT"
+          else
+            require_skipped lint "$LINT_RESULT"
+            require_skipped unit-tests "$UNIT_RESULT"
+            require_skipped export-s3 "$EXPORT_S3_RESULT"
+            require_skipped ray-runtime-env "$RAY_RUNTIME_RESULT"
+            require_skipped build "$BUILD_RESULT"
+            require_skipped core-walking-skeleton "$WALKING_RESULT"
+          fi
+
+          if [ "$MODEL_EXPORT" = "true" ]; then
+            require_success export-contract "$EXPORT_CONTRACT_RESULT"
+          else
+            require_skipped export-contract "$EXPORT_CONTRACT_RESULT"
+          fi
+
+          if [ "$TRAINER_BUNDLE" = "true" ]; then
+            require_success trainer-bundle-it "$TRAINER_BUNDLE_RESULT"
+          else
+            require_skipped trainer-bundle-it "$TRAINER_BUNDLE_RESULT"
+          fi
+
+          echo "core-gate: all applicable jobs completed successfully"

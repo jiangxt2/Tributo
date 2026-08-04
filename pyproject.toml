@@ -219,6 +219,7 @@ markers = [
     "s3_contract: marks S3-compatible contract tests (default backend: Moto)",
     "minio_compat: marks tests that require real MinIO compatibility",
     "integration: marks tests that require real services (Ray Serve, MLflow, Docker cluster) (deselect with '-m \"not integration\"')",
+    "tributo_walking_skeleton: marks the required core training-to-serving walking skeleton",
     "ray_runtime_env: marks tests for Ray uv runtime-env propagation",
 ]
 addopts = "-m 'not slow and not minio_compat and not ray_runtime_env'"
