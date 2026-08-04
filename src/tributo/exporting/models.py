@@ -124,6 +124,12 @@ class BundleOutputConfig(BaseModel):
         min_length=1,
         max_length=256,
     )
+    run_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=256,
+        description="Stable logical run identifier used for bundle idempotency",
+    )
     alias: AliasConfig | None = None
     roles: dict[str, str] = Field(default_factory=dict)
     targets: list[ExportTarget] | None = Field(
@@ -132,6 +138,9 @@ class BundleOutputConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_bundle_mode(self) -> BundleOutputConfig:
+        if self.request_id is not None and self.run_id is not None:
+            if self.request_id != self.run_id:
+                raise ValueError("request_id and run_id must identify the same run")
         if self.targets is not None:
             if not self.bundle_uri:
                 raise ValueError("bundle_uri is required when targets are specified")

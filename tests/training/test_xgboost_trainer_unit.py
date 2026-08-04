@@ -16,6 +16,8 @@ from tributo.training.xgboost_trainer import (
     TrainingParams,
     XGBoostDataConfig,
     XGBoostTrainingConfig,
+    _merge_xgb_eval_results,
+    _populate_xgb_eval_metrics,
 )
 
 
@@ -354,6 +356,22 @@ class TestXGBoostTrainingConfig:
             }
         )
         assert cfg.data.feature_columns == ["a", "b", "c"]
+
+    def test_resume_eval_metrics_include_current_and_history_keys(self):
+        metrics = {}
+        _populate_xgb_eval_metrics(
+            metrics,
+            {"train": {"logloss": [0.8, 0.4]}},
+        )
+        assert metrics["train-logloss"] == 0.4
+        assert metrics["train-logloss_history"] == [0.8, 0.4]
+
+    def test_resume_eval_history_is_continuous(self):
+        merged = _merge_xgb_eval_results(
+            {"train": {"logloss": [0.8, 0.4]}},
+            {"train": {"logloss": [0.3, 0.2]}},
+        )
+        assert merged == {"train": {"logloss": [0.8, 0.4, 0.3, 0.2]}}
 
 
 if __name__ == "__main__":

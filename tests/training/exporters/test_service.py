@@ -33,7 +33,7 @@ from tributo.exporting.registries import (
     ValidatorRegistry,
 )
 from tributo.exporting.runtime import BundleModel, BundleModelLoader
-from tributo.exporting.service import BundleExportService
+from tributo.exporting.service import BundleExportService, bundle_id_for_request
 
 # ── Fake components ───────────────────────────────────────────────────────────
 
@@ -152,6 +152,19 @@ def _make_registries() -> tuple[ExportRegistry, ValidatorRegistry]:
 
 
 class TestBundleExportService:
+    def test_run_id_is_stable_bundle_identity(self, tmp_path: Path) -> None:
+        config = _make_config(tmp_path).model_copy(update={"run_id": "run-42"})
+        assert bundle_id_for_request("run-42") == bundle_id_for_request("run-42")
+        result = BundleExportService(
+            export_registry=_make_registries()[0],
+            validator_registry=_make_registries()[1],
+        ).export_bundle(source=_make_source(), config=config)
+        assert result.bundle_id == bundle_id_for_request("run-42")
+
+    def test_request_id_and_run_id_must_match(self) -> None:
+        with pytest.raises(ValueError, match="same run"):
+            BundleOutputConfig(request_id="request-1", run_id="run-1")
+
     def test_full_lifecycle_success(self, tmp_path: Path) -> None:
         er, vr = _make_registries()
         service = BundleExportService(

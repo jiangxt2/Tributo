@@ -41,6 +41,7 @@ from tributo.training.algorithm_spec import (
     ResourceHints,
 )
 from tributo.training.base import BaseTrainer
+from tributo.training.checkpoint import ResumeConfig
 from tributo.training.dnn_trainer import (
     DNNModelConfig,
     DNNOutputConfig,
@@ -110,9 +111,10 @@ class PURayConfig(StrictConfigModel):
         description=(
             "Max automatic retries on worker failure. "
             "0 = no retry, -1 = unlimited. "
-            "Note: checkpoint resume is not yet supported; retries restart from scratch."
+            "When resume.enabled is true, retries restore the latest retained checkpoint."
         ),
     )
+    resume: ResumeConfig = Field(default_factory=ResumeConfig)
 
 
 class PUTrainingConfig(StrictConfigModel):
@@ -163,6 +165,14 @@ def pu_train_loop_per_worker(config: dict[str, Any]) -> None:
     import torch.optim as optim
     from torch.utils.data import DataLoader
 
+    from tributo.training.checkpoint import (
+        ResumeConfig,
+        capture_rng_state,
+        checkpoint_directory,
+        read_resume_manifest,
+        restore_rng_state,
+        write_resume_manifest,
+    )
     from tributo.training.data_loader import load_ray_dataset_from_source
     from tributo.training.features.column_types import (
         features_from_dicts,
@@ -181,6 +191,25 @@ def pu_train_loop_per_worker(config: dict[str, Any]) -> None:
     model_cfg = config.get("model", {})
     pu_cfg = config.get("pu", {})
     training_cfg = config.get("training", {})
+    resume_cfg = ResumeConfig.model_validate(config.get("resume") or {})
+    resume_enabled = resume_cfg.effective_enabled
+    checkpoint_interval = resume_cfg.checkpoint_interval
+    resume_checkpoint = ray.train.get_checkpoint() if resume_enabled else None
+    resume_transformer = None
+    if resume_checkpoint is not None:
+        with checkpoint_directory(resume_checkpoint) as checkpoint_dir:
+            read_resume_manifest(
+                checkpoint_dir,
+                expected_trainer_type="pu",
+                expected_resume_id=resume_cfg.resume_id,
+            )
+            resume_transformer = FeatureTransformer.load(
+                checkpoint_dir / "preprocessor.json"
+            )
+        if resume_transformer.features != features:
+            raise ValueError(
+                "Resume checkpoint preprocessing features do not match the current run"
+            )
     data_cfg = config.get("data")
 
     # ── Data loading (inside worker, bypasses driver) ──
@@ -257,10 +286,12 @@ def pu_train_loop_per_worker(config: dict[str, Any]) -> None:
     train_idx = indices[n_val:]
 
     # Fit preprocessor
-    transformer = FeatureTransformer(features)
-    train_processed = transformer.fit_transform(
-        {name: train_data[name][train_idx] for name in feature_names}
-    )
+    transformer = resume_transformer or FeatureTransformer(features)
+    train_data_split = {name: train_data[name][train_idx] for name in feature_names}
+    if resume_transformer is None:
+        train_processed = transformer.fit_transform(train_data_split)
+    else:
+        train_processed = transformer.transform(train_data_split)
     train_labels_split = train_labels[train_idx]
 
     val_processed = None
@@ -331,13 +362,44 @@ def pu_train_loop_per_worker(config: dict[str, Any]) -> None:
         weight_decay=training_cfg.get("weight_decay", 0.0),
     )
 
-    # ── Training loop ──
-    epochs = training_cfg.get("epochs", 10)
+    start_epoch = 0
     best_val_loss = float("inf")
     patience_counter = 0
+    if resume_checkpoint is not None:
+        with checkpoint_directory(resume_checkpoint) as checkpoint_dir:
+            envelope = read_resume_manifest(
+                checkpoint_dir,
+                expected_trainer_type="pu",
+                expected_resume_id=resume_cfg.resume_id,
+            )
+            model_state = torch.load(
+                checkpoint_dir / "model.pt", map_location="cpu", weights_only=True
+            )
+            optimizer_state = torch.load(
+                checkpoint_dir / "optimizer.pt", map_location="cpu", weights_only=True
+            )
+            rng_state = json.loads((checkpoint_dir / "rng_state.json").read_text())
+            training_state = json.loads(
+                (checkpoint_dir / "training_state.json").read_text()
+            )
+        model.load_state_dict(model_state)
+        optimizer.load_state_dict(optimizer_state)
+        restore_rng_state(rng_state)
+        start_epoch = envelope.completed_step
+        best_val_loss = float(training_state.get("best_val_loss", float("inf")))
+        patience_counter = int(training_state.get("patience_counter", 0))
+        logger.info(
+            "Resuming PU training from %s at epoch %d",
+            envelope.resume_id,
+            start_epoch,
+        )
+
+    # ── Training loop ──
+    epochs = training_cfg.get("epochs", 10)
     patience = training_cfg.get("early_stopping_patience")
 
-    for epoch in range(epochs):
+    for epoch in range(start_epoch, epochs):
+        stop_after_report = False
         # Train
         model.train()
         train_loss = 0.0
@@ -392,7 +454,7 @@ def pu_train_loop_per_worker(config: dict[str, Any]) -> None:
                     patience_counter += 1
                     if patience_counter >= patience:
                         logger.info("Early stopping at epoch %d", epoch + 1)
-                        break
+                        stop_after_report = True
 
         # Report metrics
         metrics = {
@@ -405,13 +467,21 @@ def pu_train_loop_per_worker(config: dict[str, Any]) -> None:
             metrics["val_loss"] = val_loss
             metrics["val_acc"] = val_acc
 
+        should_report = (
+            not resume_enabled
+            or (epoch + 1) % checkpoint_interval == 0
+            or stop_after_report
+            or epoch + 1 == epochs
+        )
+        if not should_report:
+            continue
+
         # Save checkpoint (rank 0)
         world_rank = ray.train.get_context().get_world_rank()
         if world_rank == 0:
             from ray.train import Checkpoint
 
             checkpoint_dir = Path(tempfile.mkdtemp(prefix="pu_ckpt_"))
-            checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
             torch.save(model.state_dict(), checkpoint_dir / "model.pt")
 
@@ -419,9 +489,9 @@ def pu_train_loop_per_worker(config: dict[str, Any]) -> None:
                 "features": [f.__dict__ for f in features],
                 "label_encoders": {
                     k: {
-                        str(kk): int(vv)
-                        if isinstance(vv, (np.integer, np.int64))
-                        else vv
+                        str(kk): (
+                            int(vv) if isinstance(vv, (np.integer, np.int64)) else vv
+                        )
                         for kk, vv in v.items()
                     }
                     for k, v in transformer.label_encoders.items()
@@ -446,10 +516,52 @@ def pu_train_loop_per_worker(config: dict[str, Any]) -> None:
                 json.dumps(model_config, ensure_ascii=False, default=str)
             )
 
+            if resume_enabled:
+                torch.save(optimizer.state_dict(), checkpoint_dir / "optimizer.pt")
+                (checkpoint_dir / "rng_state.json").write_text(
+                    json.dumps(capture_rng_state(), ensure_ascii=False)
+                )
+                (checkpoint_dir / "training_state.json").write_text(
+                    json.dumps(
+                        {
+                            "best_val_loss": best_val_loss,
+                            "patience_counter": patience_counter,
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+                envelope = write_resume_manifest(
+                    checkpoint_dir,
+                    resume_id=resume_cfg.resume_id,
+                    trainer_type="pu",
+                    completed_step=epoch + 1,
+                    framework="pytorch",
+                    framework_version=torch.__version__,
+                    payload_files=(
+                        "model.pt",
+                        "model_config.json",
+                        "optimizer.pt",
+                        "preprocessor.json",
+                        "rng_state.json",
+                        "training_state.json",
+                    ),
+                    payload_metadata={
+                        "model": "model.pt",
+                        "optimizer": "optimizer.pt",
+                        "preprocessing": "preprocessor.json",
+                        "rng": "rng_state.json",
+                        "early_stopping": "training_state.json",
+                    },
+                )
+                metrics["resume_id"] = envelope.resume_id
+
             checkpoint = Checkpoint.from_directory(str(checkpoint_dir))
             ray.train.report(metrics, checkpoint=checkpoint)
         else:
             ray.train.report(metrics)
+
+        if stop_after_report:
+            break
 
     logger.info("PU training completed for worker (class_prior=%.4f)", class_prior)
 
@@ -501,6 +613,11 @@ class PUTrainerImpl(BaseTrainer):
         from ray.train import FailureConfig, RunConfig, ScalingConfig
         from ray.train.torch import TorchTrainer
 
+        from tributo.training.checkpoint import (
+            checkpoint_config,
+            load_initial_checkpoint,
+        )
+
         if not ray.is_initialized():
             ray.init(address="auto", ignore_reinit_error=True)
 
@@ -508,15 +625,16 @@ class PUTrainerImpl(BaseTrainer):
 
         # Pass config to workers (no data on driver)
         train_loop_config = {
-            "data": cfg.data.model_dump()
-            if hasattr(cfg.data, "model_dump")
-            else cfg.data,
+            "data": (
+                cfg.data.model_dump() if hasattr(cfg.data, "model_dump") else cfg.data
+            ),
             "features": [f.__dict__ for f in self._features],
             "label_col": cfg.label_col,
             "model": cfg.model.model_dump(),
             "pu": cfg.pu.model_dump(),
             "training": cfg.training.model_dump(),
             "resource": cfg.resource.model_dump(),
+            "resume": cfg.ray.resume.model_dump(),
         }
 
         # Auto-detect storage_path
@@ -546,8 +664,11 @@ class PUTrainerImpl(BaseTrainer):
             run_config=RunConfig(
                 name="tributo-pu",
                 storage_path=storage_path,
-                # resilience-only: retries restart from scratch, not from checkpoint
                 failure_config=FailureConfig(max_failures=cfg.ray.max_failures),
+                checkpoint_config=checkpoint_config(cfg.ray.resume),
+            ),
+            resume_from_checkpoint=load_initial_checkpoint(
+                cfg.ray.resume.checkpoint_path
             ),
         )
 

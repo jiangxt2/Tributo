@@ -381,6 +381,7 @@ class TestBundleMode:
 
         import tributo.exporting.registries
         import tributo.exporting.service
+        from tributo.exporting.models import BundleOutputConfig, ExportTarget
         from tributo.training import lifecycle as lifecycle_module
 
         class _SourceContext:
@@ -422,13 +423,21 @@ class TestBundleMode:
 
         trainer = _FakeTrainer()
         cb = _RecordingCallback()
+        monkeypatch.setenv("TRIBUTO_RUN_ID", "run-42")
+        monkeypatch.setenv("TRIBUTO_ATTEMPT_ID", "attempt-2")
         summary = _lifecycle(trainer, [cb]).run(
-            bundle_config=SimpleNamespace(targets=["model"])
+            bundle_config=BundleOutputConfig(
+                bundle_uri="s3://bucket/bundle",
+                targets=[ExportTarget(name="model", format="onnx")],
+            )
         )
 
         fake_registry.resolve.assert_called_with("xgboost")
         fake_service.export_bundle.assert_called_once()
         assert summary["bundle_id"] == "b-1"
+        call = fake_service.export_bundle.call_args.kwargs
+        assert call["config"].run_id == "run-42"
+        assert call["attempt_id"] == "attempt-2"
         assert summary["artifacts"][0]["name"] == "model"
         assert summary["node_results"][0]["node_id"] == "n1"
         # Artifact-export callbacks stay silent in bundle mode.

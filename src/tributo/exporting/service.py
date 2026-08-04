@@ -133,6 +133,7 @@ class BundleExportService:
         callback: Callable[[PublishedBundle], None] | None = None,
         raise_on_callback_error: bool = False,
         tributo_version: str = "0.0.0",
+        attempt_id: str | None = None,
     ) -> BundleResult:
         """Export a bundle from a resolved source.
 
@@ -146,6 +147,8 @@ class BundleExportService:
             raise_on_callback_error: If ``True``, callback failures raise
                 ``PostPublishCallbackError`` (bundle is still published).
             tributo_version: Version string for provenance in the manifest.
+            attempt_id: Unique submission attempt identifier; it is recorded
+                separately from the stable run and bundle identifiers.
 
         Returns:
             ``BundleResult`` — the caller's durable reference.
@@ -158,12 +161,14 @@ class BundleExportService:
                 "BundleExportService requires targets (bundle mode)"
             )
 
-        # Generate stable IDs. bundle_id is derived solely from request_id
-        # so retries with the same request_id produce the identical bundle_id
-        # and execution_id (per the plan's idempotency design).
-        request_id = config.request_id or uuid.uuid4().hex
-        execution_id = _make_execution_id(request_id)
-        bundle_id = _make_bundle_id(request_id)
+        # Generate stable logical IDs.  A retry gets a fresh attempt_id, but
+        # the run/request identity remains the sole input to bundle_id and
+        # execution_id so publish is idempotent.
+        request_id = config.request_id or config.run_id or uuid.uuid4().hex
+        run_id = config.run_id or request_id
+        attempt_id = attempt_id or f"attempt-{uuid.uuid4().hex}"
+        execution_id = _make_execution_id(run_id)
+        bundle_id = _make_bundle_id(run_id)
 
         planner = ExportPlanner(self._exports, self._validators)
         manager = ExportManager(self._exports, self._validators)
@@ -240,6 +245,9 @@ class BundleExportService:
                 record = ExecutionRecord(
                     execution_id=execution_id,
                     bundle_id=bundle_id,
+                    run_id=run_id,
+                    request_id=request_id,
+                    attempt_id=attempt_id,
                     bundle_digest=bundle_digest,
                     status=published.result.status,
                     source_kind=source.source_kind,
@@ -388,6 +396,14 @@ def _make_bundle_id(request_id: str) -> str:
     """
     digest = hashlib.sha256(request_id.encode("utf-8")).hexdigest()
     return f"bundle-{digest[:32]}"
+
+
+@PublicAPI(stability="beta")
+def bundle_id_for_request(request_id: str) -> str:
+    """Return the stable bundle identifier for a logical run identifier."""
+    if not request_id:
+        raise ValueError("request_id must not be empty")
+    return _make_bundle_id(request_id)
 
 
 def _make_execution_id(request_id: str) -> str:

@@ -37,6 +37,7 @@ STABILITY_MAP: dict[str, str] = {
     "tributo.util.annotations": "stable",
     # Training — beta
     "tributo.training.base": "beta",
+    "tributo.training.checkpoint": "beta",
     "tributo.training.config": "beta",
     "tributo.training.xgboost_trainer": "beta",
     "tributo.training.dnn_trainer": "beta",

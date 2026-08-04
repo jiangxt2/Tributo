@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -45,7 +46,9 @@ class JsonFileOperationStore:
         """Persist *record* atomically."""
         self._mem.record_execution(record)
         self._executions_dir.mkdir(parents=True, exist_ok=True)
-        fpath = self._executions_dir / f"{record.execution_id}.json"
+        fpath = self._executions_dir / (
+            f"{record.execution_id}--{uuid.uuid4().hex}.json"
+        )
         _atomic_write_json(fpath, record.model_dump(mode="json"), self._lock)
 
     def record_publication_attempt(self, attempt: PublicationAttempt) -> None:
@@ -58,17 +61,31 @@ class JsonFileOperationStore:
     # ── Queries ──────────────────────────────────────────────────────────────
 
     def get_execution(self, execution_id: str) -> ExecutionRecord | None:
-        """Read an execution record from disk if not in memory cache."""
-        record = self._mem.get_execution(execution_id)
-        if record is not None:
-            return record
-        fpath = self._executions_dir / f"{execution_id}.json"
-        raw = _read_json(fpath)
-        if raw is None:
-            return None
-        record = ExecutionRecord(**raw)
-        self._mem.record_execution(record)
-        return record
+        """Return the latest attempt for an execution ID."""
+        records = self.list_executions(execution_id)
+        return records[-1] if records else None
+
+    def list_executions(self, execution_id: str) -> list[ExecutionRecord]:
+        """Return all attempts for an execution ID in start order."""
+        cached = self._mem.list_executions(execution_id)
+        if cached:
+            return cached
+        if not self._executions_dir.exists():
+            return []
+
+        results: list[ExecutionRecord] = []
+        candidates = [
+            self._executions_dir / f"{execution_id}.json",
+            *self._executions_dir.glob(f"{execution_id}--*.json"),
+        ]
+        for fpath in candidates:
+            raw = _read_json(fpath)
+            if raw and raw.get("execution_id") == execution_id:
+                results.append(ExecutionRecord(**raw))
+        results.sort(key=lambda record: record.started_at)
+        for record in results:
+            self._mem.record_execution(record)
+        return results
 
     def list_attempts(
         self, bundle_digest: str, hook_id: str

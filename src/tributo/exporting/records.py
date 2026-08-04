@@ -22,7 +22,7 @@ from tributo.util.annotations import DeveloperAPI, PublicAPI
 class ExecutionRecord(BaseModel):
     """Immutable snapshot of a single export execution.
 
-    Written once after commit and never modified.  Separated from
+    Written once per execution attempt and never modified.  Separated from
     ``BundleManifest`` so the manifest stays purely about model content.
     """
 
@@ -30,6 +30,9 @@ class ExecutionRecord(BaseModel):
 
     execution_id: str
     bundle_id: str
+    run_id: str | None = None
+    request_id: str | None = None
+    attempt_id: str | None = None
     bundle_digest: str | None = None
     status: str = Field(pattern=r"^(pending|running|succeeded|partial|failed)$")
     source_kind: str = ""
@@ -77,6 +80,8 @@ class OperationStore(Protocol):
 
     def get_execution(self, execution_id: str) -> ExecutionRecord | None: ...
 
+    def list_executions(self, execution_id: str) -> list[ExecutionRecord]: ...
+
     def list_attempts(
         self, bundle_digest: str, hook_id: str
     ) -> list[PublicationAttempt]: ...
@@ -87,18 +92,22 @@ class InMemoryOperationStore:
     """In-memory ``OperationStore`` for testing and single-process use."""
 
     def __init__(self) -> None:
-        self._executions: dict[str, ExecutionRecord] = {}
+        self._executions: dict[str, list[ExecutionRecord]] = {}
         self._attempts: dict[str, list[PublicationAttempt]] = {}
 
     def record_execution(self, record: ExecutionRecord) -> None:
-        self._executions[record.execution_id] = record
+        self._executions.setdefault(record.execution_id, []).append(record)
 
     def record_publication_attempt(self, attempt: PublicationAttempt) -> None:
         key = f"{attempt.bundle_digest}/{attempt.hook_id}"
         self._attempts.setdefault(key, []).append(attempt)
 
     def get_execution(self, execution_id: str) -> ExecutionRecord | None:
-        return self._executions.get(execution_id)
+        records = self._executions.get(execution_id, [])
+        return records[-1] if records else None
+
+    def list_executions(self, execution_id: str) -> list[ExecutionRecord]:
+        return list(self._executions.get(execution_id, []))
 
     def list_attempts(
         self, bundle_digest: str, hook_id: str

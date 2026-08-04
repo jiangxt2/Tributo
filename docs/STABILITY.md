@@ -33,6 +33,7 @@ Last updated: 2026-08-03.
 |--------|-------|-------|
 | `tributo.training.config` — `TrainingConfig` | `beta` | Unified training config |
 | `tributo.training.base` — `BaseTrainer`, `TrainerSpec` | `beta` | Trainer contract |
+| `tributo.training.checkpoint` | `beta` | Resume checkpoint contract |
 | `tributo.training.xgboost_trainer` | `beta` | Most mature Trainer |
 | `tributo.training.dnn_trainer` | `beta` | DNN Trainer |
 | `tributo.training.pu_trainer` | `beta` | PU Learning Trainer |

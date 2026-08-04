@@ -548,6 +548,29 @@ class TestS3PublishLogic:
         assert second.result.status == "succeeded"
         assert second.result.manifest_sha256 == first.result.manifest_sha256
 
+    def test_failed_manifest_publish_cleans_new_artifacts(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An artifact uploaded before manifest failure must not remain orphaned."""
+        fake = _FakeS3()
+        original_put = __import__(
+            "tributo.exporting.publisher", fromlist=["_s3_put_bytes"]
+        )._s3_put_bytes
+
+        def fail_manifest(*args: Any, **kwargs: Any) -> Any:
+            if kwargs.get("key", args[2] if len(args) > 2 else "").endswith(
+                "manifest.json"
+            ):
+                raise RuntimeError("injected manifest failure")
+            return original_put(*args, **kwargs)
+
+        monkeypatch.setattr("tributo.exporting.publisher._s3_put_bytes", fail_manifest)
+        with pytest.raises(RuntimeError, match="injected manifest failure"):
+            _publish_s3(fake, monkeypatch, tmp_path)
+
+        assert not any("/artifacts/" in key for key in fake.objects)
+        assert not any(key.endswith("manifest.json") for key in fake.objects)
+
     def test_alias_newer_policy_comparison(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

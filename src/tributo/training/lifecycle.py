@@ -10,6 +10,7 @@ and delegates ``run`` to this class.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 from tributo.training.base import BaseTrainer
@@ -40,6 +41,27 @@ def _load_provider_plugins(registry: Any) -> None:
             registry.register(cls)
 
 
+def _bind_job_identity(bundle_config: Any) -> tuple[Any, str | None]:
+    """Bind job attempt identity to a bundle config when running in Ray Jobs."""
+    run_id = os.environ.get("TRIBUTO_RUN_ID")
+    attempt_id = os.environ.get("TRIBUTO_ATTEMPT_ID")
+    if not run_id:
+        return bundle_config, attempt_id
+
+    from tributo.exporting.models import BundleOutputConfig
+
+    if not isinstance(bundle_config, BundleOutputConfig):
+        return bundle_config, attempt_id
+    if bundle_config.run_id not in (None, run_id):
+        raise ValueError("Bundle run_id conflicts with TRIBUTO_RUN_ID")
+    if bundle_config.request_id not in (None, run_id):
+        raise ValueError("Bundle request_id conflicts with TRIBUTO_RUN_ID")
+
+    config_data = bundle_config.model_dump()
+    config_data["run_id"] = run_id
+    return BundleOutputConfig.model_validate(config_data), attempt_id
+
+
 class TrainingLifecycle:
     """Orchestrate a single trainer run.
 
@@ -68,6 +90,7 @@ class TrainingLifecycle:
         "partial"}`` — a partial bundle is still a successful run.
         """
         trainer = self._trainer
+
         summary: dict[str, Any] = {"status": "succeeded"}
         # Subclasses write export results into ``trainer._summary`` (the
         # contract documented on ``BaseTrainer.run``); keep the same dict
@@ -136,6 +159,7 @@ class TrainingLifecycle:
         from tributo.exporting.service import BundleExportService
 
         trainer = self._trainer
+        bound_config, attempt_id = _bind_job_identity(bundle_config)
 
         provider_registry = SourceProviderRegistry()
         _load_provider_plugins(provider_registry)
@@ -148,9 +172,10 @@ class TrainingLifecycle:
             service = BundleExportService()
             result = service.export_bundle(
                 source=source,
-                config=bundle_config,
+                config=bound_config,
                 provider=provider,
                 tributo_version=trainer._get_tributo_version(),
+                attempt_id=attempt_id,
             )
 
         summary.update(
