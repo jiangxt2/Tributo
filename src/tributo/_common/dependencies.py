@@ -24,6 +24,7 @@ from types import ModuleType
 from packaging.version import InvalidVersion, Version
 
 from tributo.exceptions import TributoError
+from tributo.util.annotations import PublicAPI
 
 __all__ = [
     "DependencySpec",
@@ -46,6 +47,7 @@ __all__ = [
 ]
 
 
+@PublicAPI(stability="beta")
 class DependencyState(enum.Enum):
     """Availability state reported by a dependency probe."""
 
@@ -55,6 +57,7 @@ class DependencyState(enum.Enum):
     VERSION_UNKNOWN = "version_unknown"
 
 
+@PublicAPI(stability="beta")
 @dataclass(frozen=True)
 class DependencySpec:
     """Description of a dependency, keyed by its top-level import name.
@@ -76,6 +79,7 @@ class DependencySpec:
     extra: str | None = None
 
 
+@PublicAPI(stability="beta")
 @dataclass(frozen=True)
 class DependencyStatus:
     """Result of a side-effect free dependency probe."""
@@ -85,6 +89,7 @@ class DependencyStatus:
     installed_version: str | None = None
 
 
+@PublicAPI(stability="beta")
 def probe_dependency(spec: DependencySpec) -> DependencyStatus:
     """Probe a dependency without importing it (no side effects).
 
@@ -122,6 +127,7 @@ def probe_dependency(spec: DependencySpec) -> DependencyStatus:
     return DependencyStatus(spec, DependencyState.TOO_OLD, installed)
 
 
+@PublicAPI(stability="beta")
 def require_dependency(spec: DependencySpec) -> ModuleType:
     """Probe, then import, the dependency's top-level package.
 
@@ -147,6 +153,7 @@ def require_dependency(spec: DependencySpec) -> ModuleType:
         raise
 
 
+@PublicAPI(stability="beta")
 class DependencyUnavailableError(TributoError):
     """A dependency is missing or below its minimum version.
 
@@ -161,6 +168,7 @@ class DependencyUnavailableError(TributoError):
         super().__init__(_format_unavailable_message(spec, status))
 
 
+@PublicAPI(stability="beta")
 class MissingOptionalDependency(DependencyUnavailableError):
     """``DependencyUnavailableError`` for an optional dependency.
 
