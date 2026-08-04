@@ -46,11 +46,11 @@ dev = [
     "pytest-timeout>=2.1.0",
     "moto[server]>=5.1.0",
     "ruff>=0.6.0,<1.0",
-    "black>=23.0.0",
     "mypy>=1.0.0",
     "types-PyYAML>=6.0.12.20250516",
     "pandas-stubs~=2.1.4",
     "httpx>=0.25.0",
+    "pre-commit>=4.6.1",
 ]
 data = [
     "pylance>=4.0.0",
@@ -202,10 +202,6 @@ section-order = [
     "first-party",
     "local-folder",
 ]
-
-[tool.black]
-line-length = 88
-target-version = ["py312"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
