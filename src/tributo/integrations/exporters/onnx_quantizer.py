@@ -12,13 +12,18 @@ and discarded transparently.
 
 from __future__ import annotations
 
-import importlib.util
 import logging
 import shutil
 from typing import Any, ClassVar, Mapping
 
 from pydantic import BaseModel
 
+from tributo._common.dependencies import (
+    ONNXRUNTIME,
+    DependencyState,
+    probe_dependency,
+    require_dependency,
+)
 from tributo.exporting.models import (
     ArtifactDraft,
     DraftFile,
@@ -82,16 +87,11 @@ class ONNXQuantizer:
                     "(format='onnx' in depends_on)"
                 ),
             )
-        # Probe the top-level package only: find_spec() on a dotted name
-        # imports the parent first, so a missing onnxruntime raises
-        # ModuleNotFoundError instead of returning None. Submodule presence
-        # (onnxruntime.quantization) is validated at export time by the
-        # real import.
-        if importlib.util.find_spec("onnxruntime") is None:
+        if probe_dependency(ONNXRUNTIME).state is not DependencyState.AVAILABLE:
             return SupportResult(
                 supported=False,
                 code="MISSING_DEPENDENCY",
-                reason="onnxruntime not available",
+                reason="onnxruntime>=1.20.0 required",
                 missing_dependencies=("onnxruntime",),
             )
         return SupportResult(supported=True, code="OK")
@@ -104,7 +104,7 @@ class ONNXQuantizer:
         target: PlannedTarget,
     ) -> ArtifactDraft:
         """Quantise the upstream FP32 ONNX model to INT8 (dynamic)."""
-        import onnxruntime
+        onnxruntime = require_dependency(ONNXRUNTIME)
         import onnxruntime.quantization as ort_quant
 
         upstream_artifact = upstream.get("model")

@@ -46,6 +46,17 @@ _EXEMPT_NAMES: set[str] = {
     "ARTIFACT_KIND_REPORT",
     "ARTIFACT_KIND_DIAGNOSTICS",
     "ARTIFACT_KIND_GRAPH_SNAPSHOT",
+    # DependencySpec module constants — Python objects cannot be
+    # decorated; the spec type itself is annotated.
+    "BOTO3",
+    "LANCE",
+    "ONNXMLTOOLS",
+    "ONNXRUNTIME",
+    "PYICEBERG",
+    "SAFETENSORS",
+    "TORCH",
+    "TRANSFORMERS",
+    "XGBOOST",
 }
 
 

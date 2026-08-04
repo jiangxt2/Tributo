@@ -6,13 +6,18 @@ format.  Picks UBJ by default (compact binary, ~½ the size of JSON).
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import logging
-from typing import Any, ClassVar, Mapping
+from typing import TYPE_CHECKING, Any, ClassVar, Mapping
 
 from pydantic import BaseModel
 
+from tributo._common.dependencies import (
+    XGBOOST,
+    DependencyState,
+    probe_dependency,
+    require_dependency,
+)
 from tributo.exporting.models import (
     ArtifactDraft,
     DraftFile,
@@ -29,6 +34,9 @@ from tributo.exporting.options import XGBoostNativeOptions
 from tributo.util.annotations import PublicAPI
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from xgboost import Booster as XGBoostBooster
 
 
 @PublicAPI(stability="beta")
@@ -60,11 +68,11 @@ class XGBoostNativeExporter:
                 code="UNSUPPORTED_SOURCE_KIND",
                 reason=f"Expected source_kind='xgboost_result', got {request.source_kind!r}",
             )
-        if importlib.util.find_spec("xgboost") is None:
+        if probe_dependency(XGBOOST).state is not DependencyState.AVAILABLE:
             return SupportResult(
                 supported=False,
                 code="MISSING_DEPENDENCY",
-                reason="xgboost not available",
+                reason="xgboost>=2.1.0 required",
                 missing_dependencies=("xgboost",),
             )
         return SupportResult(supported=True, code="OK")
@@ -77,9 +85,9 @@ class XGBoostNativeExporter:
         target: PlannedTarget,
     ) -> ArtifactDraft:
         """Save the XGBoost booster to UBJ or JSON."""
-        import xgboost
+        xgboost = require_dependency(XGBOOST)
 
-        booster: xgboost.Booster = source.model_object
+        booster: XGBoostBooster = source.model_object
         fmt = target.typed_options.get("fmt", "ubj")
 
         if fmt == "ubj":

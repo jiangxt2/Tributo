@@ -26,6 +26,7 @@ dependencies = [
     "aiohttp>=3.13.4",
     "ray[default,serve,tune]==2.55.1",
     "pydantic>=2.0.0",
+    "packaging>=24.0",
     "click>=8.0.0",
     "onnxruntime>=1.20.0",
     "s3fs>=2026.2.0",
@@ -85,6 +86,7 @@ training = [
 ]
 embeddings = [
     "tributo[data,model-export,s3]",
+    "torch>=2.5.0",
     "transformers>=4.40.0",
     "optimum-onnx[onnxruntime]>=0.1.0",
     "tokenizers>=0.19.0",
@@ -92,7 +94,7 @@ embeddings = [
 ]
 identity = [
     "tributo[data,model-export]",
-    "torch>=2.0.0",
+    "torch>=2.5.0",
     "onnxruntime>=1.20.0",
 ]
 streaming = [

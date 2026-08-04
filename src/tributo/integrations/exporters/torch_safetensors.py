@@ -6,13 +6,19 @@ optional sharding.  Uses ``safetensors.torch.save_file``.
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import logging
 from typing import Any, ClassVar, Mapping
 
 from pydantic import BaseModel
 
+from tributo._common.dependencies import (
+    SAFETENSORS,
+    TORCH,
+    DependencyState,
+    probe_dependency,
+    require_dependency,
+)
 from tributo.exporting.models import (
     ArtifactDraft,
     DraftFile,
@@ -60,15 +66,21 @@ class TorchSafetensorsExporter:
                 code="UNSUPPORTED_SOURCE_KIND",
                 reason=f"Expected source_kind='dnn_result' or 'torch_module', got {request.source_kind!r}",
             )
-        if (
-            importlib.util.find_spec("safetensors") is None
-            or importlib.util.find_spec("torch") is None
-        ):
+        missing: list[str] = []
+        if probe_dependency(SAFETENSORS).state is not DependencyState.AVAILABLE:
+            missing.append("safetensors")
+        if probe_dependency(TORCH).state is not DependencyState.AVAILABLE:
+            missing.append("torch")
+        if missing:
+            requirements = {
+                "safetensors": f"safetensors>={SAFETENSORS.minimum_version}",
+                "torch": f"torch>={TORCH.minimum_version}",
+            }
             return SupportResult(
                 supported=False,
                 code="MISSING_DEPENDENCY",
-                reason="safetensors/torch not available",
-                missing_dependencies=("safetensors", "torch"),
+                reason=f"{'/'.join(requirements[name] for name in missing)} required",
+                missing_dependencies=tuple(missing),
             )
         return SupportResult(supported=True, code="OK")
 
@@ -80,7 +92,8 @@ class TorchSafetensorsExporter:
         target: PlannedTarget,
     ) -> ArtifactDraft:
         """Save the model state_dict to safetensors format."""
-        import torch
+        torch = require_dependency(TORCH)
+        require_dependency(SAFETENSORS)
         from safetensors.torch import save_file
 
         model = source.model_object
@@ -201,9 +214,7 @@ def _shard_state_dict(
 
 
 def _get_safetensors_version() -> str:
-    try:
-        import safetensors
-
-        return getattr(safetensors, "__version__", "unknown")
-    except ImportError:
-        return "unknown"
+    """Return the installed Safetensors version."""
+    safetensors = require_dependency(SAFETENSORS)
+    version = getattr(safetensors, "__version__", None)
+    return version if isinstance(version, str) else "unknown"

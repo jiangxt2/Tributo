@@ -139,6 +139,7 @@ STABILITY_MAP: dict[str, str] = {
     # Common — developer
     "tributo._common": "developer",
     "tributo._common.storage_profiles": "beta",
+    "tributo._common.dependencies": "beta",
 }
 
 #: Symbol-level stability overrides for modules with mixed stability.

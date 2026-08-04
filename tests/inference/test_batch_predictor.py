@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
+from tributo._common.dependencies import MissingOptionalDependency
 from tributo.exceptions import DataSourceError, JobConfigurationError
 from tributo.inference.batch_predictor import XGBoostONNXPredictor
 
@@ -20,10 +21,12 @@ class TestXGBoostONNXPredictorExceptions:
         with pytest.raises(DataSourceError, match="ONNX model not found"):
             XGBoostONNXPredictor("/nonexistent/model.onnx")
 
-    def test_boto3_import_error_raises_job_configuration_error(self):
-        """boto3 未安装时应抛出 JobConfigurationError。"""
+    def test_boto3_missing_raises_missing_optional_dependency(self):
+        """boto3 未安装时应抛出 MissingOptionalDependency（带安装提示）。"""
         with patch.dict("sys.modules", {"boto3": None}):
-            with pytest.raises(JobConfigurationError, match="boto3 is required"):
+            with pytest.raises(
+                MissingOptionalDependency, match=r"pip install tributo\[s3\]"
+            ):
                 predictor = XGBoostONNXPredictor.__new__(XGBoostONNXPredictor)
                 predictor._s3_config = {}
                 predictor._download_from_s3("s3://bucket/model.onnx")

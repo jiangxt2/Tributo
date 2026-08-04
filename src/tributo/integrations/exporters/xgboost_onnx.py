@@ -6,13 +6,19 @@ conversion in a protocol-conformant class.
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import logging
-from typing import Any, ClassVar, Mapping
+from typing import TYPE_CHECKING, Any, ClassVar, Mapping
 
 from pydantic import BaseModel
 
+from tributo._common.dependencies import (
+    ONNXMLTOOLS,
+    XGBOOST,
+    DependencyState,
+    probe_dependency,
+    require_dependency,
+)
 from tributo.exporting.models import (
     ArtifactDraft,
     DraftFile,
@@ -29,6 +35,9 @@ from tributo.exporting.options import XGBoostONNXOptions
 from tributo.util.annotations import PublicAPI
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from xgboost import Booster as XGBoostBooster
 
 
 @PublicAPI(stability="beta")
@@ -68,15 +77,17 @@ class XGBoostONNXExporter:
                 reason=f"Expected source_kind='xgboost_result', got {request.source_kind!r}",
             )
         # Verify onnxmltools + xgboost are available.
-        if (
-            importlib.util.find_spec("onnxmltools") is None
-            or importlib.util.find_spec("xgboost") is None
-        ):
+        missing: list[str] = []
+        if probe_dependency(ONNXMLTOOLS).state is not DependencyState.AVAILABLE:
+            missing.append("onnxmltools")
+        if probe_dependency(XGBOOST).state is not DependencyState.AVAILABLE:
+            missing.append("xgboost")
+        if missing:
             return SupportResult(
                 supported=False,
                 code="MISSING_DEPENDENCY",
-                reason="onnxmltools/xgboost not available",
-                missing_dependencies=("onnxmltools", "xgboost"),
+                reason="onnxmltools>=1.13.0/xgboost>=2.1.0 required",
+                missing_dependencies=tuple(missing),
             )
         if request.source_metadata.get("has_categorical_features"):
             return SupportResult(
@@ -130,12 +141,13 @@ class XGBoostONNXExporter:
     ) -> ArtifactDraft:
         """Convert the XGBoost booster to ONNX and write to *context.artifact_dir*."""
         import numpy as np
-        import onnxmltools
-        import xgboost
+
+        onnxmltools = require_dependency(ONNXMLTOOLS)
+        xgboost = require_dependency(XGBOOST)
         from onnxmltools.convert import convert_xgboost
         from onnxmltools.convert.common.data_types import FloatTensorType
 
-        booster: xgboost.Booster = source.model_object
+        booster: XGBoostBooster = source.model_object
 
         # Infer n_features from the source contract when the booster does not
         # carry names (e.g. a DMatrix created without feature_names).
