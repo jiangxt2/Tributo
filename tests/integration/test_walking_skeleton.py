@@ -20,6 +20,12 @@ pytestmark = [
     pytest.mark.integration,
     pytest.mark.minio_compat,
     pytest.mark.tributo_walking_skeleton,
+    # Ray 2.55.1 leaks /dev/null file handles from its internal process
+    # spawn (gcs/raylet/monitor); the garbage-collected handles surface as
+    # unraisable ResourceWarnings that the project-wide
+    # filterwarnings=error would turn into failures. This test cannot fix
+    # Ray internals, so suppress that warning class here only.
+    pytest.mark.filterwarnings("ignore::pytest.PytestUnraisableExceptionWarning"),
     pytest.mark.skipif(
         sys.platform == "darwin",
         reason="Ray Data local runtime is supported by the Linux CI gate, not macOS",
