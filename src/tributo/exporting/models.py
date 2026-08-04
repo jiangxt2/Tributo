@@ -714,6 +714,7 @@ class ExportSource(BaseModel):
     source_fingerprint: str = ""
     checkpoint_contract: ExportCheckpointV1 | None = None
 
+
 # ── Plugin diagnostics ───────────────────────────────────────────────────────
 
 

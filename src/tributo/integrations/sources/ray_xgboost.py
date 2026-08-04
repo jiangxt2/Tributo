@@ -139,9 +139,7 @@ class RayXGBoostSourceProvider:
         else:
             output_schema = (
                 # onnxmltools XGBRegressor emits a two-dimensional [batch, 1] tensor.
-                CheckpointField(
-                    name="prediction", dtype="float32", shape=("batch", 1)
-                ),
+                CheckpointField(name="prediction", dtype="float32", shape=("batch", 1)),
             )
         contract = ExportCheckpointV1(
             trainer_type="xgboost",

@@ -215,8 +215,7 @@ def build_export_checkpoint_config(
         input_schema.append(
             {
                 "name": name,
-                "dtype": feature.get("dtype")
-                or ("int64" if is_sparse else "float32"),
+                "dtype": feature.get("dtype") or ("int64" if is_sparse else "float32"),
                 "shape": shape,
             }
         )

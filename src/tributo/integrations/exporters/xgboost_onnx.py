@@ -93,8 +93,7 @@ class XGBoostONNXExporter:
                 supported=False,
                 code="UNSUPPORTED_OBJECTIVE",
                 reason=(
-                    "ONNX classifier probabilities are not available for "
-                    "binary:hinge"
+                    "ONNX classifier probabilities are not available for binary:hinge"
                 ),
             )
         if not objective:

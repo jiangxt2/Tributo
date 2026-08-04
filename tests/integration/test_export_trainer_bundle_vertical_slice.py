@@ -127,9 +127,7 @@ def test_dnn_trainer_run_publishes_typed_manifest(
     monkeypatch.setattr(trainer, "setup", lambda: None)
     monkeypatch.setattr(trainer, "training_loop", lambda: str(checkpoint_dir))
 
-    summary = trainer.run(
-        bundle_config=_bundle_config(tmp_path / "dnn-bundles", "dnn")
-    )
+    summary = trainer.run(bundle_config=_bundle_config(tmp_path / "dnn-bundles", "dnn"))
 
     assert summary["status"] in ("succeeded", "partial")
     assert summary["canonical_uri"]
@@ -165,9 +163,7 @@ def test_pu_trainer_run_publishes_typed_manifest_and_prior(
     trainer = PUTrainerImpl(datasets={}, config=config)
     monkeypatch.setattr(trainer, "setup", lambda: None)
     monkeypatch.setattr(trainer, "training_loop", lambda: str(checkpoint_dir))
-    summary = trainer.run(
-        bundle_config=_bundle_config(tmp_path / "pu-bundles", "pu")
-    )
+    summary = trainer.run(bundle_config=_bundle_config(tmp_path / "pu-bundles", "pu"))
 
     assert summary["status"] in ("succeeded", "partial")
     assert summary["canonical_uri"]
@@ -180,7 +176,5 @@ def test_pu_trainer_run_publishes_typed_manifest_and_prior(
         )
 
     with reader.open_artifact(summary["canonical_uri"], role="inference") as artifact:
-        model_config = json.loads(
-            artifact.path_for("model_config.json").read_text()
-        )
+        model_config = json.loads(artifact.path_for("model_config.json").read_text())
     assert model_config["pu"]["class_prior"] == pytest.approx(0.5)
