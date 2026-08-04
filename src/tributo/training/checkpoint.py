@@ -18,7 +18,7 @@ import json
 import random
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator, Literal, cast
+from typing import Any, Generator, Literal, cast
 
 from pydantic import ConfigDict, Field, field_validator
 
@@ -108,6 +108,7 @@ def _canonical_json(value: Any) -> bytes:
     ).encode("utf-8")
 
 
+@PublicAPI(stability="beta")
 def compute_payload_digest(
     checkpoint_dir: str | Path, payload_files: tuple[str, ...]
 ) -> str:
@@ -136,6 +137,7 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+@PublicAPI(stability="beta")
 def write_resume_manifest(
     checkpoint_dir: str | Path,
     *,
@@ -166,6 +168,7 @@ def write_resume_manifest(
     return envelope
 
 
+@PublicAPI(stability="beta")
 def read_resume_manifest(
     checkpoint_dir: str | Path,
     *,
@@ -198,7 +201,8 @@ def read_resume_manifest(
 
 
 @contextmanager
-def checkpoint_directory(checkpoint: Any) -> Iterator[Path]:
+@PublicAPI(stability="beta")
+def checkpoint_directory(checkpoint: Any) -> Generator[Path, None, None]:
     """Yield a local directory for a Ray ``Checkpoint`` or local path."""
     if isinstance(checkpoint, (str, Path)):
         path = Path(checkpoint)
@@ -213,6 +217,7 @@ def checkpoint_directory(checkpoint: Any) -> Iterator[Path]:
         yield Path(raw_path)
 
 
+@PublicAPI(stability="beta")
 def load_initial_checkpoint(path: str | None) -> Any | None:
     """Create a Ray checkpoint for an explicit local resume directory."""
     if path is None:
@@ -227,6 +232,7 @@ def load_initial_checkpoint(path: str | None) -> Any | None:
     return Checkpoint.from_directory(str(checkpoint_path))
 
 
+@PublicAPI(stability="beta")
 def capture_rng_state() -> dict[str, Any]:
     """Capture available Python, NumPy, and Torch RNG state in JSON-safe form.
 
@@ -259,6 +265,7 @@ def capture_rng_state() -> dict[str, Any]:
     return state
 
 
+@PublicAPI(stability="beta")
 def restore_rng_state(state: dict[str, Any]) -> None:
     """Restore the RNG state entries available in *state*.
 
@@ -305,6 +312,7 @@ def _from_jsonable(value: Any) -> Any:
     return value
 
 
+@PublicAPI(stability="beta")
 def checkpoint_config(resume: ResumeConfig) -> Any:
     """Build Ray's retention configuration without importing Ray eagerly."""
     from ray.train import CheckpointConfig
@@ -313,7 +321,6 @@ def checkpoint_config(resume: ResumeConfig) -> Any:
 
 
 __all__ = [
-    "RESUME_MANIFEST_FILENAME",
     "ResumeCheckpointV1",
     "ResumeConfig",
     "capture_rng_state",
