@@ -1,0 +1,29 @@
+# Pre-commit hooks for Tributo.
+#
+# Local hooks run the project's own toolchain via ``uv run``, so the
+# ruff version used here is always the one locked in ``uv.lock`` - there is
+# no second version source to drift. Requires an already-synced environment
+# (``uv sync --extra dev``); matches the ``UV_RUN`` convention in
+# ``scripts/pr-precheck.py``.
+#
+# ``files``/``exclude`` mirror the CI lint job (``ruff check`` and
+# ``ruff format --check`` on ``src/ tests/``). pre-commit passes an explicit
+# file list, which bypasses ruff's own directory ``extend-exclude``, so the
+# generated protobuf sources are filtered here.
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-format
+        name: ruff format --check
+        entry: uv run --locked --no-sync --offline ruff format --check
+        language: system
+        types: [python]
+        files: '^(src|tests)/'
+        exclude: '^src/tributo/serving/proto/inference_pb2.*\.py$'
+      - id: ruff-lint
+        name: ruff check
+        entry: uv run --locked --no-sync --offline ruff check
+        language: system
+        types: [python]
+        files: '^(src|tests)/'
+        exclude: '^src/tributo/serving/proto/inference_pb2.*\.py$'
