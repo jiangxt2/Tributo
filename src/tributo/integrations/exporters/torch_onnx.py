@@ -8,6 +8,7 @@ uses the TorchDynamo ONNX exporter which produces a more optimised graph.
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import json
 import logging
 from typing import Any, ClassVar, Mapping
@@ -49,7 +50,11 @@ class TorchONNXExporter:
     exporter_id: ClassVar[str] = "torch-onnx-v1"
     priority: ClassVar[int] = 95
     output_format: ClassVar[str] = "onnx"
-    source_kinds: ClassVar[tuple[str, ...]] = ("dnn_result", "torch_module")
+    source_kinds: ClassVar[tuple[str, ...]] = (
+        "dnn_result",
+        "pu_result",
+        "torch_module",
+    )
     options_model: ClassVar[type[BaseModel]] = TorchONNXOptions
     validator_bindings: ClassVar[tuple[ValidatorBinding, ...]] = (
         ValidatorBinding(validator_id="structure-v1", required=True),
@@ -61,11 +66,14 @@ class TorchONNXExporter:
     @classmethod
     def supports(cls, request: SupportRequest) -> SupportResult:
         """Check whether the source is a PyTorch module."""
-        if request.source_kind not in ("dnn_result", "torch_module"):
+        if request.source_kind not in ("dnn_result", "pu_result", "torch_module"):
             return SupportResult(
                 supported=False,
                 code="UNSUPPORTED_SOURCE_KIND",
-                reason=f"Expected dnn_result/torch_module, got {request.source_kind!r}",
+                reason=(
+                    "Expected dnn_result/pu_result/torch_module, "
+                    f"got {request.source_kind!r}"
+                ),
             )
         if importlib.util.find_spec("torch") is None:
             return SupportResult(
@@ -253,7 +261,7 @@ class TorchONNXExporter:
         # The ``dynamo`` keyword of torch.onnx.export was added in
         # PyTorch 2.1 — the legacy identity extra supports torch>=2.0.0,
         # so only pass it when the runtime understands it.
-        if hasattr(torch.onnx, "dynamo_export"):
+        if "dynamo" in inspect.signature(torch.onnx.export).parameters:
             export_kwargs["dynamo"] = use_dynamo
         torch.onnx.export(model, model_input, str(output_path), **export_kwargs)
         return output_path
