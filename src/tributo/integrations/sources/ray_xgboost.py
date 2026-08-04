@@ -128,7 +128,7 @@ class RayXGBoostSourceProvider:
         )
         if is_classification:
             n_classes = _booster_num_classes(booster, objective)
-            output_schema = (
+            output_schema: tuple[CheckpointField, ...] = (
                 CheckpointField(name="label", dtype="int64", shape=("batch",)),
                 CheckpointField(
                     name="probabilities",
