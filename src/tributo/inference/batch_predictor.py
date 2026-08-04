@@ -6,7 +6,6 @@ avoiding reloading the ONNX model for each batch. Data is stream-processed end-t
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import logging
 from pathlib import Path

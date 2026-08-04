@@ -18,6 +18,7 @@ from tributo._common.dependencies import (
     TRANSFORMERS,
     DependencyState,
     probe_dependency,
+    require_dependency,
 )
 from tributo.exporting.models import (
     ArtifactDraft,
@@ -77,10 +78,14 @@ class HuggingFaceONNXExporter:
         if probe_dependency(TORCH).state is not DependencyState.AVAILABLE:
             missing.append("torch")
         if missing:
+            requirements = {
+                "transformers": f"transformers>={TRANSFORMERS.minimum_version}",
+                "torch": f"torch>={TORCH.minimum_version}",
+            }
             return SupportResult(
                 supported=False,
                 code="MISSING_DEPENDENCY",
-                reason="transformers>=4.40.0/torch>=2.5.0 required",
+                reason=f"{'/'.join(requirements[name] for name in missing)} required",
                 missing_dependencies=tuple(missing),
             )
         return SupportResult(supported=True, code="OK")
@@ -93,7 +98,7 @@ class HuggingFaceONNXExporter:
         target: PlannedTarget,
     ) -> ArtifactDraft:
         """Export the HF model to ONNX."""
-        import torch
+        torch = require_dependency(TORCH)
 
         model = source.model_object
         model_id: str = source.metadata.get("model_id", "")
@@ -177,7 +182,8 @@ def _export_with_transformers_onnx(
     opset: int,
     artifact_dir: Path,
 ) -> Path:
-    """Use transformers.onnx to export."""
+    """Use ``transformers.onnx`` after the caller's dependency check."""
+    require_dependency(TRANSFORMERS)
     from transformers.onnx import FeaturesManager, export
 
     if hasattr(model, "config"):
@@ -207,7 +213,7 @@ def _export_torch_onnx_fallback(
     opset: int,
 ) -> Path:
     """Direct torch.onnx.export fallback."""
-    import torch
+    torch = require_dependency(TORCH)
 
     model.eval()
     dummy = torch.zeros(1, 128, dtype=torch.long)
@@ -233,9 +239,7 @@ def _export_torch_onnx_fallback(
 
 
 def _get_transformers_version() -> str:
-    try:
-        import transformers
-
-        return getattr(transformers, "__version__", "unknown")
-    except ImportError:
-        return "unknown"
+    """Return the Transformers version; the caller must require the package."""
+    transformers = require_dependency(TRANSFORMERS)
+    version = getattr(transformers, "__version__", None)
+    return version if isinstance(version, str) else "unknown"

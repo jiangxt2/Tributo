@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from tributo._common.dependencies import MissingOptionalDependency
-from tributo.exceptions import DataSourceError
+from tributo.exceptions import DataSourceError, JobConfigurationError
 from tributo.inference.batch_predictor import XGBoostONNXPredictor
 
 

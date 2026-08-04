@@ -18,7 +18,12 @@ from typing import Any, ClassVar, Mapping
 
 from pydantic import BaseModel
 
-from tributo._common.dependencies import ONNXRUNTIME, DependencyState, probe_dependency
+from tributo._common.dependencies import (
+    ONNXRUNTIME,
+    DependencyState,
+    probe_dependency,
+    require_dependency,
+)
 from tributo.exporting.models import (
     ArtifactDraft,
     DraftFile,
@@ -99,7 +104,7 @@ class ONNXQuantizer:
         target: PlannedTarget,
     ) -> ArtifactDraft:
         """Quantise the upstream FP32 ONNX model to INT8 (dynamic)."""
-        import onnxruntime
+        onnxruntime = require_dependency(ONNXRUNTIME)
         import onnxruntime.quantization as ort_quant
 
         upstream_artifact = upstream.get("model")

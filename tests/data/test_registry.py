@@ -24,9 +24,9 @@ class TestRegistry:
         """内置连接器应已注册。"""
         connectors = list_connectors()
         assert "parquet" in connectors
-        if probe_dependency(LANCE).state is DependencyState.AVAILABLE:
+        if probe_dependency(LANCE).state is not DependencyState.MISSING:
             assert "lance" in connectors
-        if probe_dependency(PYICEBERG).state is DependencyState.AVAILABLE:
+        if probe_dependency(PYICEBERG).state is not DependencyState.MISSING:
             assert "iceberg" in connectors
 
     def test_get_connector_returns_instance(self):

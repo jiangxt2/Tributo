@@ -8,11 +8,16 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, ClassVar, Mapping
+from typing import TYPE_CHECKING, Any, ClassVar, Mapping
 
 from pydantic import BaseModel
 
-from tributo._common.dependencies import XGBOOST, DependencyState, probe_dependency
+from tributo._common.dependencies import (
+    XGBOOST,
+    DependencyState,
+    probe_dependency,
+    require_dependency,
+)
 from tributo.exporting.models import (
     ArtifactDraft,
     DraftFile,
@@ -29,6 +34,9 @@ from tributo.exporting.options import XGBoostNativeOptions
 from tributo.util.annotations import PublicAPI
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from xgboost import Booster as XGBoostBooster
 
 
 @PublicAPI(stability="beta")
@@ -77,9 +85,9 @@ class XGBoostNativeExporter:
         target: PlannedTarget,
     ) -> ArtifactDraft:
         """Save the XGBoost booster to UBJ or JSON."""
-        import xgboost
+        xgboost = require_dependency(XGBOOST)
 
-        booster: xgboost.Booster = source.model_object
+        booster: XGBoostBooster = source.model_object
         fmt = target.typed_options.get("fmt", "ubj")
 
         if fmt == "ubj":

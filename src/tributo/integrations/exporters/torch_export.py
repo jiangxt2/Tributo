@@ -13,7 +13,12 @@ from typing import Any, ClassVar, Mapping
 
 from pydantic import BaseModel, ConfigDict
 
-from tributo._common.dependencies import TORCH, DependencyState, probe_dependency
+from tributo._common.dependencies import (
+    TORCH,
+    DependencyState,
+    probe_dependency,
+    require_dependency,
+)
 from tributo.exporting.models import (
     ArtifactDraft,
     DraftFile,
@@ -89,7 +94,7 @@ class TorchExportExporter:
         target: PlannedTarget,
     ) -> ArtifactDraft:
         """Run torch.export and save to .pt2."""
-        import torch
+        torch = require_dependency(TORCH)
 
         model = source.model_object
         if not isinstance(model, torch.nn.Module):
@@ -183,7 +188,7 @@ def _build_example_inputs(source: ExportSource, model: Any) -> tuple[Any, ...]:
     Uses sample_inputs if available, otherwise generates a dummy tensor
     from the model's first parameter.
     """
-    import torch
+    torch = require_dependency(TORCH)
 
     sample = source.sample_inputs
     if sample:

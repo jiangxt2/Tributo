@@ -7,14 +7,18 @@ uses the TorchDynamo ONNX exporter which produces a more optimised graph.
 
 from __future__ import annotations
 
-import inspect
 import json
 import logging
 from typing import Any, ClassVar, Mapping
 
 from pydantic import BaseModel
 
-from tributo._common.dependencies import DependencyState, TORCH, probe_dependency
+from tributo._common.dependencies import (
+    TORCH,
+    DependencyState,
+    probe_dependency,
+    require_dependency,
+)
 from tributo.exporting.models import (
     ArtifactDraft,
     DraftFile,
@@ -92,7 +96,7 @@ class TorchONNXExporter:
         target: PlannedTarget,
     ) -> ArtifactDraft:
         """Export the PyTorch model to ONNX."""
-        import torch
+        torch = require_dependency(TORCH)
 
         model = source.model_object
         if not isinstance(model, torch.nn.Module):
@@ -239,7 +243,7 @@ class TorchONNXExporter:
         use_dynamo: bool = False,
     ) -> Any:
         """Legacy ``torch.onnx.export`` path (model already in eval mode)."""
-        import torch
+        torch = require_dependency(TORCH)
 
         output_path = artifact_dir / "model.onnx"
 
@@ -258,11 +262,9 @@ class TorchONNXExporter:
             "export_params": True,
             "do_constant_folding": True,
         }
-        # The ``dynamo`` keyword of torch.onnx.export was added in
-        # PyTorch 2.1 — the legacy identity extra supports torch>=2.0.0,
-        # so only pass it when the runtime understands it.
-        if "dynamo" in inspect.signature(torch.onnx.export).parameters:
-            export_kwargs["dynamo"] = use_dynamo
+        # TORCH requires PyTorch >= 2.5.0, whose export API supports this
+        # keyword unconditionally.
+        export_kwargs["dynamo"] = use_dynamo
         torch.onnx.export(model, model_input, str(output_path), **export_kwargs)
         return output_path
 
@@ -280,7 +282,7 @@ def _resolve_input_names(source: ExportSource) -> list[str]:
 
 def _resolve_sample_inputs(source: ExportSource, model: Any) -> tuple[Any, ...]:
     """Resolve sample inputs for ONNX export."""
-    import torch
+    torch = require_dependency(TORCH)
 
     sample = source.sample_inputs
     if sample:

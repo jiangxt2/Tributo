@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, ClassVar, Mapping
+from typing import TYPE_CHECKING, Any, ClassVar, Mapping
 
 from pydantic import BaseModel
 
@@ -17,6 +17,7 @@ from tributo._common.dependencies import (
     XGBOOST,
     DependencyState,
     probe_dependency,
+    require_dependency,
 )
 from tributo.exporting.models import (
     ArtifactDraft,
@@ -34,6 +35,9 @@ from tributo.exporting.options import XGBoostONNXOptions
 from tributo.util.annotations import PublicAPI
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from xgboost import Booster as XGBoostBooster
 
 
 @PublicAPI(stability="beta")
@@ -137,12 +141,13 @@ class XGBoostONNXExporter:
     ) -> ArtifactDraft:
         """Convert the XGBoost booster to ONNX and write to *context.artifact_dir*."""
         import numpy as np
-        import onnxmltools
-        import xgboost
+
+        onnxmltools = require_dependency(ONNXMLTOOLS)
+        xgboost = require_dependency(XGBOOST)
         from onnxmltools.convert import convert_xgboost
         from onnxmltools.convert.common.data_types import FloatTensorType
 
-        booster: xgboost.Booster = source.model_object
+        booster: XGBoostBooster = source.model_object
 
         # Infer n_features from the source contract when the booster does not
         # carry names (e.g. a DMatrix created without feature_names).

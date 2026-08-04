@@ -17,6 +17,7 @@ from tributo._common.dependencies import (
     TORCH,
     DependencyState,
     probe_dependency,
+    require_dependency,
 )
 from tributo.exporting.models import (
     ArtifactDraft,
@@ -71,10 +72,14 @@ class TorchSafetensorsExporter:
         if probe_dependency(TORCH).state is not DependencyState.AVAILABLE:
             missing.append("torch")
         if missing:
+            requirements = {
+                "safetensors": f"safetensors>={SAFETENSORS.minimum_version}",
+                "torch": f"torch>={TORCH.minimum_version}",
+            }
             return SupportResult(
                 supported=False,
                 code="MISSING_DEPENDENCY",
-                reason="safetensors>=0.4.3/torch>=2.5.0 required",
+                reason=f"{'/'.join(requirements[name] for name in missing)} required",
                 missing_dependencies=tuple(missing),
             )
         return SupportResult(supported=True, code="OK")
@@ -87,7 +92,8 @@ class TorchSafetensorsExporter:
         target: PlannedTarget,
     ) -> ArtifactDraft:
         """Save the model state_dict to safetensors format."""
-        import torch
+        torch = require_dependency(TORCH)
+        require_dependency(SAFETENSORS)
         from safetensors.torch import save_file
 
         model = source.model_object
@@ -208,9 +214,7 @@ def _shard_state_dict(
 
 
 def _get_safetensors_version() -> str:
-    try:
-        import safetensors
-
-        return getattr(safetensors, "__version__", "unknown")
-    except ImportError:
-        return "unknown"
+    """Return the installed Safetensors version."""
+    safetensors = require_dependency(SAFETENSORS)
+    version = getattr(safetensors, "__version__", None)
+    return version if isinstance(version, str) else "unknown"
