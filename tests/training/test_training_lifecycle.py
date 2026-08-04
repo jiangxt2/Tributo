@@ -27,6 +27,10 @@ class _FakeTrainer(BaseTrainer):
         self.events.append("training_loop")
         return "checkpoint"
 
+    @staticmethod
+    def _get_trainer_type() -> str:
+        return "xgboost"
+
 
 class _FailingSetupTrainer(_FakeTrainer):
     def setup(self) -> None:
