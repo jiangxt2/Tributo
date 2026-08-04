@@ -56,10 +56,10 @@ class XGBoostONNXExporter:
     def supports(cls, request: SupportRequest) -> SupportResult:
         """Check whether the source is an XGBoost booster.
 
-        ONNX export is only supported for numeric-feature classification
-        (``binary:*`` / ``multi:*`` objectives).  Regression, ranking,
-        count, survival, custom objectives and categorical features are
-        rejected at plan time — before any work starts.
+        ONNX export is supported for numeric-feature classification
+        (``binary:*`` / ``multi:*`` objectives) and standard squared-error
+        regression.  Ranking, count, survival, custom objectives and
+        categorical features are rejected at plan time.
         """
         if request.source_kind != "xgboost_result":
             return SupportResult(
@@ -88,24 +88,35 @@ class XGBoostONNXExporter:
                 ),
             )
         objective = request.source_metadata.get("objective", "")
+        if objective == "binary:hinge":
+            return SupportResult(
+                supported=False,
+                code="UNSUPPORTED_OBJECTIVE",
+                reason=(
+                    "ONNX classifier probabilities are not available for binary:hinge"
+                ),
+            )
         if not objective:
             return SupportResult(
                 supported=False,
                 code="UNKNOWN_OBJECTIVE",
                 reason=(
                     "Cannot verify the XGBoost objective; ONNX export is "
-                    "only supported for numeric-feature classification "
-                    "(binary:* / multi:*)"
+                    "supported only for numeric-feature classification "
+                    "(binary:* / multi:*) or reg:squarederror regression"
                 ),
             )
-        if not (objective.startswith("binary:") or objective.startswith("multi:")):
+        if not (
+            objective.startswith(("binary:", "multi:"))
+            or objective == "reg:squarederror"
+        ):
             return SupportResult(
                 supported=False,
                 code="UNSUPPORTED_OBJECTIVE",
                 reason=(
                     f"Objective {objective!r} is not supported for ONNX "
-                    "export; only binary:* / multi:* classification with "
-                    "numeric features is supported at plan time"
+                    "export; supported objectives are binary:* / multi:* "
+                    "classification and reg:squarederror regression"
                 ),
             )
         return SupportResult(supported=True, code="OK")
@@ -126,33 +137,45 @@ class XGBoostONNXExporter:
 
         booster: xgboost.Booster = source.model_object
 
-        # Infer n_features from the booster's feature_names.
-        if booster.feature_names is not None:
-            n_features = len(booster.feature_names)
+        # Infer n_features from the source contract when the booster does not
+        # carry names (e.g. a DMatrix created without feature_names).
+        source_feature_names = source.feature_schema.get("feature_names", [])
+        original_names = list(booster.feature_names or source_feature_names)
+        if not original_names:
+            n_features = int(booster.num_features())
+            original_names = [f"f{i}" for i in range(n_features)]
         else:
-            raise ValueError(
-                "Cannot determine n_features: please set feature_names "
-                "on the XGBoost booster before calling this exporter"
-            )
+            n_features = len(original_names)
 
         # Save original feature names for ONNX metadata.
-        original_names = booster.feature_names
-        if original_names is None:
-            original_names = [f"f{i}" for i in range(n_features)]
         feature_names_json = json.dumps(original_names)
 
         # onnxmltools requires feature_names to be f%d format — temporarily rename.
         booster.feature_names = [f"f{i}" for i in range(n_features)]
 
         try:
-            # Choose wrapper based on objective type.  Only binary:* /
-            # multi:* reach this point — everything else is rejected at
-            # plan time by supports() (numeric-feature classification
-            # only, per the plan's first-phase scope).
+            # Choose wrapper based on objective type.  The source provider
+            # extracts this from the learner config because XGBoost does not
+            # reliably expose it through ``booster.attr``.
             # binary:* → binary classification (XGBClassifier, n_classes=2)
             # multi:*  → multi-class classification
+            # reg:squarederror → true regression (XGBRegressor)
             num_class_raw = booster.attr("num_class")
-            objective = booster.attr("objective") or ""
+            objective = str(source.metadata.get("objective") or "")
+            if not objective:
+                try:
+                    learner_config = json.loads(booster.save_config())
+                    objective = str(learner_config["learner"]["objective"]["name"])
+                except Exception:
+                    objective = ""
+            if not num_class_raw:
+                try:
+                    learner_config = json.loads(booster.save_config())
+                    num_class_raw = learner_config["learner"]["learner_model_param"][
+                        "num_class"
+                    ]
+                except Exception:
+                    num_class_raw = None
             is_classification = objective.startswith("binary:") or objective.startswith(
                 "multi:"
             )
@@ -174,6 +197,17 @@ class XGBoostONNXExporter:
                 initial_types=initial_types,
                 target_opset=opset,
             )
+            if not is_classification and onnx_model.graph.output:
+                # onnxmltools names the regressor output ``variable`` by
+                # default; keep the Bundle contract framework-neutral and
+                # stable across converter versions.
+                old_output_name = onnx_model.graph.output[0].name
+                if old_output_name != "prediction":
+                    for node in onnx_model.graph.node:
+                        for index, name in enumerate(node.output):
+                            if name == old_output_name:
+                                node.output[index] = "prediction"
+                    onnx_model.graph.output[0].name = "prediction"
         finally:
             # Restore original feature names.
             booster.feature_names = original_names

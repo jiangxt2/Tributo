@@ -252,10 +252,14 @@ class BaseTrainer(ABC):
     def _get_trainer_type() -> str:
         """Return the trainer_type string for this trainer class.
 
-        Subclasses override this to declare their trainer type identity.
-        Default returns ``"xgboost"`` — the most common case.
+        Every Bundle-capable trainer must override this method.  A default
+        trainer identity would silently route a new trainer through the
+        wrong source provider, so missing declarations fail fast.
         """
-        return "xgboost"
+        raise NotImplementedError(
+            "BaseTrainer subclasses must declare _get_trainer_type() "
+            "before using Bundle export"
+        )
 
     @staticmethod
     def _get_tributo_version() -> str:

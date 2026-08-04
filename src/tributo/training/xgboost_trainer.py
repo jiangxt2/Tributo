@@ -344,6 +344,11 @@ class XGBoostTrainerImpl(BaseTrainer):
         # Write to self._summary for run() return
         self._summary.update(summary)
 
+    @staticmethod
+    def _get_trainer_type() -> str:
+        """Return the explicit Bundle source-provider identity."""
+        return "xgboost"
+
 
 # ── Training loop (Ray worker level) ──
 

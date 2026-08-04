@@ -73,6 +73,16 @@ trainer = DNNTrainer(config)
 result = trainer.fit()
 ```
 
+## Bundle Checkpoint Compatibility
+
+DNN and PU checkpoints produced before the E2 export contract do not contain
+the required `ExportCheckpointV1` metadata and cannot be exported through
+`BaseTrainer.run(bundle_config=...)`. Regenerate those checkpoints with the
+E2 trainer implementation before using Bundle export.
+
+The legacy `export_model()` path remains available for existing checkpoints
+and is not affected by this contract requirement.
+
 ## S3 Authentication
 
 Three methods, in order of preference:

@@ -181,6 +181,72 @@ def build_features_from_config(
     return features_from_dicts([cfg.model_dump() for cfg in feature_configs])
 
 
+def build_export_checkpoint_config(
+    feature_configs: list[dict[str, Any]],
+    model_config: dict[str, Any],
+    *,
+    trainer_type: str,
+    task_type: str,
+    framework_version: str,
+    extra_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the stable export metadata written into a Torch checkpoint.
+
+    The model-specific reconstruction parameters remain at the top level for
+    compatibility with the DNN source provider.  The envelope fields are
+    deliberately explicit so exporters never need to infer a signature from
+    a raw model file.
+    """
+    normalized_features = []
+    input_schema: list[dict[str, Any]] = []
+    for feature in feature_configs:
+        normalized_feature = dict(feature)
+        if "norm" in normalized_feature:
+            normalized_feature["norm"] = getattr(
+                normalized_feature["norm"], "value", normalized_feature["norm"]
+            )
+        normalized_features.append(normalized_feature)
+        name = str(feature["name"])
+        is_sparse = "vocab_size" in feature
+        dimension = int(feature.get("dimension", 1))
+        shape: list[int | str] = ["batch"]
+        if not is_sparse and dimension > 1:
+            shape.append(dimension)
+        input_schema.append(
+            {
+                "name": name,
+                "dtype": feature.get("dtype") or ("int64" if is_sparse else "float32"),
+                "shape": shape,
+            }
+        )
+
+    metadata: dict[str, Any] = {
+        **model_config,
+        "features": normalized_features,
+        "schema_version": 1,
+        "trainer_type": trainer_type,
+        "architecture_id": "dnn",
+        "input_schema": input_schema,
+        "output_schema": [{"name": "output", "dtype": "float32", "shape": ["batch"]}],
+        "preprocessing": {
+            "artifact": "preprocessor.json",
+            "type": "FeatureTransformer",
+        },
+        "task_type": task_type,
+        "framework": "pytorch",
+        "framework_version": framework_version,
+        "checkpoint_format_version": 1,
+        "required_artifacts": [
+            "model.pt",
+            "model_config.json",
+            "preprocessor.json",
+        ],
+    }
+    if extra_metadata:
+        metadata.update(extra_metadata)
+    return metadata
+
+
 # ── DNN BaseTrainer implementation ──
 
 
@@ -736,6 +802,17 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
             }
             (checkpoint_dir / "preprocessor.json").write_text(
                 json.dumps(preprocessor_state, ensure_ascii=False, default=str)
+            )
+
+            model_config = build_export_checkpoint_config(
+                [f.__dict__ for f in features],
+                model_cfg,
+                trainer_type="dnn",
+                task_type="classification",
+                framework_version=torch.__version__,
+            )
+            (checkpoint_dir / "model_config.json").write_text(
+                json.dumps(model_config, ensure_ascii=False, default=str)
             )
 
             checkpoint = Checkpoint.from_directory(str(checkpoint_dir))

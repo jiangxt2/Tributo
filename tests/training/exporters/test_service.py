@@ -15,7 +15,9 @@ from tributo.exceptions import (
 from tributo.exporting.models import (
     ArtifactDraft,
     BundleOutputConfig,
+    CheckpointField,
     DraftFile,
+    ExportCheckpointV1,
     ExportContext,
     ExportSource,
     ExportTarget,
@@ -200,6 +202,54 @@ class TestBundleExportService:
             match="published without the typed input/output contract",
         ):
             loader.open(result.manifest_uri)
+
+    def test_checkpoint_contract_becomes_typed_manifest_signature(
+        self, tmp_path: Path
+    ) -> None:
+        er, vr = _make_registries()
+        service = BundleExportService(export_registry=er, validator_registry=vr)
+        source = _make_source().model_copy(
+            update={
+                "checkpoint_contract": ExportCheckpointV1(
+                    trainer_type="xgboost",
+                    architecture_id="xgboost",
+                    input_schema=(
+                        CheckpointField(
+                            name="float_input",
+                            dtype="float32",
+                            shape=("batch", 2),
+                        ),
+                    ),
+                    output_schema=(
+                        CheckpointField(
+                            name="prediction",
+                            dtype="float32",
+                            shape=("batch",),
+                        ),
+                    ),
+                    preprocessing={"type": "none"},
+                    task_type="regression",
+                    framework="xgboost",
+                    framework_version="2.1.0",
+                    checkpoint_format_version=1,
+                )
+            }
+        )
+        result = service.export_bundle(source=source, config=_make_config(tmp_path))
+
+        from tributo.exporting.bundle_reader import BundleReader
+
+        manifest = BundleReader().read_manifest(result.canonical_uri)
+        assert manifest.input_signature.input_fields[0].model_dump() == {
+            "name": "float_input",
+            "dtype": "float32",
+            "shape": ("batch", 2),
+        }
+        assert manifest.output_signature.output_fields[0].model_dump() == {
+            "name": "prediction",
+            "dtype": "float32",
+            "shape": ("batch",),
+        }
 
     def test_legacy_mode_rejected(self) -> None:
         service = BundleExportService()

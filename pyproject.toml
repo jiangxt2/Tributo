@@ -153,6 +153,7 @@ onnx-quantizer-v1 = "tributo.integrations.exporters.onnx_quantizer:ONNXQuantizer
 [project.entry-points."tributo.source_providers"]
 ray-xgboost-v1 = "tributo.integrations.sources.ray_xgboost:RayXGBoostSourceProvider"
 ray-dnn-v1 = "tributo.integrations.sources.ray_dnn:RayDnnSourceProvider"
+ray-pu-v1 = "tributo.integrations.sources.ray_pu:RayPUSourceProvider"
 hf-v1 = "tributo.integrations.sources.huggingface:HuggingFaceSourceProvider"
 
 [project.entry-points."tributo.validators"]

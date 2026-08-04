@@ -15,7 +15,7 @@ from typing import Any, ClassVar, Generator, cast
 
 from pydantic import BaseModel, ConfigDict
 
-from tributo.exporting.models import ExportSource
+from tributo.exporting.models import CheckpointField, ExportCheckpointV1, ExportSource
 from tributo.util.annotations import PublicAPI
 
 logger = logging.getLogger(__name__)
@@ -107,11 +107,56 @@ class RayXGBoostSourceProvider:
             model_dump if isinstance(model_dump, bytes) else str(model_dump).encode()
         ).hexdigest()[:16]
 
-        # Extract feature names.
+        # Extract feature names and build the framework-neutral checkpoint
+        # contract used by the manifest signature.
         feature_names = booster.feature_names
-        n_features = len(feature_names) if feature_names else 0
-        feature_schema: dict[str, Any] = (
-            {"feature_names": list(feature_names)} if feature_names else {}
+        n_features = (
+            len(feature_names) if feature_names else int(booster.num_features())
+        )
+        effective_feature_names = feature_names or [f"f{i}" for i in range(n_features)]
+        feature_schema: dict[str, Any] = {
+            "feature_names": list(effective_feature_names)
+        }
+        objective = _booster_objective(booster)
+        is_classification = objective.startswith(("binary:", "multi:"))
+        task_type = (
+            "classification"
+            if is_classification
+            else "regression"
+            if objective.startswith("reg:")
+            else "unknown"
+        )
+        if is_classification:
+            n_classes = _booster_num_classes(booster, objective)
+            output_schema: tuple[CheckpointField, ...] = (
+                CheckpointField(name="label", dtype="int64", shape=("batch",)),
+                CheckpointField(
+                    name="probabilities",
+                    dtype="float32",
+                    shape=("batch", n_classes),
+                ),
+            )
+        else:
+            output_schema = (
+                # onnxmltools XGBRegressor emits a two-dimensional [batch, 1] tensor.
+                CheckpointField(name="prediction", dtype="float32", shape=("batch", 1)),
+            )
+        contract = ExportCheckpointV1(
+            trainer_type="xgboost",
+            architecture_id="xgboost",
+            input_schema=(
+                CheckpointField(
+                    name="float_input",
+                    dtype="float32",
+                    shape=("batch", n_features),
+                ),
+            ),
+            output_schema=output_schema,
+            preprocessing={"type": "none"},
+            task_type=task_type,
+            framework="xgboost",
+            framework_version=xgboost.__version__,
+            checkpoint_format_version=1,
         )
 
         source = ExportSource(
@@ -123,12 +168,14 @@ class RayXGBoostSourceProvider:
                 "framework": "xgboost",
                 "framework_version": xgboost.__version__,
                 "n_features": n_features,
-                "objective": _booster_objective(booster),
+                "objective": objective,
+                "task_type": task_type,
                 "has_categorical_features": any(
                     ft and ft.startswith("c") for ft in (booster.feature_types or [])
                 ),
             },
             source_fingerprint=fingerprint,
+            checkpoint_contract=contract,
         )
         yield source
 
@@ -145,6 +192,18 @@ def _booster_objective(booster: Any) -> str:
         return str(config.get("learner", {}).get("objective", {}).get("name", ""))
     except Exception:
         return ""
+
+
+def _booster_num_classes(booster: Any, objective: str) -> int:
+    """Return the classification width declared by an XGBoost booster."""
+    if objective.startswith("binary:"):
+        return 2
+    try:
+        config = json.loads(booster.save_config())
+        raw = config["learner"]["learner_model_param"]["num_class"]
+        return max(2, int(raw))
+    except Exception:
+        return 2
 
 
 def _path_to_checkpoint(path: Path) -> Path:

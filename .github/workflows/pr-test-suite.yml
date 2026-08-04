@@ -21,6 +21,7 @@ jobs:
       # model_export is a subset of code: the export-contract job runs
       # only when the export framework or its tests changed.
       model_export: ${{ steps.filter.outputs.model_export }}
+      trainer_bundle: ${{ steps.filter.outputs.trainer_bundle }}
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
       - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36
@@ -39,6 +40,13 @@ jobs:
               - "src/tributo/exporting/**"
               - "src/tributo/integrations/**"
               - "tests/training/exporters/**"
+              - "tests/integration/test_export*"
+              - "pyproject.toml"
+            trainer_bundle:
+              - "src/tributo/exporting/**"
+              - "src/tributo/integrations/**"
+              - "src/tributo/training/**"
+              - "tests/training/**"
               - "tests/integration/test_export*"
               - "pyproject.toml"
 
@@ -168,6 +176,46 @@ jobs:
         run: |
           uv run --locked --no-sync python -m pytest tests/training/exporters/ \
             -v --tb=short --timeout=180
+
+  trainer-bundle-it:
+    name: Trainer Bundle IT (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [paths-filter, lint]
+    if: needs.paths-filter.outputs.trainer_bundle == 'true'
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
+    env:
+      # Keep native XGBoost execution deterministic on CI workers.
+      OMP_NUM_THREADS: "1"
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+
+      - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install integration dependencies
+        run: uv sync --extra dev --extra training --extra model-export-torch --locked
+
+      - name: Verify optional integration dependencies
+        run: |
+          uv run --locked --no-sync python -c \
+            "import onnxmltools, onnxscript, torch, xgboost"
+
+      - name: Run local trainer bundle integration tests
+        run: |
+          # Clear repository addopts so this explicit list runs the slow
+          # vertical slices; unrelated MinIO and runtime-env suites are not
+          # selected here.
+          uv run --locked --no-sync python -m pytest \
+            tests/integration/test_export_vertical_slice.py \
+            tests/integration/test_export_review_fixes.py \
+            tests/integration/test_export_trainer_bundle_vertical_slice.py \
+            tests/training/test_pu_trainer.py \
+            -o "addopts=" \
+            -v --tb=short --timeout=600
 
   export-s3:
     name: Export S3 Integration (MinIO)
