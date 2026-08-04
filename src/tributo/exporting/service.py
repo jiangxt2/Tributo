@@ -197,6 +197,13 @@ class BundleExportService:
                 task_type=source.metadata.get("task_type"),
             )
 
+            input_signature = None
+            output_signature = None
+            if source.checkpoint_contract is not None:
+                input_signature, output_signature = (
+                    source.checkpoint_contract.to_manifest_signatures()
+                )
+
             # Phase 4: Publish.
             if config.bundle_uri is None:
                 raise JobConfigurationError("bundle_uri is required for publishing")
@@ -208,6 +215,8 @@ class BundleExportService:
                 execution_id=execution_id,
                 tributo_version=tributo_version,
                 source_info=source_info,
+                input_signature=input_signature,
+                output_signature=output_signature,
                 storage_profile=config.storage_profile,
                 alias_config=config.alias,
                 roles=config.roles,

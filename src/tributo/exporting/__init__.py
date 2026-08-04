@@ -23,6 +23,8 @@ from typing import Any
 from tributo.exporting.models import (
     BundleOutputConfig,
     BundleRef,
+    CheckpointField,
+    ExportCheckpointV1,
     ExportSource,
     ExportTarget,
 )
@@ -136,6 +138,8 @@ def _get_tributo_version() -> str:
 
 __all__ = [
     "BundleRef",
+    "CheckpointField",
+    "ExportCheckpointV1",
     "ExportSpec",
     "ExportTarget",
     "export",

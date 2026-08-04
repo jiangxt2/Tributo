@@ -10,17 +10,21 @@ import hashlib
 import json
 import re
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    Strict,
     field_validator,
     model_validator,
 )
 
 from tributo.util.annotations import DeveloperAPI, PublicAPI
+
+if TYPE_CHECKING:
+    from tributo.exporting.manifest import ManifestSignature
 
 # ── Name validation ──────────────────────────────────────────────────────────
 
@@ -196,6 +200,116 @@ class BundleOutputConfig(BaseModel):
             return v
         raise ValueError(
             f"bundle_uri must be s3://, file://, or a local path, got {v!r}"
+        )
+
+
+# ── Export checkpoint contract ──────────────────────────────────────────────
+
+
+@PublicAPI(stability="beta")
+class CheckpointField(BaseModel):
+    """Framework-neutral typed field stored in an export checkpoint.
+
+    This intentionally mirrors ``ManifestSignature`` field structure while
+    remaining separate: checkpoint fields describe producer metadata at the
+    export boundary, whereas manifest fields describe the published artifact
+    contract.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str = Field(..., min_length=1)
+    dtype: str = Field(..., min_length=1)
+    shape: tuple[Annotated[int, Strict()] | Annotated[str, Strict()], ...] = ()
+
+    @field_validator("name", "dtype")
+    @classmethod
+    def _reject_blank(cls, v: str) -> str:
+        if v != v.strip():
+            raise ValueError(f"must not contain leading/trailing whitespace, got {v!r}")
+        return v
+
+    @field_validator("shape")
+    @classmethod
+    def _check_shape(cls, v: tuple[Any, ...]) -> tuple[Any, ...]:
+        for dim in v:
+            if isinstance(dim, int) and dim <= 0:
+                raise ValueError(f"shape dimensions must be positive, got {dim!r}")
+            if isinstance(dim, str) and not dim.strip():
+                raise ValueError("dynamic shape axes must be non-empty strings")
+        return v
+
+
+@PublicAPI(stability="beta")
+class ExportCheckpointV1(BaseModel):
+    """Contract for checkpoint metadata needed by the Bundle exporter.
+
+    The model-specific fields are intentionally allowed as extra keys.  The
+    required envelope below is stable, while DNN/PU configurations need to
+    retain their architecture-specific reconstruction parameters in the same
+    ``model_config.json`` artifact.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="allow")
+
+    schema_version: Literal[1] = 1
+    trainer_type: str = Field(..., min_length=1)
+    architecture_id: str = Field(..., min_length=1)
+    input_schema: tuple[CheckpointField, ...] = Field(..., min_length=1)
+    output_schema: tuple[CheckpointField, ...] = Field(..., min_length=1)
+    preprocessing: dict[str, Any] = Field(default_factory=dict)
+    task_type: str = Field(..., min_length=1)
+    framework: str = Field(..., min_length=1)
+    framework_version: str = Field(..., min_length=1)
+    checkpoint_format_version: int = Field(default=1, ge=1)
+    required_artifacts: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def _reject_resume_only_fields(self) -> ExportCheckpointV1:
+        """Keep optimizer and progress state out of export metadata."""
+        resume_only = {
+            "optimizer",
+            "optimizer_state",
+            "epoch",
+            "step",
+            "rng",
+            "rng_state",
+            "early_stopping",
+        }
+        leaked = sorted(resume_only.intersection(self.model_extra or {}))
+        if leaked:
+            raise ValueError(
+                f"ExportCheckpointV1 cannot contain resume-only fields: {leaked!r}"
+            )
+        return self
+
+    def to_manifest_signatures(
+        self,
+    ) -> tuple["ManifestSignature", "ManifestSignature"]:
+        """Convert typed checkpoint fields to E1 Manifest signatures."""
+        # Import lazily because ``manifest`` imports the artifact models from
+        # this module.
+        from tributo.exporting.manifest import ManifestSignature, SignatureField
+
+        input_fields = tuple(
+            SignatureField(
+                name=field.name,
+                dtype=field.dtype,
+                shape=field.shape,
+            )
+            for field in self.input_schema
+        )
+        output_fields = tuple(
+            SignatureField(
+                name=field.name,
+                dtype=field.dtype,
+                shape=field.shape,
+            )
+            for field in self.output_schema
+        )
+        return (
+            ManifestSignature(input_fields=input_fields),
+            ManifestSignature(output_fields=output_fields),
         )
 
 
@@ -598,7 +712,7 @@ class ExportSource(BaseModel):
     sample_inputs: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
     source_fingerprint: str = ""
-
+    checkpoint_contract: ExportCheckpointV1 | None = None
 
 # ── Plugin diagnostics ───────────────────────────────────────────────────────
 
