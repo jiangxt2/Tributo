@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import shutil
+import tempfile
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 from pydantic import AliasChoices, ConfigDict, Field, model_validator
@@ -19,6 +23,7 @@ from tributo.training.algorithm_spec import (
     ResourceHints,
 )
 from tributo.training.base import BaseTrainer
+from tributo.training.checkpoint import ResumeConfig
 from tributo.training.registry import register
 from tributo.training.resource import (
     DEFAULT_BATCH_SIZE,
@@ -37,6 +42,42 @@ if TYPE_CHECKING:
 # training parameters would change the execution path (e.g. external-memory
 # / data_iter) without going through the materialization-budget contract.
 _RESERVED_XGB_PARAMS = frozenset({"external_memory", "data_iter"})
+
+
+def _populate_xgb_eval_metrics(
+    metrics: dict[str, Any],
+    evals_result: dict[str, dict[str, list[Any]]],
+) -> None:
+    """Add current and history keys using one stable evaluation schema."""
+    for eval_name, eval_scores in evals_result.items():
+        for metric_name, values in eval_scores.items():
+            if values:
+                key = f"{eval_name}-{metric_name}"
+                metrics[key] = values[-1]
+                metrics[f"{key}_history"] = list(values)
+
+
+def _merge_xgb_eval_results(
+    previous: dict[str, dict[str, list[Any]]],
+    current: dict[str, dict[str, list[Any]]],
+) -> dict[str, dict[str, list[Any]]]:
+    """Merge resumed and current XGBoost evaluation histories."""
+    merged = {
+        eval_name: {
+            metric_name: list(values) for metric_name, values in eval_scores.items()
+        }
+        for eval_name, eval_scores in previous.items()
+    }
+    for eval_name, eval_scores in current.items():
+        target = merged.setdefault(eval_name, {})
+        for metric_name, values in eval_scores.items():
+            prior_values = target.get(metric_name, [])
+            if values[: len(prior_values)] == prior_values:
+                target[metric_name] = list(values)
+            else:
+                target[metric_name] = list(prior_values) + list(values)
+    return merged
+
 
 logger = logging.getLogger(__name__)
 
@@ -149,9 +190,10 @@ class RayConfig(StrictConfigModel):
         ge=-1,
         description=(
             "Number of automatic retries on worker failure. 0=no retry, -1=infinite retries. "
-            "Note: checkpoint resumption is not currently supported; retries restart training from scratch."
+            "When resume.enabled is true, retries restore the latest retained checkpoint."
         ),
     )
+    resume: ResumeConfig = Field(default_factory=ResumeConfig)
 
 
 class OutputConfig(StrictConfigModel):
@@ -232,8 +274,16 @@ class XGBoostTrainerImpl(BaseTrainer):
 
     def training_loop(self) -> Any:
         """Call build_trainer + trainer.fit(), returns Result."""
+        from tributo.training.checkpoint import load_initial_checkpoint
+
         cfg = self._train_config
         label_col = cfg.data.label_col
+
+        if cfg.ray.resume.effective_enabled and cfg.ray.num_workers != 1:
+            raise JobConfigurationError(
+                "T4-A resume currently supports num_workers=1 only; "
+                "multi-worker checkpoint coordination is deferred to T4-D."
+            )
 
         # Build XGBoost parameters
         xgb_params = {
@@ -249,6 +299,7 @@ class XGBoostTrainerImpl(BaseTrainer):
             "num_rounds": cfg.training.num_rounds,
             "max_rows_per_worker": cfg.training.max_rows_per_worker,
             "resource": cfg.resource.model_dump(),
+            "resume": cfg.ray.resume.model_dump(),
         }
         val_ds = self.datasets.get("val")
         test_ds = self.datasets.get("test")
@@ -266,6 +317,9 @@ class XGBoostTrainerImpl(BaseTrainer):
             use_gpu=cfg.ray.use_gpu,
             storage_path=cfg.ray.storage_path,
             max_failures=cfg.ray.max_failures,
+            resume_from_checkpoint=load_initial_checkpoint(
+                cfg.ray.resume.checkpoint_path
+            ),
         )
 
         logger.info("Starting XGBoost training...")
@@ -374,7 +428,22 @@ def train_loop_per_worker(config: dict[str, Any]) -> None:
     import ray.train
     import xgboost
 
+    from tributo.training.checkpoint import (
+        checkpoint_directory,
+        read_resume_manifest,
+        write_resume_manifest,
+    )
+
     label_col = config.get("label_col", "label")
+    resume_cfg = ResumeConfig.model_validate(config.get("resume") or {})
+    resume_enabled = resume_cfg.effective_enabled
+    checkpoint_interval = resume_cfg.checkpoint_interval
+    num_rounds = int(config.get("num_rounds", 100))
+    if resume_enabled and ray.train.get_context().get_world_size() != 1:
+        raise JobConfigurationError(
+            "T4-A resume currently supports num_workers=1 only; "
+            "multi-worker checkpoint coordination is deferred to T4-D."
+        )
     max_rows = config.get("max_rows_per_worker")
     _feature_names: dict[str, list[str]] = {}
     _rows_seen: dict[str, int] = {}
@@ -504,16 +573,158 @@ def train_loop_per_worker(config: dict[str, Any]) -> None:
     if dval is not None:
         evals.append((dval, "val"))
 
-    evals_result: dict[str, Any] = {}
-    booster = xgboost.train(
-        config.get("xgb_params", {}),
-        dtrain,
-        num_boost_round=int(config.get("num_rounds", 100)),
-        evals=evals,
-        evals_result=evals_result,
-        early_stopping_rounds=config.get("early_stopping_rounds"),
-        callbacks=[_CancelCallback()],
-    )
+    start_round = 0
+    initial_booster: xgboost.Booster | None = None
+    resume_evals_result: dict[str, Any] = {}
+    resume_checkpoint = ray.train.get_checkpoint() if resume_enabled else None
+    if resume_checkpoint is not None:
+        with checkpoint_directory(resume_checkpoint) as checkpoint_dir:
+            envelope = read_resume_manifest(
+                checkpoint_dir,
+                expected_trainer_type="xgboost",
+                expected_resume_id=resume_cfg.resume_id,
+            )
+            initial_booster = xgboost.Booster()
+            initial_booster.load_model(str(checkpoint_dir / "model.json"))
+            training_state = json.loads(
+                (checkpoint_dir / "training_state.json").read_text()
+            )
+        resume_evals_result = training_state.get("evals_result") or {}
+        checkpoint_params = training_state.get("xgb_params")
+        if checkpoint_params is not None and checkpoint_params != config.get(
+            "xgb_params", {}
+        ):
+            raise ValueError(
+                "Resume checkpoint XGBoost parameters do not match the current run"
+            )
+        start_round = int(
+            training_state.get("completed_rounds", envelope.completed_step)
+        )
+        logger.info(
+            "Resuming XGBoost training from %s at round %d",
+            envelope.resume_id,
+            start_round,
+        )
+
+    def _best_iteration(model: xgboost.Booster) -> int | None:
+        try:
+            return int(model.best_iteration)
+        except (AttributeError, TypeError, ValueError):
+            return None
+
+    def _best_score(model: xgboost.Booster) -> float | None:
+        try:
+            return float(model.best_score)
+        except (AttributeError, TypeError, ValueError):
+            return None
+
+    def _write_resume_checkpoint(
+        model: xgboost.Booster,
+        completed_rounds: int,
+        evals_result: dict[str, dict[str, list[Any]]] | None = None,
+    ) -> tuple[Any, str, Path]:
+        """Persist a framework-neutral resume envelope for one XGBoost round."""
+        from ray.train import Checkpoint
+
+        checkpoint_dir = Path(tempfile.mkdtemp(prefix="xgb_resume_ckpt_"))
+        try:
+            model.save_model(str(checkpoint_dir / "model.json"))
+            training_state = {
+                "completed_rounds": completed_rounds,
+                "best_iteration": _best_iteration(model),
+                "best_score": _best_score(model),
+                "xgb_params": config.get("xgb_params", {}),
+                "evals_result": evals_result or {},
+            }
+            (checkpoint_dir / "training_state.json").write_text(
+                json.dumps(training_state, ensure_ascii=False, default=float)
+            )
+            envelope = write_resume_manifest(
+                checkpoint_dir,
+                resume_id=resume_cfg.resume_id,
+                trainer_type="xgboost",
+                completed_step=completed_rounds,
+                framework="xgboost",
+                framework_version=xgboost.__version__,
+                payload_files=("model.json", "training_state.json"),
+                payload_metadata={
+                    "model": "model.json",
+                    "completed_rounds": completed_rounds,
+                    "best_iteration": training_state["best_iteration"],
+                    "best_score": training_state["best_score"],
+                    "xgb_params": training_state["xgb_params"],
+                    "preprocessing": "QuantileDMatrix",
+                },
+            )
+            return (
+                Checkpoint.from_directory(str(checkpoint_dir)),
+                envelope.resume_id,
+                checkpoint_dir,
+            )
+        except Exception:
+            shutil.rmtree(checkpoint_dir, ignore_errors=True)
+            raise
+
+    def _report_resume_checkpoint(
+        model: xgboost.Booster,
+        completed_rounds: int,
+        evals_log: dict[str, dict[str, list[Any]]],
+    ) -> None:
+        """Report one synchronized periodic checkpoint across all workers."""
+        full_evals_log = _merge_xgb_eval_results(resume_evals_result, evals_log)
+        metrics: dict[str, Any] = {"epoch": completed_rounds}
+        _populate_xgb_eval_metrics(metrics, full_evals_log)
+        if worker_rank == 0:
+            checkpoint, checkpoint_id, checkpoint_dir = _write_resume_checkpoint(
+                model, completed_rounds, full_evals_log
+            )
+            metrics["resume_id"] = checkpoint_id
+            try:
+                ray.train.report(metrics, checkpoint=checkpoint)
+            finally:
+                shutil.rmtree(checkpoint_dir, ignore_errors=True)
+        else:
+            ray.train.report(metrics)
+
+    class _ResumeCheckpointCallback(xgboost.callback.TrainingCallback):
+        """Persist resumable state at the configured boosting interval."""
+
+        def after_iteration(
+            self,
+            model: xgboost.Booster,
+            epoch: int,
+            evals_log: dict[str, dict[str, list[Any]]],
+        ) -> bool:
+            if not resume_enabled:
+                return False
+            completed_rounds = start_round + epoch + 1
+            if (
+                completed_rounds % checkpoint_interval != 0
+                and completed_rounds != num_rounds
+            ):
+                return False
+            _report_resume_checkpoint(model, completed_rounds, evals_log)
+            return False
+
+    evals_result: dict[str, dict[str, list[Any]]] = {}
+    if initial_booster is not None and start_round >= num_rounds:
+        booster = initial_booster
+        evals_result = _merge_xgb_eval_results(resume_evals_result, {})
+    else:
+        current_evals_result: dict[str, dict[str, list[Any]]] = {}
+        booster = xgboost.train(
+            config.get("xgb_params", {}),
+            dtrain,
+            num_boost_round=num_rounds - start_round,
+            evals=evals,
+            evals_result=current_evals_result,
+            early_stopping_rounds=config.get("early_stopping_rounds"),
+            callbacks=[_CancelCallback(), _ResumeCheckpointCallback()],
+            xgb_model=initial_booster,
+        )
+        evals_result = _merge_xgb_eval_results(
+            resume_evals_result, current_evals_result
+        )
 
     world_rank = ray.train.get_context().get_world_rank()
 
@@ -533,14 +744,16 @@ def train_loop_per_worker(config: dict[str, Any]) -> None:
     if world_rank == 0:
         from ray.train.xgboost import XGBoostCheckpoint
 
-        checkpoint = XGBoostCheckpoint.from_model(booster)
+        if resume_enabled:
+            completed_rounds = booster.num_boosted_rounds()
+            checkpoint, checkpoint_id, checkpoint_dir = _write_resume_checkpoint(
+                booster, completed_rounds, evals_result
+            )
+        else:
+            checkpoint = XGBoostCheckpoint.from_model(booster)
 
         report_metrics: dict[str, Any] = {"n_features": n_features}
-        for eval_name, eval_scores in evals_result.items():
-            for metric_name, values in eval_scores.items():
-                key = f"{eval_name}-{metric_name}"
-                report_metrics[key] = values[-1]
-                report_metrics[f"{key}_history"] = values
+        _populate_xgb_eval_metrics(report_metrics, evals_result)
 
         # Worker-side sklearn evaluation
         if dtest is not None and test_labels:
@@ -691,8 +904,16 @@ def train_loop_per_worker(config: dict[str, Any]) -> None:
             _log.getLogger(__name__).exception("feature importance extraction failed")
 
         report_metrics.update(row_info)
+        if resume_enabled:
+            report_metrics["resume_id"] = checkpoint_id
 
-        ray.train.report(report_metrics, checkpoint=checkpoint)
+        if resume_enabled:
+            try:
+                ray.train.report(report_metrics, checkpoint=checkpoint)
+            finally:
+                shutil.rmtree(checkpoint_dir, ignore_errors=True)
+        else:
+            ray.train.report(report_metrics, checkpoint=checkpoint)
     else:
         ray.train.report({})
 
@@ -711,6 +932,7 @@ def build_trainer(
     use_gpu: bool = False,
     storage_path: str | None = None,
     max_failures: int = 0,
+    resume_from_checkpoint: Any | None = None,
 ) -> "XGBoostTrainer":
     """Build a Ray XGBoostTrainer instance.
 
@@ -723,7 +945,8 @@ def build_trainer(
         use_gpu: Whether to use GPU.
         storage_path: Ray Train persistent storage path.
         max_failures: Number of automatic retries on worker failure. 0=no retry, -1=infinite retries.
-            Checkpoint resumption is not currently supported; retries restart training from scratch.
+            When resume is enabled, retries restore the latest retained checkpoint.
+        resume_from_checkpoint: Optional initial Ray checkpoint to restore.
 
     Returns:
         An unstarted XGBoostTrainer; call ``.fit()`` to begin training.
@@ -751,6 +974,18 @@ def build_trainer(
 
     from ray.train import FailureConfig, RunConfig, ScalingConfig
     from ray.train.xgboost import XGBoostTrainer
+
+    from tributo.training.checkpoint import checkpoint_config
+
+    resume_config = ResumeConfig.model_validate(train_config.get("resume") or {})
+    if resume_from_checkpoint is not None and not resume_config.effective_enabled:
+        resume_config = ResumeConfig(enabled=True)
+        train_config = {**train_config, "resume": resume_config.model_dump()}
+    if resume_config.effective_enabled and num_workers != 1:
+        raise JobConfigurationError(
+            "T4-A resume currently supports num_workers=1 only; "
+            "multi-worker checkpoint coordination is deferred to T4-D."
+        )
 
     datasets: dict[str, "ray.data.Dataset"] = {"train": ray_dataset}
     if val_dataset is not None:
@@ -781,9 +1016,10 @@ def build_trainer(
         run_config=RunConfig(
             name="tributo-xgboost",
             storage_path=storage,
-            # resilience-only: retries restart from scratch, not from checkpoint
             failure_config=FailureConfig(max_failures=max_failures),
+            checkpoint_config=checkpoint_config(resume_config),
         ),
+        resume_from_checkpoint=resume_from_checkpoint,
     )
 
 

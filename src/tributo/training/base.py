@@ -240,6 +240,8 @@ class BaseTrainer(ABC):
         present.  The default implementation forwards to the current bundle
         route, so ``super()._export_bundle(...)`` inside an override still
         runs the real pipeline.  The default path never calls this method.
+        Overrides bypass the default Ray Jobs identity binding and must handle
+        ``TRIBUTO_RUN_ID`` and ``TRIBUTO_ATTEMPT_ID`` themselves when needed.
         """
         from tributo.training.callbacks import CallbackDispatcher
         from tributo.training.lifecycle import TrainingLifecycle

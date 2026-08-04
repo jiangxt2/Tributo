@@ -434,6 +434,8 @@ def _s3_upload_artifact_files(
     prefix: str,
     artifact: LogicalArtifact,
     staging_root: Path,
+    *,
+    created_keys: list[str] | None = None,
 ) -> list[str]:
     """Upload all files of a single artifact to S3.
 
@@ -480,6 +482,8 @@ def _s3_upload_artifact_files(
                     },
                 )
             keys.append(key)
+            if created_keys is not None:
+                created_keys.append(key)
             continue
         try:
             _s3_put_bytes(
@@ -513,6 +517,8 @@ def _s3_upload_artifact_files(
                 ) from exc
             raise
         keys.append(key)
+        if created_keys is not None:
+            created_keys.append(key)
 
     return keys
 
@@ -581,10 +587,17 @@ def _s3_publish(
         # half-TTL intervals so a long upload cannot be taken over by
         # another publisher or the orphan GC mid-flight.
         uploaded_keys: list[str] = []
+        created_keys: list[str] = []
+        manifest_committed = False
         renew_at = time.time() + _LEASE_TTL_SECONDS / 2
         for artifact in manifest.artifacts:
             keys = _s3_upload_artifact_files(
-                client, bucket, bundle_prefix, artifact, staging_root
+                client,
+                bucket,
+                bundle_prefix,
+                artifact,
+                staging_root,
+                created_keys=created_keys,
             )
             uploaded_keys.extend(keys)
             if time.time() >= renew_at:
@@ -610,6 +623,7 @@ def _s3_publish(
                     bucket,
                     manifest_key,
                 )
+                manifest_committed = True
             else:
                 # A retry of the same request re-runs the DAG and rebuilds
                 # the manifest with fresh advisory fields (created_at, node
@@ -630,6 +644,7 @@ def _s3_publish(
                     # surface its actual sha so a retried result matches what
                     # consumers will verify against.
                     manifest_sha256 = existing_sha
+                    manifest_committed = True
                 else:
                     raise RuntimeError(
                         f"Manifest s3://{bucket}/{manifest_key} exists but "
@@ -647,6 +662,7 @@ def _s3_publish(
                 metadata=metadata,
             )
             logger.info("Published manifest s3://%s/%s", bucket, manifest_key)
+            manifest_committed = True
 
         return {
             "manifest_key": manifest_key,
@@ -655,6 +671,15 @@ def _s3_publish(
             # on disk, not the freshly computed one.
             "manifest_sha256": manifest_sha256,
         }
+
+    except Exception:
+        # A failed pre-manifest publish must not leave orphaned objects.  Only
+        # delete keys uploaded by this invocation; idempotently reused or
+        # concurrently-created objects are never part of created_keys.
+        if not manifest_committed:
+            for key in created_keys:
+                _s3_delete(client, bucket, key)
+        raise
 
     finally:
         # Best-effort delete lease.

@@ -42,7 +42,10 @@ from tributo.training.base import BaseTrainer, TrainerSpec
 from tributo.training.catalog import get_algorithm_catalog as _get_catalog
 from tributo.training.graph_trainer import BaseGraphTrainer
 from tributo.training.job_submitter import (
+    JobAttempt,
+    TrainingJobResult,
     submit_training_job,
+    submit_training_job_with_retry,
     wait_for_job,
 )
 from tributo.training.onnx_exporter import export_to_onnx
@@ -140,6 +143,9 @@ __all__ = [
     # Utilities
     "export_to_onnx",
     "submit_training_job",
+    "submit_training_job_with_retry",
+    "JobAttempt",
+    "TrainingJobResult",
     "wait_for_job",
     # GNN base class (no optional deps)
     "BaseGraphTrainer",
