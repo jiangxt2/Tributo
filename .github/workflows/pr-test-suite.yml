@@ -379,7 +379,7 @@ jobs:
         run: |
           uv run --locked --no-sync python -m pytest \
             -m tributo_walking_skeleton tests/integration/test_walking_skeleton.py \
-            -v --tb=short --timeout=600
+            -v --tb=short --timeout=600 -s
 
   # Keep this aggregator independent from DCO.  DCO is a separate required
   # check, runs on pull_request/merge_group, and remains skipped on push/master.
