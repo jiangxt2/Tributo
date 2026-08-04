@@ -25,7 +25,6 @@ idempotently.
 
 from __future__ import annotations
 
-import importlib.util
 import logging
 from contextlib import ExitStack
 from dataclasses import dataclass
@@ -33,6 +32,11 @@ from typing import Any, ClassVar, Protocol, runtime_checkable
 
 import numpy as np
 
+from tributo._common.dependencies import (
+    DependencySpec,
+    DependencyState,
+    probe_dependency,
+)
 from tributo._common.model_input_contract import validate_named_inputs
 from tributo.exceptions import (
     JobConfigurationError,
@@ -594,7 +598,12 @@ def _find_artifact(manifest: ExportManifest, artifact_name: str) -> LogicalArtif
 
 
 def _check_dependencies(flavor_id: str, dependencies: tuple[str, ...]) -> None:
-    missing = [dep for dep in dependencies if importlib.util.find_spec(dep) is None]
+    missing = [
+        dep
+        for dep in dependencies
+        if probe_dependency(DependencySpec(dep, dep)).state
+        is not DependencyState.AVAILABLE
+    ]
     if missing:
         raise ModelLoadError(
             f"Flavor {flavor_id!r} requires missing dependencies: {missing}. "

@@ -16,6 +16,11 @@ import numpy as np
 import pytest
 
 from tests.serving.bundle_fixtures import build_test_bundle
+from tributo._common.dependencies import (
+    DependencySpec,
+    DependencyState,
+    DependencyStatus,
+)
 from tributo.exceptions import (
     JobConfigurationError,
     ModelLoadError,
@@ -250,6 +255,26 @@ class TestFlavorRouting:
 
         with pytest.raises(ModelLoadError, match="missing dependencies"):
             _loader(_MissingDepFlavor).open(str(bundle), role="inference")
+
+    def test_dependency_check_uses_unified_probe(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Runtime dependency checks must delegate to the shared probe layer."""
+        bundle = build_test_bundle(tmp_path)
+
+        class _MissingDepFlavor(_EchoFlavor):
+            required_dependencies = ("missing-runtime-dependency",)
+
+        observed: list[str] = []
+
+        def _probe(spec: DependencySpec) -> DependencyStatus:
+            observed.append(spec.import_name)
+            return DependencyStatus(spec, DependencyState.MISSING)
+
+        monkeypatch.setattr("tributo.exporting.runtime.probe_dependency", _probe)
+        with pytest.raises(ModelLoadError, match="missing dependencies"):
+            _loader(_MissingDepFlavor).open(str(bundle), role="inference")
+        assert observed[-1] == "missing-runtime-dependency"
 
     def test_missing_model_factory_fails_fast(self, tmp_path: Path) -> None:
         """重建型 flavor 收到 manifest 的 architecture_id，缺 factory 时结构化失败。"""

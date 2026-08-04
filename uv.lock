@@ -4429,6 +4429,7 @@ dependencies = [
     { name = "aiohttp" },
     { name = "click" },
     { name = "onnxruntime" },
+    { name = "packaging" },
     { name = "pandas" },
     { name = "pyarrow" },
     { name = "pydantic" },
@@ -4475,6 +4476,7 @@ embeddings = [
     { name = "pyiceberg" },
     { name = "pylance" },
     { name = "tokenizers" },
+    { name = "torch" },
     { name = "transformers" },
 ]
 graph = [
@@ -4529,6 +4531,7 @@ streaming = [
     { name = "pyiceberg" },
     { name = "pylance" },
     { name = "tokenizers" },
+    { name = "torch" },
     { name = "transformers" },
 ]
 streaming-inference = [
@@ -4611,6 +4614,7 @@ requires-dist = [
     { name = "onnxruntime", marker = "extra == 'model-export'", specifier = ">=1.20.0" },
     { name = "onnxscript", marker = "extra == 'model-export-torch'", specifier = ">=0.1.0" },
     { name = "optimum-onnx", extras = ["onnxruntime"], marker = "extra == 'embeddings'", specifier = ">=0.1.0" },
+    { name = "packaging", specifier = ">=24.0" },
     { name = "pandas", specifier = ">=2.0.0" },
     { name = "pandas-stubs", marker = "extra == 'dev'", specifier = "~=2.1.4" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.6.1" },
@@ -4632,7 +4636,8 @@ requires-dist = [
     { name = "safetensors", marker = "extra == 'model-export-torch'", specifier = ">=0.4.3" },
     { name = "skl2onnx", marker = "extra == 'training'", specifier = ">=1.17.0" },
     { name = "tokenizers", marker = "extra == 'embeddings'", specifier = ">=0.19.0" },
-    { name = "torch", marker = "extra == 'identity'", specifier = ">=2.0.0" },
+    { name = "torch", marker = "extra == 'embeddings'", specifier = ">=2.5.0" },
+    { name = "torch", marker = "extra == 'identity'", specifier = ">=2.5.0" },
     { name = "torch", marker = "extra == 'model-export-torch'", specifier = ">=2.5.0" },
     { name = "torch-geometric", marker = "extra == 'graph'", specifier = ">=2.5.0" },
     { name = "transformers", marker = "extra == 'embeddings'", specifier = ">=4.40.0" },

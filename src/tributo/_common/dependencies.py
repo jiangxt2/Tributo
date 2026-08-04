@@ -18,10 +18,10 @@ from __future__ import annotations
 import enum
 import importlib.metadata
 import importlib.util
-import re
 from dataclasses import dataclass
-from itertools import zip_longest
 from types import ModuleType
+
+from packaging.version import InvalidVersion, Version
 
 from tributo.exceptions import TributoError
 
@@ -220,36 +220,14 @@ def _format_unavailable_message(spec: DependencySpec, status: DependencyStatus) 
 
 
 def _version_meets_minimum(installed: str, minimum: str) -> bool | None:
-    """Compare version strings PEP 440-lite; ``None`` when unparseable.
+    """Compare versions with standard PEP 440 semantics.
 
-    Only numeric segments are compared (pre/post/rc/dev markers and
-    build/local suffixes are ignored), which is sufficient for the
-    project's dependency floor versions.
+    ``None`` means that either value is not a valid PEP 440 version.  In
+    particular, pre-release versions remain below the corresponding final
+    release (for example, ``2.5.0rc1 < 2.5.0``), while post-release and
+    local-version ordering follows the standard comparison rules.
     """
-
-    def numeric_core(version: str) -> tuple[int, ...] | None:
-        parts: list[int] = []
-        for segment in re.split(r"[.+-]", version):
-            if not segment:
-                continue
-            if segment[0].isalpha():
-                continue  # pre/post/rc/dev marker
-            digit_match = re.match(r"\d+", segment)
-            if digit_match is None:
-                return None
-            parts.append(int(digit_match.group()))
-        return tuple(parts) if parts else None
-
-    installed_core = numeric_core(installed)
-    minimum_core = numeric_core(minimum)
-    if installed_core is None or minimum_core is None:
+    try:
+        return Version(installed) >= Version(minimum)
+    except InvalidVersion:
         return None
-    # Pad to equal length: Python tuple comparison treats a shorter
-    # prefix-equal tuple as smaller, which would misreport "1.0" as
-    # below "1.0.0".
-    for installed_part, minimum_part in zip_longest(
-        installed_core, minimum_core, fillvalue=0
-    ):
-        if installed_part != minimum_part:
-            return installed_part > minimum_part
-    return True

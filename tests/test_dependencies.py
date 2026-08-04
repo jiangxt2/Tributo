@@ -12,6 +12,9 @@ import pytest
 
 from tributo._common.dependencies import (
     ONNXMLTOOLS,
+    SAFETENSORS,
+    TORCH,
+    TRANSFORMERS,
     XGBOOST,
     DependencySpec,
     DependencyState,
@@ -109,16 +112,27 @@ class TestProbe:
         status = probe_dependency(spec)
         assert status.state is DependencyState.MISSING
 
-    def test_pre_release_version_segments_are_parsed(self) -> None:
-        """``2.5.0rc1`` (real torch releases) must parse to the numeric
-        core instead of being flagged as an unparseable version."""
+    @pytest.mark.parametrize(
+        ("installed", "expected_state"),
+        [
+            ("2.5.0rc1", DependencyState.TOO_OLD),
+            ("2.5.0.dev1", DependencyState.TOO_OLD),
+            ("2.5.0", DependencyState.AVAILABLE),
+            ("2.5.0.post1", DependencyState.AVAILABLE),
+            ("2.5.0+cpu", DependencyState.AVAILABLE),
+        ],
+    )
+    def test_pep440_version_semantics(
+        self, installed: str, expected_state: DependencyState
+    ) -> None:
+        """Version floors follow PEP 440 pre/post/dev/local ordering."""
         spec = _spec(minimum_version="2.5.0")
         with patch(
             "tributo._common.dependencies.importlib.metadata.version",
-            return_value="2.5.0rc1",
+            return_value=installed,
         ):
             status = probe_dependency(spec)
-        assert status.state is DependencyState.AVAILABLE
+        assert status.state is expected_state
 
     def test_version_unknown_when_metadata_missing_or_invalid(self) -> None:
         # Distribution metadata absent (fake dist name) → VERSION_UNKNOWN.
@@ -244,3 +258,37 @@ class TestSupportsExactMissingSet:
             result = XGBoostONNXExporter.supports(request)
         assert result.code == "MISSING_DEPENDENCY"
         assert result.missing_dependencies == ("onnxmltools", "xgboost")
+
+    def test_hf_reason_matches_exact_missing_set(self) -> None:
+        from tributo.exporting.models import SupportRequest
+        from tributo.integrations.exporters.hf_onnx import HuggingFaceONNXExporter
+
+        request = SupportRequest(source_kind="hf_model", upstream_formats=())
+        with patch(
+            "tributo.integrations.exporters.hf_onnx.probe_dependency",
+            side_effect=[
+                DependencyStatus(TRANSFORMERS, DependencyState.MISSING),
+                DependencyStatus(TORCH, DependencyState.AVAILABLE),
+            ],
+        ):
+            result = HuggingFaceONNXExporter.supports(request)
+        assert result.reason == "transformers>=4.40.0 required"
+        assert result.missing_dependencies == ("transformers",)
+
+    def test_safetensors_reason_matches_exact_missing_set(self) -> None:
+        from tributo.exporting.models import SupportRequest
+        from tributo.integrations.exporters.torch_safetensors import (
+            TorchSafetensorsExporter,
+        )
+
+        request = SupportRequest(source_kind="torch_module", upstream_formats=())
+        with patch(
+            "tributo.integrations.exporters.torch_safetensors.probe_dependency",
+            side_effect=[
+                DependencyStatus(SAFETENSORS, DependencyState.MISSING),
+                DependencyStatus(TORCH, DependencyState.AVAILABLE),
+            ],
+        ):
+            result = TorchSafetensorsExporter.supports(request)
+        assert result.reason == "safetensors>=0.4.3 required"
+        assert result.missing_dependencies == ("safetensors",)
