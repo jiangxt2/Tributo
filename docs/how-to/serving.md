@@ -129,9 +129,10 @@ builder.
 uv run tributo serve grpc start --model-path /path/to/model.onnx --port 50051
 ```
 
-!!! warning "Alpha API"
-    gRPC inference is under active development. The client API is not yet stabilized;
-    use ONNX HTTP serving for production workloads.
+```{warning}
+gRPC inference is under active development. The client API is not yet
+stabilized; use ONNX HTTP serving when a stable transport is required.
+```
 
 ## Scaling
 

@@ -55,9 +55,10 @@ print(f"ONNX model: {result.metrics['onnx_path']}")
 }
 ```
 
-!!! note "num_workers"
-    PU training currently runs on a single worker. DDP multi-worker training is not yet supported;
-    set `num_workers` to 1.
+```{note}
+PU training currently runs on a single worker. DDP multi-worker training is
+not yet supported; set `num_workers` to 1.
+```
 
 ## Loss Functions
 

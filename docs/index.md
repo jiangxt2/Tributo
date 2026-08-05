@@ -1,28 +1,32 @@
 # Tributo
 
-Telecom-native ML framework for Ray clusters. Tributo provides distributed training, batch embedding, and online inference — with first-class support for PU Learning on Ray.
+Tributo is a Ray-native machine learning SDK for data access, distributed
+training, model bundles, and batch or online inference.
 
-## Key Capabilities
+## Start here
 
-| Capability | Description |
-|---|---|
-| **PU Learning** | Train classifiers from positive + unlabeled data. nnPU/uPU loss, auto class-prior estimation, ONNX export. Single-worker training on Ray. |
-| **Distributed XGBoost** | Multi-worker XGBoost on Ray Train with S3 data sources and automatic ONNX export. |
-| **Batch Embedding** | Distributed BGE text embedding via Ray Jobs API, output to Lance/Parquet. |
-| **ONNX Inference Serving** | Ray Serve deployment of ONNX models with HTTP endpoints. |
-| **Batch Inference** | XGBoost + ONNX distributed batch inference across Ray clusters. |
-| **Hyperparameter Tuning** | Random/BayesOpt search with FIFO/ASHA/HyperBand schedulers via Ray Tune. |
+- [Install Tributo](installation.md) with the extras required by your workload.
+- Complete the [Quickstart](quickstart.md) against a Ray cluster.
+- Browse the [user guides](user-guide/index.md) for task-oriented workflows.
+- Use the [Python API](api.md) and [CLI](cli.md) references as source-aligned
+  contracts.
 
-## Roadmap
+## Current capabilities
 
-| Feature | Status |
-|---|---|
-| Sequence pre-training (Temporal Transformer) | Planned — see roadmap |
-| Large-scale vector pipeline (Daft → Ray → Lance) | In development |
-| gRPC inference serving | Alpha |
-| Streaming LLM inference | Alpha |
+| Area | Supported path |
+| --- | --- |
+| Ray Jobs | Submit, inspect, stream logs, and stop jobs |
+| Data | Bounded Parquet, CSV, Iceberg, ClickHouse, and Doris reads |
+| Training | XGBoost, DNN, PU learning, and Ray Tune integration |
+| Model lifecycle | Validated multi-format bundles with local or S3 publication |
+| Inference | Ray Data batch inference and Ray Serve HTTP/gRPC endpoints |
+| Embeddings | Ray Jobs batch processing and online serving |
 
-## Getting Started
+See the [support matrix](reference/support-matrix.md) for maturity levels and
+known boundaries. An enum, protocol, or prototype alone is not treated as an
+implemented capability.
+
+## Minimal job submission
 
 ```bash
 pip install tributo
@@ -36,8 +40,28 @@ job_id = client.submit(entrypoint="python my_script.py")
 print(client.get_status(job_id))
 ```
 
-→ Head to the [Quickstart](quickstart.md) for a 5-minute walkthrough.
+Configuration files accepted by Tributo are JSON. YAML configuration is
+explicitly rejected.
 
-## Project Status
+```{toctree}
+:hidden:
+:maxdepth: 4
 
-Tributo is in active development. APIs marked `@PublicAPI(stability="beta")` are stable enough for production use; those marked `"alpha"` may change. See [API Reference](api.md) for stability levels per module.
+Overview <overview/index>
+Getting Started <quickstart>
+Installation <installation>
+Use Cases <user-guide/index>
+Examples <examples/index>
+Integrations <integrations/index>
+Data <data/index>
+Training <training/index>
+Model Lifecycle <model-lifecycle/index>
+Inference <inference/index>
+Embeddings <embeddings/index>
+Reference <reference/index>
+Ray Jobs and Clusters <ray-jobs/index>
+Monitoring and Troubleshooting <operations/index>
+Developer Guides <developer/index>
+Architecture <architecture/index>
+Security <security/index>
+```

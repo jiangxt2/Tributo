@@ -1,0 +1,24 @@
+version: 2
+
+build:
+  os: ubuntu-24.04
+  tools:
+    python: "3.12"
+  apt_packages:
+    - enchant-2
+  jobs:
+    build:
+      html:
+        - >-
+          make rtd
+          SPHINXBUILD=sphinx-build
+          HTMLDIR="$READTHEDOCS_OUTPUT/html"
+
+sphinx:
+  configuration: docs/conf.py
+  builder: dirhtml
+  fail_on_warning: true
+
+python:
+  install:
+    - requirements: requirements-doc.lock

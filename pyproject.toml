@@ -119,11 +119,6 @@ streaming-inference = [
     "confluent-kafka>=2.3.0",
     "ray[serve]",
 ]
-docs = [
-    "mkdocs>=1.6.0",
-    "mkdocs-material>=9.0.0",
-    "mkdocstrings[python]>=0.25.0",
-]
 test-integration = [
     "tributo[training]",
     "pytest>=7.0.0",

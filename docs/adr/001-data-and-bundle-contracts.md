@@ -157,6 +157,7 @@ Rules:
 D1+D2 stabilizes the smallest bounded-read contract needed by the production
 loader:
 
+<!-- docs-check: skip-python -->
 ```python
 DataSourceProvider.open(ResolvedSource) -> DatasetHandle
 DatasetHandle.to_ray_dataset() -> ray.data.Dataset
