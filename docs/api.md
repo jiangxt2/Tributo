@@ -1,75 +1,124 @@
 # API Reference
 
-Tributo's public API is annotated with stability guarantees via `@PublicAPI(stability=...)`.
+This is a curated public entry point, not an inventory of every implementation
+module. Signatures and docstrings come from the installed source tree.
+Stability labels come from `@PublicAPI`.
 
-**Stability levels:**
+See the [stability inventory](STABILITY.md) for the complete module-level
+classification.
 
-| Level | Meaning |
-|---|---|
-| `stable` | Backward-compatible. Breaking changes require a major version bump. |
-| `beta` | Generally stable; minor breaking changes possible with deprecation notice. |
-| `alpha` | Active development; APIs may change without notice. |
+## Stable core API
 
-## Core (`tributo`)
+```{autoclass} tributo.TributoClient
+:members:
+```
 
-::: tributo.TributoClient
-    options:
-      stability: stable
+```{autoclass} tributo.RayJob
+:members:
+```
 
-::: tributo.JobConfig
-    options:
-      stability: stable
+```{autoclass} tributo.JobConfig
+:members:
+```
 
-## Training (`tributo.training`)
+### Core exceptions
 
-::: tributo.training.build_trainer
-    options:
-      stability: beta
+```{autoexception} tributo.TributoError
+```
 
-::: tributo.training.data_loader.load_ray_dataset_from_config
-    options:
-      stability: beta
+```{autoexception} tributo.JobSubmissionError
+```
 
-## Embeddings (`tributo.embeddings`)
+```{autoexception} tributo.JobExecutionError
+```
 
-::: tributo.embeddings.ModelSpec
-    options:
-      stability: beta
+```{autoexception} tributo.JobConfigurationError
+```
 
-::: tributo.embeddings.submit_embedding_job
-    options:
-      stability: beta
+```{autoexception} tributo.JobTimeoutError
+```
 
-## Serving (`tributo.serving`)
+```{autoexception} tributo.ModelExportError
+```
 
-::: tributo.serving.start_serving
-    options:
-      stability: beta
+```{autoexception} tributo.DataSourceError
+```
 
-::: tributo.serving.stop_serving
-    options:
-      stability: beta
+## Data provider API
 
-## Inference (`tributo.inference`)
+```{autoclass} tributo.data.provider.DataSourceProvider
+:members:
+```
 
-::: tributo.inference.InferenceConfig
-    options:
-      stability: beta
+```{autoclass} tributo.data.provider.ResolvedSource
+:members:
+```
 
-::: tributo.inference.run_batch_inference
-    options:
-      stability: beta
+```{autoclass} tributo.data.provider.DatasetHandle
+:members:
+```
 
-## Exceptions
+## Training API
 
-All exceptions inherit from `TributoError`:
+```{autoclass} tributo.training.BaseTrainer
+:members:
+```
 
-| Exception | Description |
-|---|---|
-| `TributoError` | Base exception for all Tributo errors. |
-| `JobSubmissionError` | Failed to submit a job to Ray. |
-| `JobExecutionError` | Job failed during execution. |
-| `JobConfigurationError` | Invalid job configuration. |
-| `JobTimeoutError` | Job exceeded its timeout. |
-| `ModelExportError` | ONNX model export failed. |
-| `DataSourceError` | Data source read/write error. |
+```{autoclass} tributo.training.AlgorithmSpec
+:members:
+```
+
+## Model bundle API
+
+```{autoclass} tributo.exporting.ExportSpec
+:members:
+```
+
+```{autoclass} tributo.exporting.ExportTarget
+:members:
+```
+
+```{autofunction} tributo.exporting.export
+```
+
+```{autofunction} tributo.exporting.load_bundle
+```
+
+## Inference API
+
+```{autoclass} tributo.inference.InferenceConfig
+:members:
+```
+
+```{autofunction} tributo.inference.run_batch_inference
+```
+
+## Embedding and serving API
+
+```{autoclass} tributo.embeddings.ModelSpec
+:members:
+```
+
+```{autofunction} tributo.embeddings.submit_embedding_job
+```
+
+```{autofunction} tributo.serving.start_serving
+```
+
+## Streaming API
+
+`StreamSource` is an unbounded input protocol. It does not return a finite Ray
+Dataset.
+
+```{autoclass} tributo.streaming.StreamSource
+:members:
+```
+
+## Alpha API
+
+The in-process pipeline is alpha. Retry, timeout, checkpoint, and cache
+semantics are not part of its current contract.
+
+```{autoclass} tributo.pipeline.Pipeline
+:members:
+```

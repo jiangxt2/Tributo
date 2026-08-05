@@ -4,12 +4,12 @@
 # ruff version used here is always the one locked in ``uv.lock`` - there is
 # no second version source to drift. Requires an already-synced environment
 # (``uv sync --extra dev``); matches the ``UV_RUN`` convention in
-# ``scripts/pr-precheck.py``.
+# ``scripts/pr-precheck.py``. Documentation Python tooling is included too.
 #
-# ``files``/``exclude`` mirror the CI lint job (``ruff check`` and
-# ``ruff format --check`` on ``src/ tests/``). pre-commit passes an explicit
-# file list, which bypasses ruff's own directory ``extend-exclude``, so the
-# generated protobuf sources are filtered here.
+# ``files``/``exclude`` mirror the CI lint job for source, tests, and
+# documentation tooling. pre-commit passes an explicit file list, which
+# bypasses ruff's own directory ``extend-exclude``, so the generated protobuf
+# sources are filtered here.
 repos:
   - repo: local
     hooks:
@@ -18,12 +18,12 @@ repos:
         entry: uv run --locked --no-sync --offline ruff format --check
         language: system
         types: [python]
-        files: '^(src|tests)/'
+        files: '^(?:src|tests|tools|docs/_ext)/|^docs/conf\.py$'
         exclude: '^src/tributo/serving/proto/inference_pb2.*\.py$'
       - id: ruff-lint
         name: ruff check
         entry: uv run --locked --no-sync --offline ruff check
         language: system
         types: [python]
-        files: '^(src|tests)/'
+        files: '^(?:src|tests|tools|docs/_ext)/|^docs/conf\.py$'
         exclude: '^src/tributo/serving/proto/inference_pb2.*\.py$'

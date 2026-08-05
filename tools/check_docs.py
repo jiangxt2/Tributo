@@ -1,0 +1,361 @@
+"""Validate the Sphinx API, CLI, mock, and example contracts."""
+
+from __future__ import annotations
+
+import argparse
+import importlib
+import re
+import sys
+from pathlib import Path
+from typing import Any
+
+REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_DOCS_ROOT = REPOSITORY_ROOT / "docs"
+DOCS_EXTENSIONS = DEFAULT_DOCS_ROOT / "_ext"
+sys.path.insert(0, str(DOCS_EXTENSIONS))
+
+DOC_MOCK_IMPORTS = importlib.import_module("mock_imports").DOC_MOCK_IMPORTS
+
+_AUTODOC_PATTERN = re.compile(
+    r"^```\{(?:autoclass|autoexception|autofunction|autodata)\}"
+    r"\s+(?P<target>\S+)\s*$",
+    re.MULTILINE,
+)
+_CLICK_PATTERN = re.compile(
+    r"^```\{click\}\s+(?P<target>\S+)\s*\n"
+    r"(?P<body>.*?)^```\s*$",
+    re.MULTILINE | re.DOTALL,
+)
+_PYTHON_BLOCK_PATTERN = re.compile(
+    r"(?P<skip><!-- docs-check: skip-python -->\s*)?"
+    r"```python\s*\n(?P<code>.*?)^```\s*$",
+    re.MULTILINE | re.DOTALL,
+)
+_TOCTREE_PATTERN = re.compile(
+    r"^```\{toctree\}\s*\n(?P<body>.*?)^```\s*$",
+    re.MULTILINE | re.DOTALL,
+)
+
+_RAY_STYLE_ROOT_TARGETS = (
+    "overview/index",
+    "quickstart",
+    "installation",
+    "user-guide/index",
+    "examples/index",
+    "integrations/index",
+    "data/index",
+    "training/index",
+    "model-lifecycle/index",
+    "inference/index",
+    "embeddings/index",
+    "reference/index",
+    "ray-jobs/index",
+    "operations/index",
+    "developer/index",
+    "architecture/index",
+    "security/index",
+)
+_RAY_SIDEBAR_OPTIONS = (
+    "startdepth=0",
+    "show_nav_level=0",
+    "maxdepth=4",
+    "collapse=False",
+    "includehidden=True",
+)
+
+_REQUIRED_ROOT_API_TARGETS = frozenset(
+    {
+        "tributo.DataSourceError",
+        "tributo.JobConfig",
+        "tributo.JobConfigurationError",
+        "tributo.JobExecutionError",
+        "tributo.JobSubmissionError",
+        "tributo.JobTimeoutError",
+        "tributo.ModelExportError",
+        "tributo.RayJob",
+        "tributo.TributoClient",
+        "tributo.TributoError",
+    }
+)
+_REQUIRED_TOP_LEVEL_COMMANDS = frozenset(
+    {
+        "algo",
+        "embed",
+        "export",
+        "export-gc",
+        "inspect",
+        "logs",
+        "registry",
+        "serve",
+        "status",
+        "stop",
+        "submit",
+        "tune",
+    }
+)
+_REQUIRED_NESTED_COMMANDS = frozenset(
+    {
+        "tributo algo config-schema",
+        "tributo embed serve start",
+        "tributo registry transition",
+        "tributo serve grpc start",
+        "tributo serve streaming start",
+        "tributo tune run",
+    }
+)
+
+
+def autodoc_targets(text: str) -> tuple[str, ...]:
+    """Extract explicit MyST autodoc targets."""
+    return tuple(match.group("target") for match in _AUTODOC_PATTERN.finditer(text))
+
+
+def click_directive(text: str) -> tuple[str, dict[str, str]] | None:
+    """Return the single sphinx-click target and its options."""
+    matches = list(_CLICK_PATTERN.finditer(text))
+    if len(matches) != 1:
+        return None
+    match = matches[0]
+    options: dict[str, str] = {}
+    for line in match.group("body").splitlines():
+        option = re.fullmatch(r":([^:]+):\s*(.*)", line.strip())
+        if option:
+            options[option.group(1)] = option.group(2)
+    return match.group("target"), options
+
+
+def root_toctree_targets(text: str) -> tuple[str, ...]:
+    """Extract ordered targets from the root MyST toctree."""
+    match = _TOCTREE_PATTERN.search(text)
+    if match is None:
+        return ()
+
+    targets: list[str] = []
+    for raw_line in match.group("body").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith(":"):
+            continue
+        titled_target = re.fullmatch(r".+?\s*<(?P<target>[^>]+)>", line)
+        targets.append(
+            titled_target.group("target") if titled_target is not None else line
+        )
+    return tuple(targets)
+
+
+def validate_navigation(docs_root: Path) -> list[str]:
+    """Validate the Ray-style global documentation navigation contract."""
+    errors: list[str] = []
+    index_path = docs_root / "index.md"
+    targets = root_toctree_targets(index_path.read_text(encoding="utf-8"))
+    if targets != _RAY_STYLE_ROOT_TARGETS:
+        errors.append(
+            f"{index_path}: unexpected root navigation order: "
+            f"{targets!r}; expected {_RAY_STYLE_ROOT_TARGETS!r}"
+        )
+
+    for target in _RAY_STYLE_ROOT_TARGETS:
+        source = docs_root / target
+        candidates = (
+            source.with_suffix(".md"),
+            source.with_suffix(".rst"),
+        )
+        if not any(candidate.is_file() for candidate in candidates):
+            errors.append(f"{index_path}: navigation target does not exist: {target}")
+
+    sidebar_path = docs_root / "_templates" / "main-sidebar.html"
+    if not sidebar_path.is_file():
+        errors.append(f"{sidebar_path}: global sidebar template is missing")
+        return errors
+
+    sidebar = sidebar_path.read_text(encoding="utf-8")
+    if "generate_toctree_html(" not in sidebar:
+        errors.append(f"{sidebar_path}: global toctree renderer is missing")
+    for option in _RAY_SIDEBAR_OPTIONS:
+        if option not in sidebar:
+            errors.append(f"{sidebar_path}: missing Ray-style option {option}")
+    return errors
+
+
+def resolve_target(target: str) -> Any:
+    """Import a dotted object without hiding dependency import failures."""
+    parts = target.split(".")
+    for boundary in range(len(parts), 0, -1):
+        module_name = ".".join(parts[:boundary])
+        try:
+            obj: Any = importlib.import_module(module_name)
+        except ModuleNotFoundError as exc:
+            if exc.name == module_name:
+                continue
+            raise
+        for attribute in parts[boundary:]:
+            obj = getattr(obj, attribute)
+        return obj
+    raise ImportError(f"Cannot resolve documented target {target!r}")
+
+
+def validate_mock_inventory() -> list[str]:
+    """Validate the shared third-party-only mock inventory."""
+    errors: list[str] = []
+    if tuple(sorted(DOC_MOCK_IMPORTS)) != DOC_MOCK_IMPORTS:
+        errors.append("DOC_MOCK_IMPORTS must remain sorted")
+    if len(set(DOC_MOCK_IMPORTS)) != len(DOC_MOCK_IMPORTS):
+        errors.append("DOC_MOCK_IMPORTS contains duplicates")
+    first_party = [
+        name
+        for name in DOC_MOCK_IMPORTS
+        if name == "tributo" or name.startswith("tributo.")
+    ]
+    if first_party:
+        errors.append(f"First-party modules must not be mocked: {first_party}")
+    return errors
+
+
+def validate_api_reference(path: Path, *, import_objects: bool) -> list[str]:
+    """Validate explicit API directives and optional real imports."""
+    text = path.read_text(encoding="utf-8")
+    targets = autodoc_targets(text)
+    errors: list[str] = []
+
+    if not targets:
+        errors.append(f"{path}: no autodoc targets found")
+        return errors
+    duplicates = sorted({target for target in targets if targets.count(target) > 1})
+    if duplicates:
+        errors.append(f"{path}: duplicate autodoc targets: {duplicates}")
+    missing_static = sorted(_REQUIRED_ROOT_API_TARGETS - set(targets))
+    if missing_static:
+        errors.append(f"{path}: missing root API targets: {missing_static}")
+
+    if not import_objects:
+        return errors
+
+    from tributo.util.annotations import get_stability
+
+    for target in targets:
+        try:
+            obj = resolve_target(target)
+        except (AttributeError, ImportError) as exc:
+            errors.append(f"{target}: import failed: {type(exc).__name__}: {exc}")
+            continue
+        stability = get_stability(obj)
+        if stability is None or stability == "developer":
+            errors.append(f"{target}: documented without a public stability annotation")
+
+    package = importlib.import_module("tributo")
+    dynamic_targets = {f"tributo.{name}" for name in getattr(package, "__all__", ())}
+    missing_dynamic = sorted(dynamic_targets - set(targets))
+    if missing_dynamic:
+        errors.append(
+            f"docs/api.md is missing exported tributo root APIs: {missing_dynamic}"
+        )
+    return errors
+
+
+def command_paths(command: Any, prefix: str = "tributo") -> tuple[str, ...]:
+    """Return every descendant Click command path."""
+    paths: list[str] = []
+    commands = getattr(command, "commands", None)
+    if not isinstance(commands, dict):
+        return ()
+    for name, child in sorted(commands.items()):
+        path = f"{prefix} {name}"
+        paths.append(path)
+        paths.extend(command_paths(child, path))
+    return tuple(paths)
+
+
+def validate_cli_reference(path: Path, *, import_cli: bool) -> list[str]:
+    """Validate the sphinx-click directive and optionally the real tree."""
+    text = path.read_text(encoding="utf-8")
+    directive = click_directive(text)
+    if directive is None:
+        return [f"{path}: expected exactly one click directive"]
+
+    target, options = directive
+    errors: list[str] = []
+    if target != "tributo.cli:main":
+        errors.append(f"{path}: unexpected Click target {target!r}")
+    if options.get("prog") != "tributo":
+        errors.append(f"{path}: click directive must set :prog: tributo")
+    if options.get("nested") != "full":
+        errors.append(f"{path}: click directive must set :nested: full")
+
+    if not import_cli:
+        return errors
+
+    module_name, attribute = target.split(":", 1)
+    module = importlib.import_module(module_name)
+    main = getattr(module, attribute)
+    commands = getattr(main, "commands", {})
+    missing_top = sorted(_REQUIRED_TOP_LEVEL_COMMANDS - set(commands))
+    if missing_top:
+        errors.append(f"CLI is missing top-level commands: {missing_top}")
+
+    discovered = set(command_paths(main))
+    missing_nested = sorted(_REQUIRED_NESTED_COMMANDS - discovered)
+    if missing_nested:
+        errors.append(f"CLI is missing nested commands: {missing_nested}")
+
+    for path_name in sorted(discovered):
+        current: Any = main
+        for segment in path_name.split()[1:]:
+            current = current.commands[segment]
+        if not (getattr(current, "help", None) or getattr(current, "short_help", None)):
+            errors.append(f"{path_name}: command has no help text")
+    return errors
+
+
+def validate_python_examples(docs_root: Path) -> list[str]:
+    """Compile executable Python fences without running cluster workloads."""
+    errors: list[str] = []
+    for path in sorted(docs_root.rglob("*.md")):
+        text = path.read_text(encoding="utf-8")
+        for match in _PYTHON_BLOCK_PATTERN.finditer(text):
+            if match.group("skip"):
+                continue
+            line = text.count("\n", 0, match.start()) + 1
+            try:
+                compile(match.group("code"), f"{path}:{line}", "exec")
+            except SyntaxError as exc:
+                errors.append(f"{path}:{line}: invalid Python example: {exc.msg}")
+    return errors
+
+
+def run_checks(docs_root: Path, *, static_only: bool) -> list[str]:
+    """Run all documentation contract checks."""
+    errors = validate_mock_inventory()
+    errors.extend(validate_navigation(docs_root))
+    errors.extend(
+        validate_api_reference(
+            docs_root / "api.md",
+            import_objects=not static_only,
+        )
+    )
+    errors.extend(
+        validate_cli_reference(
+            docs_root / "cli.md",
+            import_cli=not static_only,
+        )
+    )
+    errors.extend(validate_python_examples(docs_root))
+    return errors
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run the command-line documentation checks."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--docs-root", type=Path, default=DEFAULT_DOCS_ROOT)
+    parser.add_argument("--static-only", action="store_true")
+    args = parser.parse_args(argv)
+
+    errors = run_checks(args.docs_root, static_only=args.static_only)
+    if errors:
+        for error in errors:
+            print(f"ERROR: {error}", file=sys.stderr)
+        return 1
+    print("Documentation checks passed.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

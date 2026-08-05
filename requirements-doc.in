@@ -1,0 +1,10 @@
+# Keep direct documentation dependencies pinned. Regenerate with:
+# uv pip compile requirements-doc.in --python-version 3.12 \
+#   --python-platform x86_64-manylinux_2_28 \
+#   --output-file requirements-doc.lock
+sphinx==8.2.3
+myst-parser==4.0.1
+sphinx-click==6.1.0
+pydata-sphinx-theme==0.16.1
+sphinxcontrib-spelling==8.0.1
+pydantic==2.13.4

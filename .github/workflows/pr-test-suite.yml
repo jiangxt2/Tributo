@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Detect whether code (not just docs) changed so we can skip expensive jobs
+  # Detect code and documentation scopes independently
   # while keeping DCO always running on every PR.
   paths-filter:
     name: Paths Filter
@@ -26,6 +26,7 @@ jobs:
       # only when the export framework or its tests changed.
       model_export: ${{ github.event_name == 'merge_group' || steps.filter.outputs.model_export == 'true' }}
       trainer_bundle: ${{ github.event_name == 'merge_group' || steps.filter.outputs.trainer_bundle == 'true' }}
+      docs: ${{ github.event_name == 'merge_group' || steps.filter.outputs.docs == 'true' }}
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
       - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36
@@ -36,6 +37,7 @@ jobs:
             code:
               - "src/**"
               - "tests/**"
+              - "docs/**/*.py"
               - "pyproject.toml"
               - "uv.lock"
               - ".github/actions/**"
@@ -55,6 +57,20 @@ jobs:
               - "tests/training/**"
               - "tests/integration/test_export*"
               - "pyproject.toml"
+            docs:
+              - ".readthedocs.yaml"
+              - "Makefile"
+              - "pyproject.toml"
+              - "requirements-doc.in"
+              - "requirements-doc.lock"
+              - "docs/**"
+              - "src/tributo/**/*.py"
+              - "tests/docs/**"
+              - "tests/integration/test_docs_reference.py"
+              - "tools/check_docs.py"
+              - "uv.lock"
+              - ".github/workflows/docs-deploy.yml"
+              - ".github/workflows/pr-test-suite.yml"
 
   dco:
     name: DCO Check
@@ -117,10 +133,14 @@ jobs:
         run: uv sync --extra dev --locked
 
       - name: Lint (ruff)
-        run: uv run --locked --no-sync ruff check src/ tests/
+        run: >-
+          uv run --locked --no-sync ruff check
+          src/ tests/ tools/check_docs.py docs/conf.py docs/_ext/
 
       - name: Format check (ruff)
-        run: uv run --locked --no-sync ruff format --check src/ tests/
+        run: >-
+          uv run --locked --no-sync ruff format --check
+          src/ tests/ tools/check_docs.py docs/conf.py docs/_ext/
 
       - name: Verify generated protobuf sources
         run: |
@@ -134,6 +154,119 @@ jobs:
           diff -u \
             src/tributo/serving/proto/inference_pb2_grpc.py \
             "$proto_check_dir/tributo/serving/proto/inference_pb2_grpc.py"
+
+  docs-build:
+    name: Documentation Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: paths-filter
+    if: needs.paths-filter.outputs.docs == 'true'
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+
+      - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
+        with:
+          python-version: "3.12"
+
+      - name: Install spelling system dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes enchant-2
+
+      - name: Install locked documentation dependencies
+        run: |
+          uv venv .docs-venv --python 3.12
+          uv pip install \
+            --python .docs-venv/bin/python \
+            --requirement requirements-doc.lock
+
+      - name: Check static documentation contracts
+        run: .docs-venv/bin/python tools/check_docs.py --static-only
+
+      - name: Build strict documentation
+        run: make strict SPHINXBUILD=.docs-venv/bin/sphinx-build
+
+      - name: Check spelling
+        run: make spelling SPHINXBUILD=.docs-venv/bin/sphinx-build
+
+      - name: Upload documentation preview
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: documentation-html
+          path: docs/_build/html/
+          retention-days: 7
+
+  docs-api-it:
+    name: Documentation API Integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [paths-filter, docs-build]
+    if: needs.paths-filter.outputs.docs == 'true'
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+
+      - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
+        with:
+          python-version: "3.12"
+
+      - name: Install spelling system dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes enchant-2
+
+      - name: Install real runtime and documentation dependencies
+        run: |
+          uv sync --extra dev --extra training --locked
+          uv pip install \
+            --python .venv/bin/python \
+            --requirement requirements-doc.lock
+
+      - name: Build documentation without mocks
+        env:
+          SPHINX_REAL_IMPORTS: "1"
+        run: |
+          make strict \
+            SPHINXBUILD=.venv/bin/sphinx-build \
+            BUILDDIR=docs/_build-real \
+            HTMLDIR=docs/_build-real/html
+
+      - name: Run documentation API and CLI integration tests
+        run: |
+          .venv/bin/python -m pytest \
+            tests/integration/test_docs_reference.py \
+            -o "addopts=" -m integration \
+            -v --tb=short --timeout=300
+
+  # Remote sites can fail transiently. Keep link health visible without
+  # weakening the strict internal-reference and real-import gates.
+  docs-linkcheck:
+    name: Documentation External Links
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    needs: [paths-filter, docs-build]
+    if: needs.paths-filter.outputs.docs == 'true'
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+
+      - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
+        with:
+          python-version: "3.12"
+
+      - name: Install spelling system dependency
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes enchant-2
+
+      - name: Install documentation dependencies
+        run: |
+          uv venv .docs-venv --python 3.12
+          uv pip install \
+            --python .docs-venv/bin/python \
+            --requirement requirements-doc.lock
+
+      - name: Check external links
+        run: make linkcheck SPHINXBUILD=.docs-venv/bin/sphinx-build
 
   unit-tests:
     name: Unit Tests (Python ${{ matrix.python-version }})
@@ -309,45 +442,6 @@ jobs:
           uv pip install --python /tmp/smoke-venv/bin/python dist/*.whl
           /tmp/smoke-venv/bin/tributo --help
 
-  # Branch protection requires the code checks (Lint, Unit Tests, Package
-  # Build) to report success before a PR can merge. On docs-only changes
-  # those jobs are skipped by the paths filter, and GitHub treats a skipped
-  # required check as not-yet-reported, which blocks the merge. Report them
-  # as completed/success here so docs-only PRs stay mergeable.
-  report-skipped-checks:
-    name: Report Skipped Required Checks
-    runs-on: ubuntu-latest
-    needs: paths-filter
-    if: needs.paths-filter.outputs.code == 'false'
-    permissions:
-      checks: write
-    steps:
-      - uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
-        with:
-          script: |
-            const required = [
-              "Lint",
-              "Unit Tests (Python 3.12)",
-              "Unit Tests (Python 3.13)",
-              "Package Build & Smoke Test",
-            ];
-            const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
-            for (const name of required) {
-              await github.rest.checks.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                name,
-                head_sha: context.sha,
-                status: "completed",
-                conclusion: "success",
-                details_url: runUrl,
-                output: {
-                  title: "Skipped — docs-only change",
-                  summary: "No files matching the code filters changed; the job was skipped by the paths filter. Reported as success so branch protection does not block the merge.",
-                },
-              });
-            }
-
   # O1 Core: this job is the required PR walking-skeleton gate.  It is
   # controlled by paths-filter at job level, never by workflow-level path
   # filters, so the core-gate aggregator can always report a terminal result.
@@ -401,6 +495,8 @@ jobs:
       - ray-runtime-env
       - build
       - core-walking-skeleton
+      - docs-build
+      - docs-api-it
     steps:
       - name: Validate required job outcomes
         env:
@@ -416,6 +512,9 @@ jobs:
           RAY_RUNTIME_RESULT: ${{ needs.ray-runtime-env.result }}
           BUILD_RESULT: ${{ needs.build.result }}
           WALKING_RESULT: ${{ needs.core-walking-skeleton.result }}
+          DOCS: ${{ needs.paths-filter.outputs.docs }}
+          DOCS_BUILD_RESULT: ${{ needs.docs-build.result }}
+          DOCS_API_RESULT: ${{ needs.docs-api-it.result }}
         run: |
           set -eu
 
@@ -464,6 +563,14 @@ jobs:
             require_success trainer-bundle-it "$TRAINER_BUNDLE_RESULT"
           else
             require_skipped trainer-bundle-it "$TRAINER_BUNDLE_RESULT"
+          fi
+
+          if [ "$DOCS" = "true" ]; then
+            require_success docs-build "$DOCS_BUILD_RESULT"
+            require_success docs-api-it "$DOCS_API_RESULT"
+          else
+            require_skipped docs-build "$DOCS_BUILD_RESULT"
+            require_skipped docs-api-it "$DOCS_API_RESULT"
           fi
 
           echo "core-gate: all applicable jobs completed successfully"

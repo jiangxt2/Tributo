@@ -25,6 +25,8 @@ build/
 
 # Docs build output
 site/
+docs/_build*/
+.docs-venv/
 .coverage
 htmlcov/
 .tox/
@@ -57,10 +59,11 @@ mlruns/
 *.pth
 *.parquet
 
-# Data (keep package and test data directories)
+# Data (keep package, test, and documentation data directories)
 data/
 !src/tributo/data/
 !tests/data/
+!docs/data/
 
 # Logs
 *.log

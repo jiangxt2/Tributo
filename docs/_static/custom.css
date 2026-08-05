@@ -1,0 +1,52 @@
+:root {
+  --tributo-stable: #137333;
+  --tributo-beta: #075985;
+  --tributo-alpha: #9a6700;
+  --tributo-internal: #57606a;
+}
+
+.tributo-stability {
+  border-left-width: 0.3rem;
+  box-shadow: none;
+}
+
+.tributo-stability-stable {
+  border-left-color: var(--tributo-stable);
+}
+
+.tributo-stability-beta {
+  border-left-color: var(--tributo-beta);
+}
+
+.tributo-stability-alpha {
+  border-left-color: var(--tributo-alpha);
+}
+
+.tributo-stability-developer {
+  border-left-color: var(--tributo-internal);
+}
+
+.bd-main .bd-content .bd-article-container {
+  max-width: 74rem;
+}
+
+.bd-header .navbar-header-items__start {
+  min-width: min-content;
+}
+
+table.docutils {
+  width: 100%;
+}
+
+code {
+  overflow-wrap: anywhere;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --tributo-stable: #56d364;
+    --tributo-beta: #58a6ff;
+    --tributo-alpha: #e3b341;
+    --tributo-internal: #8c959f;
+  }
+}
