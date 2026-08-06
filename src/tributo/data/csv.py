@@ -56,21 +56,12 @@ class CsvDataConnector(DataConnector):
         cfg = CsvReadConfig(**kwargs)
         if not cfg.path:
             raise ValueError("path must not be empty")
+        from tributo.data._compat_read import open_ray_compat
+        from tributo.data.source_config import CsvSourceConfig
 
-        read_kwargs: dict[str, Any] = {}
-        if cfg.columns:
-            read_kwargs["columns"] = cfg.columns
-
-        if cfg.path.startswith("s3://"):
-            import pyarrow.fs as pafs
-
-            from tributo.data._s3 import to_pyarrow_s3_kwargs
-
-            fs = pafs.S3FileSystem(**to_pyarrow_s3_kwargs(cfg.s3))
-            path = cfg.path.removeprefix("s3://")
-            return ray.data.read_csv(path, filesystem=fs, **read_kwargs)
-
-        return ray.data.read_csv(cfg.path, **read_kwargs)
+        return open_ray_compat(
+            CsvSourceConfig(path=cfg.path, columns=cfg.columns, s3=cfg.s3)
+        )
 
     def write(self, dataset: ray.data.Dataset, **kwargs: Any) -> None:
         """Write a CSV file.

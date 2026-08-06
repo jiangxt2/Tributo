@@ -16,7 +16,7 @@ training, model bundles, and batch or online inference.
 | Area | Supported path |
 | --- | --- |
 | Ray Jobs | Submit, inspect, stream logs, and stop jobs |
-| Data | Bounded Parquet, CSV, Iceberg, ClickHouse, and Doris reads |
+| Data | Explicit Ray Data/Daft ingestion for verified file, table, and PostgreSQL inputs; optional Connector adapters fail closed until validated |
 | Training | XGBoost, DNN, PU learning, and Ray Tune integration |
 | Model lifecycle | Validated multi-format bundles with local or S3 publication |
 | Inference | Ray Data batch inference and Ray Serve HTTP/gRPC endpoints |

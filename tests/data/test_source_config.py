@@ -14,10 +14,47 @@ from tributo.data.source_config import (
     IcebergSourceConfig,
     LegacyConfigNormalizer,
     ParquetSourceConfig,
+    ProviderSourceConfig,
+    RawSourceConfig,
     SqlSourceConfig,
     apply_source_projection,
     source_projection,
 )
+
+
+def test_source_configuration_reprs_hide_runtime_payloads() -> None:
+    sources = (
+        SqlSourceConfig(
+            dialect="clickhouse",
+            user="sensitive-user",
+            password="top-secret",
+            sql="SELECT 'business-secret'",
+        ),
+        IcebergSourceConfig(
+            catalog="catalog",
+            table="analytics.events",
+            catalog_properties={"rest.token": "catalog-secret"},
+            s3={"secret_access_key": "iceberg-secret"},
+        ),
+        ProviderSourceConfig(
+            provider="third.party",
+            uri="custom://source",
+            options={"password": "provider-secret"},
+        ),
+        RawSourceConfig(type="third-party", raw={"token": "raw-secret"}),
+    )
+
+    rendered = " ".join(repr(source) for source in sources)
+    for secret in (
+        "sensitive-user",
+        "top-secret",
+        "business-secret",
+        "catalog-secret",
+        "iceberg-secret",
+        "provider-secret",
+        "raw-secret",
+    ):
+        assert secret not in rendered
 
 
 class TestLegacyS3:
@@ -247,8 +284,6 @@ class TestSourceProjection:
             apply_source_projection(source, ["missing"])
 
     def test_provider_projection_uses_native_option(self) -> None:
-        from tributo.data.source_config import ProviderSourceConfig
-
         source = ProviderSourceConfig(
             provider="tributo.parquet",
             uri="data.parquet",
@@ -256,3 +291,17 @@ class TestSourceProjection:
         projected = apply_source_projection(source, ["text"])
         assert isinstance(projected, ProviderSourceConfig)
         assert projected.options == {"columns": ["text"]}
+
+    @pytest.mark.parametrize(
+        "provider",
+        ["tributo.postgresql", "postgresql", "tributo.lance", "lance"],
+    )
+    def test_provider_projection_covers_sql_and_table_bindings(
+        self, provider: str
+    ) -> None:
+        source = ProviderSourceConfig(provider=provider, uri="source://target")
+
+        projected = apply_source_projection(source, ["id"])
+
+        assert isinstance(projected, ProviderSourceConfig)
+        assert projected.options == {"columns": ["id"]}

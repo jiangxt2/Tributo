@@ -3,19 +3,18 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
-import pyarrow as pa
 import pytest
 from pydantic import TypeAdapter
 
-from tributo.data.provider import DatasetHandle, DataSourceProvider
+from tributo.data.provider import DataSourceProvider
 from tributo.data.provider_builtins import (
     ClickHouseProvider,
     CsvProvider,
     DorisProvider,
     IcebergProvider,
     ParquetProvider,
+    PostgreSqlProvider,
 )
 from tributo.data.refs import digest
 from tributo.data.source_config import (
@@ -23,19 +22,6 @@ from tributo.data.source_config import (
     ProviderSourceConfig,
 )
 from tributo.exceptions import JobConfigurationError
-
-# Ray's accelerator-dev-var warning is noise on every local init; the project
-# runs warnings as errors, so scope the ignore to this known message only.
-pytestmark = [
-    pytest.mark.filterwarnings(
-        "ignore:Tip.*future versions of Ray.*:FutureWarning",
-        # Ray local-cluster shutdown raises background-thread unraisable
-        # exceptions; pytest surfaces them as warnings which the project
-        # escalates to errors. Known noise — ignore for these read tests.
-        "ignore::pytest.PytestUnraisableExceptionWarning",
-    ),
-    pytest.mark.usefixtures("ray_local_runtime"),
-]
 
 
 def cfg(source: dict) -> CanonicalSourceInput:
@@ -87,6 +73,25 @@ class TestFileProviderNormalize:
         assert resolved.runtime_options["s3"] == {"access_key_id": "s3cr3t"}
         # Credential value must not leak through repr.
         assert "s3cr3t" not in repr(resolved)
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            {"type": "parquet", "path": "S3://bkt/a.parquet"},
+            {
+                "provider": "tributo.parquet",
+                "uri": "S3://bkt/a.parquet",
+            },
+        ],
+    )
+    def test_s3_scheme_is_canonicalized_for_identity_and_execution(
+        self, source: dict
+    ) -> None:
+        resolved = ParquetProvider().normalize(cfg(source))
+
+        assert resolved.canonical_uri == "s3://bkt/a.parquet"
+        assert resolved.runtime_options["uri"] == "s3://bkt/a.parquet"
+        assert ParquetProvider().plan(resolved).filesystem_id == "s3"
 
     def test_provider_shape_uri_userinfo_is_rejected(self) -> None:
         with pytest.raises(JobConfigurationError, match="userinfo"):
@@ -341,6 +346,25 @@ class TestFileProviderNormalize:
 
 class TestSqlProviderNormalize:
     """ClickHouse/Doris: digests in identity, credentials in runtime only."""
+
+    def test_invalid_params_do_not_survive_in_public_error_context(self) -> None:
+        class SecretValue:
+            def __repr__(self) -> str:
+                return "password=top-secret"
+
+        with pytest.raises(JobConfigurationError) as exc_info:
+            ClickHouseProvider().normalize(
+                ProviderSourceConfig(
+                    provider="tributo.clickhouse",
+                    uri="clickhouse://host/analytics",
+                    options={"table": "events", "params": {"value": SecretValue()}},
+                )
+            )
+
+        error = exc_info.value
+        assert "top-secret" not in str(error)
+        assert error.__cause__ is None
+        assert error.__context__ is None
 
     def test_provider_shape_uri_drives_connection(self) -> None:
         # The uri is the connection address: host/port/database come from it,
@@ -607,11 +631,8 @@ class TestSqlProviderNormalize:
                 ProviderSourceConfig(provider="tributo.iceberg", uri=uri)
             )
 
-    def test_iceberg_read_via_provider_shape(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # open().to_ray_dataset() must work for the provider/uri shape too.
-        from unittest.mock import MagicMock
+    def test_iceberg_provider_shape_builds_catalog_plan(self) -> None:
+        from tributo.data.scan_plan import CatalogTableRef, TableScan
 
         resolved = IcebergProvider().normalize(
             ProviderSourceConfig(
@@ -620,18 +641,15 @@ class TestSqlProviderNormalize:
                 options={"row_filter": "event_id > 1"},
             )
         )
-        mock_connector = MagicMock()
-        mock_connector.read.return_value = "dataset"
-        monkeypatch.setattr(
-            "tributo.data.provider_builtins.get_connector", lambda _: mock_connector
+        plan = IcebergProvider().plan(resolved)
+
+        assert isinstance(plan, TableScan)
+        assert plan.table == CatalogTableRef(
+            catalog_id="prod", namespace=("db",), table="events"
         )
-        handle = IcebergProvider().open(resolved)
-        assert handle.to_ray_dataset() == "dataset"
-        mock_connector.read.assert_called_once()
-        kwargs = mock_connector.read.call_args.kwargs
-        assert kwargs["catalog_name"] == "prod"
-        assert kwargs["table_identifier"] == "db.events"
-        assert kwargs["row_filter"] == "event_id > 1"
+        assert plan.options["row_filter"] == "event_id > 1"
+        with pytest.raises(JobConfigurationError, match="no legacy Ray-only reader"):
+            IcebergProvider().open(resolved)
 
     def test_sql_canonical_uri_includes_port(self) -> None:
         resolved = ClickHouseProvider().normalize(
@@ -672,98 +690,80 @@ class TestSqlProviderNormalize:
         # Credential-free URI: host/database only.
         assert "p@ss" not in resolved.canonical_uri
 
-    def test_sql_projection_quotes_identifiers(self) -> None:
-        from tributo.data.provider_builtins import _project_sql
-
-        assert _project_sql("SELECT * FROM events;", ["id", "user-name"]) == (
-            "SELECT `id`, `user-name` FROM (SELECT * FROM events) "
-            "AS tributo_source_projection"
-        )
-
-    def test_sql_projection_escapes_backticks(self) -> None:
-        from tributo.data.provider_builtins import _project_sql
-
-        assert _project_sql("SELECT * FROM events", ["a`b"]) == (
-            "SELECT `a``b` FROM (SELECT * FROM events) AS tributo_source_projection"
-        )
-
-    def test_sql_projection_rejects_empty_query(self) -> None:
-        from tributo.data.provider_builtins import _project_sql
-
-        with pytest.raises(JobConfigurationError, match="non-empty"):
-            _project_sql("  ", ["id"])
-
-    def test_sql_projection_rejects_non_list_columns(self) -> None:
-        from tributo.data.provider_builtins import _project_sql
-
-        with pytest.raises(JobConfigurationError, match="non-empty list"):
-            _project_sql("SELECT 1", "id")
-
-    def test_clickhouse_reader_executes_projected_query(
-        self, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize(
+        ("provider", "dialect"),
+        [
+            (ClickHouseProvider(), "clickhouse"),
+            (DorisProvider(), "doris"),
+            (PostgreSqlProvider(), "postgresql"),
+        ],
+    )
+    def test_structured_table_builds_sql_plan(
+        self, provider: DataSourceProvider, dialect: str
     ) -> None:
-        import sys
+        from tributo.data.scan_plan import SqlScan, SqlTableRead
 
-        from tributo.data.provider_builtins import _clickhouse_read
-
-        client = MagicMock()
-        client.query_arrow.return_value = pa.table({"id": [1]})
-        clickhouse_connect = MagicMock()
-        clickhouse_connect.get_client.return_value = client
-        monkeypatch.setitem(sys.modules, "clickhouse_connect", clickhouse_connect)
-        dataset = MagicMock()
-        with patch("ray.data.from_arrow", return_value=dataset):
-            resolved = ClickHouseProvider().normalize(
-                cfg(
-                    {
-                        "type": "sql",
-                        "dialect": "clickhouse",
-                        "sql": "SELECT * FROM events;",
-                        "columns": ["id"],
-                    }
-                )
+        resolved = provider.normalize(
+            cfg(
+                {
+                    "type": "sql",
+                    "dialect": dialect,
+                    "host": "db.example",
+                    "database": "analytics",
+                    "table": "events",
+                    "columns": ["id"],
+                }
             )
-            assert _clickhouse_read(resolved) is dataset
-
-        client.query_arrow.assert_called_once_with(
-            "SELECT `id` FROM (SELECT * FROM events) AS tributo_source_projection",
-            parameters=None,
         )
-        client.close.assert_called_once()
+        plan = provider.plan(resolved)
 
-    def test_doris_reader_executes_projected_query(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        import sys
+        assert isinstance(plan, SqlScan)
+        assert plan.connector_id == dialect
+        expected_schema = "public" if dialect == "postgresql" else "analytics"
+        assert plan.target == SqlTableRead(
+            schema=expected_schema, table="events", projection=("id",)
+        )
 
-        from tributo.data.provider_builtins import _doris_read
+    def test_postgresql_database_schema_is_part_of_structured_target(self) -> None:
+        from tributo.data.scan_plan import SqlScan, SqlTableRead
 
-        cursor = MagicMock()
-        cursor.description = [("id",)]
-        cursor.fetchall.return_value = [(1,)]
-        connection = MagicMock()
-        connection.cursor.return_value.__enter__.return_value = cursor
-        pymysql = MagicMock()
-        pymysql.connect.return_value = connection
-        monkeypatch.setitem(sys.modules, "pymysql", pymysql)
-        dataset = MagicMock()
-        with patch("ray.data.from_arrow", return_value=dataset):
-            resolved = DorisProvider().normalize(
-                cfg(
-                    {
-                        "type": "sql",
-                        "dialect": "doris",
-                        "sql": "SELECT * FROM events;",
-                        "columns": ["id"],
-                    }
-                )
+        resolved = PostgreSqlProvider().normalize(
+            cfg(
+                {
+                    "type": "sql",
+                    "dialect": "postgresql",
+                    "database": "analytics",
+                    "database_schema": "feature_store",
+                    "table": "events",
+                }
             )
-            assert _doris_read(resolved) is dataset
-
-        cursor.execute.assert_called_once_with(
-            "SELECT `id` FROM (SELECT * FROM events) AS tributo_source_projection"
         )
-        connection.close.assert_called_once()
+        plan = PostgreSqlProvider().plan(resolved)
+
+        assert isinstance(plan, SqlScan)
+        assert plan.target == SqlTableRead(schema="feature_store", table="events")
+
+    def test_raw_sql_is_digest_only_in_logical_plan(self) -> None:
+        from tributo.data.scan_plan import ParameterizedQuery, SqlScan
+
+        resolved = ClickHouseProvider().normalize(
+            cfg(
+                {
+                    "type": "sql",
+                    "dialect": "clickhouse",
+                    "sql": "SELECT * FROM events WHERE id = %(id)s",
+                    "params": {"id": 7},
+                }
+            )
+        )
+        plan = ClickHouseProvider().plan(resolved)
+
+        assert isinstance(plan, SqlScan)
+        assert isinstance(plan.target, ParameterizedQuery)
+        assert plan.target.query_digest == digest(
+            "SELECT * FROM events WHERE id = %(id)s"
+        )
+        assert "SELECT" not in repr(plan)
 
     def test_doris_builtin_shape(self) -> None:
         resolved = DorisProvider().normalize(
@@ -1038,94 +1038,35 @@ class TestIcebergNormalize:
         assert a.ref_id() != b.ref_id()
 
 
-class TestLocalFileReads:
-    """Real bounded reads: normalize → open → read → close + materialize."""
+class TestFileProviderPlans:
+    """File Providers describe reads; only Engine Bindings execute them."""
 
-    def test_parquet_roundtrip(self, tmp_path: Path) -> None:
-        table = pa.table({"id": [1, 2, 3], "name": ["a", "b", "c"]})
-        path = tmp_path / "data.parquet"
-        pa.parquet.write_table(table, path)
+    @pytest.mark.parametrize(
+        ("provider", "source_type", "connector_id"),
+        [
+            (ParquetProvider(), "parquet", "parquet"),
+            (CsvProvider(), "csv", "csv"),
+        ],
+    )
+    def test_local_file_plan_and_legacy_open_rejection(
+        self,
+        provider: DataSourceProvider,
+        source_type: str,
+        connector_id: str,
+        tmp_path: Path,
+    ) -> None:
+        from tributo.data.scan_plan import FileScan
 
-        provider = ParquetProvider()
-        resolved = provider.normalize(cfg({"type": "parquet", "path": str(path)}))
-        handle = provider.open(resolved)
-        assert isinstance(handle, DatasetHandle)
-        try:
-            ds = handle.to_ray_dataset()
-        finally:
-            handle.close()
-        handle.close()  # idempotent
-        df = ds.to_pandas()
-        assert list(df["id"]) == [1, 2, 3]
-
-    def test_csv_roundtrip(self, tmp_path: Path) -> None:
-        path = tmp_path / "data.csv"
-        path.write_text("id,name\n1,a\n2,b\n")
-
-        provider = CsvProvider()
-        resolved = provider.normalize(cfg({"type": "csv", "path": str(path)}))
-        handle = provider.open(resolved)
-        try:
-            ds = handle.to_ray_dataset()
-        finally:
-            handle.close()
-        df = ds.to_pandas()
-        assert list(df["name"]) == ["a", "b"]
-
-    def test_parquet_column_projection(self, tmp_path: Path) -> None:
-        table = pa.table({"id": [1, 2], "name": ["a", "b"], "extra": [9, 8]})
-        path = tmp_path / "data.parquet"
-        pa.parquet.write_table(table, path)
-
-        provider = ParquetProvider()
         resolved = provider.normalize(
-            cfg({"type": "parquet", "path": str(path), "columns": ["id"]})
+            cfg({"type": source_type, "path": str(tmp_path / f"data.{source_type}")})
         )
-        handle = provider.open(resolved)
-        try:
-            ds = handle.to_ray_dataset()
-        finally:
-            handle.close()
-        assert ds.schema().names == ["id"]
+        plan = provider.plan(resolved)
 
-    def test_close_before_read_raises(self, tmp_path: Path) -> None:
-        path = tmp_path / "data.parquet"
-        pa.parquet.write_table(pa.table({"a": [1]}), path)
-        handle = ParquetProvider().open(
-            ParquetProvider().normalize(cfg({"type": "parquet", "path": str(path)}))
-        )
-        handle.close()
-        with pytest.raises(RuntimeError, match="already released"):
-            handle.to_ray_dataset()
-
-    def test_missing_file_fails(self, tmp_path: Path) -> None:
-        provider = ParquetProvider()
-        resolved = provider.normalize(
-            cfg({"type": "parquet", "path": str(tmp_path / "nope.parquet")})
-        )
-        handle = provider.open(resolved)
-        with pytest.raises(FileNotFoundError):
-            handle.to_ray_dataset()
-        handle.close()  # failed read must still be closable
-
-    def test_local_glob_skips_single_file_preflight(self, tmp_path: Path) -> None:
-        pattern = str(tmp_path / "*.parquet")
-        provider = ParquetProvider()
-        resolved = provider.normalize(cfg({"type": "parquet", "path": pattern}))
-        mock_connector = MagicMock()
-        mock_connector.read.return_value = object()
-
-        with patch(
-            "tributo.data.provider_builtins.get_connector",
-            return_value=mock_connector,
-        ):
-            handle = provider.open(resolved)
-            try:
-                handle.to_ray_dataset()
-            finally:
-                handle.close()
-
-        mock_connector.read.assert_called_once_with(path=pattern)
+        assert isinstance(plan, FileScan)
+        assert plan.connector_id == connector_id
+        assert plan.filesystem_id == "local"
+        with pytest.raises(JobConfigurationError, match="no legacy Ray-only reader"):
+            provider.open(resolved)
 
 
 class TestConnectionResolution:
@@ -1167,35 +1108,3 @@ class TestConnectionResolution:
         assert port == 9030
         assert user == "root"
         assert host == "localhost"
-
-
-class TestDorisProviderInstallHint:
-    def test_missing_pymysql_raises_install_hint(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        import sys
-
-        from tributo.data.provider_builtins import DorisProvider, _doris_read
-
-        monkeypatch.setitem(sys.modules, "pymysql", None)  # import fails
-        resolved = DorisProvider().normalize(
-            cfg({"type": "sql", "dialect": "doris", "sql": "SELECT 1"})
-        )
-        with pytest.raises(ImportError, match=r"tributo\[mysql\]"):
-            _doris_read(resolved)
-
-
-class TestClickHouseProviderInstallHint:
-    def test_missing_clickhouse_connect_raises_install_hint(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        import sys
-
-        from tributo.data.provider_builtins import ClickHouseProvider, _clickhouse_read
-
-        monkeypatch.setitem(sys.modules, "clickhouse_connect", None)
-        resolved = ClickHouseProvider().normalize(
-            cfg({"type": "sql", "dialect": "clickhouse", "sql": "SELECT 1"})
-        )
-        with pytest.raises(JobConfigurationError, match=r"tributo\[clickhouse\]"):
-            _clickhouse_read(resolved)

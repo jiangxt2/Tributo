@@ -16,7 +16,23 @@ trigger condition is met.
 
 ## Condition Tracks
 
-### Transform Compiler (D4)
+### Dual-engine bounded ingestion
+
+| Date | Decision | Evidence | Decider |
+|------|----------|----------|---------|
+| 2026-08-05 | **GO — alpha vertical slice** | Explicit Ray Data/Daft Gateway, Local/S3 Parquet Bindings, versioned ETL, typed handles, version evidence, and shared Conformance; all other source modules remain unsupported until their own gates pass | @jiangxt2 |
+| 2026-08-06 | **GO — architecture implementation candidate** | One Gateway execution path; four-part Binding identity and descriptor discovery; real Local/MinIO Conformance for Parquet, CSV, Iceberg, and Lance; real PostgreSQL dual-engine Conformance. HDFS, Hive, ClickHouse, and Doris support claims remain blocked on their infrastructure/external-package gates | @jiangxt2 |
+
+These decisions do not authorize a custom Reader, automatic engine routing, or
+support claims based only on configuration enums or adapter presence. They
+record the architectural scope and evidence boundary for the data portion of
+Gate A; alpha does not imply a stable-contract freeze.
+
+### Transform Pushdown Optimization (D4)
+
+The alpha ingestion path may translate versioned Transform IR into engine-native
+residual operations for correctness. This track governs performance pushdown
+claims only; it does not block the conservative residual compiler.
 
 **Trigger**: D1+D2 is merged AND at least one production `DataSourceProvider`
 has a benchmarked pushdown path.

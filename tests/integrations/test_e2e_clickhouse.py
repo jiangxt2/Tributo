@@ -5,7 +5,8 @@
 运行方式：
     docker exec ray-head python /opt/tributo/tests/integration/test_e2e_clickhouse.py
 
-前提：Docker 集群已启动，含 ClickHouse (8123) / MinIO / MLflow (5000)。
+前提：Docker 集群已启动，含 Ray / Daft / daft-olap-connectors /
+ClickHouse (8123) / MinIO / MLflow (5000)。
 """
 
 from __future__ import annotations
@@ -20,8 +21,10 @@ import numpy as np
 import ray
 import requests
 
+from tributo.data.handle_adapters import adapt_daft_result_to_ray
+from tributo.data.ingestion import IngestionRequest, open_ingestion
+from tributo.data.source_config import SqlSourceConfig
 from tributo.registry.callback import MLflowTrackingCallback
-from tributo.training.data_loader import load_ray_dataset_from_config
 from tributo.training.xgboost_trainer import XGBoostTrainerImpl
 
 CLICKHOUSE_HOST = os.environ.get("CLICKHOUSE_HOST", "clickhouse")
@@ -51,8 +54,8 @@ def _check_clickhouse() -> bool:
         )
         client.command("SELECT 1")
         return True
-    except Exception as e:
-        logger.warning("ClickHouse 不可达: %s", e)
+    except Exception as exc:
+        logger.warning("ClickHouse 不可达: exception_type=%s", type(exc).__name__)
         return False
 
 
@@ -126,17 +129,20 @@ def main():
     logger.info("Ray 集群就绪: %s", ray.cluster_resources())
 
     # ── 3. 从 ClickHouse 加载数据 ──
-    data_config = {
-        "type": "clickhouse",
-        "label_col": "label",
-        "ch_host": CLICKHOUSE_HOST,
-        "ch_port": CLICKHOUSE_PORT,
-        "ch_database": CLICKHOUSE_DB,
-        "ch_user": CLICKHOUSE_USER,
-        "ch_password": CLICKHOUSE_PASSWORD,
-        "ch_sql": f"SELECT * FROM {CLICKHOUSE_DB}.{TABLE}",
-    }
-    ds = load_ray_dataset_from_config(data_config)
+    source = SqlSourceConfig(
+        dialect="clickhouse",
+        host=CLICKHOUSE_HOST,
+        port=CLICKHOUSE_PORT,
+        database=CLICKHOUSE_DB,
+        user=CLICKHOUSE_USER,
+        password=CLICKHOUSE_PASSWORD,
+        table=TABLE,
+    )
+    ingestion = open_ingestion(IngestionRequest(source=source, engine="daft"))
+    try:
+        ds = adapt_daft_result_to_ray(ingestion).handle.dataset
+    finally:
+        ingestion.close()
     logger.info("Ray Dataset 加载完成: %d 行", ds.count())
 
     # ── 4. 分布式训练 + MLflow 记录 ──
@@ -151,7 +157,7 @@ def main():
     )
 
     config = {
-        "data": data_config,
+        "data": {"label_col": "label"},
         "model": {"objective": "binary:logistic", "max_depth": 5, "eta": 0.1},
         "training": {"num_rounds": 10, "val_size": 0.2, "seed": 42},
         "ray": {"num_workers": 2},

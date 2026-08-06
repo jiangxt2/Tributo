@@ -6,14 +6,38 @@ import sys
 
 import pytest
 
+from tributo._common.storage_profiles import StorageProfile
 from tributo.data._s3 import (
     resolve_endpoint,
     resolve_region,
+    to_daft_s3_kwargs,
     to_iceberg_properties,
     to_lance_storage_options,
     to_pyarrow_s3_kwargs,
 )
 from tributo.data.base import S3Config
+
+
+def test_s3_configuration_reprs_hide_credentials_and_endpoint_userinfo() -> None:
+    config = S3Config(
+        access_key_id="access-secret",
+        secret_access_key="top-secret",
+        endpoint="http://user:password@minio:9000",
+        region="us-east-1",
+    )
+    profile = StorageProfile(
+        access_key_id="profile-key",
+        secret_access_key="profile-secret",
+        endpoint="http://user:password@minio:9000",
+        region="us-east-1",
+    )
+
+    for rendered in (repr(config), repr(profile)):
+        assert "access-secret" not in rendered
+        assert "top-secret" not in rendered
+        assert "profile-key" not in rendered
+        assert "profile-secret" not in rendered
+        assert "password" not in rendered
 
 
 class TestResolveEndpoint:
@@ -88,6 +112,48 @@ class TestToPyarrowS3Kwargs:
         cfg = S3Config(endpoint="https://s3.amazonaws.com")
         kwargs = to_pyarrow_s3_kwargs(cfg)
         assert "scheme" not in kwargs
+
+
+class TestToDaftS3Kwargs:
+    """Daft S3 public configuration mapping tests."""
+
+    def test_maps_config_names(self):
+        cfg = S3Config(
+            access_key_id="AK",
+            secret_access_key="SK",
+            endpoint="http://minio:9000",
+            region="us-west-2",
+        )
+        assert to_daft_s3_kwargs(cfg) == {
+            "key_id": "AK",
+            "access_key": "SK",
+            "endpoint_url": "http://minio:9000",
+            "region_name": "us-west-2",
+            "use_ssl": False,
+        }
+
+    def test_https_endpoint_keeps_default_ssl(self):
+        kwargs = to_daft_s3_kwargs(S3Config(endpoint="https://s3.amazonaws.com"))
+
+        assert "use_ssl" not in kwargs
+
+    def test_none_config_uses_environment(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "ENV_KEY")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "ENV_SECRET")
+        assert to_daft_s3_kwargs(None)["key_id"] == "ENV_KEY"
+        assert to_daft_s3_kwargs(None)["access_key"] == "ENV_SECRET"
+
+    def test_explicit_credentials_override_named_profile(self):
+        profile = StorageProfile(
+            access_key_id="explicit-key",
+            secret_access_key="explicit-secret",
+            profile_name="fallback-profile",
+        )
+
+        assert to_daft_s3_kwargs(profile) == {
+            "key_id": "explicit-key",
+            "access_key": "explicit-secret",
+        }
 
 
 class TestToLanceStorageOptions:

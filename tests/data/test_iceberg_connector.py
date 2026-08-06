@@ -86,26 +86,11 @@ class TestIcebergWriteConfig:
 class TestIcebergDataConnector:
     """IcebergDataConnector 行为测试。"""
 
-    @patch("tributo.data.iceberg.ray.data.read_parquet")
-    @patch("tributo.data.iceberg._load_catalog")
-    def test_read_calls_plan_files(self, mock_load_catalog, mock_read_parquet):
-        """read() 应调用 plan_files() 获取文件列表，再由 ray.data.read_parquet 分布式读取。"""
-        # 模拟 FileScanTask
-        mock_task = MagicMock()
-        mock_task.file.file_path = "s3://bucket/data/part-0.parquet"
-
-        mock_scan = MagicMock()
-        mock_scan.plan_files.return_value = [mock_task]
-
-        mock_table = MagicMock()
-        mock_table.scan.return_value = mock_scan
-
-        mock_catalog = MagicMock()
-        mock_catalog.load_table.return_value = mock_table
-        mock_load_catalog.return_value = mock_catalog
-
+    @patch("tributo.data._compat_read.open_ray_compat")
+    def test_read_delegates_to_gateway(self, mock_open_ray_compat):
+        """read() 只构造逻辑请求并委托 Ray Gateway。"""
         mock_ds = MagicMock()
-        mock_read_parquet.return_value = mock_ds
+        mock_open_ray_compat.return_value = mock_ds
 
         connector = IcebergDataConnector()
         result = connector.read(
@@ -113,33 +98,15 @@ class TestIcebergDataConnector:
             catalog_properties={"type": "rest"},
         )
 
-        mock_catalog.load_table.assert_called_once_with("db.test")
-        mock_scan.plan_files.assert_called_once()
-        mock_read_parquet.assert_called_once()
-        # 验证传入的是去掉 s3:// 前缀的路径
-        call_args = mock_read_parquet.call_args
-        assert call_args[0][0] == ["bucket/data/part-0.parquet"]
+        source = mock_open_ray_compat.call_args.args[0]
+        assert source.catalog == "default"
+        assert source.table == "db.test"
+        assert source.catalog_properties == {"type": "rest"}
         assert result is mock_ds
 
-    @patch("tributo.data.iceberg.ray.data.read_parquet")
-    @patch("tributo.data.iceberg._load_catalog")
-    def test_read_passes_scan_kwargs(self, mock_load_catalog, mock_read_parquet):
-        """read() 应正确传递 snapshot_id、row_filter、selected_fields 到 scan()。"""
-        mock_task = MagicMock()
-        mock_task.file.file_path = "/local/data/part-0.parquet"
-
-        mock_scan = MagicMock()
-        mock_scan.plan_files.return_value = [mock_task]
-
-        mock_table = MagicMock()
-        mock_table.scan.return_value = mock_scan
-
-        mock_catalog = MagicMock()
-        mock_catalog.load_table.return_value = mock_table
-        mock_load_catalog.return_value = mock_catalog
-
-        mock_read_parquet.return_value = MagicMock()
-
+    @patch("tributo.data._compat_read.open_ray_compat")
+    def test_read_preserves_table_options(self, mock_open_ray_compat):
+        """read() 将快照、过滤和投影原样映射到规范 SourceConfig。"""
         connector = IcebergDataConnector()
         connector.read(
             table_identifier="db.test",
@@ -149,14 +116,10 @@ class TestIcebergDataConnector:
             selected_fields=["id", "name"],
         )
 
-        mock_table.scan.assert_called_once_with(
-            row_filter="id > 1",
-            selected_fields=("id", "name"),
-            snapshot_id=123,
-        )
-        # 验证 selected_fields 传递给 read_parquet 的 columns 参数
-        call_kwargs = mock_read_parquet.call_args[1]
-        assert call_kwargs["columns"] == ["id", "name"]
+        source = mock_open_ray_compat.call_args.args[0]
+        assert source.snapshot_id == 123
+        assert source.row_filter == "id > 1"
+        assert source.selected_fields == ["id", "name"]
 
     @patch("tributo.data.iceberg._load_catalog")
     def test_write_overwrite(self, mock_load_catalog):

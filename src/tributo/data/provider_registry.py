@@ -43,18 +43,14 @@ _CANONICAL_TYPE_ROUTES: dict[str, str] = {
     "csv": "tributo.csv",
     "sql_clickhouse": "tributo.clickhouse",
     "sql_doris": "tributo.doris",
+    "sql_postgresql": "tributo.postgresql",
     "iceberg": "tributo.iceberg",
 }
 
 # SQL dialects without a canonical provider — unsupported/experimental, with
 # explicit diagnostics instead of silent routing.
 _UNSUPPORTED_SQL_DIALECTS: dict[str, str] = {
-    "postgresql": "ConnectorX path is experimental and unsupported",
     "mysql": "MySQL is unsupported; use tributo.doris (MySQL protocol)",
-}
-_DEFERRED_PROVIDER_DIAGNOSTICS: dict[str, str] = {
-    "tributo.lance": "Lance is deferred; use a supported file provider",
-    "lance": "Lance is deferred; use a supported file provider",
 }
 
 
@@ -194,11 +190,6 @@ class ProviderRegistry:
 
     def _resolve_by_id_or_alias(self, provider_id: str) -> DataSourceProvider:
         # Layer 1: exact provider ID.  Layer 2: alias.
-        if provider_id in _DEFERRED_PROVIDER_DIAGNOSTICS:
-            raise JobConfigurationError(
-                f"Provider {provider_id!r} is not available: "
-                f"{_DEFERRED_PROVIDER_DIAGNOSTICS[provider_id]}"
-            )
         with self._lock:
             cls = self._providers.get(provider_id)
             if cls is None:
@@ -260,17 +251,16 @@ class ProviderRegistry:
             provider_id = "tributo.clickhouse"
         elif data_type == "doris":
             provider_id = "tributo.doris"
+        elif data_type == "postgresql":
+            provider_id = "tributo.postgresql"
         elif data_type == "iceberg":
             provider_id = "tributo.iceberg"
+        elif data_type == "lance":
+            provider_id = "tributo.lance"
         elif data_type in _UNSUPPORTED_SQL_DIALECTS:
             raise JobConfigurationError(
                 f"SQL dialect {data_type!r} is unsupported: "
                 f"{_UNSUPPORTED_SQL_DIALECTS[data_type]}"
-            )
-        elif data_type == "lance":
-            raise JobConfigurationError(
-                f"Legacy source type {data_type!r} is not available: "
-                f"{_DEFERRED_PROVIDER_DIAGNOSTICS['lance']}"
             )
         else:
             raise JobConfigurationError(

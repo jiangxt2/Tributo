@@ -16,6 +16,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from pydantic import TypeAdapter
+
+from tributo.data.source_config import CanonicalSourceInput
 from tributo.util.annotations import PublicAPI
 
 if TYPE_CHECKING:
@@ -79,7 +82,9 @@ class GraphDataBundle:
 
         The config must provide ``node_features_path``, ``edge_index_path``,
         and optionally ``edge_features_path`` / ``node_labels_path``.
-        Each path is read via the Parquet connector.
+        Each source is opened through the Ray Data ingestion Binding. Existing
+        ``*_path`` fields remain Parquet shorthand; ``*_source`` accepts the
+        canonical source model and therefore supports Lance and Iceberg too.
 
         Example::
 
@@ -90,40 +95,42 @@ class GraphDataBundle:
                 "schema": {"is_directed": True, "max_nodes": 100_000},
             })
         """
-        from tributo.data.parquet import ParquetDataConnector
+        node_path = str(config.get("node_features_path", "<node_features_source>"))
+        edge_path = str(config.get("edge_index_path", "<edge_index_source>"))
 
-        connector = ParquetDataConnector()
-        node_path: str = config["node_features_path"]
-        edge_path: str = config["edge_index_path"]
-
-        node_features = connector.read(path=node_path)
-        edge_index = connector.read(path=edge_path)
+        node_features = _read_graph_source(config, "node_features", node_path)
+        edge_index = _read_graph_source(config, "edge_index", edge_path)
 
         edge_features = None
-        if "edge_features_path" in config:
-            edge_features = connector.read(path=config["edge_features_path"])
+        if "edge_features_path" in config or "edge_features_source" in config:
+            edge_features = _read_graph_source(
+                config,
+                "edge_features",
+                str(config.get("edge_features_path", "<edge_features_source>")),
+            )
 
         node_labels = None
-        if "node_labels_path" in config:
-            node_labels = connector.read(path=config["node_labels_path"])
+        if "node_labels_path" in config or "node_labels_source" in config:
+            node_labels = _read_graph_source(
+                config,
+                "node_labels",
+                str(config.get("node_labels_path", "<node_labels_source>")),
+            )
 
         schema_dict = config.get("schema", {})
         schema = GraphSchema(**schema_dict)
 
-        # Compute statistical metadata.
-        metadata: dict[str, Any] = {}
-        try:
-            metadata["num_nodes"] = node_features.count()
-        except Exception as exc:
-            raise RuntimeError(
-                f"Failed to count node features from {node_path!r}: {exc}"
-            ) from exc
-        try:
-            metadata["num_edges"] = edge_index.count()
-        except Exception as exc:
-            raise RuntimeError(
-                f"Failed to count edge index from {edge_path!r}: {exc}"
-            ) from exc
+        # Compute only the small statistical metadata required by the graph
+        # contract. Native Ray Data remains responsible for the count.
+        metadata: dict[str, Any] = {
+            "num_nodes": _count_graph_rows(node_features, "node features"),
+            "num_edges": _count_graph_rows(edge_index, "edge index"),
+        }
+        if schema.max_nodes is not None and metadata["num_nodes"] > schema.max_nodes:
+            raise ValueError(
+                "Graph node count exceeds GraphSchema.max_nodes: "
+                f"{metadata['num_nodes']} > {schema.max_nodes}"
+            )
 
         return cls(
             node_features=node_features,
@@ -133,3 +140,42 @@ class GraphDataBundle:
             schema=schema,
             graph_metadata=metadata,
         )
+
+
+def _read_graph_source(
+    config: dict[str, Any],
+    name: str,
+    parquet_path: str,
+) -> "ray.data.Dataset":
+    """Open one graph table through the explicit Ray ingestion boundary."""
+    from tributo.data.ingestion import IngestionRequest, RayDataHandle, open_ingestion
+
+    source = config.get(f"{name}_source")
+    if source is None:
+        if f"{name}_path" not in config:
+            raise ValueError(f"Graph config requires {name}_source or {name}_path")
+        source = {"type": "parquet", "path": parquet_path}
+    canonical_source: CanonicalSourceInput = TypeAdapter(
+        CanonicalSourceInput
+    ).validate_python(source)
+    result = open_ingestion(IngestionRequest(source=canonical_source, engine="ray"))
+    try:
+        if not isinstance(result.handle, RayDataHandle):
+            raise RuntimeError("Graph ingestion requires a Ray Data handle")
+        return result.handle.dataset
+    finally:
+        result.close()
+
+
+def _count_graph_rows(dataset: "ray.data.Dataset", role: str) -> int:
+    """Delegate graph row counting without exposing a native error payload."""
+    failure_type: str | None = None
+    try:
+        count = int(dataset.count())
+    except Exception as exc:
+        failure_type = type(exc).__name__
+    if failure_type is not None:
+        # Raise outside the native handler so its message/cause cannot retain
+        # a path, DSN, or credential supplied by an engine or Connector.
+        raise RuntimeError(f"Failed to count {role} with {failure_type}")
+    return count

@@ -1,14 +1,21 @@
-"""tributo.data — Data connector abstraction layer.
+"""Tributo bounded-ingestion contracts and compatibility adapters.
 
-Unified data read/write interface supporting Parquet, Lance, Iceberg, and other formats.
+Ray Data, Daft, or an installed connector owns physical reads. Tributo owns
+typed requests, logical plans, engine bindings, ETL translation, errors, and
+provenance. Historical ``DataConnector`` exports remain for compatibility and
+write paths.
 
 Usage example::
 
-    from tributo.data import get_connector, S3Config
+    from tributo.data import IngestionRequest, ParquetSourceConfig, open_ingestion
 
-    connector = get_connector("parquet")
-    ds = connector.read(path="s3://bucket/data.parquet", s3=S3Config(...))
-    connector.write(ds, path="s3://bucket/output")
+    result = open_ingestion(
+        IngestionRequest(
+            source=ParquetSourceConfig(path="s3://bucket/data.parquet"),
+            engine="ray",
+        )
+    )
+    dataset = result.handle.dataset
 """
 
 from __future__ import annotations
@@ -17,7 +24,40 @@ import importlib
 import logging
 
 from tributo.data.base import DataConnector, S3Config, WriteMode
+from tributo.data.engine_binding import (
+    BindingCompilation,
+    BindingCompileRequest,
+    BindingDescriptor,
+    BindingKey,
+    BindingPlanConstraints,
+    EngineBinding,
+)
 from tributo.data.graph import GraphDataBundle, GraphSchema
+from tributo.data.handle_adapters import (
+    HandleConversionReceipt,
+    RayHandleAdaptation,
+    adapt_daft_result_to_ray,
+)
+from tributo.data.ingestion import (
+    DaftDataFrameHandle,
+    DistributionVersionEvidence,
+    HandleOwnership,
+    IngestionDescriptor,
+    IngestionGateway,
+    IngestionOpenResult,
+    IngestionPlanReceipt,
+    IngestionRequest,
+    IngestionRuntimeContext,
+    PhysicalSplitSummary,
+    RayDataHandle,
+    ReadHint,
+    ReadOptions,
+    SchemaContract,
+    TransformDecision,
+    describe_ingestion,
+    open_ingestion,
+    ray_worker_distribution_probe,
+)
 from tributo.data.provider import DatasetHandle, DataSourceProvider, ResolvedSource
 from tributo.data.provider_registry import (
     list_providers,
@@ -47,6 +87,24 @@ from tributo.data.source_config import (
     SqlSourceConfig,
     apply_source_projection,
     source_projection,
+)
+from tributo.data.transform_ir import (
+    CastColumn,
+    ColumnRename,
+    DropColumns,
+    FillNull,
+    FilterComparison,
+    FilterEq,
+    FilterIsIn,
+    FilterNotEq,
+    FilterNotNull,
+    FilterNull,
+    FilterRange,
+    Limit,
+    RenameColumns,
+    SelectColumns,
+    TransformPipeline,
+    transform_ir_digest,
 )
 from tributo.exceptions import JobConfigurationError
 from tributo.plugin import discover_connector_plugins
@@ -82,6 +140,53 @@ __all__ = [
     # Graph data abstraction
     "GraphSchema",
     "GraphDataBundle",
+    # Explicit native-handle adapters
+    "HandleConversionReceipt",
+    "RayHandleAdaptation",
+    "adapt_daft_result_to_ray",
+    # Candidate bounded-ingestion contract
+    "IngestionRequest",
+    "IngestionRuntimeContext",
+    "ReadOptions",
+    "ReadHint",
+    "SchemaContract",
+    "IngestionGateway",
+    "IngestionDescriptor",
+    "IngestionOpenResult",
+    "IngestionPlanReceipt",
+    "HandleOwnership",
+    "TransformDecision",
+    "DistributionVersionEvidence",
+    "PhysicalSplitSummary",
+    "RayDataHandle",
+    "DaftDataFrameHandle",
+    "describe_ingestion",
+    "open_ingestion",
+    "ray_worker_distribution_probe",
+    # Third-party ingestion Binding SPI
+    "BindingKey",
+    "BindingPlanConstraints",
+    "BindingCompileRequest",
+    "BindingCompilation",
+    "BindingDescriptor",
+    "EngineBinding",
+    # Engine-neutral Transform IR
+    "TransformPipeline",
+    "transform_ir_digest",
+    "FilterEq",
+    "FilterNotEq",
+    "FilterComparison",
+    "FilterRange",
+    "FilterIsIn",
+    "FilterNull",
+    "FilterNotNull",
+    "SelectColumns",
+    "DropColumns",
+    "ColumnRename",
+    "RenameColumns",
+    "CastColumn",
+    "FillNull",
+    "Limit",
     # Connector registry
     "get_connector",
     "register_connector",

@@ -10,7 +10,11 @@
 | Test | File | Coverage | Prerequisites |
 |------|------|----------|---------------|
 | MLflow E2E | `test_e2e_mlflow.py` | Synthetic data → XGBoost → MLflow tracking → ONNX export → model registry | Ray + MLflow |
-| ClickHouse E2E | `test_e2e_clickhouse.py` | ClickHouse table creation / write → `load_ray_dataset_from_config` → XGBoost distributed training → MLflow → ONNX | Ray + ClickHouse + MLflow |
+| ClickHouse E2E | `test_e2e_clickhouse.py` | ClickHouse table → Daft OLAP Binding → explicit Daft-to-Ray adapter → XGBoost distributed training → MLflow → ONNX | Ray + Daft + `daft-olap-connectors` + ClickHouse + MLflow |
+| Dual-engine Docker | `test_data_ingestion_dual_engine.py` | Local Parquet, full ETL chain, typed handles, worker-version evidence | Docker Ray cluster + Daft |
+| File conformance | `../integration/test_data_ingestion_conformance.py` | Local/MinIO Parquet and CSV through Ray Data and Daft | Local Ray runtime + MinIO |
+| Table conformance | `../integration/test_table_format_ingestion.py` | Local/MinIO Iceberg and Lance through Ray Data and Daft | Local Ray runtime + MinIO |
+| PostgreSQL conformance | `../integration/test_postgresql_ingestion.py` | Structured table read through Ray Data and Daft | Local Ray runtime + PostgreSQL |
 | Streaming | `test_e2e_streaming.py` | Streaming inference service | TBD |
 | Tune | `test_e2e_tune.py` | Hyperparameter search | TBD |
 
@@ -63,7 +67,22 @@ docker exec ray-head python /opt/tributo/tests/integrations/test_e2e_redis_strea
 
 # MLflow test
 docker exec ray-head python /opt/tributo/tests/integrations/test_e2e_mlflow.py
+
+# Required Docker-cluster ingestion slice
+docker exec ray-head env TRIBUTO_DOCKER_RAY_TEST=1 \
+  python /opt/tributo/tests/integrations/test_data_ingestion_dual_engine.py
 ```
+
+The ClickHouse and multi-class scripts require the independently installed
+`daft-olap-connectors` distribution. They use an explicit conversion adapter;
+the Gateway itself never changes the selected engine or disguises a Daft
+DataFrame as a Ray Dataset.
+
+The PR workflow additionally runs the file, table-format, and PostgreSQL
+Conformance files with locked `data`, `data-daft`, and `postgresql` extras.
+These tests are marked both `integration` and `ingestion_conformance`, so the
+normal unit-test matrix excludes them and the dedicated infrastructure job
+selects them explicitly.
 
 ### Batch Run
 

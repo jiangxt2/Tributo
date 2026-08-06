@@ -27,6 +27,7 @@ jobs:
       model_export: ${{ github.event_name == 'merge_group' || steps.filter.outputs.model_export == 'true' }}
       trainer_bundle: ${{ github.event_name == 'merge_group' || steps.filter.outputs.trainer_bundle == 'true' }}
       docs: ${{ github.event_name == 'merge_group' || steps.filter.outputs.docs == 'true' }}
+      data_ingestion: ${{ github.event_name == 'merge_group' || steps.filter.outputs.data_ingestion == 'true' }}
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
       - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36
@@ -70,6 +71,20 @@ jobs:
               - "tools/check_docs.py"
               - "uv.lock"
               - ".github/workflows/docs-deploy.yml"
+              - ".github/workflows/pr-test-suite.yml"
+            data_ingestion:
+              - "src/tributo/data/**"
+              - "src/tributo/training/data_loader.py"
+              - "src/tributo/training/local_runner.py"
+              - "src/tributo/inference/pipeline.py"
+              - "src/tributo/embeddings/**"
+              - "tests/data/**"
+              - "tests/integration/test_data_ingestion_conformance.py"
+              - "tests/integration/test_postgresql_ingestion.py"
+              - "tests/integration/test_table_format_ingestion.py"
+              - "tests/integrations/test_data_ingestion_dual_engine.py"
+              - "pyproject.toml"
+              - "uv.lock"
               - ".github/workflows/pr-test-suite.yml"
 
   dco:
@@ -421,6 +436,54 @@ jobs:
           uv run --locked --no-sync python -m pytest tests/integration/test_ray_runtime_env.py \
             -m ray_runtime_env -v --tb=short --timeout=180
 
+  data-ingestion-conformance:
+    name: Data Ingestion Conformance (Files + Tables + PostgreSQL)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [paths-filter, lint]
+    if: needs.paths-filter.outputs.data_ingestion == 'true'
+    env:
+      RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO: "0"
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin123
+      TRIBUTO_POSTGRESQL_HOST: 127.0.0.1
+      TRIBUTO_POSTGRESQL_PORT: "5432"
+      TRIBUTO_POSTGRESQL_DB: tributo
+      TRIBUTO_POSTGRESQL_USER: tributo
+      TRIBUTO_POSTGRESQL_PASSWORD: tributo-test
+    services:
+      postgres:
+        image: postgres:17.6
+        env:
+          POSTGRES_DB: tributo
+          POSTGRES_USER: tributo
+          POSTGRES_PASSWORD: tributo-test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tributo -d tributo"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+
+      - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
+        with:
+          python-version: "3.12"
+
+      - name: Install locked Ray and Daft test dependencies
+        run: uv sync --extra dev --extra data --extra data-daft --extra postgresql --locked
+
+      - name: Run required dual-engine conformance
+        run: |
+          uv run --locked --no-sync python -m pytest \
+            tests/integration/test_data_ingestion_conformance.py \
+            tests/integration/test_postgresql_ingestion.py \
+            tests/integration/test_table_format_ingestion.py \
+            -m ingestion_conformance -o "addopts=" \
+            -v --tb=short --timeout=900
+
   build:
     name: Package Build & Smoke Test
     runs-on: ubuntu-latest
@@ -493,6 +556,7 @@ jobs:
       - trainer-bundle-it
       - export-s3
       - ray-runtime-env
+      - data-ingestion-conformance
       - build
       - core-walking-skeleton
       - docs-build
@@ -510,6 +574,8 @@ jobs:
           TRAINER_BUNDLE_RESULT: ${{ needs.trainer-bundle-it.result }}
           EXPORT_S3_RESULT: ${{ needs.export-s3.result }}
           RAY_RUNTIME_RESULT: ${{ needs.ray-runtime-env.result }}
+          DATA_INGESTION: ${{ needs.paths-filter.outputs.data_ingestion }}
+          DATA_INGESTION_RESULT: ${{ needs.data-ingestion-conformance.result }}
           BUILD_RESULT: ${{ needs.build.result }}
           WALKING_RESULT: ${{ needs.core-walking-skeleton.result }}
           DOCS: ${{ needs.paths-filter.outputs.docs }}
@@ -551,6 +617,12 @@ jobs:
             require_skipped ray-runtime-env "$RAY_RUNTIME_RESULT"
             require_skipped build "$BUILD_RESULT"
             require_skipped core-walking-skeleton "$WALKING_RESULT"
+          fi
+
+          if [ "$DATA_INGESTION" = "true" ]; then
+            require_success data-ingestion-conformance "$DATA_INGESTION_RESULT"
+          else
+            require_skipped data-ingestion-conformance "$DATA_INGESTION_RESULT"
           fi
 
           if [ "$MODEL_EXPORT" = "true" ]; then

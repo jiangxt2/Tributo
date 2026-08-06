@@ -34,34 +34,40 @@ Create a JSON config (`training.json`):
 }
 ```
 
-> **Note**: Tributo only supports JSON configuration. YAML is not supported.
+> **Note**: Tributo validates the in-memory Pydantic contract with a strict
+> schema. JSON is the built-in persisted format; deployment-specific parsers
+> may convert other formats to a mapping before validation.
 
 ### Python API
 
 ```python
 from tributo.training import build_trainer
-from tributo.training.data_loader import load_ray_dataset_from_config
+from tributo.data import IngestionRequest, ParquetSourceConfig, RayDataHandle, open_ingestion
 
-train_ds = load_ray_dataset_from_config({
-    "type": "s3",
-    "uri": "s3://your-bucket/train/*.parquet",
-    "format": "parquet",
-})
-val_ds = load_ray_dataset_from_config({
-    "type": "s3",
-    "uri": "s3://your-bucket/val/*.parquet",
-    "format": "parquet",
-})
+train_input = open_ingestion(IngestionRequest(
+    source=ParquetSourceConfig(path="s3://your-bucket/train/*.parquet"),
+    engine="ray",
+))
+val_input = open_ingestion(IngestionRequest(
+    source=ParquetSourceConfig(path="s3://your-bucket/val/*.parquet"),
+    engine="ray",
+))
+assert isinstance(train_input.handle, RayDataHandle)
+assert isinstance(val_input.handle, RayDataHandle)
 
-trainer = build_trainer(
-    ray_dataset=train_ds,
-    train_config=train_config,
-    val_dataset=val_ds,
-    num_workers=4,
-    use_gpu=False,
-)
-result = trainer.fit()
-print(f"Model: {result.metrics['onnx_path']}")
+try:
+    trainer = build_trainer(
+        ray_dataset=train_input.handle.dataset,
+        train_config=train_config,
+        val_dataset=val_input.handle.dataset,
+        num_workers=4,
+        use_gpu=False,
+    )
+    result = trainer.fit()
+    print(f"Model: {result.metrics['onnx_path']}")
+finally:
+    val_input.close()
+    train_input.close()
 ```
 
 ## DNN Training

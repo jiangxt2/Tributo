@@ -153,6 +153,14 @@ class TestResolveBuiltin:
                 {"type": "sql", "dialect": "doris", "sql": "SELECT 1"},
                 "tributo.doris",
             ),
+            (
+                {
+                    "type": "sql",
+                    "dialect": "postgresql",
+                    "table": "events",
+                },
+                "tributo.postgresql",
+            ),
             ({"type": "iceberg", "catalog": "c", "table": "t"}, "tributo.iceberg"),
         ],
     )
@@ -165,7 +173,7 @@ class TestResolveBuiltin:
         provider = resolve_provider(cfg)
         assert provider.provider_id == expected
 
-    @pytest.mark.parametrize("dialect", ["postgresql", "mysql"])
+    @pytest.mark.parametrize("dialect", ["mysql"])
     def test_unsupported_sql_dialects_fail(self, dialect: str) -> None:
         from pydantic import TypeAdapter
 
@@ -208,6 +216,7 @@ class TestResolveLegacy:
             ({"type": "csv", "path": "x", "format": "csv"}, "tributo.csv"),
             ({"type": "clickhouse", "ch_sql": "SELECT 1"}, "tributo.clickhouse"),
             ({"type": "doris", "sql": "SELECT 1"}, "tributo.doris"),
+            ({"type": "postgresql", "table": "events"}, "tributo.postgresql"),
             ({"type": "iceberg", "catalog": "c", "table": "t"}, "tributo.iceberg"),
         ],
     )
@@ -215,7 +224,7 @@ class TestResolveLegacy:
         provider = resolve_provider(LegacySourceInput(raw=raw))
         assert provider.provider_id == expected
 
-    @pytest.mark.parametrize("dialect", ["mysql", "postgresql"])
+    @pytest.mark.parametrize("dialect", ["mysql"])
     def test_legacy_unsupported_sql(self, dialect: str) -> None:
         with pytest.raises(JobConfigurationError, match=r"unsupported"):
             resolve_provider(
@@ -234,13 +243,19 @@ class TestResolveLegacy:
                 )
             )
 
-    def test_lance_reports_deferred_status(self) -> None:
-        with pytest.raises(JobConfigurationError, match="Lance is deferred"):
+    def test_lance_routes_to_native_engine_provider(self) -> None:
+        assert (
             resolve_provider(
                 ProviderSourceConfig(provider="tributo.lance", uri="s3://bkt/table")
-            )
-        with pytest.raises(JobConfigurationError, match="Lance is deferred"):
-            resolve_provider(LegacySourceInput(raw={"type": "lance", "path": "x"}))
+            ).provider_id
+            == "tributo.lance"
+        )
+        assert (
+            resolve_provider(
+                LegacySourceInput(raw={"type": "lance", "path": "x"})
+            ).provider_id
+            == "tributo.lance"
+        )
 
 
 class TestThirdPartyRegistration:

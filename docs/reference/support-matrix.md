@@ -7,13 +7,17 @@ prototypes.
 
 | Capability | Status | Boundary |
 | --- | --- | --- |
-| Local/S3 Parquet and CSV reads | Implemented | Bounded Ray Dataset input |
-| Iceberg reads | Implemented | PyIceberg catalog and planned files |
-| ClickHouse reads | Implemented | Native clickhouse-connect client |
-| Doris reads | Implemented | MySQL protocol through PyMySQL |
+| Local/S3 Parquet and CSV reads | Verified | Native Ray Data or Daft handle through one Gateway |
+| Local/S3 Iceberg reads | Verified | Native Ray Data or Daft table reader; broader Catalog/delete-file matrix remains gated |
+| Local/S3 Lance reads | Verified | Native Ray Data or Daft table reader |
+| PostgreSQL structured table reads | Verified | Ray Data or Daft public SQL reader; no arbitrary SQL in the new path |
+| HDFS Parquet/CSV reads | Adapter only | Ray binding exists; real HDFS/JVM/worker gate is pending |
+| ClickHouse reads | Adapter only | Requires unpublished `daft-olap-connectors` and real-database Conformance |
+| Doris reads | Adapter only | Requires unpublished `ray-doris` or `daft-olap-connectors` and real-database Conformance |
+| ORC and Hive external-table reads | Not implemented | Locked Ray/Daft versions expose no validated public reader |
 | Lance output | Implemented for embedding workflows | Not a generic inference sink |
 | Database inference sinks | Extension point | No built-in ClickHouse or Doris sink |
-| Daft transform compiler | Prototype | Validation-only; not the stable data path |
+| Ray/Daft transform compiler | Alpha | Portable bounded ETL subset with dual-engine Conformance |
 
 ## Training
 

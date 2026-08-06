@@ -6,7 +6,7 @@ dispatch in ``training/data_loader.py`` and ``inference/pipeline.py``.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, Field, model_validator
@@ -18,6 +18,8 @@ from tributo.util.annotations import PublicAPI
 # ---------------------------------------------------------------------------
 # Individual source configs
 # ---------------------------------------------------------------------------
+
+_SqlDialect = Literal["clickhouse", "doris", "postgresql", "mysql"]
 
 
 @PublicAPI(stability="beta")
@@ -34,7 +36,7 @@ class ParquetSourceConfig(StrictConfigModel):
     type: Literal["parquet"] = "parquet"  # noqa: A003
     path: str = Field(min_length=1)
     columns: list[str] | None = None
-    s3: S3Config | None = None
+    s3: S3Config | None = Field(default=None, repr=False)
 
 
 @PublicAPI(stability="beta")
@@ -50,7 +52,7 @@ class CsvSourceConfig(StrictConfigModel):
 
     type: Literal["csv"] = "csv"  # noqa: A003
     path: str = Field(min_length=1)
-    s3: S3Config | None = None
+    s3: S3Config | None = Field(default=None, repr=False)
     columns: list[str] | None = None
 
 
@@ -58,10 +60,8 @@ class CsvSourceConfig(StrictConfigModel):
 class SqlSourceConfig(StrictConfigModel):
     """Unified SQL data source for ClickHouse, Doris, PostgreSQL, and MySQL.
 
-    The ``dialect`` field determines the runtime client:
-
-    * ``clickhouse`` / ``doris`` — native client (``clickhouse_connect`` / MySQL protocol).
-    * ``postgresql`` / ``mysql`` — ConnectorX (when validated compatible).
+    The ``dialect`` field selects a logical Provider. Execution is delegated
+    to a Ray Data, Daft, or installed third-party Binding.
 
     Attributes:
         type: Discriminator value.
@@ -69,31 +69,41 @@ class SqlSourceConfig(StrictConfigModel):
         host: Hostname (``None`` = env fallback).
         port: Port (``None`` = dialect default).
         database: Database name (``None`` = env fallback).
+        database_schema: Optional schema for structured table reads.
         user: Username (``None`` = env fallback).
         password: Password (``None`` = env fallback).
-        sql: SQL query string.
-        params: Query parameter dict for parameterized SQL (clickhouse_connect
-            ``parameters``).  ``None`` = no parameters.
+        sql: Compatibility raw-query input. New ingestion Bindings accept
+            structured table reads unless they explicitly advertise a safe
+            parameterized-query capability.
+        params: Query parameters for the compatibility raw-query input.
+            ``None`` means no parameters.
         columns: Column names to project in the SQL reader (``None`` = all
             columns).
     """
 
     type: Literal["sql"] = "sql"  # noqa: A003
-    dialect: Literal["clickhouse", "doris", "postgresql", "mysql"]
+    dialect: _SqlDialect
     host: str | None = None
     port: int | None = None
+    http_port: int | None = None
+    flight_port: int | None = None
     database: str | None = None
-    user: str | None = None
-    password: str | None = None
-    sql: str = ""
-    params: dict[str, Any] | None = None
+    database_schema: str | None = None
+    user: str | None = Field(default=None, repr=False)
+    password: str | None = Field(default=None, repr=False)
+    sql: str = Field(default="", repr=False)
+    table: str | None = None
+    protocol: Literal["mysql", "flight"] | None = None
+    params: dict[str, Any] | None = Field(default=None, repr=False)
     columns: list[str] | None = None
     partitioning: SqlPartitioning | None = None
 
     @model_validator(mode="after")
-    def _require_sql(self) -> "SqlSourceConfig":
-        if not self.sql.strip():
-            raise ValueError("sql field must be non-empty for SqlSourceConfig")
+    def _require_one_read_target(self) -> "SqlSourceConfig":
+        has_sql = bool(self.sql.strip())
+        has_table = bool(self.table and self.table.strip())
+        if has_sql == has_table:
+            raise ValueError("SqlSourceConfig requires exactly one of sql or table")
         return self
 
     @model_validator(mode="after")
@@ -108,6 +118,14 @@ class SqlSourceConfig(StrictConfigModel):
             object.__setattr__(self, "params", None)
         return self
 
+    @model_validator(mode="after")
+    def _validate_protocol(self) -> "SqlSourceConfig":
+        if self.dialect == "doris" and self.table and self.protocol is None:
+            object.__setattr__(self, "protocol", "mysql")
+        if self.dialect != "doris" and self.protocol is not None:
+            raise ValueError("protocol is only valid for Doris table reads")
+        return self
+
 
 # ---------------------------------------------------------------------------
 # SQL partitioning hint — used by Daft Provider to split large query results
@@ -118,7 +136,7 @@ class SqlSourceConfig(StrictConfigModel):
 class SqlPartitioning(BaseModel):
     """Performance hint for SQL result partitioning.
 
-    Only consumed by Daft Provider; Legacy Provider ignores it.
+    Engine-neutral requirement mapped by the selected Binding.
     """
 
     column: str
@@ -144,8 +162,8 @@ class IcebergSourceConfig(StrictConfigModel):
     type: Literal["iceberg"] = "iceberg"  # noqa: A003
     catalog: str = Field(min_length=1)
     table: str = Field(min_length=1)
-    catalog_properties: dict[str, str] = Field(default_factory=dict)
-    s3: dict[str, str] | None = None
+    catalog_properties: dict[str, str] = Field(default_factory=dict, repr=False)
+    s3: dict[str, str] | None = Field(default=None, repr=False)
     snapshot_id: int | None = None
     row_filter: str | None = None
     selected_fields: list[str] | None = None
@@ -183,7 +201,7 @@ class ProviderSourceConfig(StrictConfigModel):
 
     provider: str = Field(min_length=1)
     uri: str = Field(min_length=1)
-    options: dict[str, Any] = Field(default_factory=dict)
+    options: dict[str, Any] = Field(default_factory=dict, repr=False)
 
 
 # Canonical input union: existing type/path/dialect shapes plus the target
@@ -202,8 +220,12 @@ _PROJECTION_OPTIONS: dict[str, str] = {
     "clickhouse": "columns",
     "tributo.doris": "columns",
     "doris": "columns",
+    "tributo.postgresql": "columns",
+    "postgresql": "columns",
     "tributo.iceberg": "selected_fields",
     "iceberg": "selected_fields",
+    "tributo.lance": "columns",
+    "lance": "columns",
 }
 
 
@@ -279,7 +301,7 @@ class RawSourceConfig(BaseModel):
     """
 
     type: str  # noqa: A003
-    raw: dict[str, Any]
+    raw: dict[str, Any] = Field(repr=False)
 
     @model_validator(mode="before")
     @classmethod
@@ -317,13 +339,8 @@ _DIALECT_DEFAULTS: dict[str, dict[str, int | str]] = {
     "mysql": {"port": 3306, "user": "root"},
 }
 
-from typing import get_args as _get_args  # noqa: E402
-
-# Extract the Literal values so we can type-check the normalizer parameter.
-_SqlDialect = _get_args(SqlSourceConfig.model_fields["dialect"].annotation)
-
 # Legacy ``type`` keys that map to SQL dialects.
-_SQL_DIALECT_TYPES: dict[str, str] = {
+_SQL_DIALECT_TYPES: dict[str, _SqlDialect] = {
     "clickhouse": "clickhouse",
     "doris": "doris",
     "postgresql": "postgresql",
@@ -347,7 +364,7 @@ class LegacySourceInput:
     a bare dict; only this typed wrapper enters the legacy resolution path.
     """
 
-    raw: dict[str, Any]
+    raw: dict[str, Any] = field(repr=False)
     mode: Literal["legacy"] = "legacy"
 
 
@@ -397,7 +414,7 @@ class LegacyConfigNormalizer:
             return LegacyConfigNormalizer._normalize_iceberg(data_config)
 
         if data_type in _SQL_DIALECT_TYPES:
-            dialect: _SqlDialect = _SQL_DIALECT_TYPES[data_type]  # type: ignore[valid-type]
+            dialect = _SQL_DIALECT_TYPES[data_type]
             return LegacyConfigNormalizer._normalize_sql(data_config, dialect)
 
         # Unknown type → passthrough for plugin providers.
@@ -440,7 +457,7 @@ class LegacyConfigNormalizer:
         return ParquetSourceConfig(path=path)
 
     @staticmethod
-    def _normalize_sql(data_config: dict, dialect: _SqlDialect) -> SqlSourceConfig:  # type: ignore[valid-type]
+    def _normalize_sql(data_config: dict, dialect: _SqlDialect) -> SqlSourceConfig:
         """Normalise a legacy SQL-dialect config (clickhouse, doris, etc.)."""
         # Fields set to None signal "apply env fallback at connection time".
         # Prefix mapping: ch_ for clickhouse; port/database/user/password/sql

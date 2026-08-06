@@ -7,7 +7,7 @@ embedding credentials in model configs or manifests.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from tributo.util.annotations import PublicAPI
@@ -18,10 +18,10 @@ from tributo.util.annotations import PublicAPI
 class StorageProfile:
     """Resolved S3-compatible storage parameters."""
 
-    endpoint: str | None = None
+    endpoint: str | None = field(default=None, repr=False)
     region: str | None = None
-    access_key_id: str | None = None
-    secret_access_key: str | None = None
+    access_key_id: str | None = field(default=None, repr=False)
+    secret_access_key: str | None = field(default=None, repr=False)
     use_ssl: bool = True
     path_style: bool = False
     profile_name: str | None = None

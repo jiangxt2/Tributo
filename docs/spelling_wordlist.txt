@@ -6,6 +6,7 @@ AlgorithmSpec
 AliasConfig
 API
 APIs
+api
 ASHA
 auth
 autodoc
@@ -44,6 +45,7 @@ cpus
 CSV
 CsvSourceConfig
 Daft
+DaftDataFrameHandle
 dataclass
 dataset
 DatasetHandle
@@ -55,6 +57,7 @@ dicts
 dir
 DNN
 Docker
+DistributionVersionEvidence
 deserialize
 deserialization
 deserialized
@@ -69,6 +72,7 @@ embeddings
 entrypoint
 entrypoints
 env
+enums
 ETag
 ExportSource
 ExportSpec
@@ -84,6 +88,7 @@ gRPC
 grpc
 hashable
 HDFS
+HandleOwnership
 HTTP
 http
 hyperparameter
@@ -93,8 +98,15 @@ idempotency
 InferenceConfig
 init
 Initialise
+IngestionDescriptor
+IngestionGateway
+IngestionOpenResult
+IngestionPlanReceipt
+IngestionRequest
+IngestionRuntimeContext
 Integrations
 integrations
+ir
 jiangxt
 JobConfig
 JobConfigurationError
@@ -140,7 +152,9 @@ onnxruntime
 opset
 Parquet
 ParquetSourceConfig
+parsers
 Passthrough
+pathlib
 PipelineStep
 plugin
 plugins
@@ -148,6 +162,7 @@ PostgreSQL
 Pre
 pre
 preprocessing
+PhysicalSplitSummary
 ProblemType
 Proto
 protobuf
@@ -157,15 +172,18 @@ pushdown
 py
 Pydantic
 pydantic
+PydanticGeneralMetadata
 PyData
 PyG
 PyPI
 quantized
 Quickstart
 Ray
+RayDataHandle
 RayJob
 RBAC
 ReadTheDocs
+ReadOptions
 redirect
 registry
 repos
@@ -174,8 +192,10 @@ roadmap
 runnable
 runtime
 Safetensors
+ScanKind
 schema
 schemas
+SchemaContract
 SDK
 SemVer
 serveable
@@ -196,6 +216,8 @@ telecom
 tokenizer
 TorchScript
 tracebacks
+TransformDecision
+TransformPipeline
 Tributo
 tributo
 TributoClient

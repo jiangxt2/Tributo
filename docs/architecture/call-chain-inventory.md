@@ -1,7 +1,8 @@
 # Call Chain Inventory
 
-Documenting every data entry point and model export entry point in the
-current codebase (baseline: commit `137b125`, 2026-08-02).
+Documenting every data entry point and model export entry point in the current
+architecture candidate. Support claims are governed by Product Scope and the
+real-infrastructure gates, not by this inventory alone.
 
 ## Data Entry Points
 
@@ -18,33 +19,66 @@ LegacySourceInput(raw=config, mode="legacy")
   ↓
 load_ray_dataset_from_source(source: CanonicalSourceInput)
   ↓
-ProviderRegistry.resolve() → provider.normalize()
+IngestionRequest(source, engine="ray")
   ↓
-provider.open(resolved) → DatasetHandle.to_ray_dataset()
+IngestionGateway.open()
+  ↓
+ProviderRegistry.resolve() → normalize() → plan()
+  ↓
+EngineBindings.compile() → RayDataHandle.dataset
 ```
 
-**Legacy alias**: `load_dataframe_from_config()` — wraps `load_ray_dataset_from_config()` into Pandas.
+**Compatibility aliases**: `load_ray_dataset_from_config()` converts legacy
+flat dictionaries through `LegacyConfigNormalizer`; `load_dataframe_from_config()`
+materializes its Ray result for small historical callers. Neither selects a
+separate reader backend.
 
-**Prototype (not on main path)**:
-- `data/transform_compiler.py` — D4 prototype types (`SourcePlan`,
-  `TransformCompiler`, `SourceRouter`, `TransformPipeline`, Daft/Ray
-  pushdown; prototype; no production callers)
-- `data/provider.py` is the D1+D2 **stable** provider contract
-  (`DataSourceProvider` / `ResolvedSource` / `DatasetHandle`), not a
-  prototype.
+**Canonical ingestion implementation**:
+- `data/transform_ir.py` — versioned engine-neutral ETL contract.
+- `data/scan_plan.py` — credential-free `FileScan` / `SqlScan` / `TableScan`.
+- `data/engine_binding.py` — four-part Binding identity, constraint matching,
+  capability negotiation, and deterministic selection.
+- `data/binding_plugins.py` — narrow
+  `tributo.ingestion_bindings` descriptor discovery.
+- `data/transform_compiler.py` — internal Ray/Daft expression translation.
+- The unused `SourcePlan` / `SourceRouter` auto-routing prototype was removed;
+  engine selection is explicit in `IngestionRequest`.
+- `data/provider.py` owns logical normalization and planning;
+  `DatasetHandle` remains a legacy Ray compatibility type, not a second reader.
 
-**D1+D2 canonical path**:
+**Canonical Gateway path**:
 
 ```
 CanonicalSourceInput (provider/uri or type/path/dialect shapes)
   → ProviderRegistry.resolve()           exact ID → alias → built-in mapping
   → provider.normalize() → ResolvedSource(provider_id, canonical_uri, options)
-  → provider.open(resolved) → DatasetHandle
-  → DatasetHandle.to_ray_dataset()
+  → provider.plan() → LogicalScanPlan
+  → EngineBindings.resolve(engine, scan_kind, connector, binding_id/constraints)
+  → thin Binding → public Ray Data / Daft / installed connector API
+  → IngestionOpenResult(Typed Handle, IngestionPlanReceipt, ownership)
+
+IngestionGateway.describe(IngestionRequest)
+  → resolve relative built-in file paths against project_root_path
+  → ProviderRegistry.resolve() → provider.normalize() → provider.plan()
+  → EngineBindings.describe(engine_id, scan_kind, connector_id, constraints)
+  → credential-free IngestionDescriptor (no engine plan or metadata I/O)
+
+IngestionGateway.open(IngestionRequest)
+  → the same Provider → LogicalScanPlan route
+  → EngineBindings.compile(engine_id, scan_kind, connector_id, binding_id)
+  → thin Binding → public Ray Data / Daft / installed connector reader API
+  → IngestionOpenResult(Typed Handle, IngestionPlanReceipt, ownership)
 ```
 
-Existing `DataConnector` and SQL loaders remain Provider implementation
-details. `SourcePlan` and transform pushdown are deferred to D4.
+The relative-path resolver is shared with the beta compatibility entrypoint.
+The resolved path reaches `ResolvedSource` before source and plan digests are
+computed, so migrating entrypoints cannot silently change either the file read
+or its identity. URI sources and absolute paths are unchanged.
+
+Built-in and selected optional Bindings are registered explicitly. Independent
+packages can contribute versioned descriptors through
+`tributo.ingestion_bindings`; this descriptor-only SPI does not add a plugin
+lifecycle or permit a third ingestion engine.
 
 ### 2. Inference Data Loading
 
@@ -61,9 +95,7 @@ _legacy_source(config) or canonical source
   ↓
 load_ray_dataset_from_source(source.model_dump(mode="python"))
   ↓
-ProviderRegistry.resolve() → provider.normalize()
-  ↓
-provider.open(resolved) → DatasetHandle.to_ray_dataset()
+IngestionGateway.open(engine="ray") → RayDataHandle.dataset
 ```
 
 Legacy JSON enters through `_legacy_json_source()` and is normalized to the same
@@ -88,7 +120,7 @@ embeddings.batch_job._resolve_embedding_source()
   ↓
 load_ray_dataset_from_source(source.model_dump(mode="python"))
   ↓
-ProviderRegistry.resolve() → provider.normalize() → DatasetHandle
+IngestionGateway.open(engine="ray") → RayDataHandle.dataset
   ↓
 Ray Data → model inference → output writer
 ```
@@ -108,7 +140,7 @@ CLI parses JSON → builds JobConfig / TrainingConfig
 submits to Ray Job API or calls local runner
 ```
 
-### 5. Plugin Data Connectors
+### 5. Plugin and Optional Data Connectors
 
 **Discovery**: `plugin.py::discover_connector_plugins()`
 
@@ -121,7 +153,24 @@ Registered in connector registry (data/registry.py)
 ```
 
 **Currently**: No third-party connector plugins exist. All built-in connectors
-are in `data/` module.
+are in `data/` module. This historical SPI serves `DataConnector` compatibility
+and write paths.
+
+**Bounded-ingestion Binding discovery**:
+
+```
+first default EngineBindings use
+  ↓
+importlib.metadata.entry_points(group="tributo.ingestion_bindings")
+  ↓
+credential-safe descriptor validation and atomic registration
+  ↓
+four-part Binding selection; native dependency import occurs at factory/compile
+```
+
+Selected optional integrations (`ray-doris`, `daft-olap-connectors`) also have
+thin built-in descriptors and explicit install diagnostics. Their adapters are
+not support claims until their external packages and infrastructure gates pass.
 
 ---
 
@@ -229,11 +278,11 @@ Plugin groups also discovered:
 
 | Issue | Location | Impact |
 |-------|----------|--------|
-| Training and inference have separate data routing | `data_loader.py` vs `pipeline.py` | D3 fix target |
-| Inference ClickHouse branch goes through deprecated loader wrapper | `pipeline.py:152-162` | D3 fix target |
+| Existing downstream consumers still expect Ray Dataset values | Training / local runner / inference / embeddings | Their compatibility functions explicitly select Ray and delegate the same Gateway; native Daft consumption requires a later consumer capability change |
+| A Ray-only consumer intentionally selects a Daft-only source | Consumer boundary | `adapt_daft_result_to_ray()` calls Daft's public adapter and records conversion evidence; the Gateway never performs this conversion implicitly |
 | Old XGBoost ONNX export swallows errors | `training/onnx_exporter.py` | E0 fix target |
 | SourceProvider (export) ≠ DataSourceProvider (data) | `exporting/protocols.py` vs `data/provider.py` | D1+D2 / E1 rename target |
-| TransformCompiler prototype has no production callers | `data/transform_compiler.py` | D4 target |
-| ConnectorX path is NotImplementedError | `data_loader.py:261-264` | Future; explicit error message added in A0 |
+| Transform pushdown optimization has no benchmark evidence; alpha Bindings classify current ETL as residual | `data/transform_compiler.py` | D4 remains NO-GO for pushdown claims |
+| HDFS, Hive, ClickHouse, and Doris have incomplete delivery evidence | Bindings and external packages | Keep them at adapted/unsupported status until their real-infrastructure gates pass |
 
 <!-- END -->

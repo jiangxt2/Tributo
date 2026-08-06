@@ -45,11 +45,15 @@ class S3Config(StrictConfigModel):
     ``AWS_REGION`` → region.
     """
 
-    access_key_id: Optional[str] = Field(default=None, description="AWS Access Key ID")
-    secret_access_key: Optional[str] = Field(
-        default=None, description="AWS Secret Access Key"
+    access_key_id: Optional[str] = Field(
+        default=None, description="AWS Access Key ID", repr=False
     )
-    endpoint: Optional[str] = Field(default=None, description="S3 endpoint URL")
+    secret_access_key: Optional[str] = Field(
+        default=None, description="AWS Secret Access Key", repr=False
+    )
+    endpoint: Optional[str] = Field(
+        default=None, description="S3 endpoint URL", repr=False
+    )
     region: Optional[str] = Field(default=None, description="AWS region")
 
 

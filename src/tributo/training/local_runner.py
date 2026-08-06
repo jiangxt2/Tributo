@@ -89,8 +89,6 @@ def run_local_trial(
     # -- Load data ------------------------------------------------------------
     datasets: dict[str, Any] = {}
     if trainer_spec.data_loading != DataLoadingMode.CANONICAL_TRAINER:
-        import ray.data
-
         source = resolve_data_source(trainer_spec, config)
         from tributo.training.data_loader import load_ray_dataset_from_source
 
@@ -99,9 +97,13 @@ def run_local_trial(
 
         data_cfg = config.get("data", {})
         if isinstance(data_cfg, dict) and data_cfg.get("val_path"):
-            datasets["val"] = ray.data.read_parquet(data_cfg["val_path"])
+            datasets["val"] = load_ray_dataset_from_source(
+                {"type": "parquet", "path": data_cfg["val_path"]}
+            )
         if isinstance(data_cfg, dict) and data_cfg.get("test_path"):
-            datasets["test"] = ray.data.read_parquet(data_cfg["test_path"])
+            datasets["test"] = load_ray_dataset_from_source(
+                {"type": "parquet", "path": data_cfg["test_path"]}
+            )
 
     # -- Run training ---------------------------------------------------------
     logger.info("Running local trial: trainer=%s", trainer_spec.name)
