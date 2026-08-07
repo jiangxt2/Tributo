@@ -12,6 +12,7 @@ from typing import Any
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DOCS_ROOT = REPOSITORY_ROOT / "docs"
 DOCS_EXTENSIONS = DEFAULT_DOCS_ROOT / "_ext"
+sys.path.insert(0, str(REPOSITORY_ROOT))
 sys.path.insert(0, str(DOCS_EXTENSIONS))
 
 DOC_MOCK_IMPORTS = importlib.import_module("mock_imports").DOC_MOCK_IMPORTS
@@ -321,6 +322,18 @@ def validate_python_examples(docs_root: Path) -> list[str]:
     return errors
 
 
+def validate_support_matrix(path: Path, *, compare_snapshot: bool) -> list[str]:
+    """Validate generated markers and optionally compare real Registry facts."""
+    from tools.generate_algorithm_support_matrix import (
+        check_support_matrix,
+        validate_marker_structure,
+    )
+
+    if not compare_snapshot:
+        return validate_marker_structure(path)
+    return check_support_matrix(path)
+
+
 def run_checks(docs_root: Path, *, static_only: bool) -> list[str]:
     """Run all documentation contract checks."""
     errors = validate_mock_inventory()
@@ -338,6 +351,12 @@ def run_checks(docs_root: Path, *, static_only: bool) -> list[str]:
         )
     )
     errors.extend(validate_python_examples(docs_root))
+    errors.extend(
+        validate_support_matrix(
+            docs_root / "reference" / "support-matrix.md",
+            compare_snapshot=not static_only,
+        )
+    )
     return errors
 
 

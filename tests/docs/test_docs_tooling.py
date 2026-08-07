@@ -17,6 +17,7 @@ from tools.check_docs import (
     validate_mock_inventory,
     validate_navigation,
     validate_python_examples,
+    validate_support_matrix,
 )
 from tributo.util.annotations import DeveloperAPI, PublicAPI
 
@@ -157,3 +158,20 @@ def test_python_example_validation_supports_explicit_pseudocode(
         encoding="utf-8",
     )
     assert validate_python_examples(docs_root) == []
+
+
+def test_static_support_matrix_validation_rejects_duplicate_markers(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "support-matrix.md"
+    path.write_text(
+        "<!-- BEGIN GENERATED: TRIBUTO ALGORITHM SUPPORT -->\n"
+        "<!-- BEGIN GENERATED: TRIBUTO ALGORITHM SUPPORT -->\n"
+        "<!-- END GENERATED: TRIBUTO ALGORITHM SUPPORT -->\n",
+        encoding="utf-8",
+    )
+
+    errors = validate_support_matrix(path, compare_snapshot=False)
+
+    assert len(errors) == 1
+    assert "found begin=2, end=1" in errors[0]

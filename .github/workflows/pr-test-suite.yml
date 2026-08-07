@@ -68,7 +68,9 @@ jobs:
               - "src/tributo/**/*.py"
               - "tests/docs/**"
               - "tests/integration/test_docs_reference.py"
+              - "tools/__init__.py"
               - "tools/check_docs.py"
+              - "tools/generate_algorithm_support_matrix.py"
               - "uv.lock"
               - ".github/workflows/docs-deploy.yml"
               - ".github/workflows/pr-test-suite.yml"
@@ -153,12 +155,14 @@ jobs:
       - name: Lint (ruff)
         run: >-
           uv run --locked --no-sync ruff check
-          src/ tests/ tools/check_docs.py docs/conf.py docs/_ext/
+          src/ tests/ tools/__init__.py tools/check_docs.py
+          tools/generate_algorithm_support_matrix.py docs/conf.py docs/_ext/
 
       - name: Format check (ruff)
         run: >-
           uv run --locked --no-sync ruff format --check
-          src/ tests/ tools/check_docs.py docs/conf.py docs/_ext/
+          src/ tests/ tools/__init__.py tools/check_docs.py
+          tools/generate_algorithm_support_matrix.py docs/conf.py docs/_ext/
 
       - name: Verify generated protobuf sources
         run: |
@@ -250,6 +254,7 @@ jobs:
 
       - name: Run documentation API and CLI integration tests
         run: |
+          .venv/bin/python tools/generate_algorithm_support_matrix.py --check
           .venv/bin/python -m pytest \
             tests/integration/test_docs_reference.py \
             -o "addopts=" -m integration \
