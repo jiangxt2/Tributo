@@ -68,6 +68,37 @@ class AlgorithmCatalog:
                 multiple capabilities are given, the algorithm must have
                 **all** of them (conjunction).
         """
+        return [
+            spec.name
+            for spec in self.list_specs(
+                problem_type=problem_type,
+                problem_family=problem_family,
+                modality=modality,
+                tag=tag,
+                extras_group=extras_group,
+                execution_kind=execution_kind,
+                capabilities=capabilities,
+                include_deprecated=include_deprecated,
+            )
+        ]
+
+    def list_specs(
+        self,
+        *,
+        problem_type: ProblemType | None = None,
+        problem_family: ProblemFamily | None = None,
+        modality: str | None = None,
+        tag: str | None = None,
+        extras_group: str | None = None,
+        execution_kind: ExecutionKind | None = None,
+        capabilities: Capability | tuple[Capability, ...] | None = None,
+        include_deprecated: bool = False,
+    ) -> tuple[AlgorithmSpec, ...]:
+        """Return matching specs from one immutable Registry snapshot.
+
+        Unlike a ``list()`` followed by repeated ``get_spec()`` calls, this
+        method cannot combine algorithm facts from different Registry states.
+        """
         snapshot = self._registry.snapshot()
         self._validate_integrity(snapshot)
 
@@ -86,8 +117,8 @@ class AlgorithmCatalog:
                 Capability(c) if isinstance(c, str) else c for c in capabilities
             )
 
-        results: list[str] = []
-        for name, spec in snapshot.items():
+        results: list[AlgorithmSpec] = []
+        for spec in snapshot.values():
             if problem_type is not None and problem_type not in spec.problem_types:
                 continue
             if problem_family is not None:
@@ -106,8 +137,8 @@ class AlgorithmCatalog:
                 continue
             if not include_deprecated and spec.status == AlgorithmStatus.DEPRECATED:
                 continue
-            results.append(name)
-        return results
+            results.append(spec)
+        return tuple(results)
 
     def get_spec(self, name: str) -> AlgorithmSpec:
         """Return the ``AlgorithmSpec`` for *name*.

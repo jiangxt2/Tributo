@@ -1101,6 +1101,10 @@ def algo_list(
         ProblemType,
     )
     from tributo.training.catalog import get_algorithm_catalog
+    from tributo.training.support_snapshot import (
+        build_algorithm_support_snapshot,
+        snapshot_json_objects,
+    )
 
     catalog = get_algorithm_catalog()
 
@@ -1121,7 +1125,7 @@ def algo_list(
             param_hint="--problem-type",
         ) from e
 
-    names = catalog.list(
+    specs = catalog.list_specs(
         problem_family=pf,
         problem_type=pt,
         modality=modality,
@@ -1131,30 +1135,17 @@ def algo_list(
     )
 
     if json_output:
-        result = []
-        for name in names:
-            spec = catalog.get_spec(name)
-            result.append(
-                {
-                    "name": name,
-                    "problem_types": [pt.value for pt in spec.problem_types],
-                    "data_modality": list(spec.data_modality),
-                    "tags": list(spec.tags),
-                    "gpu_required": spec.resource_hints.gpu_required,
-                    "status": spec.status.value,
-                    "extras_group": spec.extras_group,
-                }
-            )
+        result = snapshot_json_objects(build_algorithm_support_snapshot(specs))
         click.echo(json.dumps(result, indent=2))
     else:
-        if not names:
+        if not specs:
             click.echo("No algorithms found.")
             return
         header = f"{'NAME':<20} {'FAMILY':<25} {'MODALITY':<12} {'GPU REQ':<8} {'STATUS':<10}"
         click.echo(header)
         click.echo("-" * len(header))
-        for name in names:
-            spec = catalog.get_spec(name)
+        for spec in specs:
+            name = spec.name
             families = sorted(
                 {
                     pf.value
@@ -1195,6 +1186,8 @@ def algo_info(name: str):
     click.echo(f"Min CPUs:       {spec.resource_hints.min_cpus}")
     click.echo(f"Extras Group:   {spec.extras_group or '-'}")
     click.echo(f"Supported Tasks:{list(spec.supported_tasks)}")
+    click.echo(f"Execution Kind: {spec.execution_kind.value}")
+    click.echo(f"Capabilities:   {[cap.value for cap in spec.capabilities] or '-'}")
     click.echo(
         f"Config Model:   {spec.config_model.__name__ if spec.config_model else '-'}"
     )

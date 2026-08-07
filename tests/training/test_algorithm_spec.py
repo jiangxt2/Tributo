@@ -9,7 +9,11 @@ import pytest
 
 from tributo.training.algorithm_spec import (
     AlgorithmSpec,
+    AlgorithmStatus,
+    Capability,
     DataContract,
+    DataLoadingMode,
+    ExecutionKind,
     ProblemType,
     ResourceHints,
 )
@@ -146,3 +150,28 @@ class TestFullAlgorithmSpec:
         assert spec.resource_hints.gpu_required is True
         assert spec.input_schema is not None
         assert spec.input_schema.columns == {"user_id": "int64"}
+
+    def test_runtime_plugin_strings_are_normalized_at_construction(self) -> None:
+        spec = AlgorithmSpec(
+            name="plugin",
+            trainer_cls=type("PluginTrainer", (), {}),
+            problem_types=("regression",),
+            execution_kind="train",
+            capabilities=("tunable",),
+            status="ready",
+            data_loading="canonical_driver",
+        )
+
+        assert spec.problem_types == (ProblemType.REGRESSION,)
+        assert spec.execution_kind is ExecutionKind.TRAIN
+        assert spec.capabilities == (Capability.TUNABLE,)
+        assert spec.status is AlgorithmStatus.READY
+        assert spec.data_loading is DataLoadingMode.CANONICAL_DRIVER
+
+    def test_invalid_runtime_plugin_enum_is_rejected_early(self) -> None:
+        with pytest.raises(ValueError, match="invalid enum declaration"):
+            AlgorithmSpec(
+                name="plugin",
+                trainer_cls=type("PluginTrainer", (), {}),
+                capabilities=("not-a-capability",),
+            )

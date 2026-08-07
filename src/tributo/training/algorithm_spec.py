@@ -326,13 +326,39 @@ class AlgorithmSpec:
     data_loading: DataLoadingMode = DataLoadingMode.LEGACY_DRIVER
 
     def __post_init__(self) -> None:
+        # Runtime plugin entry points are not type-checked. Normalize valid
+        # string enum values here so every Registry consumer sees one canonical
+        # representation, and reject invalid declarations before registration.
+        try:
+            object.__setattr__(
+                self,
+                "problem_types",
+                tuple(ProblemType(item) for item in self.problem_types),
+            )
+            object.__setattr__(
+                self, "execution_kind", ExecutionKind(self.execution_kind)
+            )
+            object.__setattr__(
+                self,
+                "capabilities",
+                tuple(Capability(item) for item in self.capabilities),
+            )
+            object.__setattr__(self, "status", AlgorithmStatus(self.status))
+            object.__setattr__(
+                self,
+                "data_loading",
+                DataLoadingMode(self.data_loading),
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Algorithm '{self.name}' contains an invalid enum declaration: {exc}"
+            ) from exc
+
         # ── deep-freeze mutable containers ──
         object.__setattr__(self, "default_config", deep_freeze(self.default_config))
         object.__setattr__(self, "supported_tasks", tuple(self.supported_tasks))
-        object.__setattr__(self, "problem_types", tuple(self.problem_types))
         object.__setattr__(self, "data_modality", tuple(self.data_modality))
         object.__setattr__(self, "tags", tuple(self.tags))
-        object.__setattr__(self, "capabilities", tuple(self.capabilities))
 
         # ── lifecycle invariants ──
         if self.status == AlgorithmStatus.DEPRECATED:

@@ -74,6 +74,29 @@ def _catalog(**specs: AlgorithmSpec) -> AlgorithmCatalog:
 
 
 class TestCatalogList:
+    def test_list_specs_reads_one_registry_snapshot(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        registry = _make_registry(
+            xgb=_spec("xgb"),
+            dnn=_spec("dnn"),
+        )
+        original_snapshot = registry.snapshot
+        snapshot_calls = 0
+
+        def counting_snapshot() -> dict[str, AlgorithmSpec]:
+            nonlocal snapshot_calls
+            snapshot_calls += 1
+            return original_snapshot()
+
+        monkeypatch.setattr(registry, "snapshot", counting_snapshot)
+
+        assert [spec.name for spec in AlgorithmCatalog(registry).list_specs()] == [
+            "xgb",
+            "dnn",
+        ]
+        assert snapshot_calls == 1
+
     def test_empty_registry(self) -> None:
         cat = _catalog()
         assert cat.list() == []

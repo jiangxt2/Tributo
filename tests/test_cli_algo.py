@@ -35,6 +35,20 @@ class TestAlgoList:
         assert isinstance(parsed, list)
         names = [item["name"] for item in parsed]
         assert "xgboost" in names
+        by_name = {item["name"]: item for item in parsed}
+        assert by_name["xgboost"]["execution_kind"] == "train"
+        assert by_name["xgboost"]["supported_tasks"] == ["train"]
+        assert by_name["xgboost"]["capabilities"] == [
+            "tunable",
+            "exportable",
+            "distributed",
+        ]
+        assert by_name["xgboost"]["data_loading"] == "canonical_driver"
+
+        if "dnn" in by_name:
+            assert "distributed" not in by_name["dnn"]["capabilities"]
+        if "pu" in by_name:
+            assert "distributed" not in by_name["pu"]["capabilities"]
 
     def test_list_filter_family(self, runner) -> None:
         result = runner.invoke(main, ["algo", "list", "--family", "classification"])
@@ -70,6 +84,9 @@ class TestAlgoInfo:
         assert "xgboost" in result.output
         assert "Problem Types" in result.output
         assert "Data Modality" in result.output
+        assert "Execution Kind" in result.output
+        assert "Capabilities" in result.output
+        assert "distributed" in result.output
 
     def test_info_unknown_algorithm(self, runner) -> None:
         result = runner.invoke(main, ["algo", "info", "nonexistent_algo_xyz"])
