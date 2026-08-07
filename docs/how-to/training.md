@@ -1,6 +1,8 @@
-# Distributed Training
+# Training on Ray
 
-Run XGBoost and DNN training jobs across a Ray cluster.
+Run XGBoost, DNN, and PU training jobs through Ray Train. XGBoost supports
+multiple workers. The current DNN and PU implementations require exactly one
+worker; they use Ray Train for lifecycle and cluster execution, not DDP.
 
 ## XGBoost Training
 
@@ -73,10 +75,29 @@ finally:
 ## DNN Training
 
 ```python
-from tributo.training.dnn_trainer import DNNTrainer
+from tributo.training.dnn_trainer import run_dnn_training_with_config
 
-trainer = DNNTrainer(config)
-result = trainer.fit()
+result = run_dnn_training_with_config(
+    {
+        "data": {"type": "parquet", "path": "/data/train.parquet"},
+        "features": [
+            {"name": "account_age", "type": "dense"},
+            {"name": "monthly_usage", "type": "dense"},
+        ],
+        "label_col": "label",
+        "training": {"epochs": 10, "batch_size": 256},
+        "ray": {"num_workers": 1},
+        "output": {"onnx_path": "/models/dnn"},
+    }
+)
+print(result["onnx_path"])
+```
+
+```{note}
+`num_workers > 1` is rejected for DNN and PU until preprocessing state, model
+updates, metrics, early stopping, and checkpoints have coordinated
+multi-worker semantics. Use distributed XGBoost when that algorithm fits the
+problem; do not interpret XGBoost as a deep-learning algorithm.
 ```
 
 ## Bundle Checkpoint Compatibility
@@ -101,9 +122,9 @@ Three methods, in order of preference:
 
 | Parameter | Guidance |
 |---|---|
-| `num_workers` | Match the number of Ray worker nodes (not CPU count). |
-| `use_gpu` | Only set to `True` if workers have GPUs and `xgboost-gpu` is installed. |
-| `num_cpus_per_worker` | Default 1. Increase if workers have spare CPU. |
+| `num_workers` | XGBoost: select the required Ray Train workers. DNN/PU: must be `1`. |
+| `use_gpu` | Requires GPU workers and a GPU-capable framework build: XGBoost for tree training or PyTorch for DNN/PU. |
+| `num_cpus_per_worker` | XGBoost option; default 1. Increase when each worker has spare CPU. |
 
 ## Resource Budget
 

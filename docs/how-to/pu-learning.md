@@ -13,12 +13,29 @@ Standard supervised learning treats unlabeled as negative, which produces biased
 ## Quick Start
 
 ```python
-from tributo.training.pu_trainer import PUTrainerImpl, PUTrainingConfig
+from tributo.training.pu_trainer import run_pu_training_with_config
 
-config = PUTrainingConfig.from_json("pu_config.json")
-trainer = PUTrainerImpl(config)
-result = trainer.fit()
-print(f"ONNX model: {result.metrics['onnx_path']}")
+result = run_pu_training_with_config(
+    {
+        "data": {
+            "source": {
+                "provider": "tributo.parquet",
+                "uri": "s3://bucket/training-data/*.parquet",
+            }
+        },
+        "features": [
+            {"name": "account_age", "type": "dense"},
+            {"name": "monthly_usage", "type": "dense"},
+        ],
+        "label_col": "is_confirmed_positive",
+        "model": {"dnn_hidden_units": [128, 64, 32], "dnn_dropout": 0.3},
+        "pu": {"loss_type": "nnpu", "class_prior": 0.3},
+        "training": {"epochs": 50, "batch_size": 1024},
+        "ray": {"num_workers": 1},
+        "output": {"onnx_path": "/models/pu-fraud"},
+    }
+)
+print(f"ONNX model: {result['onnx_path']}")
 ```
 
 ## Configuration
@@ -26,31 +43,34 @@ print(f"ONNX model: {result.metrics['onnx_path']}")
 ```json
 {
   "data": {
-    "type": "s3",
-    "uri": "s3://bucket/training_data/*.parquet",
-    "format": "parquet"
-  },
-  "model": {
-    "label_col": "is_fraud",
-    "pu": {
-      "loss": "nnpu",
-      "prior": 0.3,
-      "auto_prior": true
-    },
-    "nn": {
-      "hidden_dims": [128, 64, 32],
-      "dropout": 0.3,
-      "activation": "relu"
+    "source": {
+      "provider": "tributo.parquet",
+      "uri": "s3://bucket/training-data/*.parquet"
     }
   },
-  "train": {
-    "num_workers": 1,
-    "num_epochs": 50,
+  "features": [
+    {"name": "account_age", "type": "dense"},
+    {"name": "monthly_usage", "type": "dense"}
+  ],
+  "label_col": "is_confirmed_positive",
+  "model": {
+    "dnn_hidden_units": [128, 64, 32],
+    "dnn_dropout": 0.3
+  },
+  "pu": {
+    "loss_type": "nnpu",
+    "class_prior": 0.3
+  },
+  "training": {
+    "epochs": 50,
     "batch_size": 1024,
     "learning_rate": 0.001
   },
-  "export": {
-    "onnx_output": "s3://bucket/models/pu_fraud_model.onnx"
+  "ray": {
+    "num_workers": 1
+  },
+  "output": {
+    "onnx_path": "/models/pu-fraud"
   }
 }
 ```
@@ -67,21 +87,41 @@ not yet supported; set `num_workers` to 1.
 | `nnpu` | Non-negative PU learning loss. More stable, recommended default. | Most cases. |
 | `upu` | Unbiased PU learning loss. Can produce negative loss values. | When prior is accurately known. |
 
-## Class Prior Estimation
+## Class Prior
 
-Tributo provides three methods for estimating the positive class prior:
+Training requires `pu.class_prior` in the open interval `(0, 1)`. It is the
+estimated proportion of true positives in the population, not the fraction of
+currently labeled rows. Tributo deliberately does not infer it from the
+observed label frequency because labeled positives are normally a selected
+subset of all positives.
 
-| Method | Description |
-|---|---|
-| `label_frequency` | Simple frequency-based estimate. Fast; assumes labeled positives are representative. |
-| `histogram_match` | Matches score distributions between labeled and unlabeled. More accurate. |
-| `em` | Expectation-Maximization. Most accurate; slower. |
+The standalone helpers in `tributo.training.priors` can support an upstream
+estimation workflow. Their result must be reviewed and passed explicitly to
+the trainer. The compatibility field `class_prior_method` records provenance;
+it does not trigger estimation during training.
 
-Set `auto_prior: true` and specify the method with `prior_method`.
+```{warning}
+Do not use the raw labeled-positive frequency unless the labeling mechanism
+makes that value a defensible population prior.
+```
 
 ## Evaluation Metrics
 
-Standard accuracy is meaningless for PU learning. Use PU-specific metrics:
+The PU Trainer reports the following training facts through Ray Train and in
+the final result:
+
+| Metric | Description |
+|---|---|
+| `epoch` | Completed training epoch. |
+| `train_loss` | Complete training-split uPU risk or Eq. 6 nnPU risk. |
+| `train_optimization_objective` | Algorithm 1 optimization surrogate used for backpropagation. It can differ from `train_loss` in the nnPU correction region. |
+| `train_observed_label_accuracy` | Diagnostic agreement with the observed positive/unlabeled indicator. It is not population classification accuracy. |
+| `val_loss` | Complete validation-split uPU risk or Eq. 6 nnPU risk, when validation is enabled. |
+| `val_observed_label_accuracy` | Validation diagnostic against observed indicators, when validation is enabled. |
+| `class_prior` | Explicit population positive-class prior used by the loss. |
+
+Standard accuracy is not a valid quality measure for PU learning. Tributo also
+provides standalone post-training evaluation helpers:
 
 | Metric | Description |
 |---|---|
@@ -90,10 +130,11 @@ Standard accuracy is meaningless for PU learning. Use PU-specific metrics:
 | `pu_f1` | Harmonic mean of PU precision and recall. |
 | `pu_auc` | Area under the PU-ROC curve. |
 
-Metrics are reported in real time via the training event stream.
+These `pu_*` metrics are computed by `tributo.training.pu_metrics`; the Trainer
+does not currently emit them automatically.
 
 ## See Also
 
-- `src/tributo/training/priors.py` — class prior estimation
+- `src/tributo/training/priors.py` — standalone prior estimation utilities
 - `src/tributo/training/pu_metrics.py` — PU evaluation metrics
 - `src/tributo/training/pu_trainer.py` — PUTrainer implementation

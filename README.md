@@ -21,7 +21,7 @@ Tributo tackles three problems that no existing open-source framework solves end
 
 **① PU Learning — train classifiers when you only have positive labels**
 
-Real-world fraud detection, churn prediction, and identity resolution all share the same data problem: confirmed positives are scarce, but unlabeled samples are plentiful and *not* truly negative. Tributo's PU Learning module runs nnPU/uPU loss training on Ray (single-worker; DDP planned for v2), estimates class priors automatically, and exports ONNX models for production serving — all with a single JSON config.
+Real-world fraud detection, churn prediction, and identity resolution all share the same data problem: confirmed positives are scarce, but unlabeled samples are plentiful and *not* truly negative. Tributo's PU Learning module runs nnPU/uPU loss training on Ray, requires an explicit positive class prior, and exports ONNX models for production serving. The current DNN and PU trainers are single-worker implementations; XGBoost is the distributed trainer.
 
 ```python
 from tributo.training.pu_trainer import run_pu_training_from_json
@@ -188,7 +188,7 @@ uv run python examples/xgboost_s3_training.py
 
 ### PU Learning (Positive-Unlabeled)
 
-nnPU/uPU training with automatic class prior estimation and PU-specific metrics (single-worker; DDP planned for v2). See [PU Learning guide](docs/how-to/pu-learning.md).
+nnPU/uPU training with an explicit class prior and PU-specific metrics. The trainer currently requires one Ray worker. See the [PU Learning guide](docs/how-to/pu-learning.md) and [support matrix](docs/reference/support-matrix.md).
 
 ### Batch Text Embedding
 
