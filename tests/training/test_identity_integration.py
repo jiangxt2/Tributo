@@ -73,6 +73,7 @@ try:
     import torch
     from torch.utils.data import DataLoader
 
+    from tributo.training.dnn_trainer import build_pu_train_loader
     from tributo.training.features.dataset import IdentityDataset
     from tributo.training.losses.pu_loss import PULoss
     from tributo.training.models.dnn import DNNModel
@@ -162,7 +163,9 @@ try:
             # 创建 Dataset
             dataset = IdentityDataset(processed, data["labels"], feature_list)
             torch_dataset = dataset.to_torch_dataset()
-            dataloader = DataLoader(torch_dataset, batch_size=16, shuffle=True)
+            dataloader = build_pu_train_loader(
+                torch_dataset, data["labels"], batch_size=16, seed=42
+            )
 
             # 创建模型
             model = DNNModel(feature_list, dnn_hidden_units=[32, 16])

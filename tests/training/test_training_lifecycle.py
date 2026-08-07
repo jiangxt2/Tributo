@@ -528,7 +528,11 @@ class TestTrainerConstructorContract:
         from tributo.training.pu_trainer import PUTrainerImpl
 
         cb = _RecordingCallback()
-        trainer = PUTrainerImpl(datasets={}, config={"features": []}, callbacks=[cb])
+        trainer = PUTrainerImpl(
+            datasets={},
+            config={"features": [], "pu": {"class_prior": 0.2}},
+            callbacks=[cb],
+        )
         assert trainer._callbacks == [cb]
 
     def test_dnn_trainer_accepts_callbacks(self) -> None:

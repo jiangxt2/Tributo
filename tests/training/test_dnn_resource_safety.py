@@ -1,4 +1,4 @@
-"""DNN 单 worker 资源安全测试。
+"""DNN 单 worker 契约和资源安全测试。
 
 覆盖 DNNTrainingConfig 的 resource 预算默认值，以及 worker 内 train/val
 共享预算的超限 fail-fast。worker 级测试通过 mock
@@ -25,6 +25,66 @@ class TestDNNResourceConfig:
         assert cfg.resource.max_batch_bytes == 64 * MIB
         assert cfg.resource.max_worker_materialization_bytes == 1024 * MIB
         assert cfg.resource.max_input_rows_per_worker is None
+        assert cfg.ray.num_workers == 1
+
+    def test_num_workers_gt_one_is_rejected_by_config(self) -> None:
+        from pydantic import ValidationError
+
+        from tributo.training.dnn_trainer import DNNTrainingConfig
+
+        with pytest.raises(ValidationError, match="num_workers"):
+            DNNTrainingConfig.model_validate({"ray": {"num_workers": 2}})
+
+    def test_nnpu_requires_explicit_prior(self) -> None:
+        from pydantic import ValidationError
+
+        from tributo.training.dnn_trainer import DNNTrainingConfig
+
+        with pytest.raises(ValidationError, match="class_prior"):
+            DNNTrainingConfig.model_validate(
+                {
+                    "loss": {"type": "nnpu"},
+                    "pu_learning": {"enabled": True},
+                }
+            )
+
+    @pytest.mark.parametrize(
+        "pu_learning",
+        (
+            {"enabled": True, "class_prior": 0.2, "beta": -0.1},
+            {"enabled": True, "class_prior": 0.2, "gamma": -0.1},
+            {"enabled": True, "class_prior": 0.2, "gamma": 1.1},
+        ),
+    )
+    def test_nnpu_rejects_invalid_correction_parameters(
+        self,
+        pu_learning: dict[str, float | bool],
+    ) -> None:
+        from pydantic import ValidationError
+
+        from tributo.training.dnn_trainer import DNNTrainingConfig
+
+        with pytest.raises(ValidationError):
+            DNNTrainingConfig.model_validate(
+                {
+                    "loss": {"type": "nnpu"},
+                    "pu_learning": pu_learning,
+                }
+            )
+
+    def test_nnpu_rejects_batch_size_one(self) -> None:
+        from pydantic import ValidationError
+
+        from tributo.training.dnn_trainer import DNNTrainingConfig
+
+        with pytest.raises(ValidationError, match="batch_size"):
+            DNNTrainingConfig.model_validate(
+                {
+                    "loss": {"type": "nnpu"},
+                    "pu_learning": {"enabled": True, "class_prior": 0.2},
+                    "training": {"batch_size": 1},
+                }
+            )
 
     def test_custom_resource_budget(self):
         from tributo.training.dnn_trainer import DNNTrainingConfig
@@ -49,6 +109,78 @@ class TestDNNResourceConfig:
 class TestDNNWorkerBudget:
     """worker 内预算校验（mock ray.train，无真实集群）。"""
 
+    def test_worker_rejects_multiple_workers_before_reading_data(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pytest.importorskip("torch")
+        from types import SimpleNamespace
+
+        import ray.train
+
+        from tributo.exceptions import JobConfigurationError
+        from tributo.training.dnn_trainer import dnn_train_loop_per_worker
+
+        monkeypatch.setattr(
+            ray.train,
+            "get_context",
+            lambda: SimpleNamespace(
+                get_world_size=lambda: 2,
+                get_world_rank=lambda: 0,
+            ),
+        )
+        monkeypatch.setattr(
+            ray.train,
+            "get_dataset_shard",
+            lambda key: pytest.fail("dataset must not be opened"),
+        )
+
+        with pytest.raises(JobConfigurationError, match="world_size=2"):
+            dnn_train_loop_per_worker(
+                {
+                    "features": [],
+                    "loss": {},
+                    "pu_learning": {},
+                    "training": {},
+                    "resource": {},
+                }
+            )
+
+    def test_worker_rejects_invalid_prior_before_reading_data(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pytest.importorskip("torch")
+        from types import SimpleNamespace
+
+        import ray.train
+
+        from tributo.exceptions import JobConfigurationError
+        from tributo.training.dnn_trainer import dnn_train_loop_per_worker
+
+        monkeypatch.setattr(
+            ray.train,
+            "get_context",
+            lambda: SimpleNamespace(
+                get_world_size=lambda: 1,
+                get_world_rank=lambda: 0,
+            ),
+        )
+        monkeypatch.setattr(
+            ray.train,
+            "get_dataset_shard",
+            lambda key: pytest.fail("dataset must not be opened"),
+        )
+
+        with pytest.raises(JobConfigurationError, match="range \\(0, 1\\)"):
+            dnn_train_loop_per_worker(
+                {
+                    "features": [],
+                    "loss": {"type": "nnpu"},
+                    "pu_learning": {"enabled": True, "class_prior": 2.0},
+                    "training": {},
+                    "resource": {},
+                }
+            )
+
     def _patch_ray(self, monkeypatch, schema=None, batch=None):
         """Mock ray.train context + shards; returns the fake dataset factory."""
         from types import SimpleNamespace
@@ -58,7 +190,10 @@ class TestDNNWorkerBudget:
         monkeypatch.setattr(
             ray.train,
             "get_context",
-            lambda: SimpleNamespace(get_world_rank=lambda: 0),
+            lambda: SimpleNamespace(
+                get_world_size=lambda: 1,
+                get_world_rank=lambda: 0,
+            ),
         )
 
         class FakeShard:
@@ -69,7 +204,12 @@ class TestDNNWorkerBudget:
                 if batch is not None:
                     yield batch
 
-        monkeypatch.setattr(ray.train, "get_dataset_shard", lambda key: FakeShard())
+        def get_dataset_shard(key):
+            if key == "val":
+                raise KeyError(key)
+            return FakeShard()
+
+        monkeypatch.setattr(ray.train, "get_dataset_shard", get_dataset_shard)
 
     def test_worker_budget_exceeded_fails_before_concat(self, monkeypatch):
         """train 收集超预算在 concat 前失败，算法上下文完整。"""
@@ -200,7 +340,10 @@ class TestDNNWorkerBudget:
         monkeypatch.setattr(
             ray.train,
             "get_context",
-            lambda: SimpleNamespace(get_world_rank=lambda: 0),
+            lambda: SimpleNamespace(
+                get_world_size=lambda: 1,
+                get_world_rank=lambda: 0,
+            ),
         )
 
         class FakeShard:
@@ -210,7 +353,12 @@ class TestDNNWorkerBudget:
             def iter_batches(self, **kwargs):
                 yield df
 
-        monkeypatch.setattr(ray.train, "get_dataset_shard", lambda key: FakeShard())
+        def get_dataset_shard(key):
+            if key == "val":
+                raise KeyError(key)
+            return FakeShard()
+
+        monkeypatch.setattr(ray.train, "get_dataset_shard", get_dataset_shard)
 
         dnn_train_loop_per_worker(
             {
@@ -227,3 +375,24 @@ class TestDNNWorkerBudget:
             }
         )
         assert reported["epoch"] == 1  # 训练完成且 metrics 已上报
+
+        reported.clear()
+        dnn_train_loop_per_worker(
+            {
+                "features": [
+                    {"name": "f0", "type": "dense"},
+                    {"name": "f1", "type": "dense"},
+                ],
+                "label_col": "label",
+                "model": {"dnn_hidden_units": [8]},
+                "loss": {"type": "nnpu"},
+                "pu_learning": {"enabled": True, "class_prior": 0.2},
+                "training": {"epochs": 1, "batch_size": 8},
+                "resource": {},
+            }
+        )
+        assert reported["epoch"] == 1
+        assert "train_loss" in reported
+        assert "train_optimization_objective" in reported
+        assert "train_observed_label_accuracy" in reported
+        assert "train_acc" not in reported
