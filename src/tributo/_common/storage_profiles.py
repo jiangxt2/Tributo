@@ -6,10 +6,12 @@ embedding credentials in model configs or manifests.
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass, field
 from typing import Any
 
+from tributo.exceptions import JobConfigurationError
 from tributo.util.annotations import PublicAPI
 
 
@@ -82,9 +84,20 @@ class StorageProfileResolver:
         env_key = f"TRIBUTO_STORAGE_PROFILE_{profile.upper()}"
         raw = os.environ.get(env_key)
         if raw is not None:
-            import json
-
-            return StorageProfile(**json.loads(raw))
+            try:
+                values = json.loads(raw)
+            except json.JSONDecodeError:
+                raise JobConfigurationError(
+                    f"{env_key} must contain valid JSON"
+                ) from None
+            if not isinstance(values, dict):
+                raise JobConfigurationError(f"{env_key} must contain a JSON object")
+            try:
+                return StorageProfile(**values)
+            except TypeError:
+                raise JobConfigurationError(
+                    f"{env_key} contains invalid storage profile fields"
+                ) from None
 
         # Fallback: use the name as the boto3 profile name.
         return StorageProfile(profile_name=profile)
