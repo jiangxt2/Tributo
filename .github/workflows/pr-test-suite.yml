@@ -393,12 +393,14 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install integration dependencies
-        run: uv sync --extra dev --extra training --extra model-export-torch --locked
+        run: >-
+          uv sync --extra dev --extra training --extra model-export-torch
+          --extra embeddings --locked
 
       - name: Verify optional integration dependencies
         run: |
           uv run --locked --no-sync python -c \
-            "import onnxmltools, onnxscript, torch, xgboost"
+            "import onnxmltools, onnxscript, torch, transformers, xgboost"
 
       - name: Run local trainer bundle integration tests
         run: |
@@ -409,6 +411,7 @@ jobs:
             tests/integration/test_export_vertical_slice.py \
             tests/integration/test_export_review_fixes.py \
             tests/integration/test_export_trainer_bundle_vertical_slice.py \
+            tests/training/exporters/test_trainer_bundle_contract.py \
             tests/training/test_pu_trainer.py \
             -o "addopts=" \
             -v --tb=short --timeout=600
