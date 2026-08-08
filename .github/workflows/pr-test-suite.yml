@@ -139,7 +139,7 @@ jobs:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
 
-      - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
+      - uses: astral-sh/setup-uv@696e4e1bf2f38a7ac027afc72ca9d963427412ae
 
       # uv.lock is the single source of truth for dependency and tool
       # versions; fail the PR when pyproject.toml changed without
@@ -182,7 +182,7 @@ jobs:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
 
-      - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
+      - uses: astral-sh/setup-uv@696e4e1bf2f38a7ac027afc72ca9d963427412ae
         with:
           python-version: "3.12"
 
@@ -223,7 +223,7 @@ jobs:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
 
-      - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
+      - uses: astral-sh/setup-uv@696e4e1bf2f38a7ac027afc72ca9d963427412ae
         with:
           python-version: "3.12"
 
@@ -267,7 +267,7 @@ jobs:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
 
-      - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
+      - uses: astral-sh/setup-uv@696e4e1bf2f38a7ac027afc72ca9d963427412ae
         with:
           python-version: "3.12"
 
@@ -297,7 +297,7 @@ jobs:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
 
-      - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
+      - uses: astral-sh/setup-uv@696e4e1bf2f38a7ac027afc72ca9d963427412ae
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -334,7 +334,7 @@ jobs:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
 
-      - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
+      - uses: astral-sh/setup-uv@696e4e1bf2f38a7ac027afc72ca9d963427412ae
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -363,7 +363,7 @@ jobs:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
 
-      - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
+      - uses: astral-sh/setup-uv@696e4e1bf2f38a7ac027afc72ca9d963427412ae
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -397,7 +397,7 @@ jobs:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
 
-      - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
+      - uses: astral-sh/setup-uv@696e4e1bf2f38a7ac027afc72ca9d963427412ae
         with:
           python-version: "3.12"
 
@@ -425,7 +425,7 @@ jobs:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
 
-      - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
+      - uses: astral-sh/setup-uv@696e4e1bf2f38a7ac027afc72ca9d963427412ae
         with:
           python-version: "3.12"
 
@@ -471,7 +471,7 @@ jobs:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
 
-      - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
+      - uses: astral-sh/setup-uv@696e4e1bf2f38a7ac027afc72ca9d963427412ae
         with:
           python-version: "3.12"
 
@@ -576,7 +576,7 @@ jobs:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
 
-      - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
+      - uses: astral-sh/setup-uv@696e4e1bf2f38a7ac027afc72ca9d963427412ae
         with:
           python-version: "3.12"
 
@@ -604,7 +604,7 @@ jobs:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
 
-      - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
+      - uses: astral-sh/setup-uv@696e4e1bf2f38a7ac027afc72ca9d963427412ae
         with:
           python-version: "3.12"
 
