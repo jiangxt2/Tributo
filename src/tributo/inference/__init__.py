@@ -13,9 +13,31 @@ Extend BasePredictor::
 
 from __future__ import annotations
 
+from tributo.inference.api import (
+    resolve_inference,
+    run_inference,
+    run_resolved_inference,
+)
 from tributo.inference.base import BasePredictor
 from tributo.inference.batch_predictor import XGBoostONNXPredictor
-from tributo.inference.job_runner import submit_inference_job
+from tributo.inference.contracts import (
+    ArtifactModelReference,
+    BundleModelReference,
+    InferenceRequest,
+    InferenceResult,
+    InputBindingSpec,
+    OutputBindingSpec,
+    ParquetResultSinkRequest,
+    RayExecutionPolicy,
+    RegistryModelReference,
+    TensorInputBinding,
+    TensorOutputBinding,
+)
+from tributo.inference.job_runner import (
+    submit_inference_job,
+    submit_inference_request,
+    submit_resolved_inference,
+)
 from tributo.inference.pipeline import (
     InferenceConfig,
     run_batch_inference,
@@ -24,9 +46,25 @@ from tributo.inference.pipeline import (
 
 __all__ = [
     "BasePredictor",
+    "ArtifactModelReference",
+    "BundleModelReference",
     "InferenceConfig",
+    "InferenceRequest",
+    "InferenceResult",
+    "InputBindingSpec",
+    "OutputBindingSpec",
+    "ParquetResultSinkRequest",
+    "RayExecutionPolicy",
+    "RegistryModelReference",
+    "TensorInputBinding",
+    "TensorOutputBinding",
+    "resolve_inference",
     "run_batch_inference",
+    "run_inference",
     "run_inference_from_json",
+    "run_resolved_inference",
     "XGBoostONNXPredictor",
     "submit_inference_job",
+    "submit_inference_request",
+    "submit_resolved_inference",
 ]
