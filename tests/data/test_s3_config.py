@@ -6,7 +6,7 @@ import sys
 
 import pytest
 
-from tributo._common.storage_profiles import StorageProfile
+from tributo._common.storage_profiles import StorageProfile, StorageProfileResolver
 from tributo.data._s3 import (
     resolve_endpoint,
     resolve_region,
@@ -16,6 +16,7 @@ from tributo.data._s3 import (
     to_pyarrow_s3_kwargs,
 )
 from tributo.data.base import S3Config
+from tributo.exceptions import JobConfigurationError
 
 
 def test_s3_configuration_reprs_hide_credentials_and_endpoint_userinfo() -> None:
@@ -38,6 +39,45 @@ def test_s3_configuration_reprs_hide_credentials_and_endpoint_userinfo() -> None
         assert "profile-key" not in rendered
         assert "profile-secret" not in rendered
         assert "password" not in rendered
+
+
+class TestStorageProfileResolver:
+    def test_resolves_json_object_from_named_environment_variable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(
+            "TRIBUTO_STORAGE_PROFILE_MODEL",
+            '{"endpoint":"http://minio:9000","region":"us-east-1"}',
+        )
+
+        profile = StorageProfileResolver().resolve("model")
+
+        assert profile.endpoint == "http://minio:9000"
+        assert profile.region == "us-east-1"
+
+    @pytest.mark.parametrize(
+        ("payload", "message"),
+        [
+            ("not-json-secret", "must contain valid JSON"),
+            ('["embedded-secret"]', "must contain a JSON object"),
+            ('{"unknown_field":"embedded-secret"}', "invalid storage profile fields"),
+        ],
+    )
+    def test_rejects_invalid_environment_payload_without_leaking_values(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        payload: str,
+        message: str,
+    ) -> None:
+        monkeypatch.setenv("TRIBUTO_STORAGE_PROFILE_MODEL", payload)
+
+        with pytest.raises(JobConfigurationError, match=message) as error:
+            StorageProfileResolver().resolve("model")
+
+        rendered = str(error.value)
+        assert "TRIBUTO_STORAGE_PROFILE_MODEL" in rendered
+        assert "embedded-secret" not in rendered
+        assert "not-json-secret" not in rendered
 
 
 class TestResolveEndpoint:
