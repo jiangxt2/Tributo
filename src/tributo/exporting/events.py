@@ -1,44 +1,50 @@
-"""Immutable operation events emitted after durable bundle publication."""
+"""Versioned operation events derived from committed bundle facts."""
 
 from __future__ import annotations
 
 import hashlib
 import json
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from tributo.util.annotations import PublicAPI
 
 
-def _event_id(bundle_id: str, manifest_sha256: str) -> str:
+def _event_id(
+    bundle_id: str,
+    canonical_uri: str,
+    manifest_sha256: str,
+) -> str:
     payload = json.dumps(
         {
             "schema_version": 1,
             "event_kind": "bundle.published",
             "bundle_id": bundle_id,
+            "canonical_uri": canonical_uri,
             "manifest_sha256": manifest_sha256,
         },
         sort_keys=True,
         separators=(",", ":"),
+        ensure_ascii=False,
     ).encode("utf-8")
-    return f"evt-{hashlib.sha256(payload).hexdigest()}"
+    return hashlib.sha256(payload).hexdigest()
 
 
 @PublicAPI(stability="beta")
 class OperationEvent(BaseModel):
-    """Versioned, storage-neutral notification of a committed bundle."""
+    """Immutable event envelope for a committed operation."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     schema_version: Literal[1] = 1
     event_kind: Literal["bundle.published"] = "bundle.published"
-    event_id: str = Field(..., min_length=1)
+    event_id: str = Field(pattern=r"^[0-9a-f]{64}$")
     occurred_at: datetime
     bundle_id: str = Field(..., min_length=1)
     canonical_uri: str = Field(..., min_length=1)
-    manifest_sha256: str = Field(..., min_length=64, max_length=64)
+    manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     source_kind: str | None = None
     correlation_ids: dict[str, str] = Field(default_factory=dict)
 
@@ -64,7 +70,11 @@ class OperationEvent(BaseModel):
 
     @model_validator(mode="after")
     def _validate_event_id(self) -> OperationEvent:
-        expected = _event_id(self.bundle_id, self.manifest_sha256)
+        expected = _event_id(
+            self.bundle_id,
+            self.canonical_uri,
+            self.manifest_sha256,
+        )
         if self.event_id != expected:
             raise ValueError("event_id does not match the immutable publication fact")
         return self
@@ -73,20 +83,34 @@ class OperationEvent(BaseModel):
     def bundle_published(
         cls,
         *,
-        occurred_at: datetime,
-        bundle_id: str,
-        canonical_uri: str,
+        manifest: dict[str, Any] | None = None,
         manifest_sha256: str,
+        occurred_at: datetime | None = None,
+        bundle_id: str | None = None,
+        canonical_uri: str | None = None,
         source_kind: str | None = None,
         correlation_ids: dict[str, str] | None = None,
     ) -> OperationEvent:
-        """Build the stable event for a committed manifest."""
+        """Derive a stable ``bundle.published`` event from committed facts."""
+        if manifest is not None:
+            bundle_id = str(manifest["bundle_id"])
+            canonical_uri = str(manifest["canonical_uri"])
+            occurred_at = datetime.fromisoformat(str(manifest["created_at"]))
+            source_info = manifest.get("source_info") or {}
+            source_kind = source_info.get("source_kind")
+        if occurred_at is None or bundle_id is None or canonical_uri is None:
+            raise ValueError(
+                "manifest or occurred_at, bundle_id, and canonical_uri are required"
+            )
         return cls(
-            event_id=_event_id(bundle_id, manifest_sha256),
+            event_id=_event_id(bundle_id, canonical_uri, manifest_sha256),
             occurred_at=occurred_at,
             bundle_id=bundle_id,
             canonical_uri=canonical_uri,
             manifest_sha256=manifest_sha256,
             source_kind=source_kind,
-            correlation_ids=correlation_ids or {},
+            correlation_ids=dict(correlation_ids or {}),
         )
+
+
+__all__ = ["OperationEvent"]

@@ -25,10 +25,17 @@ from tributo.exporting.registries import (
 )
 from tributo.util.annotations import PublicAPI
 
+IMPLICIT_NODE_PREFIX = "_implicit__"
+
+
+def is_implicit_node_id(node_id: str) -> bool:
+    """Return whether *node_id* belongs to a planner-generated node."""
+    return node_id.startswith(IMPLICIT_NODE_PREFIX)
+
 
 def _implicit_node_id(parent_name: str, fmt: str, opts_hash: str) -> str:
     """Generate a deterministic implicit node id."""
-    return f"_implicit__{parent_name}__{fmt}__{opts_hash[:8]}"
+    return f"{IMPLICIT_NODE_PREFIX}{parent_name}__{fmt}__{opts_hash[:8]}"
 
 
 def _options_hash(opts: dict[str, Any]) -> str:
