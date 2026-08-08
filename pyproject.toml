@@ -140,7 +140,8 @@ bge_small_zh = "tributo.embeddings.registry"
 
 [project.entry-points."tributo.exporters"]
 xgboost-onnx-v1 = "tributo.integrations.exporters.xgboost_onnx:XGBoostONNXExporter"
-xgboost-native-v1 = "tributo.integrations.exporters.xgboost_native:XGBoostNativeExporter"
+xgboost-ubj-v1 = "tributo.integrations.exporters.xgboost_native:XGBoostUBJExporter"
+xgboost-json-v1 = "tributo.integrations.exporters.xgboost_native:XGBoostJSONExporter"
 torch-safetensors-v1 = "tributo.integrations.exporters.torch_safetensors:TorchSafetensorsExporter"
 torch-onnx-v1 = "tributo.integrations.exporters.torch_onnx:TorchONNXExporter"
 torch-export-v1 = "tributo.integrations.exporters.torch_export:TorchExportExporter"
@@ -160,6 +161,14 @@ onnx-runtime-v1 = "tributo.integrations.validators.onnx_runtime:ONNXRuntimeValid
 onnx-runtime-v1 = "tributo.integrations.flavors.onnx_runtime:ONNXRuntimeFlavor"
 
 [project.entry-points."tributo.model_factories"]
+
+[project.entry-points."tributo.bundle_repositories"]
+local-v1 = "tributo.integrations.storage.bundle_repository:LocalBundleRepository"
+s3-v1 = "tributo.integrations.storage.bundle_repository:S3BundleRepository"
+
+[project.entry-points."tributo.bundle_alias_stores"]
+local-alias-v1 = "tributo.integrations.storage.bundle_repository:LocalBundleAliasStore"
+s3-alias-v1 = "tributo.integrations.storage.bundle_repository:S3BundleAliasStore"
 
 [project.entry-points."tributo.hooks"]
 mlflow-log-v1 = "tributo.integrations.hooks.mlflow_hook:MLflowPostPublishHook"

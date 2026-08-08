@@ -25,6 +25,11 @@ Discovery groups:
             [project.entry-points."tributo.models"]
             my_models = "my_package.embedding_models"
 
+    ``tributo.bundle_repositories`` / ``tributo.bundle_alias_stores``
+        Each entry point must point to a storage adapter class implementing
+        the corresponding versioned repository protocol. Adapter constructors
+        must accept the keyword argument ``storage_resolver``.
+
 Filtering:
     Set the ``TRIBUTO_PLUGINS`` environment variable to a comma-separated
     list of entry point names to load only those plugins.  If unset, all
@@ -36,7 +41,8 @@ from __future__ import annotations
 import logging
 import os
 from importlib.metadata import entry_points
-from typing import Any, TypeGuard
+from inspect import Parameter, signature
+from typing import Any, TypeGuard, cast
 
 from tributo.exporting.models import PluginLoadDiagnostic
 from tributo.exporting.protocols import (
@@ -244,7 +250,7 @@ def discover_exporter_plugins(
     """Discover third-party exporters registered as ``tributo.exporters``.
 
     Each entry point must point to a ``ModelExporter`` class with
-    ``api_version == 1``.  When *diagnostics* (a list) is provided,
+    ``api_version == 2``.  When *diagnostics* (a list) is provided,
     import/type/api-version/name failures are appended to it so they can
     be queried via ``ExportRegistry.diagnostics()``.
     """
@@ -275,7 +281,7 @@ def discover_exporter_plugins(
             )
             continue
 
-        if not (isinstance(cls, type) and _looks_like_exporter(cls)):
+        if not isinstance(cls, type):
             logger.warning(
                 "Exporter plugin %r is not a ModelExporter (got %r); skipping.",
                 ep.name,
@@ -289,9 +295,10 @@ def discover_exporter_plugins(
                 error_type=type(cls).__name__,
             )
             continue
-        if not _validate_api_version(cls, 1):
+        if not _validate_api_version(cls, 2):
             logger.warning(
-                "Exporter plugin %r has unsupported api_version (got %r, expected 1); skipping.",
+                "Exporter plugin %r has unsupported api_version "
+                "(got %r, expected 2); skipping.",
                 ep.name,
                 getattr(cls, "api_version", None),
             )
@@ -299,45 +306,64 @@ def discover_exporter_plugins(
                 diagnostics,
                 "tributo.exporters",
                 ep.name,
-                f"Unsupported api_version {getattr(cls, 'api_version', None)!r}",
+                "Unsupported ModelExporter api_version "
+                f"{getattr(cls, 'api_version', None)!r}; expected 2",
             )
             continue
-        if ep.name != cls.exporter_id:
+        missing_attrs = _missing_exporter_attributes(cls)
+        if missing_attrs:
             logger.warning(
-                "Exporter plugin entry-point name %r != exporter_id %r; skipping.",
+                "Exporter plugin %r is missing ModelExporter v2 attributes %s; "
+                "skipping.",
                 ep.name,
-                cls.exporter_id,
+                missing_attrs,
             )
             _record_diagnostic(
                 diagnostics,
                 "tributo.exporters",
                 ep.name,
-                f"Entry-point name {ep.name!r} != exporter_id {cls.exporter_id!r}",
+                "Missing ModelExporter v2 attributes: " + ", ".join(missing_attrs),
+            )
+            continue
+        exporter_cls = cast(type[ModelExporter], cls)
+        if ep.name != exporter_cls.exporter_id:
+            logger.warning(
+                "Exporter plugin entry-point name %r != exporter_id %r; skipping.",
+                ep.name,
+                exporter_cls.exporter_id,
+            )
+            _record_diagnostic(
+                diagnostics,
+                "tributo.exporters",
+                ep.name,
+                "Entry-point name "
+                f"{ep.name!r} != exporter_id {exporter_cls.exporter_id!r}",
             )
             continue
 
-        classes.append(cls)
+        classes.append(exporter_cls)
         logger.info("Discovered exporter plugin %r (%s)", ep.name, ep.value)
 
     return classes
 
 
-def _looks_like_exporter(cls: type) -> TypeGuard[type[ModelExporter]]:
-    """Check structural conformance to ModelExporter without issubclass.
-
-    Uses manual attribute checks because ``@runtime_checkable`` protocols
-    with ClassVar members don't support ``issubclass()``.
-    """
+def _missing_exporter_attributes(cls: type) -> tuple[str, ...]:
+    """Return missing structural attributes for the ModelExporter v2 contract."""
     required_attrs = (
         "api_version",
         "exporter_id",
         "priority",
         "output_format",
+        "output_flavor_id",
+        "source_kinds",
         "options_model",
         "validator_bindings",
         "mutates_source",
+        "upstream_requirements",
+        "supports",
+        "export",
     )
-    return all(hasattr(cls, a) for a in required_attrs)
+    return tuple(attr for attr in required_attrs if not hasattr(cls, attr))
 
 
 def _looks_like_source_provider(cls: type) -> TypeGuard[type[ExportSourceProvider]]:
@@ -354,7 +380,18 @@ def _looks_like_validator(cls: type) -> TypeGuard[type[ExportValidator]]:
 
 def _looks_like_flavor(cls: type) -> bool:
     """Check structural conformance to ModelFlavor without issubclass."""
-    return hasattr(cls, "flavor_id") and hasattr(cls, "api_version")
+    required_attrs = (
+        "api_version",
+        "flavor_id",
+        "supported_formats",
+        "batch_supported",
+        "serveable",
+        "security_mode",
+        "signature_required",
+        "required_dependencies",
+        "load",
+    )
+    return all(hasattr(cls, attr) for attr in required_attrs)
 
 
 def _looks_like_factory(cls: type) -> TypeGuard[type[ModelFactory]]:
@@ -622,4 +659,81 @@ def discover_model_factory_plugins() -> list[Any]:
         classes.append(cls)
         logger.info("Discovered model factory plugin %r (%s)", ep.name, ep.value)
 
+    return classes
+
+
+def discover_bundle_repository_plugins() -> list[Any]:
+    """Discover ``BundleRepository`` adapter classes with API version 1."""
+    return _discover_storage_adapter_plugins(
+        group="tributo.bundle_repositories",
+        identity_attribute="repository_id",
+        required_methods=("commit", "read_manifest", "materialize_artifact"),
+    )
+
+
+def discover_bundle_alias_store_plugins() -> list[Any]:
+    """Discover ``BundleAliasStore`` adapter classes with API version 1."""
+    return _discover_storage_adapter_plugins(
+        group="tributo.bundle_alias_stores",
+        identity_attribute="alias_store_id",
+        required_methods=("is_alias_uri", "resolve", "update"),
+    )
+
+
+def _accepts_storage_resolver(cls: type[Any]) -> bool:
+    """Return whether an adapter honors the API v1 constructor contract."""
+    try:
+        parameter = signature(cls).parameters.get("storage_resolver")
+    except (TypeError, ValueError):
+        return False
+    return parameter is not None and parameter.kind in {
+        Parameter.POSITIONAL_OR_KEYWORD,
+        Parameter.KEYWORD_ONLY,
+    }
+
+
+def _discover_storage_adapter_plugins(
+    *,
+    group: str,
+    identity_attribute: str,
+    required_methods: tuple[str, ...],
+) -> list[Any]:
+    classes: list[Any] = []
+    for ep in _iter_entry_points(group):
+        try:
+            cls = ep.load()
+        except Exception:
+            logger.warning(
+                "Failed to load storage adapter %r (%s)",
+                ep.name,
+                ep.value,
+                exc_info=True,
+            )
+            continue
+        adapter_id = getattr(cls, identity_attribute, None)
+        schemes = getattr(cls, "schemes", None)
+        if not (
+            isinstance(cls, type)
+            and _validate_api_version(cls, 1)
+            and isinstance(adapter_id, str)
+            and isinstance(schemes, tuple)
+            and bool(schemes)
+            and all(isinstance(scheme, str) for scheme in schemes)
+            and all(callable(getattr(cls, method, None)) for method in required_methods)
+            and _accepts_storage_resolver(cls)
+        ):
+            logger.warning(
+                "Storage adapter %r does not satisfy the API v1 contract; skipping.",
+                ep.name,
+            )
+            continue
+        if ep.name != adapter_id:
+            logger.warning(
+                "Storage adapter entry-point name %r != adapter id %r; skipping.",
+                ep.name,
+                adapter_id,
+            )
+            continue
+        classes.append(cls)
+        logger.info("Discovered storage adapter %r (%s)", ep.name, ep.value)
     return classes
