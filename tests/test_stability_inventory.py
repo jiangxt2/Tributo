@@ -115,15 +115,27 @@ STABILITY_MAP: dict[str, str] = {
     "tributo.integrations.exporters": "beta",
     "tributo.integrations.flavors": "beta",
     "tributo.integrations.flavors.onnx_runtime": "beta",
+    "tributo.integrations.flavors.xgboost_native": "alpha",
+    "tributo.integrations.model_importers.artifact": "alpha",
+    "tributo.integrations.model_importers.mlflow": "alpha",
     "tributo.integrations.validators": "beta",
     "tributo.integrations.sources": "beta",
     "tributo.integrations.storage": "beta",
     "tributo.integrations.hooks": "beta",
+    "tributo.integrations.sinks.parquet": "alpha",
     # Inference — beta
     "tributo.inference.base": "beta",
     "tributo.inference.batch_predictor": "beta",
     "tributo.inference.pipeline": "beta",
     "tributo.inference.job_runner": "beta",
+    "tributo.inference.api": "alpha",
+    "tributo.inference.bundle_predictor": "alpha",
+    "tributo.inference.contracts": "alpha",
+    "tributo.inference.executor": "alpha",
+    "tributo.inference.importers": "alpha",
+    "tributo.inference.input_resolver": "alpha",
+    "tributo.inference.post_training": "alpha",
+    "tributo.inference.resolver": "alpha",
     # Serving — beta
     "tributo.serving.serve_runner": "beta",
     "tributo.serving.model_deployment": "beta",
@@ -165,6 +177,7 @@ STABILITY_MAP: dict[str, str] = {
 #: list the exceptions here.  Keys are ``module.symbol``, values are the
 #: symbol-specific stability.
 _SYMBOL_OVERRIDES: dict[str, str] = {
+    "tributo.exceptions.ResultMaterializationError": "alpha",
     "tributo.exceptions.BundleExportError": "beta",
     "tributo.exceptions.AliasConflict": "beta",
     "tributo.exceptions.UnsupportedArtifactFormat": "beta",
@@ -175,6 +188,13 @@ _SYMBOL_OVERRIDES: dict[str, str] = {
     "tributo.exceptions.KafkaPoisonMessageError": "beta",
     "tributo.exceptions.ResourceBudgetExceededError": "beta",
     "tributo.exceptions.EngineNotAvailableError": "alpha",
+    "tributo.inference.job_runner.InferenceJobAttempt": "alpha",
+    "tributo.inference.job_runner.InferenceJobResult": "alpha",
+    "tributo.inference.job_runner.map_ray_job_status": "alpha",
+    "tributo.inference.job_runner.submit_inference_request": "alpha",
+    "tributo.inference.job_runner.submit_resolved_inference": "alpha",
+    "tributo.inference.job_runner.submit_inference_request_with_retry": "alpha",
+    "tributo.inference.job_runner.wait_for_job": "alpha",
 }
 
 
