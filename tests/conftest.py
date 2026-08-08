@@ -19,7 +19,8 @@ from tests.support.object_storage import S3InfrastructureUnavailable, S3Service
 _TESTS_DIR = Path(__file__).parent
 
 _OPTIONAL_IMPORTS = {
-    "integrations": ["mlflow"],
+    "integrations/test_e2e_mlflow.py": ["mlflow"],
+    "integrations/test_e2e_tune.py": ["mlflow"],
     "integrations/test_e2e_streaming.py": ["httpx"],
     "serving/test_streaming_http.py": ["httpx"],
     "serving/test_streaming_integration.py": ["httpx"],
