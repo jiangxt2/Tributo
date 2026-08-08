@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import warnings
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -23,6 +24,7 @@ from pydantic import (
     model_validator,
 )
 
+from tributo.exporting.formats import validate_format_id
 from tributo.util.annotations import DeveloperAPI, PublicAPI
 
 if TYPE_CHECKING:
@@ -138,10 +140,56 @@ class ExportTarget(BaseModel):
     options: dict[str, Any] = Field(default_factory=dict)
     validation: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalise_legacy_xgboost_target(cls, value: Any) -> Any:
+        """Map the former format-plus-option selector to one format id.
+
+        The compatibility rule runs before Planner candidate selection, so
+        every downstream component sees the same canonical contract.  An
+        explicitly selected third-party exporter is left untouched because
+        Tributo cannot reinterpret another plugin's private compatibility
+        surface.
+        """
+        if not isinstance(value, dict) or value.get("format") != "xgboost":
+            return value
+        exporter_id = value.get("exporter_id")
+        if exporter_id not in (None, "xgboost-native-v1"):
+            return value
+
+        options = dict(value.get("options") or {})
+        legacy_format = options.pop("fmt", "ubj")
+        replacements = {
+            "ubj": ("ubj", "xgboost-ubj-v1"),
+            "json": ("xgboost-json", "xgboost-json-v1"),
+        }
+        if not isinstance(legacy_format, str) or legacy_format not in replacements:
+            raise ValueError(
+                "legacy XGBoost target option 'fmt' must be 'ubj' or 'json'"
+            )
+
+        canonical_format, canonical_exporter = replacements[legacy_format]
+        normalised = dict(value)
+        normalised["format"] = canonical_format
+        normalised["exporter_id"] = canonical_exporter
+        normalised["options"] = options
+        warnings.warn(
+            "ExportTarget(format='xgboost', options={'fmt': ...}) is deprecated; "
+            f"use format={canonical_format!r} with no secondary format selector",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return normalised
+
     @field_validator("name")
     @classmethod
     def _check_name(cls, v: str) -> str:
         return _validate_safe_name(v, "target name")
+
+    @field_validator("format")
+    @classmethod
+    def _check_format(cls, v: str) -> str:
+        return validate_format_id(v)
 
 
 @PublicAPI(stability="beta")
@@ -462,6 +510,11 @@ class ArtifactDraft(BaseModel):
     def _check_name(cls, v: str) -> str:
         return _validate_safe_name(v, "artifact name")
 
+    @field_validator("format")
+    @classmethod
+    def _check_format(cls, v: str) -> str:
+        return validate_format_id(v)
+
     @model_validator(mode="after")
     def _check_entrypoint(self) -> ArtifactDraft:
         paths = {f.relative_path for f in self.files}
@@ -498,6 +551,11 @@ class LogicalArtifact(BaseModel):
     @classmethod
     def _check_name(cls, v: str) -> str:
         return _validate_safe_name(v, "artifact name")
+
+    @field_validator("format")
+    @classmethod
+    def _check_format(cls, v: str) -> str:
+        return validate_format_id(v)
 
     @classmethod
     def compute_tree_digest(cls, files: tuple[ArtifactFile, ...]) -> str:
@@ -651,10 +709,12 @@ class PublishedBundle:
     def __init__(
         self,
         result: BundleResult,
+        manifest_bytes: bytes,
         local_bundle_dir: Path,
         local_dir_ephemeral: bool = True,
     ) -> None:
         self.result = result
+        self.manifest_bytes = manifest_bytes
         self.local_bundle_dir = local_bundle_dir
         self.local_dir_ephemeral = local_dir_ephemeral
 
@@ -710,6 +770,11 @@ class UpstreamRequirement(BaseModel):
     name: str = Field(..., min_length=1)
     format: str = Field(..., min_length=1)
     options: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("format")
+    @classmethod
+    def _check_format(cls, v: str) -> str:
+        return validate_format_id(v)
 
 
 # ── Planning models ──────────────────────────────────────────────────────────

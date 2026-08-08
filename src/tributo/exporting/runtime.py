@@ -152,6 +152,10 @@ class BundleModelFlavor(Protocol):
 
     - ``api_version``: 1 for the first-generation protocol.
     - ``flavor_id``: Stable routing key (e.g. ``"onnx-runtime-v1"``).
+    - ``supported_formats``: Canonical artifact formats accepted by the
+      loader.  Capability discovery validates exporter/flavor agreement.
+    - ``batch_supported`` / ``serveable``: Explicit executable capabilities;
+      a format name alone never implies either one.
     - ``security_mode``: One of the ``SECURITY_MODE_*`` constants.
       Anything other than ``safe`` requires ``unsafe=True``.
     - ``signature_required``: ``True`` when the flavor needs a non-empty
@@ -162,6 +166,9 @@ class BundleModelFlavor(Protocol):
 
     api_version: ClassVar[int]
     flavor_id: ClassVar[str]
+    supported_formats: ClassVar[tuple[str, ...]]
+    batch_supported: ClassVar[bool]
+    serveable: ClassVar[bool]
     security_mode: ClassVar[str]
     signature_required: ClassVar[bool]
     required_dependencies: ClassVar[tuple[str, ...]]
@@ -217,8 +224,11 @@ class FlavorSupportEntry:
 #: Frozen artifact capability matrix. ONNX Runtime remains the selected
 #: primary artifact for O1, DNN, PU, and XGBoost. Native XGBoost is an
 #: additional explicit executable flavor. Other first-party export flavors
-#: are readable Bundle artifacts, but fail closed at executable gates until a
-#: matching loader is implemented.
+#: are readable Bundle artifacts, but fail closed at executable gates until
+#: a matching loader is implemented. Other flavor IDs produced by exporters
+#: (``safetensors-v1``, ``torch-export-v1``, ``xgboost-ubj-v1``,
+#: ``xgboost-json-v1``, ``hf-onnx-v1``, ``onnx-int8-v1``) are never loaded
+#: by guessing.
 FLAVOR_SUPPORT_MATRIX: tuple[FlavorSupportEntry, ...] = (
     FlavorSupportEntry(
         flavor_id="onnx-runtime-v1",
@@ -712,10 +722,9 @@ def _build_flavor_registry() -> FlavorRegistry:
     an entry-point exposing the same id (from an editable install) is
     skipped instead of tripping the registry's duplicate-is-conflict rule.
     """
-    from tributo.integrations.flavors.onnx_runtime import ONNXRuntimeFlavor
-    from tributo.integrations.flavors.xgboost_native import XGBoostNativeFlavor
+    from tributo._bootstrap import first_party_model_flavors
 
-    builtin_flavors = (ONNXRuntimeFlavor, XGBoostNativeFlavor)
+    builtin_flavors = first_party_model_flavors()
     registry = FlavorRegistry()
     for cls in builtin_flavors:
         registry.register(cls)

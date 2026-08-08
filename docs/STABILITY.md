@@ -25,7 +25,7 @@ Last updated: 2026-08-09.
 | `tributo.job` — `TributoClient`, `RayJob` | `stable` | Primary user-facing API |
 | `tributo.exceptions` — core exceptions | `stable` | ``TributoError`` and 16 common subtypes |
 | `tributo.exceptions` — `ResultMaterializationError` | `alpha` | Credential-safe lazy inference action failure |
-| `tributo.exceptions` — Bundle/Plugin exceptions | `beta` | ``BundleExportError``, ``AliasConflict``, ``UnsupportedArtifactFormat``, ``PostPublishCallbackError``, ``PluginLoadIssue`` |
+| `tributo.exceptions` — Bundle/Plugin exceptions | `beta` | ``BundleExportError``, ``BundleCommitBusyError``, ``AliasConflict``, ``UnsupportedArtifactFormat``, ``PostPublishCallbackError``, ``PluginLoadIssue`` |
 | `tributo.exceptions` — Streaming exceptions | `beta` | ``StreamSourceError``, ``KafkaCommitError``, ``KafkaPoisonMessageError`` |
 | `tributo.exceptions` — `EngineNotAvailableError` | `alpha` | Candidate bounded-ingestion error |
 
@@ -108,12 +108,15 @@ from the legacy setup-only propagation rule.
 | `tributo.exporting.publisher` | `beta` | Bundle publisher |
 | `tributo.exporting.validators` | `beta` | Artifact validator runner |
 | `tributo.exporting.registries` | `beta` | Exporter/validator registries |
-| `tributo.exporting.options` | `beta` | Export option models |
+| `tributo.exporting.options` | `beta` | Compatibility re-exports; schemas are owned by integration exporters |
 | `tributo.exporting.records` | `beta` | Export record types; `PublicationAttempt` is read-only legacy compatibility and receives no new writes |
 | `tributo.exporting.gc` | `beta` | Bundle GC |
 | `tributo.exporting.events` | `beta` | Immutable publication event contract |
 | `tributo.exporting.hooks` | `beta` | Adapter and committed-artifact access contracts |
 | `tributo.exporting.dispatch` | `beta` | Inline Hook dispatch policy |
+| `tributo.exporting.capabilities` | `beta` | Exporter/Flavor-derived capability declarations |
+| `tributo.exporting.repository` | `beta` | Bundle repository and alias store ports |
+| `tributo.exporting.runtime` | `beta` | Bundle model runtime and Flavor protocol |
 | `tributo.exporting.conftest` | `developer` | Test fixtures |
 
 ### Integrations (tributo.integrations.*)
