@@ -171,7 +171,7 @@ class TestExporterSupports:
         )
 
         cls = XGBoostONNXExporter
-        assert cls.api_version == 1
+        assert cls.api_version == 2
         assert cls.exporter_id == "xgboost-onnx-v1"
         assert cls.output_format == "onnx"
         assert cls.priority == 100
@@ -214,7 +214,6 @@ class TestExportPipelineWithRealExporter:
                 result = service.export_bundle(
                     source=source,
                     config=config,
-                    provider=provider,
                 )
 
             assert result.status in ("succeeded", "partial")
@@ -269,7 +268,6 @@ class TestExportPipelineWithRealExporter:
                 result = BundleExportService().export_bundle(
                     source=source,
                     config=config,
-                    provider=provider,
                 )
 
             assert result.status == "succeeded"
