@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from tributo.exporting.conftest import ExportSourceProviderConformanceTest
 from tributo.exporting.models import CheckpointField, ExportCheckpointV1
+from tributo.integrations.sources.huggingface import HuggingFaceSourceProvider
+from tributo.integrations.sources.ray_dnn import RayDnnSourceProvider
+from tributo.integrations.sources.ray_pu import RayPUSourceProvider
+from tributo.integrations.sources.ray_xgboost import RayXGBoostSourceProvider
 from tributo.training.base import BaseTrainer
 from tributo.training.dnn_trainer import build_export_checkpoint_config
 
@@ -194,3 +201,80 @@ class TestTorchSourceValidation:
         ):
             with RayDnnSourceProvider().open_source(str(checkpoint_dir)):
                 pass
+
+
+class _TemporaryProviderResult:
+    """Keep a generated checkpoint alive for one conformance test instance."""
+
+    _temporary_directory: tempfile.TemporaryDirectory[str]
+
+    def checkpoint_dir(self, name: str) -> Path:
+        self._temporary_directory = tempfile.TemporaryDirectory(
+            prefix=f"tributo-{name}-conformance-"
+        )
+        return Path(self._temporary_directory.name) / name
+
+
+class TestRayXGBoostSourceProviderConformance(
+    _TemporaryProviderResult,
+    ExportSourceProviderConformanceTest,
+):
+    provider_cls = RayXGBoostSourceProvider
+
+    def make_result(self) -> str:
+        np = pytest.importorskip("numpy")
+        xgb = pytest.importorskip("xgboost")
+        matrix = xgb.DMatrix(
+            np.array([[0.0], [1.0]], dtype=np.float32),
+            label=np.array([0, 1]),
+        )
+        booster = xgb.train(
+            {"objective": "binary:logistic", "nthread": 1},
+            matrix,
+            num_boost_round=1,
+        )
+        checkpoint = self.checkpoint_dir("xgboost")
+        checkpoint.mkdir()
+        booster.save_model(str(checkpoint / "model.json"))
+        return str(checkpoint)
+
+
+class TestRayDnnSourceProviderConformance(
+    _TemporaryProviderResult,
+    ExportSourceProviderConformanceTest,
+):
+    provider_cls = RayDnnSourceProvider
+
+    def make_result(self) -> str:
+        checkpoint = self.checkpoint_dir("dnn")
+        _write_dnn_checkpoint(checkpoint, trainer_type="dnn")
+        return str(checkpoint)
+
+
+class TestRayPUSourceProviderConformance(
+    _TemporaryProviderResult,
+    ExportSourceProviderConformanceTest,
+):
+    provider_cls = RayPUSourceProvider
+
+    def make_result(self) -> str:
+        checkpoint = self.checkpoint_dir("pu")
+        _write_dnn_checkpoint(checkpoint, trainer_type="pu")
+        return str(checkpoint)
+
+
+class _FakeHuggingFaceConfig:
+    def to_dict(self) -> dict[str, str]:
+        return {"model_type": "test-transformer"}
+
+
+class TestHuggingFaceSourceProviderConformance(ExportSourceProviderConformanceTest):
+    provider_cls = HuggingFaceSourceProvider
+
+    def make_result(self) -> tuple[SimpleNamespace, object]:
+        pytest.importorskip("transformers")
+        model = SimpleNamespace(
+            name_or_path="test-model",
+            config=_FakeHuggingFaceConfig(),
+        )
+        return model, object()

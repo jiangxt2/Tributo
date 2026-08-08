@@ -47,12 +47,12 @@ def xgb_checkpoint(tmp_path_factory):
 
 
 def _export_config(bundle_uri, request_id, **kw):
-    """Minimal two-target bundle config (native + onnx)."""
+    """Minimal two-target bundle config (UBJ + ONNX)."""
     return BundleOutputConfig(
         bundle_uri=str(bundle_uri),
         request_id=request_id,
         targets=[
-            ExportTarget(name="native", format="xgboost"),
+            ExportTarget(name="native", format="ubj"),
             ExportTarget(name="onnx-model", format="onnx"),
         ],
         **kw,
@@ -64,7 +64,69 @@ def _export_once(ckpt, config, provider):
 
     service = BundleExportService()
     with provider.open_source(ckpt) as src:
-        return service.export_bundle(source=src, config=config, provider=provider)
+        return service.export_bundle(source=src, config=config)
+
+
+class TestMultiFormatExport:
+    def test_onnx_and_ubj_share_one_bundle(self, xgb_checkpoint, tmp_path):
+        """One target list exports two independently selectable formats."""
+        from tributo.exporting.bundle_reader import BundleReader
+        from tributo.integrations.sources.ray_xgboost import RayXGBoostSourceProvider
+
+        result = _export_once(
+            xgb_checkpoint,
+            _export_config(tmp_path / "store", "req-multi-format"),
+            RayXGBoostSourceProvider(),
+        )
+        reader = BundleReader()
+        manifest = reader.read_manifest(result.canonical_uri)
+
+        assert {artifact.name: artifact.format for artifact in manifest.artifacts} == {
+            "native": "ubj",
+            "onnx-model": "onnx",
+        }
+        with reader.open_artifact(
+            result.canonical_uri, artifact_name="native"
+        ) as resolved:
+            booster = xgb.Booster()
+            booster.load_model(str(resolved.entrypoint_path))
+            assert resolved.entrypoint_path.suffix == ".ubj"
+            assert booster.num_boosted_rounds() == 3
+
+    def test_native_formats_are_independent_targets(self, xgb_checkpoint, tmp_path):
+        """UBJ and XGBoost JSON use the same target configuration shape."""
+        from tributo.exporting.bundle_reader import BundleReader
+        from tributo.integrations.sources.ray_xgboost import RayXGBoostSourceProvider
+
+        config = BundleOutputConfig(
+            bundle_uri=str(tmp_path / "store"),
+            request_id="req-native-formats",
+            targets=[
+                ExportTarget(name="binary", format="ubj"),
+                ExportTarget(name="json", format="xgboost-json"),
+            ],
+        )
+        result = _export_once(
+            xgb_checkpoint,
+            config,
+            RayXGBoostSourceProvider(),
+        )
+        reader = BundleReader()
+        manifest = reader.read_manifest(result.canonical_uri)
+
+        assert {artifact.name: artifact.format for artifact in manifest.artifacts} == {
+            "binary": "ubj",
+            "json": "xgboost-json",
+        }
+        for artifact_name, suffix in (("binary", ".ubj"), ("json", ".json")):
+            with reader.open_artifact(
+                result.canonical_uri,
+                artifact_name=artifact_name,
+            ) as resolved:
+                booster = xgb.Booster()
+                booster.load_model(str(resolved.entrypoint_path))
+                assert resolved.entrypoint_path.suffix == suffix
+                assert booster.num_boosted_rounds() == 3
 
 
 # ── Idempotency ───────────────────────────────────────────────────────────────
@@ -133,7 +195,9 @@ class TestOnnxDeterminism:
 
     def test_manifest_logically_equal_ignores_advisory_fields(self):
         """S3 idempotency falls back to a logical comparison."""
-        from tributo.exporting.publisher import _manifest_logically_equal
+        from tributo.integrations.storage.bundle_repository import (
+            _manifest_logically_equal,
+        )
 
         base = {
             "bundle_id": "bundle-abc",
@@ -185,7 +249,6 @@ class TestImplicitNodesAndRoles:
         from tributo.exporting.planner import ExportPlanner
         from tributo.exporting.registries import (
             ExportRegistry,
-            SourceProviderRegistry,
             ValidatorRegistry,
         )
         from tributo.exporting.service import _load_entry_point_plugins
@@ -194,13 +257,13 @@ class TestImplicitNodesAndRoles:
         validators = ValidatorRegistry()
         validators.register(StructureValidator)
         registry = ExportRegistry()
-        _load_entry_point_plugins(registry, SourceProviderRegistry(), validators)
+        _load_entry_point_plugins(registry, validators)
 
         config = BundleOutputConfig(
             bundle_uri=str(tmp_path / "store"),
             request_id="role-implicit",
             targets=[
-                ExportTarget(name="native", format="xgboost"),
+                ExportTarget(name="native", format="ubj"),
                 ExportTarget(name="onnx-model", format="onnx"),
             ],
             roles={"serve": "model"},
@@ -219,7 +282,7 @@ class TestImplicitNodesAndRoles:
 
 class TestGcSafety:
     def test_looks_like_bundle_id_matches_real_format(self):
-        from tributo.exporting.gc import _looks_like_bundle_id
+        from tributo.integrations.storage.gc import _looks_like_bundle_id
 
         assert _looks_like_bundle_id("bundle-" + "a" * 32)
         assert not _looks_like_bundle_id("bundle-" + "a" * 31)  # too short
