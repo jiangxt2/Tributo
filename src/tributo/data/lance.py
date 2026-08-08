@@ -54,11 +54,7 @@ class LanceDataConnector(DataConnector):
     """
 
     def read(self, **kwargs: Any) -> ray.data.Dataset:
-        """Read a Lance dataset and return a Ray Dataset.
-
-        Note:
-            Currently loads the entire dataset into driver memory, so it
-            is unsuitable for datasets larger than available RAM.
+        """Delegate Lance reads to the native Ray Data Binding.
 
         Args:
             **kwargs: ``LanceReadConfig`` fields.
@@ -66,22 +62,20 @@ class LanceDataConnector(DataConnector):
         Returns:
             A ``ray.data.Dataset``.
         """
-        lance = _import_lance()
-
         cfg = LanceReadConfig(**kwargs)
+        from tributo.data._compat_read import open_ray_compat
+        from tributo.data.source_config import ProviderSourceConfig
 
-        from tributo.data._s3 import to_lance_storage_options
-
-        storage_options = to_lance_storage_options(cfg.s3)
-        ds = lance.dataset(cfg.path, storage_options=storage_options)
-        arrow_table = ds.to_table()
-        logger.info(
-            "Lance dataset '%s' read: %d rows, %d columns",
-            cfg.path,
-            arrow_table.num_rows,
-            arrow_table.num_columns,
+        options: dict[str, Any] = {}
+        if cfg.s3 is not None:
+            options["s3"] = cfg.s3.model_dump(exclude_none=True)
+        return open_ray_compat(
+            ProviderSourceConfig(
+                provider="tributo.lance",
+                uri=cfg.path,
+                options=options,
+            )
         )
-        return ray.data.from_arrow(arrow_table)
 
     def write(self, dataset: ray.data.Dataset, **kwargs: Any) -> None:
         """Write a Lance dataset.

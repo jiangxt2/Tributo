@@ -64,43 +64,23 @@ class TestParquetDataConnector:
 
 
 class TestParquetS3Glob:
-    """ParquetDataConnector S3 glob 模式测试。"""
+    """The compatibility connector delegates glob semantics to Ray Data."""
 
-    @patch("tributo.data.parquet.pafs.S3FileSystem")
-    def test_glob_pattern(self, mock_s3fs_cls):
-        """Glob 模式应匹配文件列表并传递给 ray.data.read_parquet。"""
-        mock_fs = MagicMock()
-        mock_s3fs_cls.return_value = mock_fs
+    @patch("tributo.data._compat_read.open_ingestion")
+    def test_glob_pattern_is_preserved(self, mock_open):
+        result = MagicMock()
+        result.handle.dataset = object()
+        from tributo.data.ingestion import RayDataHandle
 
-        file_info_1 = MagicMock()
-        file_info_1.is_file = True
-        file_info_1.path = "bucket/data/part-001.parquet"
-        file_info_2 = MagicMock()
-        file_info_2.is_file = True
-        file_info_2.path = "bucket/data/part-002.parquet"
-        file_info_3 = MagicMock()
-        file_info_3.is_file = False
-        file_info_3.path = "bucket/data/_temporary"
-        mock_fs.get_file_info.return_value = [file_info_1, file_info_2, file_info_3]
-
-        with patch("ray.data.read_parquet") as mock_read:
+        result.handle = RayDataHandle(result.handle.dataset)
+        mock_open.return_value = result
+        try:
             connector = ParquetDataConnector()
             connector.read(path="s3://bucket/data/*.parquet")
-
-        args, _ = mock_read.call_args
-        assert isinstance(args[0], list)
-        assert len(args[0]) == 2
-
-    @patch("tributo.data.parquet.pafs.S3FileSystem")
-    def test_glob_no_match_raises(self, mock_s3fs_cls):
-        """Glob 无匹配时应抛出 FileNotFoundError。"""
-        mock_fs = MagicMock()
-        mock_s3fs_cls.return_value = mock_fs
-        mock_fs.get_file_info.return_value = []
-
-        connector = ParquetDataConnector()
-        with pytest.raises(FileNotFoundError, match="No files matched"):
-            connector.read(path="s3://bucket/data/*.parquet")
+        finally:
+            result.close.assert_called_once()
+        request = mock_open.call_args.args[0]
+        assert request.source.path == "s3://bucket/data/*.parquet"
 
 
 class TestBackwardCompatibility:

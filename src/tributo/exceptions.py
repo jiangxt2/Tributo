@@ -63,6 +63,11 @@ class DataSourceError(TributoError):
     """
 
 
+@PublicAPI(stability="alpha")
+class EngineNotAvailableError(DataSourceError):
+    """Requested ingestion engine binding is missing or incompatible."""
+
+
 # ── Inference exceptions (compatible with inference-protocol §5.5) ────────
 
 

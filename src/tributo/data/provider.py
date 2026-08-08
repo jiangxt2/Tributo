@@ -1,19 +1,19 @@
-"""Stable DataSourceProvider contract for bounded data reads.
+"""Logical DataSourceProvider contract for bounded ingestion.
 
-The stable runtime boundary (ADR 001)::
+The canonical runtime boundary (ADR 001)::
 
     ProviderRegistry.resolve(source) -> DataSourceProvider
     provider.normalize(source) -> ResolvedSource
-    provider.open(resolved) -> DatasetHandle
-    DatasetHandle.to_ray_dataset() -> ray.data.Dataset
-    DatasetHandle.close() -> None  # idempotent
+    provider.plan(resolved) -> LogicalScanPlan
+    IngestionGateway.open(request) -> IngestionOpenResult
+    EngineBinding -> Ray Data / Daft / installed connector
 
 ``ResolvedSource`` separates *identity* options (everything that changes the
 data — columns, snapshot, SQL digest, partition/filter) from *runtime*
 options (connection credentials etc.). Credentials never appear in ``repr``,
-logs, errors, ``DatasetRef`` or benchmark output.  The prototype types
-(``SourcePlan``, ``TransformCompiler``, ``SourceRouter``) live in
-``data/transform_compiler.py`` and are not part of this contract.
+logs, errors, ``DatasetRef`` or benchmark output. ``open()`` and
+``DatasetHandle`` remain conversion-only Ray compatibility surfaces; built-in
+providers no longer own an independent reader implementation.
 """
 
 from __future__ import annotations
@@ -32,10 +32,13 @@ from tributo.data.refs import (
     compute_ref_id,
 )
 from tributo.data.source_config import CanonicalSourceInput
+from tributo.exceptions import JobConfigurationError
 from tributo.util.annotations import PublicAPI
 
 if TYPE_CHECKING:
     import ray.data
+
+    from tributo.data.scan_plan import LogicalScanPlan
 
 logger = logging.getLogger(__name__)
 
@@ -132,12 +135,18 @@ class DataSourceProvider(ABC):
     """Logical data-source provider (stable contract).
 
     Subclasses declare a unique ``provider_id`` and optional default
-    ``aliases``; conflict checks and alias resolution live in the
-    ProviderRegistry, not here.
+    ``aliases``. ``projection_option_name`` identifies the provider option
+    used by the consumer-neutral projection helper. ``relative_uri_is_path``
+    declares whether a scheme-less ``ProviderSourceConfig.uri`` is a local
+    path resolved against the configured project root. Conflict checks,
+    metadata validation, and alias resolution live in the ProviderRegistry,
+    not here.
     """
 
     provider_id: ClassVar[str] = ""
     aliases: ClassVar[frozenset[str]] = frozenset()
+    projection_option_name: ClassVar[str | None] = None
+    relative_uri_is_path: ClassVar[bool] = False
 
     @abstractmethod
     def normalize(self, source: CanonicalSourceInput) -> ResolvedSource:
@@ -148,14 +157,27 @@ class DataSourceProvider(ABC):
         matches theirs.
         """
 
-    @abstractmethod
     def open(self, resolved: ResolvedSource) -> DatasetHandle:
-        """Open a bounded read over *resolved*.
+        """Open the legacy Ray-only compatibility path over *resolved*.
 
-        Returns a handle whose ``to_ray_dataset()`` executes the read and
-        decouples the returned Dataset from provider resources, so callers
-        can close the handle immediately afterwards.
+        Plan-only providers need not implement this method.  The default
+        fails explicitly so the ingestion path can never fall back to an
+        obsolete in-process Reader.
         """
+        raise JobConfigurationError(
+            f"Provider {self.provider_id!r} has no legacy Ray-only reader; "
+            "use IngestionGateway with an installed engine Binding"
+        )
+
+    def plan(self, resolved: ResolvedSource) -> LogicalScanPlan:
+        """Build an engine-neutral scan plan for canonical ingestion.
+
+        Providers opt in by overriding this method. The default fails
+        explicitly and never falls back to a legacy Reader.
+        """
+        raise JobConfigurationError(
+            f"Provider {self.provider_id!r} does not support planned ingestion"
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -82,6 +82,8 @@ version and the Manifest schema version.
 | `ExportSourceProvider` (renamed from `SourceProvider` in E1) | 1 | `exporting/protocols.py` |
 | `ModelFactory` | 1 | `exporting/protocols.py` |
 | `ModelFlavor` | 1 | `integrations/` |
+| Bounded-ingestion Provider descriptor | 1 | `data/provider_plugins.py` |
+| Bounded-ingestion Binding descriptor | 1 | `data/binding_plugins.py` |
 | Trainer entry points | N/A (not versioned) | `plugin.py` |
 | Connector entry points | N/A (not versioned) | `plugin.py` |
 
@@ -95,13 +97,19 @@ version and the Manifest schema version.
 - The framework MAY support multiple `api_version` values concurrently during
   a transition period (e.g., accept both v1 and v2 plugins). This requires
   explicit code — the default is single-version.
-- Plugin authors declare compatibility range via `min_tributo_version` and
-  `max_tributo_version` (optional, for future PL1+PL2). Current plugins do
-  not declare this.
+- Bounded-ingestion Provider and Binding descriptors declare an exact plugin
+  distribution version plus a Tributo version specifier. Discovery rejects a
+  descriptor when either installed version disagrees, isolates the bad entry
+  point, and never replaces an already registered route.
+- Other plugin authors declare compatibility range via `min_tributo_version`
+  and `max_tributo_version` (optional, for future PL1+PL2). Current non-data
+  plugins do not declare this.
 
 ### Plugin Lifecycle (Current — Pre-PL1+PL2)
 
-- Discovery: `importlib.metadata.entry_points()` at import time.
+- Discovery: independent `importlib.metadata.entry_points()` loaders. Bounded
+  ingestion discovers Provider and Binding descriptors lazily on first use;
+  older plugin groups retain their existing import-time behavior.
 - Validation: Structural check (`api_version`, required classvars), then
   `api_version == expected`.
 - Filtering: `TRIBUTO_PLUGINS` env var for selective loading.
@@ -121,6 +129,9 @@ version and the Manifest schema version.
 
 - **Ray**: Pinned to exact version (`==2.55.1`). Ray's own SemVer does not
   guarantee Train/Data/Serve API stability across minor versions.
+- **PyIceberg**: Constrained to `>=0.11.1,<0.12.0`. Built-in Iceberg bindings
+  select `PyArrowFileIO`; named profiles are materialized into its public S3
+  properties and alternative FileIO implementations fail closed.
 - **Core dependencies** (pydantic, click): Lower-bound only (`>=X.Y.Z`),
   trusting their SemVer.
 - **Optional dependencies** (onnxruntime, xgboost, torch, transformers):
@@ -129,5 +140,16 @@ version and the Manifest schema version.
   any dependency change.
 - **Transitive-only dependencies** (PyMySQL, ConnectorX): Declared as optional
   extras; imported at runtime with `ModuleNotFoundError` → install hint.
+
+### Data dependency upgrade gates
+
+- Ray 2.55.1 still accepts Iceberg `row_filter` and `selected_fields`, but both
+  reader arguments are deprecated. A Ray upgrade must first move filtering and
+  projection to the replacement public Dataset APIs, then rerun local/S3,
+  empty-table, and dual-engine Iceberg Conformance before widening the pin.
+- A PyIceberg range change must rerun named-profile, session-token, path-style,
+  FileIO rejection, empty-table, and MinIO Iceberg tests. Tributo must not
+  support a second FileIO by inheriting backend-specific string semantics;
+  that requires a separately declared and tested Connector/Binding.
 
 <!-- END -->

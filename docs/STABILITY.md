@@ -1,7 +1,7 @@
 # API Stability Inventory
 
 Canonical stability classification for every Tributo module.
-Last updated: 2026-08-03.
+Last updated: 2026-08-07.
 
 ## Stability Levels
 
@@ -26,6 +26,7 @@ Last updated: 2026-08-03.
 | `tributo.exceptions` — core exceptions | `stable` | ``TributoError`` and 16 common subtypes |
 | `tributo.exceptions` — Bundle/Plugin exceptions | `beta` | ``BundleExportError``, ``AliasConflict``, ``UnsupportedArtifactFormat``, ``PostPublishCallbackError``, ``PluginLoadIssue`` |
 | `tributo.exceptions` — Streaming exceptions | `beta` | ``StreamSourceError``, ``KafkaCommitError``, ``KafkaPoisonMessageError`` |
+| `tributo.exceptions` — `EngineNotAvailableError` | `alpha` | Candidate bounded-ingestion error |
 
 ### Training (tributo.training.*)
 
@@ -41,7 +42,7 @@ Last updated: 2026-08-03.
 | `tributo.training.causal_estimator` | `beta` | Causal effect estimation (docstring was alpha; aligned to @PublicAPI) |
 | `tributo.training.algorithm_spec` | `beta` | Algorithm capability declarations |
 | `tributo.training.catalog` | `beta` | Algorithm registry |
-| `tributo.training.data_loader` | `beta` | Training data loading (migrating to Provider) |
+| `tributo.training.data_loader` | `beta` | Ray compatibility adapter over IngestionGateway |
 | `tributo.training.tune_config` | `beta` | Hyperparameter tuning config |
 | `tributo.training.tune_runner` | `beta` | Tune execution |
 | `tributo.training.tune_space` | `beta` | Search space definitions |
@@ -57,15 +58,24 @@ Last updated: 2026-08-03.
 
 | Module | Level | Notes |
 |--------|-------|-------|
-| `tributo.data.source_config` — `SourceConfig` | `beta` | Canonical data source config (JSON only) |
-| `tributo.data.provider` — `DataSourceProvider` | `beta` | Stable bounded-read contract |
-| `tributo.data.transform_compiler` | `prototype` | Under active design |
+| `tributo.data.source_config` — `SourceConfig` | `beta` | Strict in-memory contract; JSON is the built-in persisted format |
+| `tributo.data.provider` — `DataSourceProvider` | `beta` | Logical normalization/planning contract; open-only implementations are deprecated and limited to the old Ray adapter |
+| `tributo.data.transform_ir` | `alpha` | Versioned engine-neutral ETL contract |
+| `tributo.data.transform_compiler` | `developer` | Internal Ray/Daft expression translation |
+| `tributo.data.scan_plan` | `developer` | Internal engine-neutral scan SPI; downstream consumers use `IngestionGateway` |
+| `tributo.data.ingestion` | `alpha` | Two-stage Gateway, explicit request, typed handles, and receipt |
+| `tributo.data.handle_adapters` | `alpha` | Explicit native-handle conversions with conversion evidence; never a routing fallback |
+| `tributo.data.engine_binding` | `developer` | Third-party extension SPI; not exported from the consumer-facing `tributo.data` root |
+| `tributo.data.binding_plugins` | `developer` | Descriptor-only `tributo.ingestion_bindings` discovery SPI |
+| `tributo.data.provider_plugins` | `developer` | Versioned descriptor-only `tributo.ingestion_providers` discovery SPI |
+| `tributo.data.bindings.*` | `developer` | Thin adapters over public Ray Data, Daft, or installed connector APIs |
 | `tributo.data.graph` | `beta` | Graph data abstraction (GNN; @PublicAPI says beta) |
-| `tributo.data.base` — `DataConnector` | `beta` | Connector base class |
-| `tributo.data.lance` | `beta` | Lance connector |
-| `tributo.data.registry` | `beta` | Connector registry |
-| `tributo.data.iceberg` | `beta` | Iceberg connector |
-| `tributo.data.parquet` | `alpha` | Parquet connector (@PublicAPI says alpha) |
+| `tributo.data.base` — `DataConnector` | `beta` | Historical read/write shape; reads are one-way Gateway adapters |
+| `tributo.data.lance` | `beta` | Compatibility adapter; read delegates Gateway |
+| `tributo.data.registry` | `beta` | Historical connector registry |
+| `tributo.data.iceberg` | `beta` | Compatibility adapter; read delegates Gateway |
+| `tributo.data.parquet` | `alpha` | Compatibility adapter; read delegates Gateway |
+| `tributo.data.csv` | `beta` | Compatibility adapter; read delegates Gateway |
 
 ### Exporting / Bundle (tributo.exporting.*)
 
@@ -103,7 +113,7 @@ Last updated: 2026-08-03.
 |--------|-------|-------|
 | `tributo.inference.base` — `BasePredictor` | `beta` | Batch predictor contract |
 | `tributo.inference.batch_predictor` | `beta` | Batch predictor implementation |
-| `tributo.inference.pipeline` | `beta` | Inference pipeline (legacy data routing → D3) |
+| `tributo.inference.pipeline` | `beta` | Inference pipeline; data loading delegates the Ray Gateway adapter |
 | `tributo.inference.job_runner` | `beta` | Inference job runner |
 
 ### Serving (tributo.serving.*)
@@ -178,7 +188,9 @@ Last updated: 2026-08-03.
 | `tributo.training.exporters.*` | `tributo.exporting.*` + `tributo.integrations.exporters.*` | v1.0.0 | ≥ 2 minor versions (E4) |
 | `tributo.training.onnx_exporter` | `tributo.exporting.service.BundleExportService` | v1.0.0 | ≥ 2 minor versions (E4) |
 | `tributo.exporting.protocols.SourceProvider` (name) | `ExportSourceProvider` (E1) | After E1 merge | 2 minor versions with DeprecationWarning |
-| Legacy `data_loader` dispatch | `tributo.data.provider.DataSourceProvider` (canonical path) | After canonical-path merge | Legacy compat adapter retained until the legacy dispatch is removed |
+| Legacy flat data config | `CanonicalSourceInput` / `IngestionRequest` | v1.0.0 | Conversion-only adapter retained for its deprecation window; direct dispatch removed |
+| `TRIBUTO_DATA_BACKEND=legacy` | Default Provider/Gateway path | v1.0.0 | Selector is accepted with `FutureWarning` during the compatibility window; it no longer restores direct dispatch |
+| Third-party Provider `normalize()+open()` SPI | `plan()` + `EngineBinding` | v1.0.0 | Ray compatibility adapter only until the next major release; Gateway never falls back |
 
 ## Unannotated Code
 
@@ -195,7 +207,7 @@ This is informative only — `STABILITY.md` is the canonical reference.
 
 ### Marked as prototype
 
-- `tributo.data.transform_compiler` — "Phase 2a TransformCompiler implementation"
+- None.
 
 ### Marked as deprecated
 
@@ -203,6 +215,8 @@ This is informative only — `STABILITY.md` is the canonical reference.
 
 ### Marked as alpha
 
+- `tributo.data.transform_ir` — versioned engine-neutral ETL contract
+- `tributo.data.ingestion` — candidate dual-engine ingestion API
 - `tributo.pipeline.core` — "Alpha; lightweight in-process DAG executor"
 - `tributo.training.graph_trainer` — "Alpha; GNN training"
 - `tributo.serving.streaming_deployment` — "Alpha; streaming inference service"

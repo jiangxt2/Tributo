@@ -10,6 +10,10 @@ Layered architecture (Ray/Daft-style):
   Layer 3:  Commit Message — Signed-off-by + format check + claims vs diff
   Layer 4:  General Hygiene — unintended files, merge conflicts, large files
   Layer 5:  Run Changed Tests — pytest on changed test files
+  Layer 5.5: CI-parity Suite — dev-only environment runs the CI unit suite
+             (catches optional-dependency imports and runtime failures)
+  Layer 5.6: Docs Spelling — runs the CI docs spelling build when the docs
+             environment is available
 
 Usage:
     uv run --locked --no-sync python scripts/pr-precheck.py
@@ -25,6 +29,7 @@ import argparse
 import ast
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -970,6 +975,103 @@ def check_run_tests(root: str, changed_files: list[str]) -> list[str]:
     return issues
 
 
+def check_ci_parity_suite(root: str) -> list[str]:
+    """Run the CI unit suite in a dev-only environment.
+
+    The CI unit-tests job installs only the ``dev`` extra, while a local
+    worktree usually has the data/data-daft/postgresql extras installed.
+    Tests that import or execute optional engine/connector dependencies pass
+    locally but fail in CI, either at collection or at runtime.  This layer
+    rebuilds the dev-only environment in a temporary venv (from the uv
+    cache, offline) and runs the complete CI unit suite, so both failure
+    classes are caught before push.
+    """
+    issues: list[str] = []
+    venv_dir = tempfile.mkdtemp(prefix="tributo-ci-parity-")
+    try:
+        sync = subprocess.run(
+            ["uv", "sync", "--extra", "dev", "--locked", "--offline"],
+            capture_output=True,
+            text=True,
+            cwd=root,
+            timeout=600,
+            env={**os.environ, "UV_PROJECT_ENVIRONMENT": venv_dir},
+        )
+        if sync.returncode != 0:
+            tail = "\n".join((sync.stdout or sync.stderr).splitlines()[-3:])
+            issues.append(
+                f"WARN: dev-only parity sync failed — CI-parity suite skipped ({tail})"
+            )
+            return issues
+        python = os.path.join(venv_dir, "bin", "python")
+        suite = subprocess.run(
+            [
+                python,
+                "-m",
+                "pytest",
+                "tests/",
+                "-q",
+                "--tb=short",
+                "--timeout=180",
+                "-m",
+                CHANGED_TEST_MARKER_FILTER,
+            ],
+            capture_output=True,
+            text=True,
+            cwd=root,
+            timeout=600,
+        )
+        if suite.returncode == 5:
+            # Exit 5 = no tests collected; the marker filter deselected
+            # everything — not a failure.
+            return issues
+        if suite.returncode != 0:
+            failures = [
+                line.strip()
+                for line in suite.stdout.splitlines()
+                if line.startswith("FAILED ") or line.startswith("ERROR ")
+            ]
+            if failures:
+                issues.append(
+                    "FAIL: CI-parity suite failed — a test depends on an "
+                    "optional dependency at runtime:\n" + "\n".join(failures[:10])
+                )
+            else:
+                tail = "\n".join(suite.stdout.splitlines()[-10:])
+                issues.append("FAIL: CI-parity suite failed:\n" + tail)
+        return issues
+    finally:
+        shutil.rmtree(venv_dir, ignore_errors=True)
+
+
+def check_docs_spelling(root: str) -> list[str]:
+    """Run the CI docs spelling check when a docs environment is available."""
+    makefile = os.path.join(root, "Makefile")
+    sphinx_build = os.path.join(root, ".docs-venv", "bin", "sphinx-build")
+    if not os.path.exists(makefile) or not os.path.exists(sphinx_build):
+        return [
+            "WARN: .docs-venv not found — docs spelling check skipped "
+            "(run the docs build locally or rely on the CI docs job)"
+        ]
+    result = subprocess.run(
+        ["make", "spelling", f"SPHINXBUILD={sphinx_build}"],
+        capture_output=True,
+        text=True,
+        cwd=root,
+        timeout=300,
+    )
+    if result.returncode != 0:
+        lines = [
+            line.strip()
+            for line in result.stdout.splitlines()
+            if "Spell check" in line or "misspelled" in line
+        ]
+        issues = ["FAIL: docs spelling found unknown words:"]
+        issues.extend(lines[:10])
+        return issues
+    return []
+
+
 # =============================================================================
 # Main
 # =============================================================================
@@ -1093,6 +1195,22 @@ def main():
             print(f"  {issue}")
         print(f"  {'PASS' if not l5 else 'ISSUES'} — {len(l5)} issue(s)\n")
 
+    # Layer 5.5
+    print("=== Layer 5.5: CI-parity Suite ===")
+    l55 = check_ci_parity_suite(root)
+    all_issues.extend(l55)
+    for issue in l55:
+        print(f"  {issue}")
+    print(f"  {'PASS' if not l55 else 'ISSUES'} — {len(l55)} issue(s)\n")
+
+    # Layer 5.6
+    print("=== Layer 5.6: Docs Spelling ===")
+    l56 = check_docs_spelling(root)
+    all_issues.extend(l56)
+    for issue in l56:
+        print(f"  {issue}")
+    print(f"  {'PASS' if not l56 else 'ISSUES'} — {len(l56)} issue(s)\n")
+
     errors = [i for i in all_issues if i.startswith("FAIL")]
     warns = [i for i in all_issues if i.startswith("WARN")]
 
@@ -1110,6 +1228,8 @@ def main():
         print(
             f"  Layer 5 (Tests):         {'PASS' if not l5 else f'{len(l5)} issue(s)'}"
         )
+    print(f"  Layer 5.5 (CI-parity):   {'PASS' if not l55 else f'{len(l55)} issue(s)'}")
+    print(f"  Layer 5.6 (Docs):        {'PASS' if not l56 else f'{len(l56)} issue(s)'}")
     print()
 
     if errors:

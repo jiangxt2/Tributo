@@ -16,7 +16,9 @@ Runtime, PyArrow, pandas, and S3 filesystem support.
 
 | Workload | Installation |
 | --- | --- |
-| Data connectors | `python -m pip install "tributo[data,clickhouse,mysql]"` |
+| Ray Data table formats | `python -m pip install "tributo[data]"` |
+| Daft ingestion | `python -m pip install "tributo[data,data-daft]"` |
+| PostgreSQL ingestion | `python -m pip install "tributo[postgresql]"` |
 | Distributed training | `python -m pip install "tributo[training]"` |
 | Embeddings | `python -m pip install "tributo[embeddings]"` |
 | Torch model export | `python -m pip install "tributo[model-export-torch]"` |

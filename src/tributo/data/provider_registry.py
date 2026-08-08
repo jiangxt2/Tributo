@@ -7,9 +7,10 @@ probed by availability, and the bare-dict legacy semantics live only in the
 conflict is checked up front, so a failed registration leaves no partial
 entry behind.
 
-Third-party providers register explicitly (``register_provider``); entry
-point discovery, version negotiation and lifecycle management belong to
-PL1+PL2.
+Third-party providers may register explicitly or publish versioned descriptors
+through the ``tributo.ingestion_providers`` entry-point group. Discovery is
+lazy and isolated: a broken plugin cannot replace built-ins or prevent an
+unrelated provider from resolving.
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ from tributo.util.annotations import PublicAPI
 # each segment matches [a-z][a-z0-9_]*.
 _PROVIDER_ID_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
 _ALIAS_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+_PROJECTION_OPTION_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
 
 # Frozen canonical routes: builtin source type → logical provider ID.
 _CANONICAL_TYPE_ROUTES: dict[str, str] = {
@@ -43,18 +45,14 @@ _CANONICAL_TYPE_ROUTES: dict[str, str] = {
     "csv": "tributo.csv",
     "sql_clickhouse": "tributo.clickhouse",
     "sql_doris": "tributo.doris",
+    "sql_postgresql": "tributo.postgresql",
     "iceberg": "tributo.iceberg",
 }
 
 # SQL dialects without a canonical provider — unsupported/experimental, with
 # explicit diagnostics instead of silent routing.
 _UNSUPPORTED_SQL_DIALECTS: dict[str, str] = {
-    "postgresql": "ConnectorX path is experimental and unsupported",
     "mysql": "MySQL is unsupported; use tributo.doris (MySQL protocol)",
-}
-_DEFERRED_PROVIDER_DIAGNOSTICS: dict[str, str] = {
-    "tributo.lance": "Lance is deferred; use a supported file provider",
-    "lance": "Lance is deferred; use a supported file provider",
 }
 
 
@@ -100,6 +98,16 @@ class ProviderRegistry:
         for alias in aliases:
             if not _ALIAS_RE.fullmatch(alias):
                 raise TypeError(f"Invalid alias {alias!r}: expected [a-z][a-z0-9_]*")
+        projection_option = cls.projection_option_name
+        if projection_option is not None and (
+            not isinstance(projection_option, str)
+            or _PROJECTION_OPTION_RE.fullmatch(projection_option) is None
+        ):
+            raise TypeError(
+                "projection_option_name must be None or a safe flat option key"
+            )
+        if type(cls.relative_uri_is_path) is not bool:
+            raise TypeError("relative_uri_is_path must be a bool")
 
         # Atomicity: validate every collision before writing anything.
         with self._lock:
@@ -194,11 +202,6 @@ class ProviderRegistry:
 
     def _resolve_by_id_or_alias(self, provider_id: str) -> DataSourceProvider:
         # Layer 1: exact provider ID.  Layer 2: alias.
-        if provider_id in _DEFERRED_PROVIDER_DIAGNOSTICS:
-            raise JobConfigurationError(
-                f"Provider {provider_id!r} is not available: "
-                f"{_DEFERRED_PROVIDER_DIAGNOSTICS[provider_id]}"
-            )
         with self._lock:
             cls = self._providers.get(provider_id)
             if cls is None:
@@ -260,17 +263,16 @@ class ProviderRegistry:
             provider_id = "tributo.clickhouse"
         elif data_type == "doris":
             provider_id = "tributo.doris"
+        elif data_type == "postgresql":
+            provider_id = "tributo.postgresql"
         elif data_type == "iceberg":
             provider_id = "tributo.iceberg"
+        elif data_type == "lance":
+            provider_id = "tributo.lance"
         elif data_type in _UNSUPPORTED_SQL_DIALECTS:
             raise JobConfigurationError(
                 f"SQL dialect {data_type!r} is unsupported: "
                 f"{_UNSUPPORTED_SQL_DIALECTS[data_type]}"
-            )
-        elif data_type == "lance":
-            raise JobConfigurationError(
-                f"Legacy source type {data_type!r} is not available: "
-                f"{_DEFERRED_PROVIDER_DIAGNOSTICS['lance']}"
             )
         else:
             raise JobConfigurationError(
@@ -288,12 +290,36 @@ class ProviderRegistry:
 
 
 _registry = ProviderRegistry()
+_provider_plugins_loaded = False
+_provider_plugins_loading = False
+_provider_plugins_lock = threading.RLock()
+
+
+def _ensure_provider_plugins_registered() -> None:
+    """Load third-party Provider descriptors once without import recursion."""
+    global _provider_plugins_loaded, _provider_plugins_loading
+    with _provider_plugins_lock:
+        if _provider_plugins_loaded or _provider_plugins_loading:
+            return
+        _provider_plugins_loading = True
+        try:
+            from tributo.data.provider_plugins import register_discovered_providers
+
+            register_discovered_providers(_registry)
+        except Exception:
+            # Entry-point enumeration itself may fail before per-plugin
+            # isolation begins. Leave discovery retryable for the next call.
+            _provider_plugins_loading = False
+            raise
+        else:
+            _provider_plugins_loaded = True
+        finally:
+            _provider_plugins_loading = False
 
 
 @PublicAPI(stability="beta")
 def register_provider(cls: type[DataSourceProvider]) -> None:
-    """Register a provider class (explicit/manual registration; PL1+PL2 adds
-    entry-point discovery).
+    """Register a provider class explicitly.
 
     Raises:
         TypeError: Invalid provider class or ID format.
@@ -312,6 +338,7 @@ def resolve_provider(
         JobConfigurationError: Unknown provider, unsupported dialect, or
             unknown legacy type — with an explicit diagnostic.
     """
+    _ensure_provider_plugins_registered()
     return _registry.resolve(source)
 
 
@@ -324,4 +351,5 @@ def unregister_provider(provider_id: str) -> None:
 @PublicAPI(stability="beta")
 def list_providers() -> list[str]:
     """Return the sorted registered provider IDs."""
+    _ensure_provider_plugins_registered()
     return _registry.list_providers()

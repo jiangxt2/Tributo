@@ -46,6 +46,9 @@ classification.
 
 ## Data provider API
 
+This is the logical source-extension contract. Physical reads are delegated to
+Ray Data, Daft, or an installed Connector through the bounded ingestion API.
+
 ```{autoclass} tributo.data.provider.DataSourceProvider
 :members:
 ```
@@ -56,6 +59,31 @@ classification.
 
 ```{autoclass} tributo.data.provider.DatasetHandle
 :members:
+```
+
+## Bounded ingestion API
+
+New bounded-read code explicitly selects Ray Data or Daft and receives a typed
+native handle plus a credential-free plan receipt. The Gateway never silently
+switches engines.
+
+```{autoclass} tributo.data.IngestionRequest
+:members:
+```
+
+```{autoclass} tributo.data.IngestionGateway
+:members:
+```
+
+```{autoclass} tributo.data.IngestionOpenResult
+:members:
+```
+
+```{autoclass} tributo.data.IngestionPlanReceipt
+:members:
+```
+
+```{autofunction} tributo.data.open_ingestion
 ```
 
 ## Training API

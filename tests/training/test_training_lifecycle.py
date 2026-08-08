@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -221,6 +222,56 @@ class TestLegacyFlow:
 
         assert summary["status"] == "succeeded"
         assert delegated == [("/tmp/out", None)]
+
+    def test_local_trial_routes_validation_and_test_sources_through_gateway(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        loaded: list[tuple[dict[str, Any], Path | None]] = []
+
+        def fake_load(
+            source: dict[str, Any],
+            *,
+            project_root_path: Path | None = None,
+        ) -> object:
+            loaded.append((source, project_root_path))
+            return object()
+
+        monkeypatch.setattr(
+            "tributo.training.data_loader.load_ray_dataset_from_source",
+            fake_load,
+        )
+        spec = AlgorithmSpec(
+            name="gateway-data-probe",
+            trainer_cls=_EntryTrainer,
+            data_loading=DataLoadingMode.CANONICAL_DRIVER,
+        )
+
+        summary = run_local_trial(
+            spec,
+            "/tmp/out",
+            effective_config={
+                "data": {
+                    "source": {"type": "parquet", "path": "train.parquet"},
+                    "val_path": "validation.parquet",
+                    "test_path": "test.parquet",
+                }
+            },
+        )
+
+        assert summary["status"] == "succeeded"
+        assert loaded == [
+            (
+                {
+                    "type": "parquet",
+                    "path": "train.parquet",
+                    "columns": None,
+                    "s3": None,
+                },
+                None,
+            ),
+            ({"type": "parquet", "path": "validation.parquet"}, Path.cwd()),
+            ({"type": "parquet", "path": "test.parquet"}, Path.cwd()),
+        ]
 
     def test_no_export_override_warns_but_succeeds(
         self, caplog: pytest.LogCaptureFixture

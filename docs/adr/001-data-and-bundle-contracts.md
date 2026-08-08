@@ -136,7 +136,11 @@ Rules:
 
 `SourceConfig` is the user-facing configuration that describes a data source:
 
-- Serialization format: **JSON only**. YAML input is rejected at the parser level.
+- Validation authority: the in-memory Pydantic model with strict schema and
+  `extra="forbid"`. JSON remains the built-in persisted representation. An
+  external deployment may deserialize another format to a plain mapping before
+  validation, but that parser is outside the data-ingestion contract and does
+  not weaken validation semantics.
 - Unknown fields: **fail-fast** (Pydantic `extra="forbid"`).
 - Compatibility: New optional fields with defaults must not break existing configs.
   Removing or renaming a field requires a deprecation window.
@@ -154,28 +158,66 @@ Rules:
 
 ### D1+D2 Runtime Boundary
 
-D1+D2 stabilizes the smallest bounded-read contract needed by the production
-loader:
+The canonical bounded-read runtime boundary is:
 
 <!-- docs-check: skip-python -->
 ```python
-DataSourceProvider.open(ResolvedSource) -> DatasetHandle
-DatasetHandle.to_ray_dataset() -> ray.data.Dataset
-DatasetHandle.close() -> None  # idempotent
+IngestionGateway.describe(IngestionRequest) -> IngestionDescriptor
+IngestionGateway.open(IngestionRequest) -> IngestionOpenResult
+IngestionOpenResult.handle -> RayDataHandle | DaftDataFrameHandle
+IngestionOpenResult.close() -> None  # idempotent
 ```
 
 `ResolvedSource` contains the canonical provider ID, credential-free URI and
-validated options. `DataConnector` and the existing SQL loaders remain
-implementation details behind Provider adapters. The existing `SourcePlan`,
-`TransformCompiler`, transform pushdown and residual-transform lifecycle stay
-prototype-level until D4 makes a separate go/no-go decision.
+validated options. A Provider produces a credential-free `LogicalScanPlan`,
+which a thin `EngineBinding` delegates to a public Ray Data, Daft, or installed
+third-party connector API. The unused `SourcePlan` and `SourceRouter`
+auto-routing prototype is removed; engine selection is explicit.
+`TransformPipeline` is a separate versioned contract and engine translation is
+internal. Downstream modules use `IngestionGateway.describe()` for static,
+metadata-free validation and `IngestionGateway.open()` for lazy native-handle
+construction; they do not call Provider or Binding objects directly.
 
 Resolution order is explicit: `ProviderRegistry.resolve()` selects the provider
 (exact ID → alias → built-in legacy mapping), then the selected provider
-`normalize()`s the input into `ResolvedSource`, then `open()` returns the
-`DatasetHandle`. Rollback to the old direct dispatch is controlled by
-`TRIBUTO_DATA_BACKEND=legacy` (see migration-safety.md); a `provider/uri` input
-is rejected loudly in legacy mode rather than silently guessed.
+`normalize()`s the input into `ResolvedSource`, then `plan()` returns the
+`LogicalScanPlan`, and the Gateway selects exactly one compatible Binding. The
+old direct dispatch runtime backend is removed. During its compatibility
+window, `TRIBUTO_DATA_BACKEND=legacy` remains accepted with a `FutureWarning`,
+but routes through the same legacy-input conversion and Gateway as the default;
+it cannot select or restore a separate reader implementation. Legacy flat
+dictionaries, `DatasetHandle`, and `DataConnector.read()` remain one-way Ray
+compatibility adapters over the Gateway.
+
+Installed bounded-source extensions use two symmetric, descriptor-only entry
+point groups:
+
+- `tributo.ingestion_providers` registers a versioned
+  `DataSourceProvider` class;
+- `tributo.ingestion_bindings` registers one or more versioned physical
+  Ray/Daft Bindings.
+
+Discovery is deterministic and lazy. A bad plugin is isolated, and an external
+registration can never replace a built-in Provider or Binding. Provider
+metadata owns its projection option name and whether a scheme-less `uri` is a
+relative file path; consumers do not maintain provider-name maps. A catalog
+table may set `TableScan.storage_format_id` to assert Parquet, ORC, or Iceberg,
+and Binding constraints may match filesystem, catalog, and storage format.
+Multiple matching Bindings fail closed unless `IngestionRequest.binding_id` is
+explicit.
+
+Per-entry load and validation failures are isolated and skipped. Failure of
+the entry-point metadata enumeration itself is not cached as a successful
+discovery; a later call retries it. This prevents one transient or malformed
+environment state from disabling all external Providers for the process
+lifetime.
+
+Within the bounded tabular contract and the two supported engines, adding a
+source is therefore an extension-only operation: add Provider/Binding
+descriptors, connector dependencies, Conformance tests, and support-matrix
+evidence. Training, Inference, Embeddings, and Graph must not import or branch
+on the new source. Adding another execution engine, an unbounded source, or a
+new scan semantic remains a separate ADR.
 
 `DatasetHandle` represents a bounded finite read. It does not carry Kafka
 offsets, commits, partition ownership, or other `StreamSource` lifecycle
@@ -278,7 +320,19 @@ class ExportError(TributoError):
 
 - Provider/Exporter implementations raise domain-specific subtypes.
 - The framework catches and wraps unexpected exceptions from third-party code.
-- Stack traces from third-party code are logged at DEBUG level, not exposed to users.
+- Untrusted ingestion Binding, factory, engine, and probe failures report only
+  a credential-free compilation stage, error category, and exception type.
+  They do not retain the native message or cause.
+- First-party framework validation may add an explicitly authored, bounded
+  `diagnostic_code` and credential-free diagnostic. Native `str(exc)` text is
+  never promoted into that diagnostic, and non-Tributo Bindings cannot publish
+  first-party diagnostics across the registry boundary.
+- Cleanup failures preserve the primary contract error and may log only the
+  callback kind and normalized exception type. Native messages, exception
+  objects, causes, contexts, and stack traces are not logged.
+- Other third-party stack traces may be logged at DEBUG only after the owning
+  module's credential-redaction policy has been applied; they are never
+  exposed directly to users.
 
 ### Artifact Status Model
 

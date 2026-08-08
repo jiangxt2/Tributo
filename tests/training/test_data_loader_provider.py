@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-import importlib
 from pathlib import Path
 
 import pyarrow as pa
 import pytest
+from pydantic import TypeAdapter, ValidationError
 
+from tributo.data.provider_registry import resolve_provider
+from tributo.data.source_config import CanonicalSourceInput
 from tributo.exceptions import JobConfigurationError
-from tributo.training import data_loader as dl_module
+from tributo.training import data_loader
 from tributo.training.data_loader import (
     load_ray_dataset_from_config,
     load_ray_dataset_from_source,
@@ -37,11 +39,6 @@ def csv_file(tmp_path: Path) -> str:
     path = tmp_path / "data.csv"
     path.write_text("id,kind\n3,c\n4,c\n")
     return str(path)
-
-
-def _reload_with_backend(monkeypatch: pytest.MonkeyPatch, backend: str) -> None:
-    monkeypatch.setenv("TRIBUTO_DATA_BACKEND", backend)
-    importlib.reload(dl_module)
 
 
 class TestThreeEntrySemantics:
@@ -72,72 +69,55 @@ class TestThreeEntrySemantics:
 
     def test_canonical_sql_route_to_clickhouse(self) -> None:
         # Resolution only — no connection is made by normalize/open.
-
-        from pydantic import TypeAdapter
-
-        from tributo.data.provider_registry import resolve_provider
-        from tributo.data.source_config import CanonicalSourceInput
-
         cfg = TypeAdapter(CanonicalSourceInput).validate_python(
             {"type": "sql", "dialect": "clickhouse", "sql": "SELECT 1"}
         )
         assert resolve_provider(cfg).provider_id == "tributo.clickhouse"
 
 
-class TestRollbackSwitch:
-    """TRIBUTO_DATA_BACKEND=legacy bypasses the ProviderRegistry."""
+class TestLegacyConversion:
+    """Legacy dictionaries convert once; no independent runtime backend remains."""
 
-    def test_legacy_backend_reads_file(
-        self, monkeypatch: pytest.MonkeyPatch, parquet_file: str
+    def test_deprecated_legacy_backend_uses_canonical_routing(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        parquet_file: str,
     ) -> None:
-        _reload_with_backend(monkeypatch, "legacy")
-        try:
-            ds = load_ray_dataset_from_source({"type": "parquet", "path": parquet_file})
-            df = ds.to_pandas()
-            assert list(df["id"]) == [1, 2]
-        finally:
-            _reload_with_backend(monkeypatch, "provider")
+        monkeypatch.setattr(data_loader, "DATA_BACKEND", "legacy")
+        with pytest.warns(FutureWarning, match="canonical Provider/Gateway"):
+            dataset = load_ray_dataset_from_source(
+                {"provider": "tributo.parquet", "uri": parquet_file}
+            )
 
-    def test_legacy_backend_rejects_provider_shape(
-        self, monkeypatch: pytest.MonkeyPatch
+        assert list(dataset.to_pandas()["id"]) == [1, 2]
+
+    def test_unknown_backend_selector_fails_closed(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        parquet_file: str,
     ) -> None:
-        _reload_with_backend(monkeypatch, "legacy")
-        try:
-            from tributo.exceptions import JobConfigurationError
-
-            with pytest.raises(
-                JobConfigurationError, match="TRIBUTO_DATA_BACKEND=provider"
-            ):
-                load_ray_dataset_from_source(
-                    {"provider": "tributo.parquet", "uri": "x"}
-                )
-        finally:
-            _reload_with_backend(monkeypatch, "provider")
+        monkeypatch.setattr(data_loader, "DATA_BACKEND", "other")
+        with pytest.raises(JobConfigurationError, match="must be 'provider'"):
+            load_ray_dataset_from_source(
+                {"provider": "tributo.parquet", "uri": parquet_file}
+            )
 
     def test_legacy_config_entrypoint_rejects_provider_shape(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        _reload_with_backend(monkeypatch, "provider")
         with pytest.raises(JobConfigurationError, match="load_ray_dataset_from_source"):
             with pytest.warns(FutureWarning):
                 load_ray_dataset_from_config(
                     {"provider": "tributo.parquet", "uri": "data.parquet"}
                 )
 
-    def test_legacy_backend_keeps_csv_default(
-        self, monkeypatch: pytest.MonkeyPatch, parquet_file: str
-    ) -> None:
-        _reload_with_backend(monkeypatch, "legacy")
-        try:
-            with pytest.warns(FutureWarning):
-                ds = load_ray_dataset_from_config({"type": "csv", "path": parquet_file})
-            df = ds.to_pandas()
-            assert list(df["kind"]) == ["p", "p"]
-        finally:
-            _reload_with_backend(monkeypatch, "provider")
+    def test_legacy_conversion_keeps_csv_default(self, parquet_file: str) -> None:
+        with pytest.warns(FutureWarning):
+            dataset = load_ray_dataset_from_config(
+                {"type": "csv", "path": parquet_file}
+            )
 
-    def test_default_backend_is_provider(self) -> None:
-        assert dl_module.DATA_BACKEND == "provider"
+        assert list(dataset.to_pandas()["kind"]) == ["p", "p"]
 
 
 class TestParity:
@@ -170,7 +150,5 @@ class TestParity:
         assert ds.count() == 1
 
     def test_unknown_type_rejected(self) -> None:
-        from pydantic import ValidationError
-
         with pytest.raises(ValidationError):
             load_ray_dataset_from_source({"type": "kafka", "bootstrap": "x"})

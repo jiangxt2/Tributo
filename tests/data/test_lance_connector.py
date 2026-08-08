@@ -5,7 +5,6 @@ from __future__ import annotations
 import sys
 from unittest.mock import MagicMock, patch
 
-import pyarrow as pa
 import pytest
 from pydantic import ValidationError
 
@@ -49,51 +48,34 @@ class TestLanceDataConnector:
         with pytest.raises(ValidationError):
             connector.read(path="")
 
-    @patch("tributo.data.lance.ray.data.from_arrow")
-    @patch("lance.dataset")
-    def test_read_calls_lance_dataset(self, mock_lance_dataset, mock_from_arrow):
-        """read() 应调用 lance.dataset().to_table() 并转换为 Ray Dataset。"""
-        arrow_table = pa.table({"id": [1, 2], "name": ["a", "b"]})
-
-        mock_ds = MagicMock()
-        mock_ds.to_table.return_value = arrow_table
-        mock_lance_dataset.return_value = mock_ds
-
+    @patch("tributo.data._compat_read.open_ray_compat")
+    def test_read_delegates_to_gateway(self, mock_open_ray_compat):
+        """read() 只构造逻辑请求并委托 Ray Gateway。"""
         mock_ray_ds = MagicMock()
-        mock_from_arrow.return_value = mock_ray_ds
+        mock_open_ray_compat.return_value = mock_ray_ds
 
         connector = LanceDataConnector()
         result = connector.read(path="/data/test.lance")
 
-        mock_lance_dataset.assert_called_once_with(
-            "/data/test.lance", storage_options=None
-        )
-        mock_ds.to_table.assert_called_once()
-        mock_from_arrow.assert_called_once_with(arrow_table)
+        source = mock_open_ray_compat.call_args.args[0]
+        assert source.provider == "tributo.lance"
+        assert source.uri == "/data/test.lance"
+        assert source.options == {}
         assert result is mock_ray_ds
 
-    @patch("tributo.data.lance.ray.data.from_arrow")
-    @patch("lance.dataset")
-    def test_read_with_s3(self, mock_lance_dataset, mock_from_arrow):
-        """read() S3 路径应传递 storage_options。"""
-        arrow_table = pa.table({"id": [1]})
-
-        mock_ds = MagicMock()
-        mock_ds.to_table.return_value = arrow_table
-        mock_lance_dataset.return_value = mock_ds
-
-        mock_from_arrow.return_value = MagicMock()
-
+    @patch("tributo.data._compat_read.open_ray_compat")
+    def test_read_with_s3(self, mock_open_ray_compat):
+        """read() 将 S3 配置封装进 Gateway runtime options。"""
         connector = LanceDataConnector()
         connector.read(
             path="s3://bucket/dataset.lance",
             s3=S3Config(endpoint="http://minio:9000"),
         )
 
-        mock_lance_dataset.assert_called_once()
-        call_kwargs = mock_lance_dataset.call_args
-        assert call_kwargs[1]["storage_options"] is not None
-        assert call_kwargs[1]["storage_options"]["endpoint"] == "http://minio:9000"
+        source = mock_open_ray_compat.call_args.args[0]
+        assert source.provider == "tributo.lance"
+        assert source.uri == "s3://bucket/dataset.lance"
+        assert source.options["s3"]["endpoint"] == "http://minio:9000"
 
 
 if __name__ == "__main__":

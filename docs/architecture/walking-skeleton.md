@@ -10,7 +10,7 @@ ProviderSourceConfig(parquet) → XGBoostTrainer → Bundle → BundleReader →
 This is the target canonical path for D1+D2. The current beta JSON shapes
 (`type/path/dialect`) remain readable through the compatibility normalizer;
 both shapes are normalized by the selected provider into the same
-credential-free `ResolvedSource` before `open()`. The `provider/uri` shape
+credential-free `ResolvedSource` before planning. The `provider/uri` shape
 below is therefore a target canonical representation, not permission to
 silently break existing configs.
 
@@ -28,7 +28,7 @@ silently break existing configs.
 
 | Step | Contract | What it validates |
 |------|----------|-------------------|
-| 1. `ProviderSourceConfig(provider="tributo.parquet", uri=...)` → `ProviderRegistry.resolve()` → provider `normalize()` → `ResolvedSource` | `DataSourceProvider` | Provider ID resolution (exact → alias → built-in mapping), JSON-only config, `extra="forbid"`, legacy normalization |
+| 1. `IngestionRequest(ProviderSourceConfig(...), engine="ray")` → `IngestionGateway.open()` | `DataSourceProvider` + `LogicalScanPlan` + `EngineBinding` | Provider resolution, strict validation, credential-free planning, explicit engine selection, typed handle and receipt |
 | 2. `XGBoostTrainer.run(source_config, ...)` | `TrainingLifecycle` + `CallbackDispatcher` | Trainer receives canonical `SourceConfig`, not legacy config dict |
 | 3. `BundleExportService.export(result)` | `ModelExporter` + `ExportSourceProvider` | Exporter ID resolution, required artifact status |
 | 4. `BundleReader.open(bundle_path)` | `ExportManifest` + `ManifestSignature` | Manifest v1 read, schema version check, digest verification |
@@ -36,12 +36,12 @@ silently break existing configs.
 
 ## Step-by-Step Design
 
-### Step 1: ProviderSourceConfig → DataSourceProvider
+### Step 1: ProviderSourceConfig → IngestionGateway
 
 ```python
 from pydantic import TypeAdapter
 
-from tributo.data import resolve_provider
+from tributo.data import IngestionRequest, RayDataHandle, open_ingestion
 from tributo.data.source_config import CanonicalSourceInput
 
 config = TypeAdapter(CanonicalSourceInput).validate_json("""
@@ -51,21 +51,21 @@ config = TypeAdapter(CanonicalSourceInput).validate_json("""
   "options": {}
 }
 """)
-provider = resolve_provider(config)
-resolved = provider.normalize(config)
-handle = provider.open(resolved)
+result = open_ingestion(IngestionRequest(source=config, engine="ray"))
 try:
-    dataset = handle.to_ray_dataset()
+    assert isinstance(result.handle, RayDataHandle)
+    dataset = result.handle.dataset
 finally:
-    handle.close()
+    result.close()
 ```
 
-Expected: `resolve_provider(config)` returns a `DataSourceProvider`, its
-`normalize()` yields a credential-free `ResolvedSource`, and `open()` returns a
-bounded `DatasetHandle`. `SourcePlan` and transform pushdown are not part of
-this D1+D2 path. Legacy `SourceInput` is normalized into the same
-`ResolvedSource`; it is not deleted until the data migration exit gates are
-satisfied.
+Expected: the Gateway resolves and normalizes the provider, builds a
+credential-free logical plan, selects the explicit Ray Binding, and returns a
+native typed handle plus `IngestionPlanReceipt`. `describe()` performs the same
+static control-plane validation without constructing an engine plan. Legacy
+`SourceInput`, DataConnector reads, and Ray loader APIs delegate this same
+Gateway; no legacy runtime backend remains. Compatibility input adapters stay
+until their deprecation window is satisfied.
 
 ### Step 2: XGBoostTrainer with SourceConfig
 

@@ -1,9 +1,9 @@
-"""Built-in providers for the stable path.
+"""Built-in logical providers for canonical bounded ingestion.
 
-Parquet, CSV, Iceberg, ClickHouse and Doris.  ``DataConnector`` (and the
-SQL client code migrated from ``training/data_loader.py``) remain internal
-implementation details behind these adapters; provider IDs identify the
-logical data source, not an execution engine.
+Parquet, CSV, Iceberg, Lance, ClickHouse, Doris, and PostgreSQL normalize input
+and build logical plans. Execution is delegated directly to Ray Data, Daft, or
+an installed connector Binding. Provider IDs identify logical sources, not
+execution engines.
 
 Credential handling: passwords/access keys live in ``runtime_options`` only
 (their values never appear in ``repr``/logs/errors), while ``identity_options``
@@ -16,8 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
-from glob import has_magic
-from pathlib import Path
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, ClassVar, Mapping
 from urllib.parse import unquote, urlsplit, urlunsplit
 
@@ -25,25 +24,25 @@ from pydantic import ValidationError
 
 from tributo.data._s3 import resolve_endpoint
 from tributo.data.base import S3Config
-from tributo.data.provider import DatasetHandle, DataSourceProvider, ResolvedSource
+from tributo.data.provider import DataSourceProvider, ResolvedSource
 from tributo.data.refs import (
     SENSITIVE_QUERY_KEYS,
     SENSITIVE_QUERY_PREFIXES,
     digest,
 )
-from tributo.data.registry import get_connector
 from tributo.data.source_config import (
     CanonicalSourceInput,
     CsvSourceConfig,
     IcebergSourceConfig,
     ParquetSourceConfig,
     ProviderSourceConfig,
+    SqlPartitioning,
     SqlSourceConfig,
 )
 from tributo.exceptions import JobConfigurationError
 
 if TYPE_CHECKING:
-    import ray.data
+    from tributo.data.scan_plan import LogicalScanPlan
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +56,9 @@ _ICEBERG_IDENTITY_KEYS: frozenset[str] = frozenset(
 # SQL text and parameters are represented by digests; projection is safe to
 # retain directly because it is a bounded list of result column names.
 _SQL_IDENTITY_KEYS: frozenset[str] = frozenset({"columns"})
+_LANCE_IDENTITY_KEYS: frozenset[str] = frozenset(
+    {"columns", "filter", "version", "asof"}
+)
 
 # Option-key whitelists for the provider/uri shape: an unrecognized key is a
 # configuration error (never silently ignored — that would read the wrong
@@ -65,14 +67,23 @@ _FILE_OPTION_KEYS: frozenset[str] = frozenset({"columns", "s3"})
 _SQL_OPTION_KEYS: frozenset[str] = frozenset(
     {
         "sql",
+        "table",
         "params",
         "host",
         "port",
+        "http_port",
+        "flight_port",
         "database",
+        "schema",
         "user",
         "password",
         "columns",
+        "partitioning",
+        "protocol",
     }
+)
+_LANCE_OPTION_KEYS: frozenset[str] = frozenset(
+    {"columns", "filter", "version", "asof", "s3"}
 )
 _ICEBERG_OPTION_KEYS: frozenset[str] = frozenset(
     {
@@ -90,6 +101,7 @@ _ICEBERG_OPTION_KEYS: frozenset[str] = frozenset(
 _DIALECT_DEFAULTS: dict[str, dict[str, int | str]] = {
     "clickhouse": {"port": 8123, "user": "default"},
     "doris": {"port": 9030, "user": "root"},
+    "postgresql": {"port": 5432, "user": "postgres"},
 }
 
 
@@ -180,10 +192,16 @@ def _build_s3_config(provider_id: str, value: Any) -> S3Config | None:
             f"{provider_id}: unknown s3 option(s) {unknown}; "
             f"supported: {sorted(_S3_CONFIG_FIELDS)}"
         )
+    invalid = False
     try:
-        return S3Config(**dict(value))
-    except ValidationError as exc:
-        raise JobConfigurationError(f"{provider_id}: invalid s3 configuration") from exc
+        config = S3Config(**dict(value))
+    except ValidationError:
+        invalid = True
+    if invalid:
+        # Raise outside the native handler so a ValidationError containing the
+        # rejected input cannot survive as ``__context__``.
+        raise JobConfigurationError(f"{provider_id}: invalid s3 configuration")
+    return config
 
 
 # Credential detection for catalog properties is substring-based: PyIceberg
@@ -248,13 +266,16 @@ def _params_digest(provider_id: str, params: Mapping[str, Any]) -> str:
     else non-JSON-serializable is a configuration error surfaced here
     (ref_id time), not a raw ``TypeError``.
     """
+    invalid = False
     try:
-        return digest(params)
-    except TypeError as exc:
+        params_digest = digest(params)
+    except TypeError:
+        invalid = True
+    if invalid:
         raise JobConfigurationError(
-            f"{provider_id}: options['params'] must contain "
-            f"JSON-serializable values, got: {exc}"
-        ) from exc
+            f"{provider_id}: options['params'] must contain JSON-serializable values"
+        )
+    return params_digest
 
 
 # ---------------------------------------------------------------------------
@@ -340,13 +361,25 @@ _FILE_OPTION_TYPES: dict[str, type] = {
 }
 _SQL_OPTION_TYPES: dict[str, type] = {
     "sql": str,
+    "table": str,
     "params": dict,
     "columns": list,
     "host": str,
     "port": int,
+    "http_port": int,
+    "flight_port": int,
     "database": str,
+    "schema": str,
     "user": str,
     "password": str,
+    "partitioning": dict,
+    "protocol": str,
+}
+_LANCE_OPTION_TYPES: dict[str, type] = {
+    "columns": list,
+    "filter": str,
+    "asof": str,
+    "s3": dict,
 }
 _ICEBERG_OPTION_TYPES: dict[str, type] = {
     "selected_fields": list,
@@ -368,34 +401,6 @@ def _check_option_keys(
         raise JobConfigurationError(
             f"{provider_id}: unknown option(s) {unknown}; supported: {sorted(allowed)}"
         )
-
-
-def _project_sql(sql: str, columns: Any) -> str:
-    """Wrap a SQL query with a validated identifier-only projection.
-
-    Projection names are quoted as identifiers rather than interpolated as
-    expressions.  This keeps feature names such as ``user-name`` usable
-    without allowing a caller to inject SQL through the projection option.
-    The derived-table wrapper is intentional: it lets ClickHouse and Doris
-    apply projection without changing the caller's SQL expression semantics.
-    Provider-specific plan pushdown remains subject to the D3 benchmark gate.
-    """
-    if columns is None or columns == [] or columns == ():
-        return sql
-    if not isinstance(columns, (list, tuple)) or not all(
-        isinstance(column, str) and column for column in columns
-    ):
-        raise JobConfigurationError(
-            "SQL source option 'columns' must be a non-empty list of strings"
-        )
-    column_names = list(columns)
-    inner = sql.strip()
-    if inner.endswith(";"):
-        inner = inner[:-1].rstrip()
-    if not inner:
-        raise JobConfigurationError("SQL source query must be non-empty")
-    quoted = ", ".join(f"`{column.replace('`', '``')}`" for column in column_names)
-    return f"SELECT {quoted} FROM ({inner}) AS tributo_source_projection"
 
 
 # Sensitive query parameter names/prefixes live in ``refs`` (shared with the
@@ -421,7 +426,9 @@ def _strip_uri_credentials(uri: str) -> str:
     """
     parts = urlsplit(uri)
     if parts.username is None and not parts.query:
-        return uri
+        # URI schemes are case-insensitive. Canonicalize S3 here so both the
+        # identity and every engine binding receive the same executable URI.
+        return urlunsplit(parts) if parts.scheme.lower() == "s3" else uri
     try:
         hostname = parts.hostname or ""
         port = parts.port
@@ -469,14 +476,16 @@ def _validate_file_uri(provider_id: str, uri: str) -> None:
 class _FileProvider(DataSourceProvider):
     """Shared file-source provider logic (Parquet/CSV)."""
 
+    projection_option_name = "columns"
+    relative_uri_is_path = True
     _config_cls: ClassVar[type[ParquetSourceConfig] | type[CsvSourceConfig]]
-    _connector_name: ClassVar[str]
     _allowed_option_keys: ClassVar[frozenset[str]] = _FILE_OPTION_KEYS
 
     def normalize(self, source: CanonicalSourceInput) -> ResolvedSource:
         if isinstance(source, ProviderSourceConfig):
             _check_provider(source.provider, self.provider_id, self.aliases)
             _validate_file_uri(self.provider_id, source.uri)
+            normalized_uri = _strip_uri_credentials(source.uri)
             _check_option_keys(
                 self.provider_id, source.options, self._allowed_option_keys
             )
@@ -486,43 +495,40 @@ class _FileProvider(DataSourceProvider):
             # identity; credentials (access key id / secret) stay runtime.
             s3_identity = _identity_s3(
                 source.options.get("s3"),
-                include_environment=urlsplit(source.uri).scheme.lower() == "s3",
+                include_environment=urlsplit(normalized_uri).scheme.lower() == "s3",
             )
             if s3_identity:
                 identity["s3"] = s3_identity
-            # Keep the raw uri for a connector that natively supports signed
-            # URLs; the current connector rejects unsupported query signing
-            # explicitly at read time rather than treating it as an object key.
-            runtime["uri"] = source.uri
+            # Runtime execution uses the same normalized URI as the logical
+            # identity; credential-bearing/signed S3 URIs were rejected above.
+            runtime["uri"] = normalized_uri
             return ResolvedSource(
                 provider_id=self.provider_id,
-                canonical_uri=_strip_uri_credentials(source.uri),
+                canonical_uri=normalized_uri,
                 identity_options=identity,
                 runtime_options=runtime,
             )
         if isinstance(source, self._config_cls):
             _validate_file_uri(self.provider_id, source.path)
+            normalized_uri = _strip_uri_credentials(source.path)
             identity = {"columns": list(source.columns)} if source.columns else {}
             s3_identity = _identity_s3(
                 source.s3,
-                include_environment=urlsplit(source.path).scheme.lower() == "s3",
+                include_environment=urlsplit(normalized_uri).scheme.lower() == "s3",
             )
             if s3_identity:
                 identity["s3"] = s3_identity
             return ResolvedSource(
                 provider_id=self.provider_id,
-                canonical_uri=_strip_uri_credentials(source.path),
+                canonical_uri=normalized_uri,
                 identity_options=identity,
-                # Runtime keeps the raw path for a connector that supports
-                # signed URLs; canonical_uri is the stripped identity.
-                runtime_options={"uri": source.path, "s3": source.s3},
+                # Runtime and identity share one executable URI. Credentials
+                # remain in the isolated S3 configuration object instead.
+                runtime_options={"uri": normalized_uri, "s3": source.s3},
             )
         raise JobConfigurationError(
             f"{self.provider_id}: unsupported source {type(source).__name__!r}"
         )
-
-    def open(self, resolved: ResolvedSource) -> DatasetHandle:
-        return _ConnectorHandle(self._connector_name, resolved)
 
 
 class ParquetProvider(_FileProvider):
@@ -531,7 +537,20 @@ class ParquetProvider(_FileProvider):
     provider_id = "tributo.parquet"
     aliases = frozenset({"parquet"})
     _config_cls = ParquetSourceConfig
-    _connector_name = "parquet"
+
+    def plan(self, resolved: ResolvedSource) -> "LogicalScanPlan":
+        """Describe a Parquet read without invoking the legacy connector."""
+        from tributo.data.scan_plan import FileScan
+
+        scheme = urlsplit(resolved.canonical_uri).scheme.lower()
+        filesystem_id = scheme if scheme else "local"
+        return FileScan(
+            provider_id=self.provider_id,
+            connector_id="parquet",
+            uri=resolved.canonical_uri,
+            filesystem_id=filesystem_id,
+            options=resolved.identity_options,
+        )
 
 
 class CsvProvider(_FileProvider):
@@ -540,7 +559,20 @@ class CsvProvider(_FileProvider):
     provider_id = "tributo.csv"
     aliases = frozenset({"csv"})
     _config_cls = CsvSourceConfig
-    _connector_name = "csv"
+
+    def plan(self, resolved: ResolvedSource) -> "LogicalScanPlan":
+        """Describe a CSV read without invoking the legacy connector."""
+        from tributo.data.scan_plan import FileScan
+
+        scheme = urlsplit(resolved.canonical_uri).scheme.lower()
+        filesystem_id = scheme if scheme else "local"
+        return FileScan(
+            provider_id=self.provider_id,
+            connector_id="csv",
+            uri=resolved.canonical_uri,
+            filesystem_id=filesystem_id,
+            options=resolved.identity_options,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -553,6 +585,7 @@ class IcebergProvider(DataSourceProvider):
 
     provider_id = "tributo.iceberg"
     aliases = frozenset({"iceberg"})
+    projection_option_name = "selected_fields"
 
     def normalize(self, source: CanonicalSourceInput) -> ResolvedSource:
         if isinstance(source, ProviderSourceConfig):
@@ -661,8 +694,134 @@ class IcebergProvider(DataSourceProvider):
             f"{self.provider_id}: unsupported source {type(source).__name__!r}"
         )
 
-    def open(self, resolved: ResolvedSource) -> DatasetHandle:
-        return _IcebergHandle(resolved)
+    def plan(self, resolved: ResolvedSource) -> "LogicalScanPlan":
+        """Describe a catalog-backed Iceberg table for native engine readers."""
+        from tributo.data.scan_plan import (
+            CatalogTableRef,
+            SnapshotVersionRef,
+            SourceCapability,
+            TableScan,
+        )
+
+        catalog_name = str(resolved.runtime_options.get("catalog_name") or "default")
+        table_identifier = str(resolved.runtime_options.get("table_identifier") or "")
+        if not table_identifier:
+            raise JobConfigurationError(
+                "tributo.iceberg: resolved source is missing table_identifier"
+            )
+        parts = tuple(part for part in table_identifier.split(".") if part)
+        if not parts:
+            raise JobConfigurationError(
+                "tributo.iceberg: table_identifier must be non-empty"
+            )
+        required: set[SourceCapability] = set()
+        if resolved.identity_options.get("selected_fields"):
+            required.add(SourceCapability.PROJECTION)
+        snapshot_id = resolved.identity_options.get("snapshot_id")
+        return TableScan(
+            provider_id=self.provider_id,
+            connector_id="iceberg",
+            table=CatalogTableRef(
+                catalog_id=catalog_name,
+                namespace=parts[:-1],
+                table=parts[-1],
+            ),
+            version_ref=(
+                SnapshotVersionRef(snapshot_id=int(snapshot_id))
+                if snapshot_id is not None
+                else None
+            ),
+            required_capabilities=frozenset(required),
+            options=resolved.identity_options,
+        )
+
+
+class LanceProvider(DataSourceProvider):
+    """Logical Lance table source delegated to Ray Data or Daft."""
+
+    provider_id = "tributo.lance"
+    aliases = frozenset({"lance"})
+    projection_option_name = "columns"
+    relative_uri_is_path = True
+
+    def normalize(self, source: CanonicalSourceInput) -> ResolvedSource:
+        if not isinstance(source, ProviderSourceConfig):
+            raise JobConfigurationError(
+                "tributo.lance requires the provider/uri source shape"
+            )
+        _check_provider(source.provider, self.provider_id, self.aliases)
+        _validate_file_uri(self.provider_id, source.uri)
+        _check_option_keys(self.provider_id, source.options, _LANCE_OPTION_KEYS)
+        _require_option_types(self.provider_id, source.options, _LANCE_OPTION_TYPES)
+        version = source.options.get("version")
+        if version is not None and (
+            isinstance(version, bool) or not isinstance(version, (int, str))
+        ):
+            raise JobConfigurationError(
+                "tributo.lance: option 'version' must be int or str"
+            )
+        if version is not None and source.options.get("asof") is not None:
+            raise JobConfigurationError(
+                "tributo.lance: version and asof are mutually exclusive"
+            )
+        identity, runtime = _split_options(source.options, _LANCE_IDENTITY_KEYS)
+        normalized_uri = _strip_uri_credentials(source.uri)
+        s3_identity = _identity_s3(
+            source.options.get("s3"),
+            include_environment=urlsplit(normalized_uri).scheme.lower() == "s3",
+        )
+        if s3_identity:
+            identity["s3"] = s3_identity
+        runtime["s3"] = source.options.get("s3")
+        return ResolvedSource(
+            provider_id=self.provider_id,
+            canonical_uri=normalized_uri,
+            identity_options=identity,
+            runtime_options=runtime,
+        )
+
+    def plan(self, resolved: ResolvedSource) -> "LogicalScanPlan":
+        from tributo.data.scan_plan import (
+            AsOfVersionRef,
+            NumericVersionRef,
+            SourceCapability,
+            TableScan,
+            TagVersionRef,
+            UriTableRef,
+        )
+
+        required: set[SourceCapability] = set()
+        if resolved.identity_options.get("columns"):
+            required.add(SourceCapability.PROJECTION)
+        if resolved.identity_options.get("filter"):
+            required.add(SourceCapability.PREDICATE_PUSHDOWN)
+        version = resolved.identity_options.get("version")
+        asof = resolved.identity_options.get("asof")
+        version_ref: Any = None
+        if isinstance(version, int):
+            version_ref = NumericVersionRef(version=version)
+        elif isinstance(version, str):
+            version_ref = TagVersionRef(tag=version)
+        elif isinstance(asof, str):
+            try:
+                timestamp = datetime.fromisoformat(asof)
+            except ValueError as exc:
+                raise JobConfigurationError(
+                    "tributo.lance: option 'asof' must be an ISO-8601 timestamp"
+                ) from exc
+            if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+                raise JobConfigurationError(
+                    "tributo.lance: option 'asof' must include a timezone offset"
+                )
+            version_ref = AsOfVersionRef(timestamp=timestamp)
+        return TableScan(
+            provider_id=self.provider_id,
+            connector_id="lance",
+            table=UriTableRef(uri=resolved.canonical_uri),
+            version_ref=version_ref,
+            required_capabilities=frozenset(required),
+            options=resolved.identity_options,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -688,7 +847,13 @@ def _resolve_connection(
     port = rt.get("port")
     if port is None:
         port_env = os.getenv(f"{prefix}_PORT", "")
-        port = int(port_env) if port_env else int(defaults.get("port", 8123))
+        port = port_env if port_env else defaults.get("port", 8123)
+    try:
+        port = int(port)
+    except (TypeError, ValueError):
+        raise JobConfigurationError(
+            f"{dialect} source port must be an integer"
+        ) from None
     user = rt.get("user")
     if user is None:
         user = os.getenv(f"{prefix}_USER", str(defaults.get("user", "")))
@@ -701,106 +866,15 @@ def _resolve_connection(
     return host, port, user, password, database
 
 
-def _clickhouse_read(resolved: ResolvedSource) -> "ray.data.Dataset":
-    """Execute a ClickHouse query via the native client and close it."""
-    import ray.data
-
-    rt = resolved.runtime_options
-    sql = str(rt.get("sql") or "")
-    if not sql.strip():
-        raise ValueError("missing sql in clickhouse source config")
-    host, port, user, password, database = _resolve_connection("clickhouse", rt)
-
-    try:
-        import clickhouse_connect
-    except ImportError as exc:
-        raise JobConfigurationError(
-            "The 'clickhouse' extra is required for ClickHouse sources. "
-            "Install it with: pip install 'tributo[clickhouse]'"
-        ) from exc
-
-    client = clickhouse_connect.get_client(
-        host=host,
-        port=port,
-        username=user,
-        password=password or "",
-        database=database,
-    )
-    try:
-        table = client.query_arrow(
-            _project_sql(sql, resolved.identity_options.get("columns")),
-            parameters=rt.get("params"),
-        )
-    finally:
-        client.close()
-
-    if table is None or table.num_rows == 0:
-        raise ValueError("ClickHouse query returned empty result")
-
-    num_blocks = max(1, table.num_rows // 10000)
-    dataset: ray.data.Dataset = ray.data.from_arrow(
-        table, override_num_blocks=num_blocks
-    )
-    return dataset
-
-
-def _doris_read(resolved: ResolvedSource) -> "ray.data.Dataset":
-    """Execute a Doris query via MySQL protocol and close the connection."""
-    import ray.data
-
-    rt = resolved.runtime_options
-    sql = str(rt.get("sql") or "")
-    if not sql.strip():
-        raise ValueError("missing sql in doris source config")
-    host, port, user, password, database = _resolve_connection("doris", rt)
-
-    import pyarrow as pa
-
-    try:
-        import pymysql
-    except ImportError as exc:
-        raise ImportError(
-            "The 'mysql' extra is required for Doris sources. "
-            "Install it with: pip install 'tributo[mysql]'"
-        ) from exc
-
-    conn = pymysql.connect(
-        host=host,
-        port=port,
-        user=user,
-        password=password,
-        database=database,
-    )
-    try:
-        with conn.cursor() as cursor:
-            cursor.execute(_project_sql(sql, resolved.identity_options.get("columns")))
-            if cursor.description is None:
-                raise ValueError(
-                    "Doris query returned no result set "
-                    "(did you run a non-SELECT statement?)."
-                )
-            rows = cursor.fetchall()
-            if not rows:
-                raise ValueError("Doris query returned empty result")
-            columns = [desc[0] for desc in cursor.description]
-            table = pa.table(
-                {col: [row[i] for row in rows] for i, col in enumerate(columns)}
-            )
-    finally:
-        conn.close()
-
-    return ray.data.from_arrow(table)
-
-
 # ---------------------------------------------------------------------------
-# SQL providers (ClickHouse / Doris)
+# SQL providers (logical control plane only)
 # ---------------------------------------------------------------------------
 
 
 class _SqlProvider(DataSourceProvider):
-    """Shared SQL-source provider logic (ClickHouse/Doris)."""
+    """Shared SQL-source normalization and plan construction."""
 
-    _reader: ClassVar[Any]  # set by subclass: _clickhouse_read / _doris_read
+    projection_option_name = "columns"
     _allowed_option_keys: ClassVar[frozenset[str]] = _SQL_OPTION_KEYS
 
     def _canonical_uri(
@@ -857,13 +931,33 @@ class _SqlProvider(DataSourceProvider):
             _require_option_types(self.provider_id, source.options, _SQL_OPTION_TYPES)
             options = dict(source.options)
             sql = options.pop("sql", None)
+            table = options.pop("table", None)
             params = options.pop("params", None)
             columns = options.pop("columns", None)
+            partitioning_raw = options.pop("partitioning", None)
+            protocol = options.pop("protocol", None)
+            partitioning = (
+                SqlPartitioning.model_validate(partitioning_raw)
+                if partitioning_raw is not None
+                else None
+            )
             if params == {}:
                 params = None
-            if not sql or not str(sql).strip():
+            has_sql = bool(sql and str(sql).strip())
+            has_table = bool(table and str(table).strip())
+            if has_sql == has_table:
                 raise JobConfigurationError(
-                    f"{self.provider_id}: options['sql'] is required"
+                    f"{self.provider_id}: exactly one of options['sql'] or "
+                    "options['table'] is required"
+                )
+            if self._dialect() == "doris" and has_table and protocol is None:
+                protocol = "mysql"
+            if protocol is not None and (
+                self._dialect() != "doris" or protocol not in {"mysql", "flight"}
+            ):
+                raise JobConfigurationError(
+                    f"{self.provider_id}: protocol must be mysql or flight and "
+                    "is only valid for Doris table reads"
                 )
             # The uri is the connection address: host[:port]/database come
             # from it, explicit options win.
@@ -896,11 +990,18 @@ class _SqlProvider(DataSourceProvider):
                 raise JobConfigurationError(
                     f"{self.provider_id}: uri contains an invalid port"
                 ) from exc
-            identity: dict[str, Any] = {"sql_digest": digest(str(sql))}
+            identity: dict[str, Any] = (
+                {"sql_digest": digest(str(sql))} if has_sql else {"table": str(table)}
+            )
             if params is not None:
                 identity["params_digest"] = _params_digest(self.provider_id, params)
             if columns:
                 identity["columns"] = list(columns)
+            schema = options.get("schema")
+            if schema:
+                identity["schema"] = schema
+            if partitioning is not None:
+                identity["partitioning"] = partitioning.model_dump(mode="json")
             runtime = {
                 k: v
                 for k, v in options.items()
@@ -931,7 +1032,12 @@ class _SqlProvider(DataSourceProvider):
                 if password is not None
                 else (unquote(parsed.password) if parsed.password is not None else None)
             )
-            runtime["sql"] = str(sql)
+            if has_sql:
+                runtime["sql"] = str(sql)
+            else:
+                runtime["table"] = str(table)
+            if protocol is not None:
+                runtime["protocol"] = protocol
             if params is not None:
                 runtime["params"] = params
             return ResolvedSource(
@@ -945,20 +1051,35 @@ class _SqlProvider(DataSourceProvider):
                 raise JobConfigurationError(
                     f"{self.provider_id}: dialect {source.dialect!r} does not match"
                 )
-            builtin_identity: dict[str, Any] = {"sql_digest": digest(source.sql)}
+            builtin_identity: dict[str, Any] = (
+                {"sql_digest": digest(source.sql)}
+                if source.sql.strip()
+                else {"table": str(source.table)}
+            )
             if source.params is not None:
                 builtin_identity["params_digest"] = _params_digest(
                     self.provider_id, source.params
                 )
             if source.columns:
                 builtin_identity["columns"] = list(source.columns)
+            if source.database_schema:
+                builtin_identity["schema"] = source.database_schema
+            if source.partitioning is not None:
+                builtin_identity["partitioning"] = source.partitioning.model_dump(
+                    mode="json"
+                )
             runtime = {
                 "host": source.host,
                 "port": source.port,
+                "http_port": source.http_port,
+                "flight_port": source.flight_port,
                 "database": source.database,
+                "schema": source.database_schema,
                 "user": source.user,
                 "password": source.password,
                 "sql": source.sql,
+                "table": source.table,
+                "protocol": source.protocol,
                 "params": source.params,
             }
             return ResolvedSource(
@@ -971,8 +1092,86 @@ class _SqlProvider(DataSourceProvider):
             f"{self.provider_id}: unsupported source {type(source).__name__!r}"
         )
 
-    def open(self, resolved: ResolvedSource) -> DatasetHandle:
-        return _SqlHandle(self._reader, resolved)
+    def plan(self, resolved: ResolvedSource) -> "LogicalScanPlan":
+        """Describe a bounded SQL query without exposing SQL text or credentials."""
+        from tributo.data.scan_plan import (
+            SourceCapability,
+            SqlScan,
+            SqlShardMode,
+            SqlShardRequirement,
+            SqlTableRead,
+        )
+
+        query_digest = resolved.identity_options.get("sql_digest")
+        table = resolved.identity_options.get("table")
+        if isinstance(query_digest, str):
+            raise JobConfigurationError(
+                f"{self.provider_id}: raw SQL ingestion is not supported by the "
+                "engine-neutral read contract; configure a structured 'table' "
+                "source with columns and partitioning, or execute the query "
+                "outside Tributo ingestion"
+            )
+        if not isinstance(table, str):
+            raise JobConfigurationError(
+                f"{self.provider_id}: resolved source has no SQL read target"
+            )
+        required: set[SourceCapability] = set()
+        if resolved.identity_options.get("columns"):
+            required.add(SourceCapability.PROJECTION)
+        raw_partitioning = resolved.identity_options.get("partitioning")
+        if isinstance(raw_partitioning, Mapping):
+            partitioning = SqlPartitioning.model_validate(dict(raw_partitioning))
+            if partitioning.mode == "parallel":
+                assert partitioning.column is not None
+                sharding = SqlShardRequirement(
+                    mode=SqlShardMode.PARALLEL,
+                    columns=(partitioning.column,),
+                    target_partitions=partitioning.num_partitions,
+                )
+            elif partitioning.mode == "auto":
+                sharding = SqlShardRequirement(
+                    mode=SqlShardMode.AUTO,
+                    target_partitions=partitioning.num_partitions,
+                )
+            else:
+                sharding = SqlShardRequirement()
+        else:
+            sharding = SqlShardRequirement(
+                mode=(
+                    SqlShardMode.AUTO
+                    if self._dialect() in {"clickhouse", "doris"}
+                    else SqlShardMode.SINGLE
+                )
+            )
+        if self._dialect() == "postgresql":
+            schema = resolved.runtime_options.get("schema") or "public"
+        else:
+            schema = resolved.runtime_options.get("database")
+        target = SqlTableRead(
+            table=table,
+            schema=str(schema or "") or None,
+            projection=tuple(resolved.identity_options.get("columns", ())),
+        )
+        plan_options = {
+            key: value
+            for key, value in {
+                "params_digest": resolved.identity_options.get("params_digest"),
+                "partition_bound_strategy": (
+                    raw_partitioning.get("bound_strategy")
+                    if isinstance(raw_partitioning, Mapping)
+                    else None
+                ),
+            }.items()
+            if value is not None
+        }
+        return SqlScan(
+            provider_id=self.provider_id,
+            connector_id=self._dialect(),
+            target=target,
+            sharding=sharding,
+            required_capabilities=frozenset(required),
+            options=plan_options,
+        )
 
     @classmethod
     def _dialect(cls) -> str:
@@ -980,126 +1179,24 @@ class _SqlProvider(DataSourceProvider):
 
 
 class ClickHouseProvider(_SqlProvider):
-    """Logical ClickHouse source (native client)."""
+    """Logical ClickHouse source for an installed OLAP Binding."""
 
     provider_id = "tributo.clickhouse"
     aliases = frozenset({"clickhouse"})
-    _reader = _clickhouse_read
 
 
 class DorisProvider(_SqlProvider):
-    """Logical Doris source (MySQL protocol)."""
+    """Logical Doris source for an installed OLAP Binding."""
 
     provider_id = "tributo.doris"
     aliases = frozenset({"doris"})
-    _reader = _doris_read
 
 
-# ---------------------------------------------------------------------------
-# DatasetHandles
-# ---------------------------------------------------------------------------
+class PostgreSqlProvider(_SqlProvider):
+    """Logical PostgreSQL source for Ray Data and Daft SQL readers."""
 
-
-class _ConnectorHandle(DatasetHandle):
-    """Handle over a DataConnector read (parquet/csv)."""
-
-    def __init__(self, connector_name: str, resolved: ResolvedSource) -> None:
-        super().__init__()
-        self._connector_name = connector_name
-        self._resolved = resolved
-
-    def _read(self) -> "ray.data.Dataset":
-        resolved = self._resolved
-        # Runtime keeps the raw uri for connector execution; canonical_uri is
-        # the credential-stripped identity.  The normalizer rejects unsupported
-        # S3 URI features, and this is a defensive backstop for manually-built
-        # ResolvedSource objects.
-        path = resolved.runtime_options.get("uri") or resolved.canonical_uri
-        if isinstance(path, str) and path.startswith("s3://"):
-            parts = urlsplit(path)
-            if parts.username is not None or parts.query or parts.fragment:
-                raise JobConfigurationError(
-                    f"{self._connector_name}: S3 URI userinfo, query parameters "
-                    "and fragments are unsupported by the connector; use S3 "
-                    "credentials/configuration or a provider with native "
-                    "versioned/signed-URL support"
-                )
-        elif (
-            isinstance(path, str) and not urlsplit(path).scheme and not has_magic(path)
-        ):
-            local_path = Path(path)
-            if not local_path.exists():
-                raise FileNotFoundError(f"Data file not found: {local_path}")
-        kwargs: dict[str, Any] = {"path": path}
-        columns = resolved.identity_options.get("columns")
-        if columns:
-            kwargs["columns"] = list(columns)
-        s3 = resolved.runtime_options.get("s3")
-        if isinstance(s3, Mapping):
-            kwargs["s3"] = S3Config(**dict(s3))
-        elif s3 is not None:
-            kwargs["s3"] = s3
-        return get_connector(self._connector_name).read(**kwargs)
-
-    def _release(self) -> None:
-        pass  # connector reads hold no provider-owned connection
-
-
-class _IcebergHandle(DatasetHandle):
-    """Handle over the Iceberg connector read."""
-
-    def __init__(self, resolved: ResolvedSource) -> None:
-        super().__init__()
-        self._resolved = resolved
-
-    def _read(self) -> "ray.data.Dataset":
-        resolved = self._resolved
-        rt = resolved.runtime_options
-        table_identifier = rt.get("table_identifier")
-        if not table_identifier:
-            raise JobConfigurationError(
-                "tributo.iceberg: resolved source is missing "
-                "'table_identifier' (provider/uri shape must include the "
-                "table path)"
-            )
-        kwargs: dict[str, Any] = {
-            "table_identifier": table_identifier,
-            "catalog_name": rt.get("catalog_name", "default"),
-            "catalog_properties": dict(rt.get("catalog_properties", {})),
-            "s3": rt.get("s3"),
-        }
-        s3 = kwargs["s3"]
-        if isinstance(s3, Mapping):
-            kwargs["s3"] = S3Config(**dict(s3))
-        snapshot_id = resolved.identity_options.get("snapshot_id")
-        if snapshot_id is not None:
-            kwargs["snapshot_id"] = snapshot_id
-        selected = resolved.identity_options.get("selected_fields")
-        if selected:
-            kwargs["selected_fields"] = list(selected)
-        row_filter = resolved.identity_options.get("row_filter")
-        if row_filter:
-            kwargs["row_filter"] = row_filter
-        return get_connector("iceberg").read(**kwargs)
-
-    def _release(self) -> None:
-        pass
-
-
-class _SqlHandle(DatasetHandle):
-    """Handle over a SQL read; the connection is closed inside ``_read``."""
-
-    def __init__(self, reader: Any, resolved: ResolvedSource) -> None:
-        super().__init__()
-        self._reader = reader
-        self._resolved = resolved
-
-    def _read(self) -> "ray.data.Dataset":
-        dataset: ray.data.Dataset = self._reader(self._resolved)
-        return dataset
-
-    def _release(self) -> None:
-        pass  # connection lifecycle is owned by _read (try/finally)
+    provider_id = "tributo.postgresql"
+    aliases = frozenset({"postgresql"})
 
 
 # ── Built-in registration (module import triggers registration) ──
@@ -1110,7 +1207,9 @@ for _provider_cls in (
     ParquetProvider,
     CsvProvider,
     IcebergProvider,
+    LanceProvider,
     ClickHouseProvider,
     DorisProvider,
+    PostgreSqlProvider,
 ):
     register_provider(_provider_cls)

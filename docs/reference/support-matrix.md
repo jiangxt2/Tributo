@@ -7,13 +7,22 @@ prototypes.
 
 | Capability | Status | Boundary |
 | --- | --- | --- |
-| Local/S3 Parquet and CSV reads | Implemented | Bounded Ray Dataset input |
-| Iceberg reads | Implemented | PyIceberg catalog and planned files |
-| ClickHouse reads | Implemented | Native clickhouse-connect client |
-| Doris reads | Implemented | MySQL protocol through PyMySQL |
+| Local/S3 Parquet and CSV reads | Verified | Native Ray Data or Daft handle through one Gateway |
+| Local/S3 Iceberg reads | Verified | Built-in bindings use PyIceberg `>=0.11.1,<0.12.0` with `PyArrowFileIO`; Ray may push `row_filter` into the scan, Daft applies it as a lazy residual filter, and empty-table schema is preserved from Iceberg metadata; broader Catalog/delete-file matrix remains gated |
+| Local/S3 Lance reads | Verified | Native Ray Data or Daft table reader; numeric versions and tags are supported, Daft also supports as-of, and Iceberg snapshot references fail closed |
+| PostgreSQL structured table reads | Verified | Ray uses a single public SQL read and fails closed on parallel shard requirements; Daft may use native partition hints |
+| ClickHouse/Doris raw SQL | Unsupported | Legacy shapes return a credential-free migration error; use structured table input or execute SQL outside Tributo ingestion |
+| HDFS Parquet/CSV reads | Adapter only | Ray binding exists; real HDFS/JVM/worker gate is pending |
+| ClickHouse reads | Adapter only | Requires unpublished `daft-olap-connectors` and real-database Conformance; Connector `auto` partition discovery is distinct from engine auto-routing |
+| Doris reads | Adapter only | Requires unpublished `ray-doris` or `daft-olap-connectors` and real-database Conformance; tablet planning remains Connector-owned |
+| ORC and Hive external-table reads | Not implemented | Locked Ray/Daft versions expose no validated public reader |
+| Third-party ingestion Provider/Binding SPI | Implemented | Installed packages use `tributo.ingestion_providers` plus `tributo.ingestion_bindings`; bad plugins are isolated, duplicate routes never replace built-ins, and Binding selection can constrain filesystem, catalog, and storage format |
 | Lance output | Implemented for embedding workflows | Not a generic inference sink |
+| Embedding canonical input | Implemented | Submit host performs credential-safe serialization only; the cluster resolves the explicit Ray/Daft engine, with Daft-to-Ray conversion at the consumer boundary |
 | Database inference sinks | Extension point | No built-in ClickHouse or Doris sink |
-| Daft transform compiler | Prototype | Validation-only; not the stable data path |
+| Ray/Daft transform compiler | Alpha | Portable bounded ETL subset with dual-engine Conformance |
+| File glob empty-match behavior | Engine-defined | Tributo delegates discovery; exception type and timing follow the selected Ray/Daft reader |
+| Bounded SQL empty result | Valid | Ingestion returns an empty native handle; Training, Inference, or another consumer decides whether empty input is acceptable |
 
 ## Training
 
@@ -56,6 +65,8 @@ prototypes.
 | YAML configuration | Rejected |
 | Public stability source | `@PublicAPI` and the stability inventory |
 | Versioning | Semantic Versioning |
+| Third-party Provider `normalize()+open()` | Deprecated; old Ray adapter only, with `FutureWarning`; Gateway requires `plan()` plus `EngineBinding` |
+| New third-party bounded source | `ProviderSourceConfig` plus versioned Provider/Binding descriptors; no consumer-module source branches |
 
 For symbol-level compatibility promises, consult the
 [API stability inventory](../STABILITY.md).

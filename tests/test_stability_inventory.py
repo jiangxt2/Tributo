@@ -72,11 +72,18 @@ STABILITY_MAP: dict[str, str] = {
     "tributo.data.csv": "beta",
     "tributo.data.provider_registry": "beta",
     "tributo.data.refs": "beta",
+    # Data — alpha candidate ingestion contract
+    "tributo.data.scan_plan": "developer",
+    "tributo.data.ingestion": "alpha",
+    "tributo.data.handle_adapters": "alpha",
+    "tributo.data.transform_ir": "alpha",
     # Data — beta
     "tributo.data.provider": "beta",
     "tributo.data.graph": "beta",
-    # Data — prototype
-    "tributo.data.transform_compiler": "prototype",
+    # Data — internal engine translation
+    "tributo.data.engine_binding": "developer",
+    "tributo.data.provider_plugins": "developer",
+    "tributo.data.transform_compiler": "developer",
     # Exporting — beta
     "tributo.exporting.service": "beta",
     "tributo.exporting.models": "beta",
@@ -156,6 +163,7 @@ _SYMBOL_OVERRIDES: dict[str, str] = {
     "tributo.exceptions.KafkaCommitError": "beta",
     "tributo.exceptions.KafkaPoisonMessageError": "beta",
     "tributo.exceptions.ResourceBudgetExceededError": "beta",
+    "tributo.exceptions.EngineNotAvailableError": "alpha",
 }
 
 

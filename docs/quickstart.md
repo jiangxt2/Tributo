@@ -53,25 +53,33 @@ uv run tributo submit \
 ```python
 # Or from Python
 from tributo.training import build_trainer
-from tributo.training.data_loader import load_ray_dataset_from_config
+from tributo.data import IngestionRequest, ParquetSourceConfig, RayDataHandle, open_ingestion
 
-train_ds = load_ray_dataset_from_config({
-    "type": "s3",
-    "uri": "s3://your-bucket/train/*.parquet",
-    "format": "parquet",
-})
-
-trainer = build_trainer(
-    ray_dataset=train_ds,
-    train_config={
-        "label_col": "label",
-        "xgb_params": {"objective": "binary:logistic", "eval_metric": ["auc"]},
-        "num_rounds": 100,
-    },
-    num_workers=4,
+ingestion = open_ingestion(
+    IngestionRequest(
+        source=ParquetSourceConfig(
+            path="s3://your-bucket/train/*.parquet"
+        ),
+        engine="ray",
+    )
 )
-result = trainer.fit()
-print(f"Model saved to: {result.metrics['onnx_path']}")
+assert isinstance(ingestion.handle, RayDataHandle)
+train_ds = ingestion.handle.dataset
+
+try:
+    trainer = build_trainer(
+        ray_dataset=train_ds,
+        train_config={
+            "label_col": "label",
+            "xgb_params": {"objective": "binary:logistic", "eval_metric": ["auc"]},
+            "num_rounds": 100,
+        },
+        num_workers=4,
+    )
+    result = trainer.fit()
+    print(f"Model saved to: {result.metrics['onnx_path']}")
+finally:
+    ingestion.close()
 ```
 
 ## 4. Serve a Model for Inference

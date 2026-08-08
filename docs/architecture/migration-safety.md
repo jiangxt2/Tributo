@@ -5,36 +5,43 @@ convergence. These apply to all migration PRs (D1+D2, E1, E2, E3, E4, T1, T3).
 
 ## Core Principle
 
-**New path + compat adapter + rollback switch — never delete the old path until
-exit gates are satisfied.**
+**New path + typed compat adapter + observable stop-loss gate.** Compatibility
+inputs may remain after a legacy execution backend is removed; an adapter must
+normalize into the new path rather than preserve two reader implementations.
 
 ## Migration Strategy Per Domain
 
 ### Data Provider (D1+D2 / D3)
 
 ```
-Old: training.data_loader direct dispatch (legacy type/path/dialect config)
+Old input: legacy type/path/dialect config
   ↓
-New: DataSourceProvider + ResolvedSource (logical provider ID, canonical URI)
+Compat: LegacyConfigNormalizer (conversion only)
   ↓
-Compat: LegacyConfigNormalizer wraps old config dicts → ResolvedSource
+New: DataSourceProvider / IngestionGateway (one execution path)
 ```
 
-Exit gates before removing legacy adapter:
-- [ ] All built-in data sources (Parquet, CSV, Iceberg, ClickHouse, Doris) have
-  Provider implementations with contract tests. Lance stays deferred — it is not
-  part of the D1+D2 matrix; S3 is a storage profile, not a provider.
-- [ ] Contract/golden comparison: old path vs new path produce equivalent
-  schema, rows and error behavior for the same input on a fixed benchmark
-  dataset; the new path returns a bounded `DatasetHandle`.
-- [ ] Training, inference, and embeddings all route through the new Provider
+Current exit-gate status:
+- [x] All built-in logical sources (Parquet, CSV, Iceberg, Lance, ClickHouse,
+  Doris, and PostgreSQL) have Provider implementations with contract tests.
+  Adapter presence is not a runtime-support claim; each physical combination
+  still needs its own infrastructure gate.
+- [x] Representative compatibility comparisons show that canonical and legacy
+  inputs enter the same Gateway and produce equivalent Ray Data results. The
+  new public path returns an `IngestionOpenResult` with a typed native handle.
+- [x] Training, inference, and embeddings all route through the new Provider
   (verified by code audit, not just test coverage).
-- [ ] Legacy adapter has been in place for ≥ 1 minor version with
-  `FutureWarning` (the historical deprecation signal used by the data
-  loader).
+- [ ] Legacy input adapters have completed their documented compatibility
+  window. They remain available and keep their `FutureWarning`; only the
+  duplicate execution backend has been removed.
 
-Rollback: Set `TRIBUTO_DATA_BACKEND=legacy` environment variable (or equivalent
-feature flag) to bypass the Provider router and use the old dispatch.
+The maintainer-approved architecture convergence removed the duplicate
+direct-dispatch execution backend without claiming that the legacy *input*
+deprecation window had elapsed. `TRIBUTO_DATA_BACKEND=legacy` therefore remains
+accepted with a `FutureWarning`, but it selects the same conversion and Gateway
+path as the default. Rollback uses normal release rollback or disables adoption
+of the alpha Gateway; the compatibility selector does not reactivate duplicate
+reader code.
 
 ### D3 Delivery Record
 
@@ -47,12 +54,31 @@ Migration impact:
   projection.
 - Output sinks are unchanged.
 
-Rollback:
+Compatibility:
 
-- Keep the legacy adapters enabled; no legacy input path is removed by D3.
-- `TRIBUTO_DATA_BACKEND=legacy` remains the data-loader rollback switch.
-- A caller can continue using the legacy inference and embedding input forms
-  while migrating source configuration.
+- Legacy inference and embedding input forms remain accepted during their
+  deprecation windows.
+- Legacy local-runner `val_path` and `test_path` remain relative to the caller
+  working directory during that window; canonical source objects use the
+  shared project-root path policy.
+- They normalize to the same Provider path and cannot select a legacy backend.
+- Existing downstream callers use the Ray compatibility adapter, which now
+  delegates the same Gateway with `engine="ray"`; it is an API-shape adapter,
+  not an alternate reader backend.
+- Third-party Providers that shipped only the beta `normalize()+open()` SPI
+  remain callable from that Ray compatibility adapter with a `FutureWarning`.
+  The alpha Gateway never catches a planning or Binding failure and falls back
+  to `open()`; external Providers must migrate to `plan()` plus an
+  `EngineBinding` before the next major release.
+- Legacy ClickHouse and Doris raw-SQL shapes remain parseable only to produce a
+  credential-free migration error. Built-in execution supports structured
+  table/projection/partitioning requests; Tributo does not restore an arbitrary
+  SQL reader.
+- Embedding submission validates and transports a credential-free source but
+  does not resolve Providers, Bindings, or optional dependencies on the submit
+  host. The Ray job performs that validation in its cluster image. Its engine
+  remains explicit; Daft input reaches the Ray-only embedding consumer through
+  the recorded Daft-to-Ray adapter.
 
 Deprecation window:
 
@@ -62,18 +88,31 @@ work after the data migration exit gates are satisfied.
 
 Exit gate:
 
-Pending. Do not remove the legacy adapters until the provider contract/golden
-comparison, training/inference/embedding route audit, benchmark thresholds, and
-compatibility window requirements above are satisfied.
+The independent runtime backend is removed. Do not remove legacy *input
+normalizers* until their compatibility windows and route audits are satisfied.
 
-During D1+D2, existing `DataConnector` and SQL loaders remain implementation
-details behind Provider adapters. Provider IDs identify logical data sources
-(`tributo.parquet`, `tributo.clickhouse`, etc.); engine/backend selectors are
-not persisted as public provider IDs. `SourcePlan` and transform pushdown are
-not part of this migration gate and remain deferred to D4. File providers
-accept local paths and S3 paths with an explicit `S3Config`; S3 URI userinfo,
-query parameters, and fragments are rejected because the current connectors
-cannot execute those forms without changing object-key semantics.
+Provider IDs identify logical data sources (`tributo.parquet`,
+`tributo.clickhouse`, etc.); engine selectors are not persisted as provider
+IDs. The unused `SourcePlan` / `SourceRouter` prototype has been replaced by
+the explicit `IngestionRequest` → `IngestionGateway` → `LogicalScanPlan` →
+`EngineBinding` path. Gateway `describe()` performs static validation without
+metadata I/O; `open()` creates the lazy typed handle and receipt. Built-in
+`DataConnector.read()` and training loader surfaces are one-way Ray adapters
+over this path and must never restore a reader. Provider `open()` is a temporary
+external beta-SPI compatibility exception described above, not a Gateway
+fallback. File
+providers accept local paths and S3 paths with an explicit `S3Config`; S3 URI
+userinfo, query parameters, and fragments are rejected because accepting them
+would change object-key or credential semantics.
+
+New third-party sources do not use the deprecated `open()` exception. An
+installed package publishes a versioned logical Provider through
+`tributo.ingestion_providers` and physical Ray/Daft Bindings through
+`tributo.ingestion_bindings`. Provider-declared projection and relative-path
+metadata replace consumer-side provider maps. Catalog and storage-format
+Binding constraints allow Hive tables backed by Parquet, ORC, or Iceberg
+without changing the Gateway or any algorithm consumer. Duplicate or ambiguous
+registrations fail closed; discovery never overrides an existing route.
 
 ### Bundle Export (E1 / E2 / E4)
 
@@ -147,11 +186,13 @@ must be documented in the PR and the `decision-log.md`.
 
 ## Feature Flag Convention
 
-All migration paths use environment variables for rollback:
+Migration paths may retain environment selectors while two supported
+implementations intentionally coexist, or for a documented compatibility
+window after a selector stops choosing a distinct implementation:
 
 | Flag | Default | Effect |
 |------|---------|--------|
-| `TRIBUTO_DATA_BACKEND` | `provider` | `legacy` to use old data_loader dispatch |
+| `TRIBUTO_DATA_BACKEND` | `provider` | Deprecated `legacy` value warns and enters the same Provider/Gateway path; retained for the compatibility window only |
 | `TRIBUTO_EXPORT_BACKEND` | `bundle` | `legacy` to use old per-trainer exporters |
 | `TRIBUTO_CONFIG_FORMAT` | `json` | Reserved; rejects non-JSON input regardless |
 

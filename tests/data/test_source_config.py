@@ -9,15 +9,67 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from tributo.data.provider import DataSourceProvider, ResolvedSource
+from tributo.data.provider_registry import register_provider, unregister_provider
 from tributo.data.source_config import (
+    CanonicalSourceInput,
     CsvSourceConfig,
     IcebergSourceConfig,
     LegacyConfigNormalizer,
     ParquetSourceConfig,
+    ProviderSourceConfig,
+    RawSourceConfig,
+    SqlPartitioning,
     SqlSourceConfig,
     apply_source_projection,
     source_projection,
 )
+
+
+class _ProjectionPluginProvider(DataSourceProvider):
+    provider_id = "example.hive"
+    projection_option_name = "projected_columns"
+
+    def normalize(self, source: CanonicalSourceInput) -> ResolvedSource:
+        return ResolvedSource(
+            provider_id=self.provider_id,
+            canonical_uri="hive://catalog/analytics/events",
+        )
+
+
+def test_source_configuration_reprs_hide_runtime_payloads() -> None:
+    sources = (
+        SqlSourceConfig(
+            dialect="clickhouse",
+            user="sensitive-user",
+            password="top-secret",
+            sql="SELECT 'business-secret'",
+        ),
+        IcebergSourceConfig(
+            catalog="catalog",
+            table="analytics.events",
+            catalog_properties={"rest.token": "catalog-secret"},
+            s3={"secret_access_key": "iceberg-secret"},
+        ),
+        ProviderSourceConfig(
+            provider="third.party",
+            uri="custom://source",
+            options={"password": "provider-secret"},
+        ),
+        RawSourceConfig(type="third-party", raw={"token": "raw-secret"}),
+    )
+
+    rendered = " ".join(repr(source) for source in sources)
+    for secret in (
+        "sensitive-user",
+        "top-secret",
+        "business-secret",
+        "catalog-secret",
+        "iceberg-secret",
+        "provider-secret",
+        "raw-secret",
+    ):
+        assert secret not in rendered
 
 
 class TestLegacyS3:
@@ -211,6 +263,27 @@ class TestResolveEnv:
         assert resolved.user == "env-user"
 
 
+class TestSqlPartitioning:
+    def test_existing_column_shape_defaults_to_parallel(self) -> None:
+        partitioning = SqlPartitioning(column="id", num_partitions=4)
+
+        assert partitioning.mode == "parallel"
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            {"mode": "parallel"},
+            {"mode": "auto", "column": "id"},
+            {"mode": "single", "num_partitions": 2},
+        ],
+    )
+    def test_inconsistent_partitioning_mode_fails_closed(
+        self, value: dict[str, object]
+    ) -> None:
+        with pytest.raises(ValidationError):
+            SqlPartitioning.model_validate(value)
+
+
 class TestPydanticValidation:
     """Pydantic model validation for SourceConfig types."""
 
@@ -247,8 +320,6 @@ class TestSourceProjection:
             apply_source_projection(source, ["missing"])
 
     def test_provider_projection_uses_native_option(self) -> None:
-        from tributo.data.source_config import ProviderSourceConfig
-
         source = ProviderSourceConfig(
             provider="tributo.parquet",
             uri="data.parquet",
@@ -256,3 +327,32 @@ class TestSourceProjection:
         projected = apply_source_projection(source, ["text"])
         assert isinstance(projected, ProviderSourceConfig)
         assert projected.options == {"columns": ["text"]}
+
+    def test_third_party_projection_metadata_avoids_consumer_changes(self) -> None:
+        register_provider(_ProjectionPluginProvider)
+        try:
+            source = ProviderSourceConfig(
+                provider="example.hive",
+                uri="hive://catalog/analytics/events",
+            )
+
+            projected = apply_source_projection(source, ["id", "score"])
+
+            assert source_projection(projected) == ["id", "score"]
+            assert projected.options == {"projected_columns": ["id", "score"]}
+        finally:
+            unregister_provider("example.hive")
+
+    @pytest.mark.parametrize(
+        "provider",
+        ["tributo.postgresql", "postgresql", "tributo.lance", "lance"],
+    )
+    def test_provider_projection_covers_sql_and_table_bindings(
+        self, provider: str
+    ) -> None:
+        source = ProviderSourceConfig(provider=provider, uri="source://target")
+
+        projected = apply_source_projection(source, ["id"])
+
+        assert isinstance(projected, ProviderSourceConfig)
+        assert projected.options == {"columns": ["id"]}

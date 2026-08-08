@@ -44,21 +44,39 @@ Call records, SMS logs, and app usage traces have irregular intervals and multi-
 # model.pretrain(data_path="s3://bucket/events/*.parquet")
 ```
 
-**③ Large-scale Embedding Pipeline — declarative ETL → distributed inference → Lance storage**
+**③ Large-scale Embedding Pipeline — bounded ingestion → distributed inference → Lance storage**
 
-A declarative pipeline that chains Daft (ETL) → Ray (distributed inference) → Lance (columnar storage) for embedding workflows. Turn raw tables into embedding indices and run similarity queries — all on CPU, no vector database required.
+A typed ingestion Gateway selects Ray Data or Daft explicitly and delegates
+physical reads to that engine. Existing embedding consumers select Ray Data;
+there is no implicit Daft-to-Ray materialization. Lance writes remain a
+separate output concern.
 
-> **Note**: Lance datasets are currently loaded into driver memory via `ds.to_table()`, making this pipeline unsuitable for datasets exceeding available RAM. Streaming and distributed reads are planned for a future release.
+Lance reads use the public Ray Data or Daft `read_lance` API and do not collect
+the dataset into a driver-side Arrow table.
 
 ```python
-from tributo.data.registry import get_connector
+from tributo.data import (
+    IngestionRequest,
+    ParquetSourceConfig,
+    RayDataHandle,
+    get_connector,
+    open_ingestion,
+)
 
-# Read from Parquet, write to Lance — both via unified connector API
-reader = get_connector("parquet")
-ds = reader.read(path="s3://bucket/data.parquet")
-
-writer = get_connector("lance")
-writer.write(ds, path="s3://bucket/index.lance")  # Auto-detects vector columns
+result = open_ingestion(
+    IngestionRequest(
+        source=ParquetSourceConfig(path="s3://bucket/data.parquet"),
+        engine="ray",
+    )
+)
+try:
+    assert isinstance(result.handle, RayDataHandle)
+    get_connector("lance").write(
+        result.handle.dataset,
+        path="s3://bucket/index.lance",
+    )
+finally:
+    result.close()
 ```
 
 ---
@@ -94,7 +112,8 @@ print(client.get_status(job_id))
 │ DNN      │          │ streaming │                       │
 │ Ray Train│ Ray Data │ Ray Serve │ Ray Data              │
 ├──────────┴──────────┴───────────┴───────────────────────┤
-│         data (Parquet / Lance / Iceberg, unified S3)     │
+│ IngestionGateway → Provider/Plan → Ray Data / Daft       │
+│ Files / Iceberg / Lance / SQL + typed ETL and receipts   │
 ├─────────────────────────────────────────────────────────┤
 │              _common (runtime_env / io / logging)         │
 ├─────────────────────────────────────────────────────────┤
@@ -129,8 +148,8 @@ uv sync --extra embeddings
 # Development dependencies
 uv sync --extra dev
 
-# SQL sources (ClickHouse / Doris)
-uv sync --extra clickhouse,mysql
+# Dual-engine files/tables and PostgreSQL
+uv sync --extra data --extra data-daft --extra postgresql
 ```
 
 ---
@@ -140,19 +159,20 @@ uv sync --extra clickhouse,mysql
 Data sources are opt-in extras where applicable — install the extra for the
 dialect or backend you use:
 
-| Dialect | Client | Extra | Status |
+| Source | Physical reader | Extra | Status |
 |---|---|---|---|
-| Parquet / CSV / local | Ray Data | (core) | ✅ Stable |
-| Lance / Iceberg | pylance / pyiceberg | `tributo[data]` | ✅ Stable |
-| S3 | boto3 / s3fs | `tributo[s3]` | ✅ Stable |
-| ClickHouse | clickhouse-connect | `tributo[clickhouse]` | ✅ Stable |
-| Doris | PyMySQL | `tributo[mysql]` | ✅ Stable |
-| PostgreSQL / MySQL | ConnectorX | — | ⚠️ Experimental — not yet implemented |
+| Local/S3 Parquet and CSV | Ray Data / Daft public readers | core / `tributo[data-daft]` | Alpha; real dual-engine Conformance |
+| Local/S3 Iceberg and Lance | Ray Data / Daft public readers | `tributo[data,data-daft]` | Alpha; real dual-engine Conformance |
+| PostgreSQL structured table | Ray Data / Daft SQL readers | `tributo[postgresql,data-daft]` | Alpha; real PostgreSQL Conformance |
+| HDFS Parquet/CSV | Ray Data + PyArrow Hadoop filesystem | Ray runtime with HDFS libraries | Adapter present; cluster gate pending |
+| ClickHouse | independent `daft-olap-connectors` | external package | Adapter present; package/infrastructure gates pending |
+| Doris | independent `ray-doris` / `daft-olap-connectors` | external packages | Adapters present; package/infrastructure gates pending |
+| ORC / Hive external tables | no locked public reader path | — | Unsupported |
 
-The `mysql` extra is required to read Doris sources; missing it fails fast
-with an install hint instead of a bare `ModuleNotFoundError`. ConnectorX
-paths for PostgreSQL/MySQL raise `NotImplementedError` and will be
-implemented in a future release.
+Adapter presence is not a support claim. ClickHouse, Doris, HDFS, and Hive are
+reported as available only after their locked external dependencies and real
+infrastructure gates pass. Tributo never installs optional connectors at
+runtime.
 
 ---
 

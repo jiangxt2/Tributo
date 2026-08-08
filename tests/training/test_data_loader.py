@@ -2,46 +2,48 @@
 
 from __future__ import annotations
 
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
-from tributo.data.source_config import SqlSourceConfig
+from tributo.data import CsvSourceConfig, ParquetSourceConfig
+from tributo.exceptions import EngineNotAvailableError, JobConfigurationError
 from tributo.training.data_loader import load_ray_dataset_from_source
 
 
-def test_s3_parquet_uses_parquet_connector():
-    # The provider path calls get_connector via provider_builtins.
-    with patch("tributo.data.provider_builtins.get_connector") as mock_get_connector:
-        mock_connector = MagicMock()
-        mock_connector.read.return_value = MagicMock()
-        mock_get_connector.return_value = mock_connector
-        load_ray_dataset_from_source(
+def test_s3_parquet_uses_ray_ingestion_binding() -> None:
+    dataset = MagicMock()
+    with patch(
+        "tributo.training.data_loader.open_ray_compat", return_value=dataset
+    ) as open_:
+        actual = load_ray_dataset_from_source(
             {"type": "parquet", "path": "s3://bucket/data.parquet"}
         )
-        mock_get_connector.assert_called_once_with("parquet")
+    source = open_.call_args.args[0]
+    assert isinstance(source, ParquetSourceConfig)
+    assert actual is dataset
 
 
-def test_s3_csv_uses_csv_connector():
-    with patch("tributo.data.provider_builtins.get_connector") as mock_get_connector:
-        mock_connector = MagicMock()
-        mock_connector.read.return_value = MagicMock()
-        mock_get_connector.return_value = mock_connector
-        load_ray_dataset_from_source(
+def test_s3_csv_uses_ray_ingestion_binding() -> None:
+    dataset = MagicMock()
+    with patch(
+        "tributo.training.data_loader.open_ray_compat", return_value=dataset
+    ) as open_:
+        actual = load_ray_dataset_from_source(
             {
                 "type": "csv",
                 "path": "s3://bucket/data.csv",
                 "s3": {"region": "us-east-1"},
             }
         )
-        mock_get_connector.assert_called_once_with("csv")
+    source = open_.call_args.args[0]
+    assert isinstance(source, CsvSourceConfig)
+    assert actual is dataset
 
 
 def test_s3_unsupported_format_raises():
     """Unknown source type is rejected by TypeAdapter discriminator."""
-    from pydantic import ValidationError
-
     try:
         load_ray_dataset_from_source({"type": "bogus", "path": "s3://bucket/data.orc"})
         raise AssertionError("expected ValidationError")
@@ -49,22 +51,41 @@ def test_s3_unsupported_format_raises():
         pass
 
 
-def test_doris_missing_mysql_extra_raises_install_hint(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Doris sources fail fast with an install hint when the mysql extra is absent."""
-    from tributo.training.data_loader import _load_doris_mysql
+def test_doris_requires_independent_ray_doris_binding() -> None:
+    """Tributo never falls back to its former in-process MySQL reader."""
+    with pytest.raises(EngineNotAvailableError, match=r"ray-doris\[mysql,flight\]"):
+        load_ray_dataset_from_source(
+            {
+                "type": "sql",
+                "dialect": "doris",
+                "table": "events",
+                "host": "localhost",
+                "port": 9030,
+                "database": "db",
+                "user": "user",
+                "password": "pass",
+            }
+        )
 
-    monkeypatch.setitem(sys.modules, "pymysql", None)  # import fails
 
-    source = SqlSourceConfig(
-        dialect="doris",
-        sql="SELECT 1",
-        host="localhost",
-        port=9030,
-        database="db",
-        user="user",
-        password="pass",
-    )
-    with pytest.raises(ImportError, match=r"tributo\[mysql\]"):
-        _load_doris_mysql(source)
+@pytest.mark.parametrize("dialect", ["clickhouse", "doris", "postgresql"])
+def test_legacy_raw_sql_has_structured_source_migration_error(dialect: str) -> None:
+    with pytest.raises(JobConfigurationError, match="structured 'table' source"):
+        load_ray_dataset_from_source(
+            {
+                "type": "sql",
+                "dialect": dialect,
+                "sql": "SELECT * FROM events",
+            }
+        )
+
+
+def test_mysql_has_explicit_migration_error() -> None:
+    with pytest.raises(JobConfigurationError, match="MySQL is unsupported"):
+        load_ray_dataset_from_source(
+            {
+                "type": "sql",
+                "dialect": "mysql",
+                "sql": "SELECT * FROM events",
+            }
+        )

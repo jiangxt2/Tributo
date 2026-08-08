@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import time
+from pathlib import Path
 from typing import Any
 
 from tributo.training.algorithm_spec import AlgorithmSpec, DataLoadingMode
@@ -89,8 +90,6 @@ def run_local_trial(
     # -- Load data ------------------------------------------------------------
     datasets: dict[str, Any] = {}
     if trainer_spec.data_loading != DataLoadingMode.CANONICAL_TRAINER:
-        import ray.data
-
         source = resolve_data_source(trainer_spec, config)
         from tributo.training.data_loader import load_ray_dataset_from_source
 
@@ -99,9 +98,18 @@ def run_local_trial(
 
         data_cfg = config.get("data", {})
         if isinstance(data_cfg, dict) and data_cfg.get("val_path"):
-            datasets["val"] = ray.data.read_parquet(data_cfg["val_path"])
+            # ``val_path``/``test_path`` are legacy local-runner fields whose
+            # published behavior is CWD-relative. Canonical source objects use
+            # the normal project-root policy instead.
+            datasets["val"] = load_ray_dataset_from_source(
+                {"type": "parquet", "path": data_cfg["val_path"]},
+                project_root_path=Path.cwd(),
+            )
         if isinstance(data_cfg, dict) and data_cfg.get("test_path"):
-            datasets["test"] = ray.data.read_parquet(data_cfg["test_path"])
+            datasets["test"] = load_ray_dataset_from_source(
+                {"type": "parquet", "path": data_cfg["test_path"]},
+                project_root_path=Path.cwd(),
+            )
 
     # -- Run training ---------------------------------------------------------
     logger.info("Running local trial: trainer=%s", trainer_spec.name)

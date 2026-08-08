@@ -102,12 +102,32 @@ class TestJobRunnerSubmissionId:
 
         mock_client.submit_job.assert_not_called()
 
-    def test_canonical_sql_text_allows_credential_like_column_literals(self):
-        """SQL business text should not be rejected by credential heuristics."""
+    def test_canonical_source_identity_does_not_resolve_driver_bindings(self):
+        """Submission validation must not depend on driver-installed bindings."""
+        mock_client = MagicMock()
+        mock_client.submit_job.return_value = "job-canonical"
+        with patch(
+            "tributo.embeddings.job_runner.JobSubmissionClient",
+            return_value=mock_client,
+        ):
+            from tributo.embeddings.job_runner import submit_embedding_job
+
+            job_id = submit_embedding_job(
+                source={"provider": "tributo.parquet", "uri": "data.parquet"},
+                s3_output_path="s3://bucket/out.lance",
+            )
+
+        assert job_id == "job-canonical"
+        kwargs = mock_client.submit_job.call_args.kwargs
+        assert kwargs["submission_id"].startswith("tributo-embed-")
+        assert "--engine tributo.ray_data" in kwargs["entrypoint"]
+
+    def test_canonical_raw_sql_migration_error_is_deferred_to_cluster(self):
+        """The submit host serializes safely; cluster Providers validate plans."""
         from tributo.embeddings.job_runner import submit_embedding_job
 
         mock_client = MagicMock()
-        mock_client.submit_job.return_value = "job-sql"
+        mock_client.submit_job.return_value = "job-raw-sql"
         with patch(
             "tributo.embeddings.job_runner.JobSubmissionClient",
             return_value=mock_client,
@@ -116,15 +136,17 @@ class TestJobRunnerSubmissionId:
                 source={
                     "provider": "tributo.clickhouse",
                     "uri": "clickhouse://host/db",
-                    "options": {"sql": "SELECT * FROM users WHERE password = 'x'"},
+                    "options": {"sql": "SELECT password FROM users"},
                 },
+                engine="daft",
                 s3_output_path="s3://bucket/out.lance",
             )
 
-        assert job_id == "job-sql"
-        entrypoint = mock_client.submit_job.call_args.kwargs["entrypoint"]
-        assert "password" in entrypoint
-        assert "SELECT" in entrypoint
+        assert job_id == "job-raw-sql"
+        assert (
+            "--engine tributo.daft"
+            in (mock_client.submit_job.call_args.kwargs["entrypoint"])
+        )
 
     def test_canonical_source_with_credential_params_is_rejected(self):
         """Parameterized credentials must not enter the Ray entrypoint."""

@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import os
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -58,9 +59,9 @@ def sample_entrypoint():
     return "python -c 'print(\"Hello from Ray\")'"
 
 
-@pytest.fixture(scope="module")
-def ray_local_runtime():
-    """Run Ray data contract tests in one bounded local runtime per module."""
+@contextmanager
+def _bounded_ray_local_runtime() -> Iterator[None]:
+    """Own one bounded local Ray runtime without selecting a Daft runner."""
     import ray
     from ray._private import ray_constants
 
@@ -100,6 +101,28 @@ def ray_local_runtime():
         ray_constants.RAY_ENABLE_UV_RUN_RUNTIME_ENV = previous_uv_runtime_env
 
 
+@pytest.fixture(scope="module")
+def ray_local_runtime() -> Iterator[None]:
+    """Run Ray data contract tests in one bounded local runtime per module."""
+    with _bounded_ray_local_runtime():
+        yield
+
+
+@pytest.fixture(scope="module")
+def native_daft_ray_local_runtime() -> Iterator[None]:
+    """Lock Daft to its native runner before starting a local Ray runtime."""
+    import daft
+
+    runner = daft.get_or_create_runner()
+    if runner.name != "native":
+        pytest.fail(
+            "Native Daft conformance requires a fresh process whose Daft runner "
+            "has not already been locked to Ray"
+        )
+    with _bounded_ray_local_runtime():
+        yield
+
+
 @pytest.fixture(scope="session")
 def s3_service(request: pytest.FixtureRequest) -> Iterator[S3Service | None]:
     """Own the S3 service required by the selected S3 test tier."""
@@ -120,6 +143,10 @@ def s3_service(request: pytest.FixtureRequest) -> Iterator[S3Service | None]:
             else S3Service.start_contract()
         )
     except S3InfrastructureUnavailable as exc:
+        if "minio_compat" in markers:
+            pytest.fail(
+                f"Required MinIO compatibility infrastructure is unavailable: {exc}"
+            )
         pytest.skip(str(exc))
     try:
         yield service

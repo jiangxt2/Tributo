@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from pyiceberg.catalog import load_catalog as _pyiceberg_load_catalog
 from pyiceberg.exceptions import NoSuchTableError
 
-from tributo.data._s3 import to_iceberg_properties
+from tributo.data._s3 import merge_iceberg_properties
 from tributo.data.base import DataConnector, S3Config, WriteMode
 from tributo.data.registry import register_connector
 from tributo.util.annotations import PublicAPI
@@ -63,19 +63,13 @@ class IcebergWriteConfig(BaseModel):
 class IcebergDataConnector(DataConnector):
     """Iceberg data connector.
 
-    Reads and writes Iceberg tables via the PyIceberg catalog API.
-    - ``read()``: Gets file list via ``plan_files()``, then Ray Data reads
-      the Parquet files in distributed mode — data never touches the driver.
+    - ``read()``: compatibility adapter over the native Ray Iceberg Binding.
     - ``write()``: Collects the Dataset to the driver and writes through
       PyIceberg (auto-creates table if needed).
     """
 
     def read(self, **kwargs: Any) -> ray.data.Dataset:
-        """Read an Iceberg table and return a Ray Dataset (distributed read).
-
-        Uses PyIceberg ``plan_files()`` to get the file list (with partition
-        pruning), then Ray Data reads the Parquet files in distributed mode
-        — driver memory is never a bottleneck.
+        """Delegate Iceberg reads to the native Ray Data Binding.
 
         Args:
             **kwargs: ``IcebergReadConfig`` fields.
@@ -84,50 +78,20 @@ class IcebergDataConnector(DataConnector):
             A lazy ``ray.data.Dataset``.
         """
         cfg = IcebergReadConfig(**kwargs)
+        from tributo.data._compat_read import open_ray_compat
+        from tributo.data.source_config import IcebergSourceConfig
 
-        catalog = _load_catalog(cfg.catalog_name, cfg.catalog_properties, cfg.s3)
-        table = catalog.load_table(cfg.table_identifier)
-
-        scan_kwargs: dict[str, Any] = {}
-        if cfg.row_filter:
-            scan_kwargs["row_filter"] = cfg.row_filter
-        if cfg.selected_fields:
-            scan_kwargs["selected_fields"] = tuple(cfg.selected_fields)
-        if cfg.snapshot_id is not None:
-            scan_kwargs["snapshot_id"] = cfg.snapshot_id
-
-        scan = table.scan(**scan_kwargs)
-        file_paths = [task.file.file_path for task in scan.plan_files()]
-
-        if not file_paths:
-            logger.warning("Iceberg table '%s' has no data files", cfg.table_identifier)
-            # Construct an empty Arrow table from the catalog schema (metadata
-            # only — no I/O) instead of scanning all empty data files.
-            schema = table.schema().as_arrow()
-            return ray.data.from_arrow(schema.empty_table())
-
-        # Build S3 filesystem if configured
-        read_kwargs: dict[str, Any] = {}
-        if cfg.selected_fields:
-            read_kwargs["columns"] = list(cfg.selected_fields)
-
-        if file_paths[0].startswith("s3://"):
-            import pyarrow.fs as pafs
-
-            from tributo.data._s3 import to_pyarrow_s3_kwargs
-
-            read_kwargs["filesystem"] = pafs.S3FileSystem(
-                **to_pyarrow_s3_kwargs(cfg.s3)
+        return open_ray_compat(
+            IcebergSourceConfig(
+                catalog=cfg.catalog_name,
+                table=cfg.table_identifier,
+                catalog_properties=cfg.catalog_properties,
+                s3=cfg.s3.model_dump(exclude_none=True) if cfg.s3 else None,
+                snapshot_id=cfg.snapshot_id,
+                row_filter=cfg.row_filter,
+                selected_fields=cfg.selected_fields,
             )
-            # Strip s3:// prefix
-            file_paths = [p.removeprefix("s3://") for p in file_paths]
-
-        logger.info(
-            "Iceberg table '%s': %d files to read",
-            cfg.table_identifier,
-            len(file_paths),
         )
-        return ray.data.read_parquet(file_paths, **read_kwargs)
 
     def write(self, dataset: ray.data.Dataset, **kwargs: Any) -> None:
         """Write a Ray Dataset to an Iceberg table.
@@ -195,7 +159,7 @@ def _load_catalog(
     s3_config: S3Config | None,
 ) -> Any:
     """Load a PyIceberg catalog, merging S3 auth properties."""
-    merged = {**catalog_properties, **to_iceberg_properties(s3_config)}
+    merged = merge_iceberg_properties(catalog_properties, source=s3_config)
     return _pyiceberg_load_catalog(catalog_name, **merged)
 
 
