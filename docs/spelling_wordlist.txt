@@ -153,6 +153,7 @@ opset
 Parquet
 ParquetSourceConfig
 parsers
+parseable
 Passthrough
 pathlib
 PipelineStep
@@ -244,6 +245,7 @@ vN
 workflow
 workflows
 xgb
+SPI
 XGBoost
 xgboost
 YAML

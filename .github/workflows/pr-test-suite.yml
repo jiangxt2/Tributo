@@ -509,16 +509,22 @@ jobs:
         run: |
           ready=0
           for attempt in $(seq 1 60); do
-            if docker compose \
+            ray_out="$(docker compose \
                 --file tests/integrations/docker-compose.data-ingestion.yml \
                 exec --no-tty ray-head \
-                ray status --address=127.0.0.1:6379 >/dev/null 2>&1 && \
-              docker compose \
+                ray status --address=127.0.0.1:6379 2>&1)" && ray_rc=0 || ray_rc=$?
+            minio_out="$(docker compose \
                 --file tests/integrations/docker-compose.data-ingestion.yml \
                 exec --no-tty ray-head \
-                python -c "import urllib.request; urllib.request.urlopen('http://minio:9000/minio/health/live', timeout=2).read()"; then
+                python -c "import urllib.request; urllib.request.urlopen('http://minio:9000/minio/health/live', timeout=2).read()" 2>&1)" && minio_rc=0 || minio_rc=$?
+            if [ "$ray_rc" -eq 0 ] && [ "$minio_rc" -eq 0 ]; then
               ready=1
               break
+            fi
+            if [ "$attempt" -le 3 ]; then
+              echo "attempt ${attempt}: ray_rc=${ray_rc} minio_rc=${minio_rc}"
+              printf 'ray stderr: %s\n' "$(printf '%s' "$ray_out" | head -4)"
+              printf 'minio stderr: %s\n' "$(printf '%s' "$minio_out" | head -4)"
             fi
             echo "Waiting for Docker Ray and MinIO (attempt ${attempt}/60)"
             sleep 2

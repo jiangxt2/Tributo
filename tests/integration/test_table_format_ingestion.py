@@ -8,10 +8,18 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-import daft
-import lance
-import pyarrow as pa
-import pyarrow.fs as pafs
+import pytest
+
+# The CI unit-test matrix installs only the ``dev`` extra; skip collection
+# when the optional engine/connector dependencies are absent. The dedicated
+# integration jobs install them via their extras.
+try:
+    import daft
+    import lance
+    import pyarrow as pa
+    import pyarrow.fs as pafs
+except ModuleNotFoundError:
+    pytest.skip("requires the data and data-daft extras", allow_module_level=True)
 import pytest
 from pyiceberg.catalog.sql import SqlCatalog
 

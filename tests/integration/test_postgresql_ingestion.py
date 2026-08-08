@@ -5,10 +5,17 @@ from __future__ import annotations
 import os
 import uuid
 
-import daft
-import psycopg
 import pytest
-from psycopg import sql
+
+# The CI unit-test matrix installs only the ``dev`` extra; skip collection
+# when the optional engine/connector dependencies are absent. The dedicated
+# integration jobs install them via their extras.
+try:
+    import daft
+    import psycopg
+    from psycopg import sql
+except ModuleNotFoundError:
+    pytest.skip("requires the data and postgresql extras", allow_module_level=True)
 
 from tests.data.ingestion_conformance import assert_dual_engine_conformance
 from tributo.data import (
