@@ -96,6 +96,8 @@ class OperationEvent(BaseModel):
             bundle_id = str(manifest["bundle_id"])
             canonical_uri = str(manifest["canonical_uri"])
             occurred_at = datetime.fromisoformat(str(manifest["created_at"]))
+            if occurred_at.tzinfo is None or occurred_at.utcoffset() is None:
+                occurred_at = occurred_at.replace(tzinfo=timezone.utc)
             source_info = manifest.get("source_info") or {}
             source_kind = source_info.get("source_kind")
         if occurred_at is None or bundle_id is None or canonical_uri is None:
