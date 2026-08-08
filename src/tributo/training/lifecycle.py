@@ -173,7 +173,6 @@ class TrainingLifecycle:
             result = service.export_bundle(
                 source=source,
                 config=bound_config,
-                provider=provider,
                 tributo_version=trainer._get_tributo_version(),
                 attempt_id=attempt_id,
             )

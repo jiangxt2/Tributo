@@ -34,6 +34,7 @@ from tributo.exporting.registries import (
 )
 from tributo.exporting.runtime import BundleModel, BundleModelLoader
 from tributo.exporting.service import BundleExportService, bundle_id_for_request
+from tributo.exporting.validators import StructureValidator
 
 # ── Fake components ───────────────────────────────────────────────────────────
 
@@ -47,10 +48,11 @@ class _MinOpts(BaseModel):
 class _TestExporter:
     """Exporter that writes a simple model file."""
 
-    api_version: int = 1
+    api_version: int = 2
     exporter_id: str = "test-exporter-v1"
     priority: int = 100
     output_format: str = "onnx"
+    output_flavor_id: str = "onnx-runtime-v1"
     options_model: type[BaseModel] = _MinOpts  # type: ignore[assignment]
     validator_bindings: tuple[ValidatorBinding, ...] = ()
     mutates_source: bool = False
@@ -80,10 +82,11 @@ class _TestExporter:
 class _FailingExporter:
     """Required exporter whose export() always fails."""
 
-    api_version: int = 1
+    api_version: int = 2
     exporter_id: str = "failing-exporter-v1"
     priority: int = 100
     output_format: str = "onnx"
+    output_flavor_id: str = "onnx-runtime-v1"
     options_model: type[BaseModel] = _MinOpts
     validator_bindings: tuple[ValidatorBinding, ...] = ()
     mutates_source: bool = False
@@ -152,6 +155,18 @@ def _make_registries() -> tuple[ExportRegistry, ValidatorRegistry]:
 
 
 class TestBundleExportService:
+    def test_preserves_pre_registered_builtin_validator(self) -> None:
+        exporters = ExportRegistry()
+        validators = ValidatorRegistry()
+        validators.register(StructureValidator)
+
+        BundleExportService(
+            export_registry=exporters,
+            validator_registry=validators,
+        )
+
+        assert validators.get(StructureValidator.validator_id) is StructureValidator
+
     def test_run_id_is_stable_bundle_identity(self, tmp_path: Path) -> None:
         config = _make_config(tmp_path).model_copy(update={"run_id": "run-42"})
         assert bundle_id_for_request("run-42") == bundle_id_for_request("run-42")
@@ -195,6 +210,54 @@ class TestBundleExportService:
         result = service.export_bundle(source=source, config=config)
 
         assert result.manifest_uri.endswith("manifest.json")
+
+    def test_commit_derives_operation_event_without_persisting_it(
+        self, tmp_path: Path
+    ) -> None:
+        er, vr = _make_registries()
+        service = BundleExportService(export_registry=er, validator_registry=vr)
+
+        result = service.export_bundle(
+            source=_make_source(),
+            config=_make_config(tmp_path).model_copy(
+                update={"request_id": "event-run-1"}
+            ),
+        )
+
+        event = service.last_operation_event
+        assert event is not None
+        assert event.event_kind == "bundle.published"
+        assert event.bundle_id == result.bundle_id
+        assert event.canonical_uri.endswith(result.bundle_id)
+        assert event.manifest_sha256 == result.manifest_sha256
+        assert event.correlation_ids["request_id"] == "event-run-1"
+
+    def test_post_commit_uses_repository_manifest_bytes_without_reread(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Event derivation consumes the bytes that won the repository commit."""
+        from tributo.exporting.bundle_reader import BundleReader
+
+        def reject_reread(*args: object, **kwargs: object) -> None:
+            del args, kwargs
+            raise AssertionError("post-commit manifest must not be fetched again")
+
+        monkeypatch.setattr(BundleReader, "read_manifest", reject_reread)
+        monkeypatch.setattr(BundleReader, "read_manifest_with_bytes", reject_reread)
+        captured: list[PublishedBundle] = []
+        er, vr = _make_registries()
+        service = BundleExportService(export_registry=er, validator_registry=vr)
+
+        result = service.export_bundle(
+            source=_make_source(),
+            config=_make_config(tmp_path),
+            callback=captured.append,
+        )
+
+        assert len(captured) == 1
+        committed_bytes = Path(result.manifest_uri).read_bytes()
+        assert captured[0].manifest_bytes == committed_bytes
+        assert service.last_operation_event is not None
 
     def test_pre_e2_export_is_rejected_by_default_serving_gate(
         self, tmp_path: Path

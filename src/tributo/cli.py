@@ -279,7 +279,6 @@ def export(
             result = service.export_bundle(
                 source=export_source,
                 config=config,
-                provider=provider,
                 tributo_version=_get_tributo_version(),
             )
 
