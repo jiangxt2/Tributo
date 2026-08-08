@@ -17,7 +17,14 @@ from tributo.data.source_config import (
     SqlSourceConfig,
 )
 from tributo.exceptions import JobConfigurationError
+from tributo.inference.contracts import ResultSinkReceipt
 from tributo.inference.pipeline import InferenceConfig
+
+
+def _opened_input(dataset):
+    opened = MagicMock()
+    opened.dataset = dataset
+    return opened
 
 
 class TestInferenceConfig:
@@ -71,7 +78,7 @@ class TestInferenceConfig:
 
     def test_canonical_source_rejects_legacy_fields(self):
         """Direct construction must fail fast on mixed source shapes."""
-        with pytest.raises(ValidationError, match="cannot be combined"):
+        with pytest.raises(ValidationError, match="source.columns"):
             InferenceConfig(
                 source=ParquetSourceConfig(path="data.parquet"),
                 output_uri="out",
@@ -177,6 +184,40 @@ class TestRunInferenceFromJson:
         assert call_cfg.batch_size == 2048
 
     @patch("tributo.inference.pipeline.run_batch_inference")
+    def test_legacy_source_s3_credentials_do_not_silently_cross_domains(
+        self, mock_run, caplog
+    ):
+        from tributo.inference.pipeline import run_inference_from_json
+
+        mock_run.return_value = {"status": "completed"}
+        path = self._write_json(
+            {
+                "data": {
+                    "type": "s3",
+                    "uri": "s3://source/input.parquet",
+                    "s3": {
+                        "access_key_id": "source-key",
+                        "secret_access_key": "source-secret",
+                    },
+                },
+                "model": {"uri": "s3://models/model.onnx"},
+                "output": {"uri": "s3://results/output"},
+            }
+        )
+
+        with caplog.at_level(logging.WARNING, logger="tributo.inference.pipeline"):
+            run_inference_from_json(path)
+
+        call_cfg = mock_run.call_args.args[0]
+        assert isinstance(call_cfg.source, ParquetSourceConfig)
+        assert call_cfg.source.s3.access_key_id == "source-key"
+        assert call_cfg.s3_config == {}
+        assert "source-only" in caplog.text
+        assert "model.storage_profile" in caplog.text
+        assert "source-key" not in caplog.text
+        assert "source-secret" not in caplog.text
+
+    @patch("tributo.inference.pipeline.run_batch_inference")
     def test_legacy_s3_shape_preserves_uri(self, mock_run):
         """Legacy type=s3 JSON must retain its URI during normalization."""
         from tributo.inference.pipeline import run_inference_from_json
@@ -252,16 +293,26 @@ class TestRunInferenceFromJson:
         assert source.sql == "SELECT * FROM events"
 
     @patch("ray.data.ActorPoolStrategy")
-    @patch("tributo.training.data_loader.load_ray_dataset_from_source")
+    @patch("tributo.integrations.sinks.parquet.ParquetResultSink.write")
+    @patch("tributo.inference.input_resolver.IngestionGatewayInputResolver.open")
+    @patch("tributo.inference.input_resolver.IngestionGatewayInputResolver.describe")
     def test_batch_pipeline_loads_canonical_source(
-        self, mock_load, mock_pool, tmp_path
+        self, mock_describe, mock_open, mock_write, mock_pool, tmp_path
     ):
-        """Inference must route canonical input through the provider loader."""
+        """Inference routes input and output through Data and Sink boundaries."""
         from tributo.inference.pipeline import run_batch_inference
 
         dataset = MagicMock()
-        dataset.map_batches.return_value = dataset
-        mock_load.return_value = dataset
+        predicted = MagicMock()
+        dataset.map_batches.return_value = predicted
+        selection = object()
+        mock_describe.return_value = selection
+        mock_open.return_value = _opened_input(dataset)
+        mock_write.return_value = ResultSinkReceipt(
+            sink_id="parquet-v1",
+            result_id="a" * 64,
+            uri=str(tmp_path / "output"),
+        )
 
         class Predictor:
             pass
@@ -276,18 +327,117 @@ class TestRunInferenceFromJson:
         )
         result = run_batch_inference(config, predictor_cls=Predictor)
 
-        mock_load.assert_called_once_with(
-            {
-                "type": "parquet",
-                "path": "data.parquet",
-                "columns": ["feature"],
-                "s3": None,
-            }
-        )
+        request = mock_describe.call_args.args[0]
+        assert request.source == config.source
+        assert request.engine == "tributo.ray_data"
+        assert request.storage_profile is None
+        assert request.transforms.steps[0].columns == ("feature",)
+        mock_open.assert_called_once_with(selection)
+        mock_open.return_value.close.assert_called_once_with()
+        mock_open.return_value.cancel.assert_not_called()
         dataset.map_batches.assert_called_once()
-        dataset.write_parquet.assert_called_once()
+        assert mock_write.call_args.args[0] is predicted
+        assert mock_write.call_args.args[1].uri == str(tmp_path / "output")
         assert result["input_path"] == "data.parquet"
+        assert result["rows_written"] is None
         mock_pool.assert_called_once()
+
+    @patch("ray.data.ActorPoolStrategy")
+    @patch("tributo.integrations.sinks.parquet.ParquetResultSink.write")
+    @patch("tributo.inference.input_resolver.IngestionGatewayInputResolver.open")
+    @patch("tributo.inference.input_resolver.IngestionGatewayInputResolver.describe")
+    def test_canonical_source_credentials_do_not_flow_to_model_or_sink(
+        self, mock_describe, mock_open, mock_write, mock_pool, tmp_path
+    ):
+        from tributo.data.base import S3Config
+        from tributo.inference.pipeline import run_batch_inference
+
+        del mock_pool
+        dataset = MagicMock()
+        dataset.map_batches.return_value = dataset
+        mock_describe.return_value = object()
+        mock_open.return_value = _opened_input(dataset)
+        mock_write.return_value = ResultSinkReceipt(
+            sink_id="parquet-v1",
+            result_id="a" * 64,
+            uri=str(tmp_path / "output"),
+        )
+
+        class Predictor:
+            pass
+
+        source = ParquetSourceConfig(
+            path="s3://source/input.parquet",
+            columns=["feature"],
+            s3=S3Config(
+                access_key_id="source-key",
+                secret_access_key="source-secret",
+            ),
+        )
+        config = InferenceConfig(
+            source=source,
+            output_uri=str(tmp_path / "output"),
+            model_uri="model.onnx",
+        )
+
+        run_batch_inference(config, predictor_cls=Predictor)
+
+        predictor_config = dataset.map_batches.call_args.kwargs["fn_constructor_args"][
+            1
+        ]
+        assert "s3_config" not in predictor_config
+        assert mock_write.call_args.args[1].storage_profile is None
+        ingestion_request = mock_describe.call_args.args[0]
+        assert ingestion_request.source == source
+        assert ingestion_request.storage_profile is None
+
+    @patch("ray.data.ActorPoolStrategy")
+    @patch("tributo.integrations.sinks.parquet.ParquetResultSink.write")
+    @patch("tributo.inference.input_resolver.IngestionGatewayInputResolver.open")
+    @patch("tributo.inference.input_resolver.IngestionGatewayInputResolver.describe")
+    def test_legacy_flat_s3_config_warns_in_compatibility_window(
+        self, mock_describe, mock_open, mock_write, mock_pool
+    ):
+        from tributo.inference.pipeline import run_batch_inference
+
+        del mock_pool
+        dataset = MagicMock()
+        dataset.map_batches.return_value = dataset
+        mock_describe.return_value = object()
+        mock_open.return_value = _opened_input(dataset)
+        mock_write.return_value = ResultSinkReceipt(
+            sink_id="parquet-v1",
+            result_id="a" * 64,
+            uri="s3://output/results",
+        )
+
+        class Predictor:
+            pass
+
+        config = InferenceConfig(
+            input_uri="s3://input/data.parquet",
+            output_uri="s3://output/results",
+            model_uri="s3://models/model.onnx",
+            feature_columns=["feature"],
+            s3_config={
+                "access_key_id": "legacy-key",
+                "secret_access_key": "legacy-secret",
+            },
+        )
+
+        with pytest.warns(DeprecationWarning, match="independent"):
+            run_batch_inference(config, predictor_cls=Predictor)
+
+        predictor_config = dataset.map_batches.call_args.kwargs["fn_constructor_args"][
+            1
+        ]
+        assert predictor_config["s3_config"]["access_key_id"] == "legacy-key"
+        assert mock_write.call_args.args[1].storage_profile == "legacy-flat-s3-config"
+        ingestion_request = mock_describe.call_args.args[0]
+        opened_source = ingestion_request.source
+        assert isinstance(opened_source, ParquetSourceConfig)
+        assert opened_source.path == "s3://input/data.parquet"
+        assert ingestion_request.storage_profile is None
 
     @patch("tributo.inference.pipeline.run_batch_inference")
     def test_canonical_source(self, mock_run):
@@ -328,7 +478,7 @@ class TestRunInferenceFromJson:
                 "output": {"uri": "s3://bucket/output/"},
             }
         )
-        with pytest.raises(JobConfigurationError, match="cannot be combined"):
+        with pytest.raises(JobConfigurationError, match="source.columns"):
             run_inference_from_json(path)
         mock_run.assert_not_called()
 
