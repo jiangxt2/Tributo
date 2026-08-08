@@ -106,6 +106,23 @@ class ResultWriteError(TributoError):
     """Failed to write inference results to the output data source."""
 
 
+@PublicAPI(stability="alpha")
+class ResultMaterializationError(TributoError):
+    """A lazy inference graph failed while a result sink materialized it.
+
+    Ray Data executes upstream reads, transforms, model calls, and distributed
+    writes from the terminal sink action.  This exception deliberately avoids
+    claiming that an action-time failure came from the sink itself when the
+    public Ray API cannot identify the failing operator reliably.
+    """
+
+    def __init__(self, source_error_type: str) -> None:
+        self.source_error_type = source_error_type
+        super().__init__(
+            f"Inference result materialization failed ({source_error_type})"
+        )
+
+
 @PublicAPI(stability="stable")
 class PredictionError(TributoError):
     """Model prediction failed at runtime."""
