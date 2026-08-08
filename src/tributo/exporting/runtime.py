@@ -25,6 +25,7 @@ idempotently.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from contextlib import ExitStack
 from dataclasses import dataclass
@@ -80,6 +81,10 @@ class BundleReaderLike(Protocol):
     def read_manifest(
         self, manifest_or_bundle_uri: str, *, storage_profile: str | None = None
     ) -> ExportManifest: ...
+
+    def read_manifest_with_bytes(
+        self, manifest_or_bundle_uri: str, *, storage_profile: str | None = None
+    ) -> tuple[ExportManifest, bytes]: ...
 
     def open_artifact(
         self,
@@ -207,14 +212,12 @@ class FlavorSupportEntry:
     producer_ids: tuple[str, ...] = ()
 
 
-#: Frozen serveable flavor support matrix (E3).  The selected primary
-#: artifact for O1, DNN, PU, and XGBoost is ONNX Runtime.  The trainer and
-#: producer columns make that decision explicit instead of relying on a
-#: comment or on the ``format`` field.
-#: Other flavor IDs produced by exporters (``safetensors-v1``,
-#: ``torch-export-v1``, ``xgboost-native-v1``, ``hf-onnx-v1``,
-#: ``onnx-int8-v1``) are explicitly unsupported until their loaders are
-#: registered here — they are never loaded by guessing.
+#: Frozen serveable flavor support matrix (E3). ONNX Runtime remains the
+#: selected primary artifact for O1, DNN, PU, and XGBoost. Native XGBoost is
+#: an additional explicit batch/serving flavor; it is never selected by file
+#: extension. Other flavor IDs produced by exporters (``safetensors-v1``,
+#: ``torch-export-v1``, ``hf-onnx-v1``, ``onnx-int8-v1``) are unsupported
+#: until their loaders are registered here.
 SERVEABLE_FLAVOR_MATRIX: tuple[FlavorSupportEntry, ...] = (
     FlavorSupportEntry(
         flavor_id="onnx-runtime-v1",
@@ -226,6 +229,17 @@ SERVEABLE_FLAVOR_MATRIX: tuple[FlavorSupportEntry, ...] = (
         verticals=("o1", "dnn", "pu", "xgboost"),
         trainer_types=("dnn", "pu", "xgboost"),
         producer_ids=("torch-onnx-v1", "xgboost-onnx-v1"),
+    ),
+    FlavorSupportEntry(
+        flavor_id="xgboost-native-v1",
+        artifact_role="model",
+        loader=("tributo.integrations.flavors.xgboost_native:XGBoostNativeFlavor"),
+        dependencies=("xgboost",),
+        signature_required=True,
+        security_mode=SECURITY_MODE_SAFE,
+        verticals=("xgboost",),
+        trainer_types=("xgboost",),
+        producer_ids=("xgboost-native-v1",),
     ),
 )
 
@@ -261,6 +275,7 @@ class BundleModelLoader:
         role: str = DEFAULT_ROLE,
         storage_profile: str | None = None,
         unsafe: bool = False,
+        expected_manifest_sha256: str | None = None,
     ) -> "BundleModelRuntime":
         """Open *bundle_uri* and load the model for *role*.
 
@@ -271,6 +286,9 @@ class BundleModelLoader:
             storage_profile: Storage profile name for S3 credentials.
             unsafe: Permit flavors whose security mode is not ``safe``
                 and manifests without a typed signature.
+            expected_manifest_sha256: Optional immutable BundleRef digest.
+                Compared with the exact published manifest bytes before role,
+                flavor, dependency, or artifact loading.
 
         Returns:
             A ``BundleModelRuntime`` holding the loaded model.
@@ -283,9 +301,21 @@ class BundleModelLoader:
             ModelLoadError: A required dependency is missing or the
                 model file could not be loaded.
         """
-        manifest = self._reader.read_manifest(
-            bundle_uri, storage_profile=storage_profile
-        )
+        if expected_manifest_sha256 is None:
+            manifest = self._reader.read_manifest(
+                bundle_uri, storage_profile=storage_profile
+            )
+        else:
+            manifest, manifest_bytes = self._reader.read_manifest_with_bytes(
+                bundle_uri, storage_profile=storage_profile
+            )
+            actual_manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+            if actual_manifest_sha256 != expected_manifest_sha256:
+                raise ModelLoadError(
+                    "Bundle manifest digest mismatch: expected "
+                    f"{expected_manifest_sha256[:16]}..., got "
+                    f"{actual_manifest_sha256[:16]}..."
+                )
 
         # Explicit role → artifact.
         target_name = manifest.roles.get(role)
@@ -523,8 +553,9 @@ def _build_flavor_registry() -> FlavorRegistry:
     skipped instead of tripping the registry's duplicate-is-conflict rule.
     """
     from tributo.integrations.flavors.onnx_runtime import ONNXRuntimeFlavor
+    from tributo.integrations.flavors.xgboost_native import XGBoostNativeFlavor
 
-    builtin_flavors = (ONNXRuntimeFlavor,)
+    builtin_flavors = (ONNXRuntimeFlavor, XGBoostNativeFlavor)
     registry = FlavorRegistry()
     for cls in builtin_flavors:
         registry.register(cls)

@@ -9,8 +9,10 @@ runtime's idempotent close contract (close-after-load, exception close).
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -27,6 +29,7 @@ from tributo.exceptions import (
     ModelSchemaMismatchError,
     UnsupportedArtifactFormat,
 )
+from tributo.exporting.bundle_reader import BundleReader
 from tributo.exporting.registries import FlavorRegistry
 from tributo.exporting.runtime import (
     DEFAULT_ROLE,
@@ -211,6 +214,36 @@ class TestRoleSelection:
         bundle = build_test_bundle(tmp_path)
         with pytest.raises(JobConfigurationError, match="Role 'serve' not found"):
             _loader().open(str(bundle), role="serve")
+
+    def test_expected_manifest_digest_is_checked_before_artifact_open(
+        self, tmp_path: Path
+    ) -> None:
+        bundle = build_test_bundle(tmp_path)
+        reader = BundleReader()
+        registry = FlavorRegistry()
+        registry.register(_EchoFlavor)
+        loader = BundleModelLoader(bundle_reader=reader, flavor_registry=registry)
+
+        with patch.object(
+            reader, "open_artifact", wraps=reader.open_artifact
+        ) as opened:
+            with pytest.raises(ModelLoadError, match="digest mismatch"):
+                loader.open(
+                    str(bundle),
+                    expected_manifest_sha256="f" * 64,
+                )
+
+        opened.assert_not_called()
+
+    def test_expected_manifest_digest_accepts_exact_published_bytes(
+        self, tmp_path: Path
+    ) -> None:
+        bundle = build_test_bundle(tmp_path)
+        digest = hashlib.sha256((bundle / "manifest.json").read_bytes()).hexdigest()
+
+        runtime = _loader().open(str(bundle), expected_manifest_sha256=digest)
+
+        runtime.close()
 
 
 # ── Flavor routing & gates ─────────────────────────────────────────────────────
