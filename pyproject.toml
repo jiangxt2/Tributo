@@ -55,7 +55,7 @@ dev = [
 ]
 data = [
     "pylance>=4.0.0",
-    "pyiceberg>=0.8.0",
+    "pyiceberg>=0.11.1,<0.12.0",
 ]
 data-daft = [
     "daft[lance,ray]>=0.7.0,<0.8.0",

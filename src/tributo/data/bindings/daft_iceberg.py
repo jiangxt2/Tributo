@@ -8,9 +8,11 @@ from typing import Any
 
 import pyarrow as pa
 
-from tributo.data._s3 import to_daft_s3_kwargs, to_iceberg_properties
+from tributo.data._s3 import to_daft_s3_kwargs
 from tributo.data.bindings._shared import (
     canonical_engine_schema,
+    iceberg_catalog_properties,
+    parse_iceberg_row_filter,
     residual_decisions,
     runtime_s3_profile,
 )
@@ -41,6 +43,7 @@ class _DaftIcebergNativePlan:
     dataframe: Any
     input_schema: pa.Schema
     transforms: CompiledPipeline
+    row_filter_is_residual: bool = False
 
 
 class DaftIcebergBinding:
@@ -67,8 +70,7 @@ class DaftIcebergBinding:
             raise JobConfigurationError("Iceberg catalog table is required")
         runtime = request.runtime_options
         profile = runtime_s3_profile(runtime)
-        catalog_properties = dict(runtime.get("catalog_properties", {}))
-        catalog_properties.update(to_iceberg_properties(profile))
+        catalog_properties = iceberg_catalog_properties(runtime)
         catalog_name = str(runtime.get("catalog_name") or plan.table.catalog_id)
         catalog = load_catalog(catalog_name, **catalog_properties)
         table_identifier = ".".join((*plan.table.namespace, plan.table.table))
@@ -84,6 +86,10 @@ class DaftIcebergBinding:
             snapshot_id=snapshot_id,
             io_config=io_config,
         )
+        row_filter = plan.options.get("row_filter")
+        if row_filter:
+            parse_iceberg_row_filter(row_filter)
+            dataframe = dataframe.where(str(row_filter))
         selected = plan.options.get("selected_fields")
         if selected:
             dataframe = dataframe.select(*selected)
@@ -91,7 +97,12 @@ class DaftIcebergBinding:
         transforms = ConcreteTransformCompiler().compile(
             request.transforms, TransformBackend.DAFT, schema
         )
-        return _DaftIcebergNativePlan(dataframe, schema, transforms)
+        return _DaftIcebergNativePlan(
+            dataframe,
+            schema,
+            transforms,
+            row_filter_is_residual=bool(row_filter),
+        )
 
     @staticmethod
     def _wrap(
@@ -118,5 +129,12 @@ class DaftIcebergBinding:
             physical_splits=PhysicalSplitSummary(
                 detail="snapshots, manifests, and data files are delegated to Daft"
             ),
-            diagnostics=("catalog metadata I/O was used for schema inference",),
+            diagnostics=(
+                "catalog metadata I/O was used for schema inference",
+                *(
+                    ("Iceberg row_filter was applied as a Daft lazy residual filter",)
+                    if native_plan.row_filter_is_residual
+                    else ()
+                ),
+            ),
         )

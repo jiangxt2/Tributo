@@ -296,6 +296,27 @@ class TestEmbedCommand:
                 "provider": "tributo.parquet",
                 "uri": "s3://bucket/in.parquet",
             }
+            assert mock_submit.call_args.kwargs["engine"] == "ray"
+
+    def test_embed_batch_passes_explicit_daft_engine(self, runner):
+        with patch("tributo.embeddings.job_runner.submit_embedding_job") as mock_submit:
+            mock_submit.return_value = "embed-job-daft"
+            result = runner.invoke(
+                main,
+                [
+                    "embed",
+                    "batch",
+                    "--source",
+                    '{"provider":"tributo.clickhouse","uri":"clickhouse://db/analytics","options":{"table":"events"}}',
+                    "--engine",
+                    "daft",
+                    "--output",
+                    "s3://bucket/out.lance",
+                ],
+            )
+
+        assert result.exit_code == 0
+        assert mock_submit.call_args.kwargs["engine"] == "daft"
 
     def test_embed_batch_rejects_mixed_input_options(self, runner):
         """--source and legacy --input are mutually exclusive."""

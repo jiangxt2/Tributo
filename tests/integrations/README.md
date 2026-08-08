@@ -70,7 +70,7 @@ docker exec ray-head python /opt/tributo/tests/integrations/test_e2e_mlflow.py
 
 # Required Docker-cluster ingestion slice
 docker exec ray-head env TRIBUTO_DOCKER_RAY_TEST=1 \
-  python /opt/tributo/tests/integrations/test_data_ingestion_dual_engine.py
+  python -m tests.integrations.test_data_ingestion_dual_engine
 ```
 
 The ClickHouse and multi-class scripts require the independently installed
@@ -78,11 +78,14 @@ The ClickHouse and multi-class scripts require the independently installed
 the Gateway itself never changes the selected engine or disguises a Daft
 DataFrame as a Ray Dataset.
 
-The PR workflow additionally runs the file, table-format, and PostgreSQL
-Conformance files with locked `data`, `data-daft`, and `postgresql` extras.
-These tests are marked both `integration` and `ingestion_conformance`, so the
-normal unit-test matrix excludes them and the dedicated infrastructure job
-selects them explicitly.
+The PR workflow runs two required ingestion gates. The semantic gate executes
+the file, table-format, and PostgreSQL Conformance files with locked `data`,
+`data-daft`, and `postgresql` extras. The distributed gate builds the isolated
+`Dockerfile.data-ingestion` image, starts one Ray head, one Ray worker, and
+MinIO with `docker-compose.data-ingestion.yml`, initializes the shared volume
+for the unprivileged `ray` user, then runs this module with the Daft Ray runner
+and mandatory Driver/Worker version evidence. Both jobs feed `core-gate`;
+infrastructure absence is a failure rather than a passing skip.
 
 ### Batch Run
 

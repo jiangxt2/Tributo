@@ -143,6 +143,10 @@ def s3_service(request: pytest.FixtureRequest) -> Iterator[S3Service | None]:
             else S3Service.start_contract()
         )
     except S3InfrastructureUnavailable as exc:
+        if "minio_compat" in markers:
+            pytest.fail(
+                f"Required MinIO compatibility infrastructure is unavailable: {exc}"
+            )
         pytest.skip(str(exc))
     try:
         yield service

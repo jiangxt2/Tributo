@@ -50,11 +50,17 @@ def resolve_sql_target(
     prefix = f"TRIBUTO_{dialect.upper()}"
     host = str(runtime_options.get("host") or os.getenv(f"{prefix}_HOST", "localhost"))
     port_value = runtime_options.get("port")
-    port = (
-        int(port_value)
+    raw_port = (
+        port_value
         if port_value is not None
-        else int(os.getenv(f"{prefix}_PORT", str(_PORT_DEFAULTS[dialect])))
+        else os.getenv(f"{prefix}_PORT", str(_PORT_DEFAULTS[dialect]))
     )
+    try:
+        port = int(raw_port)
+    except (TypeError, ValueError):
+        raise JobConfigurationError(
+            f"{dialect} Binding port must be an integer"
+        ) from None
     database = str(
         runtime_options.get("database")
         or os.getenv(f"{prefix}_DB", "")

@@ -29,6 +29,7 @@ from tributo.data.refs import schema_fingerprint
 from tributo.data.scan_plan import (
     AsOfVersionRef,
     NumericVersionRef,
+    SnapshotVersionRef,
     TableScan,
     TagVersionRef,
     UriTableRef,
@@ -60,12 +61,28 @@ def _require_lance(plan: Any) -> TableScan:
     return plan
 
 
+def _reject_lance_snapshot_ref(plan: TableScan) -> None:
+    """Reject Iceberg snapshot identifiers at the Lance binding boundary."""
+    if isinstance(plan.version_ref, SnapshotVersionRef):
+        raise BindingStageError.framework_diagnostic(
+            "validate_capabilities",
+            error_type=JobConfigurationError,
+            diagnostic_code="unsupported_lance_snapshot_ref",
+            diagnostic=(
+                "Lance bindings accept numeric versions, tags, and supported "
+                "as-of timestamps; Iceberg snapshot identifiers are not Lance "
+                "versions"
+            ),
+        )
+
+
 class RayLanceBinding:
     """Compile Lance requests into native lazy Ray Data plans."""
 
     def compile(self, request: BindingCompileRequest) -> BindingCompilation:
         with binding_stage("validate_capabilities"):
             plan = _require_lance(request.plan)
+            _reject_lance_snapshot_ref(plan)
             if isinstance(plan.version_ref, AsOfVersionRef):
                 raise BindingStageError.framework_diagnostic(
                     "validate_capabilities",

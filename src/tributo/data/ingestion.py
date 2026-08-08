@@ -187,6 +187,18 @@ class IngestionRequest(BaseModel):
     def _serialize_trace_context(self, value: Mapping[str, str]) -> dict[str, str]:
         return dict(value)
 
+    def source_json_for_remote_transport(self) -> str:
+        """Serialize a source only when it is safe to cross a job boundary."""
+        payload = self.source.model_dump(mode="python", exclude_none=True)
+        leaked = _credential_paths(payload, text_exempt_keys=frozenset({"sql"}))
+        if leaked:
+            raise ValueError(
+                "ingestion source contains inline credentials at "
+                f"{sorted(leaked)}; configure credentials through runtime "
+                "environment variables, IAM, or a storage profile instead"
+            )
+        return self.source.model_dump_json(exclude_none=True)
+
 
 @PublicAPI(stability="alpha")
 class TransformDecision(BaseModel):
@@ -710,8 +722,14 @@ def _credential_free_endpoint(endpoint: str) -> str:
     netloc = parts.hostname
     if ":" in netloc and not netloc.startswith("["):
         netloc = f"[{netloc}]"
-    if parts.port is not None:
-        netloc = f"{netloc}:{parts.port}"
+    try:
+        port = parts.port
+    except ValueError:
+        raise DataSourceError(
+            "Storage profile endpoint must contain a valid port"
+        ) from None
+    if port is not None:
+        netloc = f"{netloc}:{port}"
     sanitized = urlunsplit((parts.scheme, netloc, parts.path, "", ""))
     return sanitized if has_scheme else sanitized.removeprefix("//")
 

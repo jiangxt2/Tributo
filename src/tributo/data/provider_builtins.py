@@ -476,6 +476,8 @@ def _validate_file_uri(provider_id: str, uri: str) -> None:
 class _FileProvider(DataSourceProvider):
     """Shared file-source provider logic (Parquet/CSV)."""
 
+    projection_option_name = "columns"
+    relative_uri_is_path = True
     _config_cls: ClassVar[type[ParquetSourceConfig] | type[CsvSourceConfig]]
     _allowed_option_keys: ClassVar[frozenset[str]] = _FILE_OPTION_KEYS
 
@@ -583,6 +585,7 @@ class IcebergProvider(DataSourceProvider):
 
     provider_id = "tributo.iceberg"
     aliases = frozenset({"iceberg"})
+    projection_option_name = "selected_fields"
 
     def normalize(self, source: CanonicalSourceInput) -> ResolvedSource:
         if isinstance(source, ProviderSourceConfig):
@@ -714,8 +717,6 @@ class IcebergProvider(DataSourceProvider):
         required: set[SourceCapability] = set()
         if resolved.identity_options.get("selected_fields"):
             required.add(SourceCapability.PROJECTION)
-        if resolved.identity_options.get("row_filter"):
-            required.add(SourceCapability.PREDICATE_PUSHDOWN)
         snapshot_id = resolved.identity_options.get("snapshot_id")
         return TableScan(
             provider_id=self.provider_id,
@@ -740,6 +741,8 @@ class LanceProvider(DataSourceProvider):
 
     provider_id = "tributo.lance"
     aliases = frozenset({"lance"})
+    projection_option_name = "columns"
+    relative_uri_is_path = True
 
     def normalize(self, source: CanonicalSourceInput) -> ResolvedSource:
         if not isinstance(source, ProviderSourceConfig):
@@ -806,6 +809,10 @@ class LanceProvider(DataSourceProvider):
                 raise JobConfigurationError(
                     "tributo.lance: option 'asof' must be an ISO-8601 timestamp"
                 ) from exc
+            if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+                raise JobConfigurationError(
+                    "tributo.lance: option 'asof' must include a timezone offset"
+                )
             version_ref = AsOfVersionRef(timestamp=timestamp)
         return TableScan(
             provider_id=self.provider_id,
@@ -840,7 +847,13 @@ def _resolve_connection(
     port = rt.get("port")
     if port is None:
         port_env = os.getenv(f"{prefix}_PORT", "")
-        port = int(port_env) if port_env else int(defaults.get("port", 8123))
+        port = port_env if port_env else defaults.get("port", 8123)
+    try:
+        port = int(port)
+    except (TypeError, ValueError):
+        raise JobConfigurationError(
+            f"{dialect} source port must be an integer"
+        ) from None
     user = rt.get("user")
     if user is None:
         user = os.getenv(f"{prefix}_USER", str(defaults.get("user", "")))
@@ -861,6 +874,7 @@ def _resolve_connection(
 class _SqlProvider(DataSourceProvider):
     """Shared SQL-source normalization and plan construction."""
 
+    projection_option_name = "columns"
     _allowed_option_keys: ClassVar[frozenset[str]] = _SQL_OPTION_KEYS
 
     def _canonical_uri(
@@ -1081,7 +1095,6 @@ class _SqlProvider(DataSourceProvider):
     def plan(self, resolved: ResolvedSource) -> "LogicalScanPlan":
         """Describe a bounded SQL query without exposing SQL text or credentials."""
         from tributo.data.scan_plan import (
-            ParameterizedQuery,
             SourceCapability,
             SqlScan,
             SqlShardMode,
@@ -1091,7 +1104,14 @@ class _SqlProvider(DataSourceProvider):
 
         query_digest = resolved.identity_options.get("sql_digest")
         table = resolved.identity_options.get("table")
-        if not isinstance(query_digest, str) and not isinstance(table, str):
+        if isinstance(query_digest, str):
+            raise JobConfigurationError(
+                f"{self.provider_id}: raw SQL ingestion is not supported by the "
+                "engine-neutral read contract; configure a structured 'table' "
+                "source with columns and partitioning, or execute the query "
+                "outside Tributo ingestion"
+            )
+        if not isinstance(table, str):
             raise JobConfigurationError(
                 f"{self.provider_id}: resolved source has no SQL read target"
             )
@@ -1101,26 +1121,37 @@ class _SqlProvider(DataSourceProvider):
         raw_partitioning = resolved.identity_options.get("partitioning")
         if isinstance(raw_partitioning, Mapping):
             partitioning = SqlPartitioning.model_validate(dict(raw_partitioning))
-            sharding = SqlShardRequirement(
-                mode=SqlShardMode.PARALLEL,
-                columns=(partitioning.column,),
-                target_partitions=partitioning.num_partitions,
-            )
-        else:
-            sharding = SqlShardRequirement()
-        target: SqlTableRead | ParameterizedQuery
-        if isinstance(table, str):
-            if self._dialect() == "postgresql":
-                schema = resolved.runtime_options.get("schema") or "public"
+            if partitioning.mode == "parallel":
+                assert partitioning.column is not None
+                sharding = SqlShardRequirement(
+                    mode=SqlShardMode.PARALLEL,
+                    columns=(partitioning.column,),
+                    target_partitions=partitioning.num_partitions,
+                )
+            elif partitioning.mode == "auto":
+                sharding = SqlShardRequirement(
+                    mode=SqlShardMode.AUTO,
+                    target_partitions=partitioning.num_partitions,
+                )
             else:
-                schema = resolved.runtime_options.get("database")
-            target = SqlTableRead(
-                table=table,
-                schema=str(schema or "") or None,
-                projection=tuple(resolved.identity_options.get("columns", ())),
-            )
+                sharding = SqlShardRequirement()
         else:
-            target = ParameterizedQuery(query_digest=str(query_digest))
+            sharding = SqlShardRequirement(
+                mode=(
+                    SqlShardMode.AUTO
+                    if self._dialect() in {"clickhouse", "doris"}
+                    else SqlShardMode.SINGLE
+                )
+            )
+        if self._dialect() == "postgresql":
+            schema = resolved.runtime_options.get("schema") or "public"
+        else:
+            schema = resolved.runtime_options.get("database")
+        target = SqlTableRead(
+            table=table,
+            schema=str(schema or "") or None,
+            projection=tuple(resolved.identity_options.get("columns", ())),
+        )
         plan_options = {
             key: value
             for key, value in {

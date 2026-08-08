@@ -11,6 +11,7 @@ from pydantic import TypeAdapter, ValidationError
 from tributo.data.provider_registry import resolve_provider
 from tributo.data.source_config import CanonicalSourceInput
 from tributo.exceptions import JobConfigurationError
+from tributo.training import data_loader
 from tributo.training.data_loader import (
     load_ray_dataset_from_config,
     load_ray_dataset_from_source,
@@ -77,17 +78,29 @@ class TestThreeEntrySemantics:
 class TestLegacyConversion:
     """Legacy dictionaries convert once; no independent runtime backend remains."""
 
-    def test_removed_backend_environment_does_not_change_routing(
+    def test_deprecated_legacy_backend_uses_canonical_routing(
         self,
         monkeypatch: pytest.MonkeyPatch,
         parquet_file: str,
     ) -> None:
-        monkeypatch.setenv("TRIBUTO_DATA_BACKEND", "legacy")
-        dataset = load_ray_dataset_from_source(
-            {"provider": "tributo.parquet", "uri": parquet_file}
-        )
+        monkeypatch.setattr(data_loader, "DATA_BACKEND", "legacy")
+        with pytest.warns(FutureWarning, match="canonical Provider/Gateway"):
+            dataset = load_ray_dataset_from_source(
+                {"provider": "tributo.parquet", "uri": parquet_file}
+            )
 
         assert list(dataset.to_pandas()["id"]) == [1, 2]
+
+    def test_unknown_backend_selector_fails_closed(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        parquet_file: str,
+    ) -> None:
+        monkeypatch.setattr(data_loader, "DATA_BACKEND", "other")
+        with pytest.raises(JobConfigurationError, match="must be 'provider'"):
+            load_ray_dataset_from_source(
+                {"provider": "tributo.parquet", "uri": parquet_file}
+            )
 
     def test_legacy_config_entrypoint_rejects_provider_shape(
         self, monkeypatch: pytest.MonkeyPatch

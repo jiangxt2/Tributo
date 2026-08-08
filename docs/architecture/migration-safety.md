@@ -37,9 +37,11 @@ Current exit-gate status:
 
 The maintainer-approved architecture convergence removed the duplicate
 direct-dispatch execution backend without claiming that the legacy *input*
-deprecation window had elapsed. `TRIBUTO_DATA_BACKEND` no longer selects an
-execution backend. Rollback uses normal release rollback or disables adoption
-of the alpha Gateway; it does not reactivate duplicate reader code.
+deprecation window had elapsed. `TRIBUTO_DATA_BACKEND=legacy` therefore remains
+accepted with a `FutureWarning`, but it selects the same conversion and Gateway
+path as the default. Rollback uses normal release rollback or disables adoption
+of the alpha Gateway; the compatibility selector does not reactivate duplicate
+reader code.
 
 ### D3 Delivery Record
 
@@ -56,10 +58,27 @@ Compatibility:
 
 - Legacy inference and embedding input forms remain accepted during their
   deprecation windows.
+- Legacy local-runner `val_path` and `test_path` remain relative to the caller
+  working directory during that window; canonical source objects use the
+  shared project-root path policy.
 - They normalize to the same Provider path and cannot select a legacy backend.
 - Existing downstream callers use the Ray compatibility adapter, which now
   delegates the same Gateway with `engine="ray"`; it is an API-shape adapter,
   not an alternate reader backend.
+- Third-party Providers that shipped only the beta `normalize()+open()` SPI
+  remain callable from that Ray compatibility adapter with a `FutureWarning`.
+  The alpha Gateway never catches a planning or Binding failure and falls back
+  to `open()`; external Providers must migrate to `plan()` plus an
+  `EngineBinding` before the next major release.
+- Legacy ClickHouse and Doris raw-SQL shapes remain parseable only to produce a
+  credential-free migration error. Built-in execution supports structured
+  table/projection/partitioning requests; Tributo does not restore an arbitrary
+  SQL reader.
+- Embedding submission validates and transports a credential-free source but
+  does not resolve Providers, Bindings, or optional dependencies on the submit
+  host. The Ray job performs that validation in its cluster image. Its engine
+  remains explicit; Daft input reaches the Ray-only embedding consumer through
+  the recorded Daft-to-Ray adapter.
 
 Deprecation window:
 
@@ -78,11 +97,22 @@ IDs. The unused `SourcePlan` / `SourceRouter` prototype has been replaced by
 the explicit `IngestionRequest` → `IngestionGateway` → `LogicalScanPlan` →
 `EngineBinding` path. Gateway `describe()` performs static validation without
 metadata I/O; `open()` creates the lazy typed handle and receipt. Built-in
-`DataConnector.read()`, Provider `open()`, and training loader surfaces are
-one-way Ray adapters over this path and must never restore a reader. File
+`DataConnector.read()` and training loader surfaces are one-way Ray adapters
+over this path and must never restore a reader. Provider `open()` is a temporary
+external beta-SPI compatibility exception described above, not a Gateway
+fallback. File
 providers accept local paths and S3 paths with an explicit `S3Config`; S3 URI
 userinfo, query parameters, and fragments are rejected because accepting them
 would change object-key or credential semantics.
+
+New third-party sources do not use the deprecated `open()` exception. An
+installed package publishes a versioned logical Provider through
+`tributo.ingestion_providers` and physical Ray/Daft Bindings through
+`tributo.ingestion_bindings`. Provider-declared projection and relative-path
+metadata replace consumer-side provider maps. Catalog and storage-format
+Binding constraints allow Hive tables backed by Parquet, ORC, or Iceberg
+without changing the Gateway or any algorithm consumer. Duplicate or ambiguous
+registrations fail closed; discovery never overrides an existing route.
 
 ### Bundle Export (E1 / E2 / E4)
 
@@ -156,11 +186,13 @@ must be documented in the PR and the `decision-log.md`.
 
 ## Feature Flag Convention
 
-Migration paths may use environment variables only while two supported
-implementations intentionally coexist:
+Migration paths may retain environment selectors while two supported
+implementations intentionally coexist, or for a documented compatibility
+window after a selector stops choosing a distinct implementation:
 
 | Flag | Default | Effect |
 |------|---------|--------|
+| `TRIBUTO_DATA_BACKEND` | `provider` | Deprecated `legacy` value warns and enters the same Provider/Gateway path; retained for the compatibility window only |
 | `TRIBUTO_EXPORT_BACKEND` | `bundle` | `legacy` to use old per-trainer exporters |
 | `TRIBUTO_CONFIG_FORMAT` | `json` | Reserved; rejects non-JSON input regardless |
 

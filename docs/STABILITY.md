@@ -1,7 +1,7 @@
 # API Stability Inventory
 
 Canonical stability classification for every Tributo module.
-Last updated: 2026-08-06.
+Last updated: 2026-08-07.
 
 ## Stability Levels
 
@@ -59,14 +59,15 @@ Last updated: 2026-08-06.
 | Module | Level | Notes |
 |--------|-------|-------|
 | `tributo.data.source_config` — `SourceConfig` | `beta` | Strict in-memory contract; JSON is the built-in persisted format |
-| `tributo.data.provider` — `DataSourceProvider` | `beta` | Logical normalization/planning contract; direct open is compatibility-only |
+| `tributo.data.provider` — `DataSourceProvider` | `beta` | Logical normalization/planning contract; open-only implementations are deprecated and limited to the old Ray adapter |
 | `tributo.data.transform_ir` | `alpha` | Versioned engine-neutral ETL contract |
 | `tributo.data.transform_compiler` | `developer` | Internal Ray/Daft expression translation |
-| `tributo.data.scan_plan` | `alpha` | Engine-neutral bounded scan contracts |
+| `tributo.data.scan_plan` | `developer` | Internal engine-neutral scan SPI; downstream consumers use `IngestionGateway` |
 | `tributo.data.ingestion` | `alpha` | Two-stage Gateway, explicit request, typed handles, and receipt |
 | `tributo.data.handle_adapters` | `alpha` | Explicit native-handle conversions with conversion evidence; never a routing fallback |
-| `tributo.data.engine_binding` | `developer` | Thin Binding descriptor, capability negotiation, and four-part identity |
+| `tributo.data.engine_binding` | `developer` | Third-party extension SPI; not exported from the consumer-facing `tributo.data` root |
 | `tributo.data.binding_plugins` | `developer` | Descriptor-only `tributo.ingestion_bindings` discovery SPI |
+| `tributo.data.provider_plugins` | `developer` | Versioned descriptor-only `tributo.ingestion_providers` discovery SPI |
 | `tributo.data.bindings.*` | `developer` | Thin adapters over public Ray Data, Daft, or installed connector APIs |
 | `tributo.data.graph` | `beta` | Graph data abstraction (GNN; @PublicAPI says beta) |
 | `tributo.data.base` — `DataConnector` | `beta` | Historical read/write shape; reads are one-way Gateway adapters |
@@ -188,6 +189,8 @@ Last updated: 2026-08-06.
 | `tributo.training.onnx_exporter` | `tributo.exporting.service.BundleExportService` | v1.0.0 | ≥ 2 minor versions (E4) |
 | `tributo.exporting.protocols.SourceProvider` (name) | `ExportSourceProvider` (E1) | After E1 merge | 2 minor versions with DeprecationWarning |
 | Legacy flat data config | `CanonicalSourceInput` / `IngestionRequest` | v1.0.0 | Conversion-only adapter retained for its deprecation window; direct dispatch removed |
+| `TRIBUTO_DATA_BACKEND=legacy` | Default Provider/Gateway path | v1.0.0 | Selector is accepted with `FutureWarning` during the compatibility window; it no longer restores direct dispatch |
+| Third-party Provider `normalize()+open()` SPI | `plan()` + `EngineBinding` | v1.0.0 | Ray compatibility adapter only until the next major release; Gateway never falls back |
 
 ## Unannotated Code
 
@@ -212,7 +215,6 @@ This is informative only — `STABILITY.md` is the canonical reference.
 
 ### Marked as alpha
 
-- `tributo.data.scan_plan` — engine-neutral bounded scan contract
 - `tributo.data.transform_ir` — versioned engine-neutral ETL contract
 - `tributo.data.ingestion` — candidate dual-engine ingestion API
 - `tributo.pipeline.core` — "Alpha; lightweight in-process DAG executor"

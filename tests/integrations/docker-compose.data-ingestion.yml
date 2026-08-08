@@ -1,0 +1,75 @@
+x-ray-common: &ray-common
+  image: tributo-data-ingestion-it:${TRIBUTO_INGESTION_IMAGE_TAG:-local}
+  build:
+    context: ../..
+    dockerfile: tests/integrations/Dockerfile.data-ingestion
+  init: true
+  shm_size: 2gb
+  environment:
+    AWS_ACCESS_KEY_ID: minioadmin
+    AWS_SECRET_ACCESS_KEY: minioadmin123
+    AWS_DEFAULT_REGION: us-east-1
+    RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO: "0"
+    TRIBUTO_MINIO_ENDPOINT: http://minio:9000
+    TRIBUTO_MINIO_ACCESS_KEY: minioadmin
+    TRIBUTO_MINIO_SECRET_KEY: minioadmin123
+  volumes:
+    - ingestion-workspace:/workspace
+
+services:
+  workspace-init:
+    <<: *ray-common
+    user: root
+    command:
+      - chown
+      - ray:users
+      - /workspace
+    restart: "no"
+
+  ray-head:
+    <<: *ray-common
+    command:
+      - ray
+      - start
+      - --head
+      - --port=6379
+      - --dashboard-host=0.0.0.0
+      - --num-cpus=1
+      - --block
+    healthcheck:
+      test: ["CMD-SHELL", "ray status --address=127.0.0.1:6379 >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
+    depends_on:
+      minio:
+        condition: service_started
+      workspace-init:
+        condition: service_completed_successfully
+
+  ray-worker:
+    <<: *ray-common
+    command:
+      - ray
+      - start
+      - --address=ray-head:6379
+      - --num-cpus=2
+      - --block
+    depends_on:
+      ray-head:
+        condition: service_healthy
+
+  minio:
+    image: minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+    command:
+      - server
+      - /data
+      - --console-address
+      - :9001
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+
+volumes:
+  ingestion-workspace:

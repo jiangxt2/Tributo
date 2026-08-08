@@ -8,6 +8,7 @@ same Parquet file.
 from __future__ import annotations
 
 import os
+import time
 import uuid
 from contextlib import ExitStack
 from pathlib import Path
@@ -63,6 +64,16 @@ elif os.environ.get("TRIBUTO_DOCKER_RAY_TEST") != "1":
 
 def _configure_cluster() -> None:
     ray.init(address="auto", ignore_reinit_error=True)
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        alive_nodes = [node for node in ray.nodes() if node.get("Alive")]
+        if len(alive_nodes) >= 2:
+            break
+        time.sleep(1)
+    else:
+        raise RuntimeError(
+            "Docker ingestion gate requires a Ray head and at least one worker"
+        )
     daft.set_runner_ray(address="auto", noop_if_initialized=True)
 
 

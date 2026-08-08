@@ -17,6 +17,7 @@ from tributo.data.bindings._sql_shared import require_sql_table, resolve_sql_tar
 from tributo.data.engine_binding import (
     BindingCompilation,
     BindingCompileRequest,
+    BindingStageError,
     binding_stage,
 )
 from tributo.data.ingestion import (
@@ -32,6 +33,7 @@ from tributo.data.transform_compiler import (
     TransformBackend,
     apply_pipeline_to_daft_df,
 )
+from tributo.exceptions import JobConfigurationError
 
 
 @dataclass(frozen=True)
@@ -47,6 +49,17 @@ class DaftPostgreSqlBinding:
     def compile(self, request: BindingCompileRequest) -> BindingCompilation:
         with binding_stage("validate_capabilities"):
             plan = require_sql_table(request.plan, "postgresql")
+            if plan.sharding.mode is SqlShardMode.AUTO:
+                raise BindingStageError.framework_diagnostic(
+                    "validate_capabilities",
+                    error_type=JobConfigurationError,
+                    diagnostic_code="unsupported_postgresql_auto_read",
+                    diagnostic=(
+                        "Daft PostgreSQL automatic sharding requires an explicit "
+                        "partition column; use parallel mode with a column or a "
+                        "single read"
+                    ),
+                )
         with binding_stage("classify_transforms"):
             decisions = residual_decisions(request.transforms)
         with binding_stage("build_native_plan"):

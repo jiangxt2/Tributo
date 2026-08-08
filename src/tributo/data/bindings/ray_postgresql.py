@@ -17,6 +17,7 @@ from tributo.data.bindings._sql_shared import require_sql_table, resolve_sql_tar
 from tributo.data.engine_binding import (
     BindingCompilation,
     BindingCompileRequest,
+    BindingStageError,
     binding_stage,
 )
 from tributo.data.ingestion import (
@@ -32,6 +33,7 @@ from tributo.data.transform_compiler import (
     TransformBackend,
     apply_pipeline_to_ray_ds,
 )
+from tributo.exceptions import JobConfigurationError
 
 
 @dataclass(frozen=True)
@@ -39,7 +41,6 @@ class _RayPostgreSqlNativePlan:
     dataset: Any
     input_schema: pa.Schema
     transforms: CompiledPipeline
-    diagnostics: tuple[str, ...]
 
 
 class RayPostgreSqlBinding:
@@ -48,6 +49,17 @@ class RayPostgreSqlBinding:
     def compile(self, request: BindingCompileRequest) -> BindingCompilation:
         with binding_stage("validate_capabilities"):
             plan = require_sql_table(request.plan, "postgresql")
+            if plan.sharding.mode is not SqlShardMode.SINGLE:
+                raise BindingStageError.framework_diagnostic(
+                    "validate_capabilities",
+                    error_type=JobConfigurationError,
+                    diagnostic_code="unsupported_postgresql_parallel_read",
+                    diagnostic=(
+                        "Ray Data PostgreSQL binding cannot honor automatic or "
+                        "parallel shard requirements; select Daft with an "
+                        "explicit partition column or use a single read"
+                    ),
+                )
         with binding_stage("classify_transforms"):
             decisions = residual_decisions(request.transforms)
         with binding_stage("build_native_plan"):
@@ -63,13 +75,6 @@ class RayPostgreSqlBinding:
 
         target = resolve_sql_target(plan, request.runtime_options)
         options: dict[str, Any] = {}
-        diagnostics: tuple[str, ...] = ()
-        if plan.sharding.mode is SqlShardMode.PARALLEL:
-            diagnostics = (
-                "Ray Data PostgreSQL sharding was not requested because its "
-                "public generic SQL hash expression is not type-safe for all "
-                "PostgreSQL columns; the read uses one database task",
-            )
         if request.read_options.concurrency is not None:
             options["concurrency"] = request.read_options.concurrency
         dataset = ray.data.read_sql(
@@ -81,7 +86,7 @@ class RayPostgreSqlBinding:
         transforms = ConcreteTransformCompiler().compile(
             request.transforms, TransformBackend.RAY, schema
         )
-        return _RayPostgreSqlNativePlan(dataset, schema, transforms, diagnostics)
+        return _RayPostgreSqlNativePlan(dataset, schema, transforms)
 
     @staticmethod
     def _wrap(
@@ -109,8 +114,5 @@ class RayPostgreSqlBinding:
                 split_count=1,
                 detail="PostgreSQL batches are delegated to Ray Data",
             ),
-            diagnostics=(
-                "database metadata I/O was used for schema inference",
-                *native_plan.diagnostics,
-            ),
+            diagnostics=("database metadata I/O was used for schema inference",),
         )

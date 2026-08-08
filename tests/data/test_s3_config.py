@@ -5,9 +5,11 @@ from __future__ import annotations
 import sys
 
 import pytest
+from botocore.exceptions import ProfileNotFound
 
 from tributo._common.storage_profiles import StorageProfile
 from tributo.data._s3 import (
+    merge_iceberg_properties,
     resolve_endpoint,
     resolve_region,
     to_daft_s3_kwargs,
@@ -16,6 +18,8 @@ from tributo.data._s3 import (
     to_pyarrow_s3_kwargs,
 )
 from tributo.data.base import S3Config
+from tributo.data.bindings._shared import runtime_s3_profile
+from tributo.exceptions import JobConfigurationError
 
 
 def test_s3_configuration_reprs_hide_credentials_and_endpoint_userinfo() -> None:
@@ -99,9 +103,11 @@ class TestToPyarrowS3Kwargs:
     def test_none_config_uses_env(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("AWS_ACCESS_KEY_ID", "ENV_KEY")
         monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "ENV_SECRET")
+        monkeypatch.setenv("AWS_SESSION_TOKEN", "ENV_TOKEN")
         kwargs = to_pyarrow_s3_kwargs(None)
         assert kwargs["access_key"] == "ENV_KEY"
         assert kwargs["secret_key"] == "ENV_SECRET"
+        assert kwargs["session_token"] == "ENV_TOKEN"
 
     def test_http_scheme_detected(self):
         cfg = S3Config(endpoint="http://minio:9000")
@@ -140,8 +146,10 @@ class TestToDaftS3Kwargs:
     def test_none_config_uses_environment(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("AWS_ACCESS_KEY_ID", "ENV_KEY")
         monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "ENV_SECRET")
+        monkeypatch.setenv("AWS_SESSION_TOKEN", "ENV_TOKEN")
         assert to_daft_s3_kwargs(None)["key_id"] == "ENV_KEY"
         assert to_daft_s3_kwargs(None)["access_key"] == "ENV_SECRET"
+        assert to_daft_s3_kwargs(None)["session_token"] == "ENV_TOKEN"
 
     def test_explicit_credentials_override_named_profile(self):
         profile = StorageProfile(
@@ -153,6 +161,16 @@ class TestToDaftS3Kwargs:
         assert to_daft_s3_kwargs(profile) == {
             "key_id": "explicit-key",
             "access_key": "explicit-secret",
+        }
+
+    def test_named_profile_overrides_environment_credentials(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "ENV_KEY")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "ENV_SECRET")
+
+        assert to_daft_s3_kwargs(StorageProfile(profile_name="analytics")) == {
+            "profile_name": "analytics"
         }
 
 
@@ -180,6 +198,31 @@ class TestToLanceStorageOptions:
         monkeypatch.delenv("AWS_ENDPOINT_URL", raising=False)
         monkeypatch.delenv("AWS_REGION", raising=False)
         assert to_lance_storage_options(None) is None
+
+    def test_named_profile_and_transport_flags_are_preserved(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "ENV_KEY")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "ENV_SECRET")
+        monkeypatch.setattr(
+            "tributo.data._s3._named_profile_credentials",
+            lambda name: ("PROFILE_KEY", "PROFILE_SECRET", "SESSION_TOKEN"),
+        )
+        profile = StorageProfile(
+            endpoint="https://minio:9000",
+            profile_name="analytics",
+            use_ssl=False,
+            path_style=True,
+        )
+
+        assert to_lance_storage_options(profile) == {
+            "access_key_id": "PROFILE_KEY",
+            "secret_access_key": "PROFILE_SECRET",
+            "session_token": "SESSION_TOKEN",
+            "endpoint": "http://minio:9000",
+            "allow_http": "true",
+            "virtual_hosted_style_request": "false",
+        }
 
 
 class TestToIcebergProperties:
@@ -211,7 +254,158 @@ class TestToIcebergProperties:
         monkeypatch.delenv("S3_ENDPOINT", raising=False)
         monkeypatch.delenv("AWS_ENDPOINT_URL", raising=False)
         monkeypatch.delenv("AWS_REGION", raising=False)
+        monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
         assert to_iceberg_properties(None) == {}
+
+    def test_environment_session_token_is_preserved(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "ENV_KEY")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "ENV_SECRET")
+        monkeypatch.setenv("AWS_SESSION_TOKEN", "ENV_TOKEN")
+
+        assert to_iceberg_properties(None)["s3.session-token"] == "ENV_TOKEN"
+        assert to_lance_storage_options(None)["session_token"] == "ENV_TOKEN"
+
+    def test_named_profile_and_path_style_are_preserved(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "ENV_KEY")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "ENV_SECRET")
+        monkeypatch.setattr(
+            "tributo.data._s3._named_profile_credentials",
+            lambda name: ("PROFILE_KEY", "PROFILE_SECRET", "PROFILE_TOKEN"),
+        )
+        props = to_iceberg_properties(
+            StorageProfile(profile_name="analytics", path_style=True)
+        )
+
+        assert props == {
+            "s3.access-key-id": "PROFILE_KEY",
+            "s3.secret-access-key": "PROFILE_SECRET",
+            "s3.session-token": "PROFILE_TOKEN",
+            "s3.profile-name": "analytics",
+            "s3.force-virtual-addressing": "false",
+        }
+
+    def test_missing_named_profile_is_normalized(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def missing_profile(*args: object, **kwargs: object) -> object:
+            raise ProfileNotFound(profile="missing")
+
+        monkeypatch.setattr("boto3.Session", missing_profile)
+
+        with pytest.raises(
+            JobConfigurationError,
+            match="Configured S3 profile could not be resolved",
+        ) as exc_info:
+            to_iceberg_properties(StorageProfile(profile_name="missing"))
+
+        assert "missing" not in str(exc_info.value)
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__context__ is None
+
+    def test_named_profile_without_credentials_fails_closed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class EmptySession:
+            @staticmethod
+            def get_credentials() -> None:
+                return None
+
+        monkeypatch.setattr("boto3.Session", lambda **kwargs: EmptySession())
+
+        with pytest.raises(
+            JobConfigurationError,
+            match="Configured S3 profile could not be resolved",
+        ) as exc_info:
+            to_lance_storage_options(StorageProfile(profile_name="empty"))
+
+        assert "empty" not in str(exc_info.value)
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__context__ is None
+
+    def test_named_profile_without_s3_extra_has_install_hint(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setitem(sys.modules, "boto3", None)
+
+        with pytest.raises(
+            JobConfigurationError,
+            match=r"pip install 'tributo\[s3\]'",
+        ) as exc_info:
+            to_lance_storage_options(StorageProfile(profile_name="analytics"))
+
+        assert "analytics" not in str(exc_info.value)
+        assert exc_info.value.__cause__ is None
+
+    def test_catalog_named_profile_is_materialized_for_pyarrow(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "tributo.data._s3._named_profile_credentials",
+            lambda name: ("CATALOG_KEY", "CATALOG_SECRET", "CATALOG_TOKEN"),
+        )
+
+        merged = merge_iceberg_properties({"s3.profile-name": "catalog-profile"})
+
+        assert merged["s3.access-key-id"] == "CATALOG_KEY"
+        assert merged["s3.secret-access-key"] == "CATALOG_SECRET"
+        assert merged["s3.session-token"] == "CATALOG_TOKEN"
+        assert merged["py-io-impl"] == "pyiceberg.io.pyarrow.PyArrowFileIO"
+
+    def test_non_pyarrow_iceberg_file_io_fails_closed(self) -> None:
+        with pytest.raises(JobConfigurationError, match="require PyArrowFileIO"):
+            merge_iceberg_properties({"py-io-impl": "pyiceberg.io.fsspec.FsspecFileIO"})
+
+    def test_merge_precedence_is_source_catalog_profile_environment(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AWS_ENDPOINT_URL", "http://environment:9000")
+        merged = merge_iceberg_properties(
+            {
+                "s3.endpoint": "http://catalog:9000",
+                "s3.region": "catalog-region",
+            },
+            profile=StorageProfile(
+                endpoint="http://profile:9000",
+                region="profile-region",
+            ),
+            source=S3Config(endpoint="http://source:9000"),
+        )
+
+        assert merged["s3.endpoint"] == "http://source:9000"
+        assert merged["s3.region"] == "catalog-region"
+
+    def test_credential_layers_are_not_partially_mixed(self) -> None:
+        merged = merge_iceberg_properties(
+            {"s3.access-key-id": "catalog-key"},
+            profile=StorageProfile(
+                access_key_id="profile-key",
+                secret_access_key="profile-secret",
+            ),
+        )
+
+        assert merged["s3.access-key-id"] == "catalog-key"
+        assert "s3.secret-access-key" not in merged
+
+    def test_source_credentials_do_not_mix_with_profile(self) -> None:
+        merged = runtime_s3_profile(
+            {
+                "s3_profile": StorageProfile(
+                    access_key_id="profile-key",
+                    secret_access_key="profile-secret",
+                    profile_name="profile-name",
+                ),
+                "s3": S3Config(access_key_id="source-key"),
+            }
+        )
+
+        assert merged.access_key_id == "source-key"
+        assert merged.secret_access_key is None
+        assert merged.profile_name is None
 
 
 if __name__ == "__main__":

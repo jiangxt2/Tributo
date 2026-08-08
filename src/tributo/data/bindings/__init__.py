@@ -385,15 +385,31 @@ def _register_optional(
     constraints: BindingPlanConstraints | None = None,
     dependencies: tuple[str, ...] = (),
 ) -> None:
-    available = _is_compatible_distribution(
+    installed_engine = _distribution_version(engine_distribution)
+    engine_compatible = _is_compatible_distribution(
         engine_distribution, engine_version_spec
-    ) and all(_distribution_version(name) is not None for name in dependencies)
+    )
+    missing_dependencies = tuple(
+        name for name in dependencies if _distribution_version(name) is None
+    )
+    available = engine_compatible and not missing_dependencies
     if available:
         bindings.register(descriptor_factory())
     else:
+        details: list[str] = []
+        if installed_engine is not None and not engine_compatible:
+            details.append(
+                f"installed {engine_distribution} {installed_engine}; "
+                f"required {engine_version_spec}"
+            )
+        if missing_dependencies:
+            details.append("missing " + ", ".join(sorted(missing_dependencies)))
+        diagnostic_hint = (
+            f"{install_hint} ({'; '.join(details)})" if details else install_hint
+        )
         bindings.register_requirement(
             key,
-            install_hint,
+            diagnostic_hint,
             constraints=constraints,
         )
 

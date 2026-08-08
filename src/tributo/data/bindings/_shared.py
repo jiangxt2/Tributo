@@ -11,8 +11,13 @@ from typing import Any, Mapping
 import pyarrow as pa
 
 from tributo._common.storage_profiles import StorageProfile, StorageProfileResolver
+from tributo.data._s3 import (
+    ICEBERG_FILE_IO_PROPERTY,
+    PYARROW_ICEBERG_FILE_IO,
+    merge_iceberg_properties,
+)
 from tributo.data.base import S3Config
-from tributo.data.engine_binding import classify_transform_decisions
+from tributo.data.engine_binding import BindingStageError, classify_transform_decisions
 from tributo.data.ingestion import TransformDecision
 from tributo.data.scan_plan import FileScan, LogicalScanPlan
 from tributo.data.transform_ir import TransformPipeline
@@ -46,30 +51,95 @@ def require_parquet_file_scan(plan: LogicalScanPlan) -> FileScan:
     )
 
 
-def runtime_s3_profile(runtime_options: Mapping[str, Any]) -> StorageProfile:
-    """Resolve the shared storage profile, then overlay source-local settings."""
+def _runtime_s3_source(runtime_options: Mapping[str, Any]) -> S3Config | None:
+    """Validate and return source-local S3 settings, when present."""
+    raw = runtime_options.get("s3")
+    if raw is None:
+        return None
+    if isinstance(raw, S3Config):
+        return raw
+    if isinstance(raw, Mapping):
+        return S3Config.model_validate(dict(raw))
+    raise JobConfigurationError("runtime option 's3' must be an S3Config")
+
+
+def _runtime_storage_profile(
+    runtime_options: Mapping[str, Any],
+) -> StorageProfile | None:
+    """Validate the profile resolved by the ingestion Gateway."""
     runtime_profile = runtime_options.get("s3_profile")
     if runtime_profile is not None and not isinstance(runtime_profile, StorageProfile):
         raise JobConfigurationError("runtime option 's3_profile' must be resolved")
-    profile = runtime_profile or StorageProfileResolver().resolve(None)
-    raw = runtime_options.get("s3")
-    if raw is None:
+    return runtime_profile
+
+
+def runtime_s3_profile(runtime_options: Mapping[str, Any]) -> StorageProfile:
+    """Resolve the shared storage profile, then overlay source-local settings."""
+    profile = _runtime_storage_profile(runtime_options)
+    profile = profile or StorageProfileResolver().resolve(None)
+    source = _runtime_s3_source(runtime_options)
+    if source is None:
         return profile
-    if isinstance(raw, S3Config):
-        source = raw
-    elif isinstance(raw, Mapping):
-        source = S3Config.model_validate(dict(raw))
-    else:
-        raise JobConfigurationError("runtime option 's3' must be an S3Config")
+    source_has_credentials = bool(source.access_key_id or source.secret_access_key)
     return StorageProfile(
         endpoint=source.endpoint or profile.endpoint,
         region=source.region or profile.region,
-        access_key_id=source.access_key_id or profile.access_key_id,
-        secret_access_key=source.secret_access_key or profile.secret_access_key,
+        access_key_id=(
+            source.access_key_id if source_has_credentials else profile.access_key_id
+        ),
+        secret_access_key=(
+            source.secret_access_key
+            if source_has_credentials
+            else profile.secret_access_key
+        ),
         use_ssl=profile.use_ssl,
         path_style=profile.path_style,
-        profile_name=profile.profile_name,
+        profile_name=None if source_has_credentials else profile.profile_name,
     )
+
+
+def iceberg_catalog_properties(runtime_options: Mapping[str, Any]) -> dict[str, str]:
+    """Resolve catalog properties with source-aware S3 precedence."""
+    raw_properties = runtime_options.get("catalog_properties", {})
+    if not isinstance(raw_properties, Mapping) or any(
+        not isinstance(key, str) or not isinstance(value, str)
+        for key, value in raw_properties.items()
+    ):
+        raise JobConfigurationError(
+            "runtime option 'catalog_properties' must map strings to strings"
+        )
+    file_io = raw_properties.get(ICEBERG_FILE_IO_PROPERTY)
+    if file_io is not None and file_io != PYARROW_ICEBERG_FILE_IO:
+        raise BindingStageError.framework_diagnostic(
+            "build_native_plan",
+            error_type=JobConfigurationError,
+            diagnostic_code="unsupported_iceberg_file_io",
+            diagnostic=(
+                "Built-in Iceberg bindings require PyArrowFileIO; "
+                "other py-io-impl values are unsupported"
+            ),
+        )
+    return merge_iceberg_properties(
+        raw_properties,
+        profile=_runtime_storage_profile(runtime_options),
+        source=_runtime_s3_source(runtime_options),
+    )
+
+
+def parse_iceberg_row_filter(value: Any) -> Any | None:
+    """Validate the shared filter subset with PyIceberg's public parser."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise JobConfigurationError("Iceberg row_filter must be a non-empty string")
+    from pyiceberg.expressions.parser import ParseException, parse
+
+    try:
+        return parse(value)
+    except ParseException:
+        raise JobConfigurationError(
+            "Iceberg row_filter must use the supported PyIceberg expression syntax"
+        ) from None
 
 
 def arrow_schema(value: Any) -> pa.Schema:

@@ -135,12 +135,18 @@ class DataSourceProvider(ABC):
     """Logical data-source provider (stable contract).
 
     Subclasses declare a unique ``provider_id`` and optional default
-    ``aliases``; conflict checks and alias resolution live in the
-    ProviderRegistry, not here.
+    ``aliases``. ``projection_option_name`` identifies the provider option
+    used by the consumer-neutral projection helper. ``relative_uri_is_path``
+    declares whether a scheme-less ``ProviderSourceConfig.uri`` is a local
+    path resolved against the configured project root. Conflict checks,
+    metadata validation, and alias resolution live in the ProviderRegistry,
+    not here.
     """
 
     provider_id: ClassVar[str] = ""
     aliases: ClassVar[frozenset[str]] = frozenset()
+    projection_option_name: ClassVar[str | None] = None
+    relative_uri_is_path: ClassVar[bool] = False
 
     @abstractmethod
     def normalize(self, source: CanonicalSourceInput) -> ResolvedSource:

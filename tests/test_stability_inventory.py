@@ -73,7 +73,7 @@ STABILITY_MAP: dict[str, str] = {
     "tributo.data.provider_registry": "beta",
     "tributo.data.refs": "beta",
     # Data — alpha candidate ingestion contract
-    "tributo.data.scan_plan": "alpha",
+    "tributo.data.scan_plan": "developer",
     "tributo.data.ingestion": "alpha",
     "tributo.data.handle_adapters": "alpha",
     "tributo.data.transform_ir": "alpha",
@@ -82,6 +82,7 @@ STABILITY_MAP: dict[str, str] = {
     "tributo.data.graph": "beta",
     # Data — internal engine translation
     "tributo.data.engine_binding": "developer",
+    "tributo.data.provider_plugins": "developer",
     "tributo.data.transform_compiler": "developer",
     # Exporting — beta
     "tributo.exporting.service": "beta",

@@ -25,7 +25,13 @@ from tributo.data.ingestion import (
     ReadOptions,
     TransformDecision,
 )
-from tributo.data.scan_plan import FileScan, ScanKind, SourceCapability
+from tributo.data.scan_plan import (
+    CatalogTableRef,
+    FileScan,
+    ScanKind,
+    SourceCapability,
+    TableScan,
+)
 from tributo.data.transform_ir import FilterEq, Limit, SelectColumns, TransformPipeline
 from tributo.exceptions import (
     DataSourceError,
@@ -39,6 +45,8 @@ _TEST_BINDING_ID = "test.ray.parquet"
 @pytest.fixture(autouse=True)
 def installed_versions(monkeypatch: pytest.MonkeyPatch) -> None:
     versions = {
+        "daft": "0.7.21",
+        "pyiceberg": "0.11.1",
         "ray": "2.55.1",
         "test-binding": "1.2.3",
         "test-helper": "4.5.6",
@@ -161,6 +169,63 @@ def test_plan_constraints_select_non_conflicting_bindings() -> None:
 
     assert selected_local.key.binding_id == "test.ray.parquet.local"
     assert selected_hdfs.key.binding_id == "test.ray.parquet.hdfs"
+
+
+def test_catalog_and_storage_format_constraints_select_hive_binding() -> None:
+    bindings = EngineBindings()
+    for storage_format_id in ("parquet", "orc"):
+        bindings.register(
+            BindingDescriptor(
+                key=BindingKey(
+                    "tributo.ray_data",
+                    ScanKind.TABLE,
+                    "hive",
+                    f"test.ray.hive.{storage_format_id}",
+                ),
+                factory=_Binding,
+                capabilities=frozenset(),
+                distribution_name="test-binding",
+                distribution_version="1.2.3",
+                engine_version_spec="==2.55.1",
+                constraints=BindingPlanConstraints(
+                    catalog_ids=frozenset({"hive"}),
+                    storage_format_ids=frozenset({storage_format_id}),
+                ),
+            )
+        )
+    plan = TableScan(
+        provider_id="example.hive",
+        connector_id="hive",
+        table=CatalogTableRef("hive", ("analytics",), "events"),
+        storage_format_id="orc",
+    )
+
+    selected, _ = bindings.describe(engine_id="tributo.ray_data", plan=plan)
+
+    assert selected.key.binding_id == "test.ray.hive.orc"
+
+
+def test_table_constraints_do_not_match_unknown_catalog_storage() -> None:
+    constraints = BindingPlanConstraints(
+        catalog_ids=frozenset({"hive"}),
+        storage_format_ids=frozenset({"orc"}),
+    )
+
+    assert not constraints.matches(
+        TableScan(
+            provider_id="example.hive",
+            connector_id="hive",
+            table=CatalogTableRef("glue", ("analytics",), "events"),
+            storage_format_id="orc",
+        )
+    )
+    assert not constraints.matches(
+        TableScan(
+            provider_id="example.hive",
+            connector_id="hive",
+            table=CatalogTableRef("hive", ("analytics",), "events"),
+        )
+    )
 
 
 def test_ambiguous_bindings_require_explicit_binding_id() -> None:
@@ -307,6 +372,40 @@ def test_worker_distribution_mismatch_fails_closed() -> None:
     with pytest.raises(
         EngineNotAvailableError,
         match=r"\[worker_version_mismatch\].*Driver and worker versions differ",
+    ) as exc_info:
+        _compile(bindings, context=context)
+
+    assert calls == ["close"]
+    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__context__ is None
+
+
+def test_invalid_worker_distribution_version_is_engine_unavailable() -> None:
+    calls: list[str] = []
+
+    class _ClosingBinding(_Binding):
+        def compile(self, request: Any) -> BindingCompilation:
+            compilation = super().compile(request)
+            return BindingCompilation(
+                handle=compilation.handle,
+                engine_version=compilation.engine_version,
+                reader_api=compilation.reader_api,
+                transport_id=compilation.transport_id,
+                close_callback=lambda: calls.append("close"),
+            )
+
+    bindings = EngineBindings()
+    bindings.register(_descriptor(factory=_ClosingBinding))
+    context = IngestionRuntimeContext(
+        distribution_probe=lambda names: {
+            name: (("not-a-version",) if name == "ray" else ("1.2.3",))
+            for name in names
+        }
+    )
+
+    with pytest.raises(
+        EngineNotAvailableError,
+        match=r"\[worker_version_invalid\].*invalid version",
     ) as exc_info:
         _compile(bindings, context=context)
 
@@ -511,6 +610,53 @@ def test_first_party_binding_can_publish_framework_diagnostic() -> None:
     assert exc_info.value.__context__ is None
 
 
+@pytest.mark.parametrize(
+    ("engine_id", "descriptor_factory"),
+    [
+        ("tributo.ray_data", builtin_bindings._ray_iceberg_descriptor),
+        ("tributo.daft", builtin_bindings._daft_iceberg_descriptor),
+    ],
+)
+def test_builtin_iceberg_file_io_rejection_preserves_diagnostic(
+    engine_id: str,
+    descriptor_factory: Any,
+) -> None:
+    bindings = EngineBindings()
+    bindings.register(descriptor_factory())
+    plan = TableScan(
+        provider_id="tributo.iceberg",
+        connector_id="iceberg",
+        table=CatalogTableRef(
+            catalog_id="prod",
+            namespace=("analytics",),
+            table="events",
+        ),
+    )
+
+    with pytest.raises(
+        JobConfigurationError,
+        match=(
+            r"\[unsupported_iceberg_file_io\].*"
+            r"Built-in Iceberg bindings require PyArrowFileIO"
+        ),
+    ) as exc_info:
+        bindings.compile(
+            engine_id=engine_id,
+            binding_id=None,
+            plan=plan,
+            runtime_options={
+                "catalog_properties": {"py-io-impl": "pyiceberg.io.fsspec.FsspecFileIO"}
+            },
+            transforms=TransformPipeline(),
+            read_options=ReadOptions(),
+            source_ref="0" * 64,
+            runtime_context=IngestionRuntimeContext(),
+        )
+
+    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__context__ is None
+
+
 def test_framework_binding_diagnostic_rejects_credentials() -> None:
     with pytest.raises(ValueError, match="credential-free"):
         BindingStageError.framework_diagnostic(
@@ -649,7 +795,10 @@ def test_incompatible_ray_does_not_disable_daft(
         ).key.engine_id
         == "tributo.daft"
     )
-    with pytest.raises(EngineNotAvailableError, match="ray.*2.55.1"):
+    with pytest.raises(
+        EngineNotAvailableError,
+        match=r"installed ray 2\.54\.0; required ==2\.55\.1",
+    ):
         bindings.resolve(
             BindingKey(
                 "tributo.ray_data",

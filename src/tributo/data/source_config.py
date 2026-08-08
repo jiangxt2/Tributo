@@ -139,9 +139,20 @@ class SqlPartitioning(BaseModel):
     Engine-neutral requirement mapped by the selected Binding.
     """
 
-    column: str
+    mode: Literal["single", "auto", "parallel"] = "parallel"
+    column: str | None = None
     num_partitions: int | None = Field(default=None, ge=1)
     bound_strategy: Literal["min-max", "percentile"] = "min-max"
+
+    @model_validator(mode="after")
+    def _validate_mode(self) -> "SqlPartitioning":
+        if self.mode == "parallel" and not self.column:
+            raise ValueError("parallel SQL partitioning requires a column")
+        if self.mode != "parallel" and self.column is not None:
+            raise ValueError("SQL partitioning column is only valid for parallel mode")
+        if self.mode == "single" and self.num_partitions is not None:
+            raise ValueError("single SQL partitioning cannot declare num_partitions")
+        return self
 
 
 @PublicAPI(stability="beta")
@@ -211,22 +222,12 @@ class ProviderSourceConfig(StrictConfigModel):
 CanonicalSourceInput = BuiltinSourceConfig | ProviderSourceConfig
 
 
-_PROJECTION_OPTIONS: dict[str, str] = {
-    "tributo.parquet": "columns",
-    "parquet": "columns",
-    "tributo.csv": "columns",
-    "csv": "columns",
-    "tributo.clickhouse": "columns",
-    "clickhouse": "columns",
-    "tributo.doris": "columns",
-    "doris": "columns",
-    "tributo.postgresql": "columns",
-    "postgresql": "columns",
-    "tributo.iceberg": "selected_fields",
-    "iceberg": "selected_fields",
-    "tributo.lance": "columns",
-    "lance": "columns",
-}
+def _provider_projection_option(source: ProviderSourceConfig) -> str | None:
+    """Resolve projection metadata through the Provider SPI."""
+    # Local import avoids source_config -> provider -> source_config at module load.
+    from tributo.data.provider_registry import resolve_provider
+
+    return resolve_provider(source).projection_option_name
 
 
 @PublicAPI(stability="beta")
@@ -241,7 +242,7 @@ def source_projection(source: CanonicalSourceInput) -> list[str] | None:
         return list(source.columns) if source.columns else None
     if isinstance(source, IcebergSourceConfig):
         return list(source.selected_fields) if source.selected_fields else None
-    option_name = _PROJECTION_OPTIONS.get(source.provider)
+    option_name = _provider_projection_option(source)
     if option_name is None:
         return None
     value = source.options.get(option_name)
@@ -282,7 +283,7 @@ def apply_source_projection(
     if isinstance(source, IcebergSourceConfig):
         return source.model_copy(update={"selected_fields": list(columns)})
 
-    option_name = _PROJECTION_OPTIONS.get(source.provider)
+    option_name = _provider_projection_option(source)
     if option_name is None:
         raise ValueError(
             f"provider {source.provider!r} does not declare a projection option"

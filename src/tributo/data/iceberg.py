@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from pyiceberg.catalog import load_catalog as _pyiceberg_load_catalog
 from pyiceberg.exceptions import NoSuchTableError
 
-from tributo.data._s3 import to_iceberg_properties
+from tributo.data._s3 import merge_iceberg_properties
 from tributo.data.base import DataConnector, S3Config, WriteMode
 from tributo.data.registry import register_connector
 from tributo.util.annotations import PublicAPI
@@ -159,7 +159,7 @@ def _load_catalog(
     s3_config: S3Config | None,
 ) -> Any:
     """Load a PyIceberg catalog, merging S3 auth properties."""
-    merged = {**catalog_properties, **to_iceberg_properties(s3_config)}
+    merged = merge_iceberg_properties(catalog_properties, source=s3_config)
     return _pyiceberg_load_catalog(catalog_name, **merged)
 
 

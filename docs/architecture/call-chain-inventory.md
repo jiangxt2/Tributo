@@ -38,6 +38,8 @@ separate reader backend.
 - `data/scan_plan.py` — credential-free `FileScan` / `SqlScan` / `TableScan`.
 - `data/engine_binding.py` — four-part Binding identity, constraint matching,
   capability negotiation, and deterministic selection.
+- `data/provider_plugins.py` — versioned
+  `tributo.ingestion_providers` descriptor discovery.
 - `data/binding_plugins.py` — narrow
   `tributo.ingestion_bindings` descriptor discovery.
 - `data/transform_compiler.py` — internal Ray/Daft expression translation.
@@ -51,6 +53,7 @@ separate reader backend.
 ```
 CanonicalSourceInput (provider/uri or type/path/dialect shapes)
   → ProviderRegistry.resolve()           exact ID → alias → built-in mapping
+                                         after lazy Provider-plugin discovery
   → provider.normalize() → ResolvedSource(provider_id, canonical_uri, options)
   → provider.plan() → LogicalScanPlan
   → EngineBindings.resolve(engine, scan_kind, connector, binding_id/constraints)
@@ -75,9 +78,13 @@ The resolved path reaches `ResolvedSource` before source and plan digests are
 computed, so migrating entrypoints cannot silently change either the file read
 or its identity. URI sources and absolute paths are unchanged.
 
-Built-in and selected optional Bindings are registered explicitly. Independent
-packages can contribute versioned descriptors through
-`tributo.ingestion_bindings`; this descriptor-only SPI does not add a plugin
+Built-ins register explicitly. Independent packages contribute the logical
+Provider through `tributo.ingestion_providers` and the physical Ray/Daft
+Binding through `tributo.ingestion_bindings`. Both descriptor-only SPIs are
+versioned, discovered lazily, isolate bad plugins, and cannot replace an
+existing route. Provider-declared projection/path semantics plus declarative
+Binding filesystem/catalog/storage-format constraints prevent consumer
+modules from adding source-name branches. These SPIs do not add a plugin
 lifecycle or permit a third ingestion engine.
 
 ### 2. Inference Data Loading
@@ -114,19 +121,28 @@ CLI / Python API
   ↓
 submit_embedding_job(source=... or s3_input_path=...)
   ↓
+IngestionRequest(source, explicit engine)
+  ↓
+credential-safe source serialization + deterministic submission identity
+  (no Provider/Binding resolution on the submit host)
+  ↓
 Ray Job submission (entrypoint script runs inside Ray cluster)
   ↓
 embeddings.batch_job._resolve_embedding_source()
   ↓
-load_ray_dataset_from_source(source.model_dump(mode="python"))
+IngestionGateway.open(explicit engine)
   ↓
-IngestionGateway.open(engine="ray") → RayDataHandle.dataset
+RayDataHandle.dataset, or explicit DaftDataFrameHandle → Ray adapter
   ↓
 Ray Data → model inference → output writer
 ```
 
-Ray Job entrypoints carry only credential-free source configuration; credentials
-are resolved from the cluster environment or IAM.
+Ray Job entrypoints carry only source configuration accepted by
+`IngestionRequest.source_json_for_remote_transport()`; credentials are resolved
+from the cluster environment, IAM, or a storage profile. Optional Provider,
+Binding, and Connector dependencies are resolved inside the cluster, never on
+the submit host. Embeddings never calls Provider normalization or a registry
+directly and never performs automatic engine fallback.
 
 ### 4. CLI Data Entry
 

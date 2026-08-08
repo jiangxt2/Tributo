@@ -24,14 +24,6 @@ import importlib
 import logging
 
 from tributo.data.base import DataConnector, S3Config, WriteMode
-from tributo.data.engine_binding import (
-    BindingCompilation,
-    BindingCompileRequest,
-    BindingDescriptor,
-    BindingKey,
-    BindingPlanConstraints,
-    EngineBinding,
-)
 from tributo.data.graph import GraphDataBundle, GraphSchema
 from tributo.data.handle_adapters import (
     HandleConversionReceipt,
@@ -163,13 +155,6 @@ __all__ = [
     "describe_ingestion",
     "open_ingestion",
     "ray_worker_distribution_probe",
-    # Third-party ingestion Binding SPI
-    "BindingKey",
-    "BindingPlanConstraints",
-    "BindingCompileRequest",
-    "BindingCompilation",
-    "BindingDescriptor",
-    "EngineBinding",
     # Engine-neutral Transform IR
     "TransformPipeline",
     "transform_ir_digest",

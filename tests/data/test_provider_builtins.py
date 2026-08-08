@@ -632,7 +632,7 @@ class TestSqlProviderNormalize:
             )
 
     def test_iceberg_provider_shape_builds_catalog_plan(self) -> None:
-        from tributo.data.scan_plan import CatalogTableRef, TableScan
+        from tributo.data.scan_plan import CatalogTableRef, SourceCapability, TableScan
 
         resolved = IcebergProvider().normalize(
             ProviderSourceConfig(
@@ -648,6 +648,7 @@ class TestSqlProviderNormalize:
             catalog_id="prod", namespace=("db",), table="events"
         )
         assert plan.options["row_filter"] == "event_id > 1"
+        assert SourceCapability.PREDICATE_PUSHDOWN not in plan.required_capabilities
         with pytest.raises(JobConfigurationError, match="no legacy Ray-only reader"):
             IcebergProvider().open(resolved)
 
@@ -701,7 +702,7 @@ class TestSqlProviderNormalize:
     def test_structured_table_builds_sql_plan(
         self, provider: DataSourceProvider, dialect: str
     ) -> None:
-        from tributo.data.scan_plan import SqlScan, SqlTableRead
+        from tributo.data.scan_plan import SqlScan, SqlShardMode, SqlTableRead
 
         resolved = provider.normalize(
             cfg(
@@ -723,6 +724,42 @@ class TestSqlProviderNormalize:
         assert plan.target == SqlTableRead(
             schema=expected_schema, table="events", projection=("id",)
         )
+        assert plan.sharding.mode is (
+            SqlShardMode.SINGLE if dialect == "postgresql" else SqlShardMode.AUTO
+        )
+
+    def test_sql_partitioning_modes_are_preserved_in_plan(self) -> None:
+        from tributo.data.scan_plan import SqlShardMode
+
+        auto_source = cfg(
+            {
+                "type": "sql",
+                "dialect": "clickhouse",
+                "database": "analytics",
+                "table": "events",
+                "partitioning": {"mode": "auto", "num_partitions": 6},
+            }
+        )
+        single_source = cfg(
+            {
+                "type": "sql",
+                "dialect": "clickhouse",
+                "database": "analytics",
+                "table": "events",
+                "partitioning": {"mode": "single"},
+            }
+        )
+
+        auto_plan = ClickHouseProvider().plan(
+            ClickHouseProvider().normalize(auto_source)
+        )
+        single_plan = ClickHouseProvider().plan(
+            ClickHouseProvider().normalize(single_source)
+        )
+
+        assert auto_plan.sharding.mode is SqlShardMode.AUTO
+        assert auto_plan.sharding.target_partitions == 6
+        assert single_plan.sharding.mode is SqlShardMode.SINGLE
 
     def test_postgresql_database_schema_is_part_of_structured_target(self) -> None:
         from tributo.data.scan_plan import SqlScan, SqlTableRead
@@ -743,27 +780,29 @@ class TestSqlProviderNormalize:
         assert isinstance(plan, SqlScan)
         assert plan.target == SqlTableRead(schema="feature_store", table="events")
 
-    def test_raw_sql_is_digest_only_in_logical_plan(self) -> None:
-        from tributo.data.scan_plan import ParameterizedQuery, SqlScan
-
-        resolved = ClickHouseProvider().normalize(
+    @pytest.mark.parametrize("provider", [ClickHouseProvider(), DorisProvider()])
+    def test_raw_sql_has_actionable_migration_error(
+        self, provider: DataSourceProvider
+    ) -> None:
+        raw_sql = "SELECT * FROM events WHERE password = 'top-secret'"
+        resolved = provider.normalize(
             cfg(
                 {
                     "type": "sql",
-                    "dialect": "clickhouse",
-                    "sql": "SELECT * FROM events WHERE id = %(id)s",
+                    "dialect": provider.provider_id.removeprefix("tributo."),
+                    "sql": raw_sql,
                     "params": {"id": 7},
                 }
             )
         )
-        plan = ClickHouseProvider().plan(resolved)
 
-        assert isinstance(plan, SqlScan)
-        assert isinstance(plan.target, ParameterizedQuery)
-        assert plan.target.query_digest == digest(
-            "SELECT * FROM events WHERE id = %(id)s"
-        )
-        assert "SELECT" not in repr(plan)
+        with pytest.raises(
+            JobConfigurationError, match="structured 'table' source"
+        ) as exc_info:
+            provider.plan(resolved)
+
+        assert raw_sql not in str(exc_info.value)
+        assert "top-secret" not in str(exc_info.value)
 
     def test_doris_builtin_shape(self) -> None:
         resolved = DorisProvider().normalize(
@@ -1100,6 +1139,16 @@ class TestConnectionResolution:
         assert host == "env.example"
         assert port == 9443
         assert password == "env-pass"
+
+    def test_invalid_environment_port_is_structured(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from tributo.data.provider_builtins import _resolve_connection
+
+        monkeypatch.setenv("TRIBUTO_CLICKHOUSE_PORT", "not-a-port")
+
+        with pytest.raises(JobConfigurationError, match="port must be an integer"):
+            _resolve_connection("clickhouse", {})
 
     def test_dialect_defaults(self) -> None:
         from tributo.data.provider_builtins import _resolve_connection

@@ -7,9 +7,10 @@ probed by availability, and the bare-dict legacy semantics live only in the
 conflict is checked up front, so a failed registration leaves no partial
 entry behind.
 
-Third-party providers register explicitly (``register_provider``); entry
-point discovery, version negotiation and lifecycle management belong to
-PL1+PL2.
+Third-party providers may register explicitly or publish versioned descriptors
+through the ``tributo.ingestion_providers`` entry-point group. Discovery is
+lazy and isolated: a broken plugin cannot replace built-ins or prevent an
+unrelated provider from resolving.
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ from tributo.util.annotations import PublicAPI
 # each segment matches [a-z][a-z0-9_]*.
 _PROVIDER_ID_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
 _ALIAS_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+_PROJECTION_OPTION_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*$")
 
 # Frozen canonical routes: builtin source type → logical provider ID.
 _CANONICAL_TYPE_ROUTES: dict[str, str] = {
@@ -96,6 +98,16 @@ class ProviderRegistry:
         for alias in aliases:
             if not _ALIAS_RE.fullmatch(alias):
                 raise TypeError(f"Invalid alias {alias!r}: expected [a-z][a-z0-9_]*")
+        projection_option = cls.projection_option_name
+        if projection_option is not None and (
+            not isinstance(projection_option, str)
+            or _PROJECTION_OPTION_RE.fullmatch(projection_option) is None
+        ):
+            raise TypeError(
+                "projection_option_name must be None or a safe flat option key"
+            )
+        if type(cls.relative_uri_is_path) is not bool:
+            raise TypeError("relative_uri_is_path must be a bool")
 
         # Atomicity: validate every collision before writing anything.
         with self._lock:
@@ -278,12 +290,36 @@ class ProviderRegistry:
 
 
 _registry = ProviderRegistry()
+_provider_plugins_loaded = False
+_provider_plugins_loading = False
+_provider_plugins_lock = threading.RLock()
+
+
+def _ensure_provider_plugins_registered() -> None:
+    """Load third-party Provider descriptors once without import recursion."""
+    global _provider_plugins_loaded, _provider_plugins_loading
+    with _provider_plugins_lock:
+        if _provider_plugins_loaded or _provider_plugins_loading:
+            return
+        _provider_plugins_loading = True
+        try:
+            from tributo.data.provider_plugins import register_discovered_providers
+
+            register_discovered_providers(_registry)
+        except Exception:
+            # Entry-point enumeration itself may fail before per-plugin
+            # isolation begins. Leave discovery retryable for the next call.
+            _provider_plugins_loading = False
+            raise
+        else:
+            _provider_plugins_loaded = True
+        finally:
+            _provider_plugins_loading = False
 
 
 @PublicAPI(stability="beta")
 def register_provider(cls: type[DataSourceProvider]) -> None:
-    """Register a provider class (explicit/manual registration; PL1+PL2 adds
-    entry-point discovery).
+    """Register a provider class explicitly.
 
     Raises:
         TypeError: Invalid provider class or ID format.
@@ -302,6 +338,7 @@ def resolve_provider(
         JobConfigurationError: Unknown provider, unsupported dialect, or
             unknown legacy type — with an explicit diagnostic.
     """
+    _ensure_provider_plugins_registered()
     return _registry.resolve(source)
 
 
@@ -314,4 +351,5 @@ def unregister_provider(provider_id: str) -> None:
 @PublicAPI(stability="beta")
 def list_providers() -> list[str]:
     """Return the sorted registered provider IDs."""
+    _ensure_provider_plugins_registered()
     return _registry.list_providers()

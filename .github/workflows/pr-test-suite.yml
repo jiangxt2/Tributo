@@ -83,6 +83,9 @@ jobs:
               - "tests/integration/test_postgresql_ingestion.py"
               - "tests/integration/test_table_format_ingestion.py"
               - "tests/integrations/test_data_ingestion_dual_engine.py"
+              - "tests/integrations/Dockerfile.data-ingestion"
+              - "tests/integrations/Dockerfile.data-ingestion.dockerignore"
+              - "tests/integrations/docker-compose.data-ingestion.yml"
               - "pyproject.toml"
               - "uv.lock"
               - ".github/workflows/pr-test-suite.yml"
@@ -484,6 +487,81 @@ jobs:
             -m ingestion_conformance -o "addopts=" \
             -v --tb=short --timeout=900
 
+  data-ingestion-distributed:
+    name: Data Ingestion Distributed (Docker Ray + MinIO)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [paths-filter, lint]
+    if: needs.paths-filter.outputs.data_ingestion == 'true'
+    env:
+      COMPOSE_PROJECT_NAME: tributo-ingestion-${{ github.run_id }}-${{ github.run_attempt }}
+      TRIBUTO_INGESTION_IMAGE_TAG: ${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+
+      - name: Build and start isolated Ray ingestion infrastructure
+        run: >-
+          docker compose
+          --file tests/integrations/docker-compose.data-ingestion.yml
+          up --detach --build
+
+      - name: Wait for Ray and MinIO readiness
+        run: |
+          ready=0
+          for attempt in $(seq 1 60); do
+            if docker compose \
+                --file tests/integrations/docker-compose.data-ingestion.yml \
+                exec --no-tty ray-head \
+                ray status --address=127.0.0.1:6379 >/dev/null 2>&1 && \
+              docker compose \
+                --file tests/integrations/docker-compose.data-ingestion.yml \
+                exec --no-tty ray-head \
+                python -c "import urllib.request; urllib.request.urlopen('http://minio:9000/minio/health/live', timeout=2).read()"; then
+              ready=1
+              break
+            fi
+            echo "Waiting for Docker Ray and MinIO (attempt ${attempt}/60)"
+            sleep 2
+          done
+          test "$ready" = "1"
+
+      - name: Run distributed dual-engine ingestion gate
+        run: |
+          set -o pipefail
+          docker compose \
+            --file tests/integrations/docker-compose.data-ingestion.yml \
+            exec --no-tty \
+            --env TRIBUTO_DOCKER_RAY_TEST=1 \
+            ray-head \
+            python -m tests.integrations.test_data_ingestion_dual_engine \
+            2>&1 | tee /tmp/data-ingestion-distributed-test.log
+
+      - name: Collect Docker infrastructure logs
+        if: always()
+        run: >-
+          docker compose
+          --file tests/integrations/docker-compose.data-ingestion.yml
+          logs --no-color
+          > /tmp/data-ingestion-distributed-services.log
+
+      - name: Upload distributed ingestion logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: data-ingestion-distributed-logs
+          path: |
+            /tmp/data-ingestion-distributed-test.log
+            /tmp/data-ingestion-distributed-services.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Stop isolated Ray ingestion infrastructure
+        if: always()
+        run: >-
+          docker compose
+          --file tests/integrations/docker-compose.data-ingestion.yml
+          down --volumes --remove-orphans
+
   build:
     name: Package Build & Smoke Test
     runs-on: ubuntu-latest
@@ -557,6 +635,7 @@ jobs:
       - export-s3
       - ray-runtime-env
       - data-ingestion-conformance
+      - data-ingestion-distributed
       - build
       - core-walking-skeleton
       - docs-build
@@ -576,6 +655,7 @@ jobs:
           RAY_RUNTIME_RESULT: ${{ needs.ray-runtime-env.result }}
           DATA_INGESTION: ${{ needs.paths-filter.outputs.data_ingestion }}
           DATA_INGESTION_RESULT: ${{ needs.data-ingestion-conformance.result }}
+          DATA_INGESTION_DISTRIBUTED_RESULT: ${{ needs.data-ingestion-distributed.result }}
           BUILD_RESULT: ${{ needs.build.result }}
           WALKING_RESULT: ${{ needs.core-walking-skeleton.result }}
           DOCS: ${{ needs.paths-filter.outputs.docs }}
@@ -621,8 +701,10 @@ jobs:
 
           if [ "$DATA_INGESTION" = "true" ]; then
             require_success data-ingestion-conformance "$DATA_INGESTION_RESULT"
+            require_success data-ingestion-distributed "$DATA_INGESTION_DISTRIBUTED_RESULT"
           else
             require_skipped data-ingestion-conformance "$DATA_INGESTION_RESULT"
+            require_skipped data-ingestion-distributed "$DATA_INGESTION_DISTRIBUTED_RESULT"
           fi
 
           if [ "$MODEL_EXPORT" = "true" ]; then

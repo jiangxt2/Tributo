@@ -872,6 +872,13 @@ def embed():
 @click.option("--input", "input_path", help="Legacy S3 input Parquet path")
 @click.option("--output", "output_path", required=True, help="S3 output path")
 @click.option("--model", "model_name", default="bge-small-zh", help="Model name")
+@click.option(
+    "--engine",
+    type=click.Choice(["ray", "daft"]),
+    default="ray",
+    show_default=True,
+    help="Explicit ingestion engine",
+)
 @click.option("--text-column", default=None, help="Text column name")
 @click.option("--batch-size", default=64, type=int, help="Inference batch size")
 @click.option("--concurrency", default=4, type=int, help="Number of actors")
@@ -885,6 +892,7 @@ def embed_batch(
     input_path: str | None,
     output_path: str,
     model_name: str,
+    engine: str,
     text_column: str | None,
     batch_size: int,
     concurrency: int,
@@ -910,6 +918,7 @@ def embed_batch(
             s3_input_path=input_path,
             s3_output_path=output_path,
             model_name=model_name,
+            engine=engine,
             text_column=text_column,
             batch_size=batch_size,
             concurrency=concurrency,

@@ -10,8 +10,9 @@ import argparse
 import json
 import logging
 import sys
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Iterator
 
 import ray
 from pydantic import TypeAdapter, ValidationError
@@ -19,15 +20,22 @@ from pydantic import TypeAdapter, ValidationError
 from tributo._common import configure_logging
 from tributo.data import (
     CanonicalSourceInput,
+    DaftDataFrameHandle,
+    IngestionRequest,
     ProviderSourceConfig,
+    RayDataHandle,
+    adapt_daft_result_to_ray,
     apply_source_projection,
+    open_ingestion,
     source_projection,
 )
 from tributo.embeddings.batch_processor import Embedder
 from tributo.embeddings.output_writer import write_dataset
-from tributo.training.data_loader import load_ray_dataset_from_source
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    import ray.data
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -47,6 +55,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--model",
         default="bge-small-zh",
         help="Short model name from registry",
+    )
+    parser.add_argument(
+        "--engine",
+        choices=("ray", "tributo.ray_data", "daft", "tributo.daft"),
+        default="ray",
+        help="Explicit ingestion engine; Daft is adapted to Ray after reading",
     )
     parser.add_argument(
         "--text-column",
@@ -104,6 +118,25 @@ def _resolve_embedding_source(
     return source, text_column
 
 
+@contextmanager
+def _open_embedding_dataset(
+    source: CanonicalSourceInput,
+    engine: str,
+) -> Iterator["ray.data.Dataset"]:
+    """Keep ingestion resources alive for the complete consumer operation."""
+    result = open_ingestion(IngestionRequest(source=source, engine=engine))
+    try:
+        if isinstance(result.handle, RayDataHandle):
+            dataset = result.handle.dataset
+        elif isinstance(result.handle, DaftDataFrameHandle):
+            dataset = adapt_daft_result_to_ray(result).handle.dataset
+        else:
+            raise RuntimeError("Embedding ingestion returned an unsupported handle")
+        yield dataset
+    finally:
+        result.close()
+
+
 def main(args: argparse.Namespace | None = None) -> int:
     if args is None:
         args = _parse_args()
@@ -121,8 +154,6 @@ def main(args: argparse.Namespace | None = None) -> int:
         source.provider if isinstance(source, ProviderSourceConfig) else source.type
     )
     logger.info("Reading input from provider=%s", provider_name)
-
-    ds = load_ray_dataset_from_source(source.model_dump(mode="python"))
 
     logger.info(
         "Embedding with model=%s actors=%d batch_size=%d",
@@ -143,16 +174,17 @@ def main(args: argparse.Namespace | None = None) -> int:
             f"Check image build (/opt/models/) or volume mount (/workspace/shared_models/)"
         )
 
-    ds = ds.map_batches(
-        Embedder,
-        fn_constructor_args=(model_path, text_column),
-        batch_size=args.batch_size,
-        concurrency=args.concurrency,
-        num_cpus=1,  # Reduce to 1 CPU/actor to lower resource usage
-    )
+    with _open_embedding_dataset(source, args.engine) as ds:
+        ds = ds.map_batches(
+            Embedder,
+            fn_constructor_args=(model_path, text_column),
+            batch_size=args.batch_size,
+            concurrency=args.concurrency,
+            num_cpus=1,  # Reduce to 1 CPU/actor to lower resource usage
+        )
 
-    logger.info("Writing output to %s", args.output)
-    write_dataset(ds, args.output)
+        logger.info("Writing output to %s", args.output)
+        write_dataset(ds, args.output)
 
     logger.info("Batch embedding complete: %s", args.output)
     return 0

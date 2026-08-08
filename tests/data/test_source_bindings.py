@@ -28,7 +28,11 @@ from tributo.data.bindings.ray_hdfs import (
 from tributo.data.bindings.ray_iceberg import RayIcebergBinding
 from tributo.data.bindings.ray_lance import RayLanceBinding
 from tributo.data.bindings.ray_postgresql import RayPostgreSqlBinding
-from tributo.data.engine_binding import BindingCompileRequest, EngineBinding
+from tributo.data.engine_binding import (
+    BindingCompileRequest,
+    BindingStageError,
+    EngineBinding,
+)
 from tributo.data.ingestion import (
     DaftDataFrameHandle,
     IngestionRuntimeContext,
@@ -39,6 +43,7 @@ from tributo.data.scan_plan import (
     CatalogTableRef,
     FileScan,
     NumericVersionRef,
+    SnapshotVersionRef,
     SqlScan,
     SqlShardMode,
     SqlShardRequirement,
@@ -53,7 +58,8 @@ _SCHEMA = pa.schema([("id", pa.int64())])
 
 
 class _RayDataset:
-    def schema(self) -> pa.Schema:
+    def schema(self, fetch_if_missing: bool = True) -> pa.Schema:
+        del fetch_if_missing
         return _SCHEMA
 
 
@@ -65,6 +71,11 @@ class _DaftSchema:
 class _DaftDataFrame:
     def __init__(self) -> None:
         self.selected: tuple[str, ...] = ()
+        self.predicates: tuple[str, ...] = ()
+
+    def where(self, predicate: str) -> "_DaftDataFrame":
+        self.predicates = (*self.predicates, predicate)
+        return self
 
     def select(self, *columns: str) -> "_DaftDataFrame":
         self.selected = columns
@@ -249,9 +260,16 @@ def test_daft_iceberg_binding_delegates_catalog_and_scan(
         lambda name: "0.7.21",
     )
 
+    plan = _iceberg_plan()
+    plan = TableScan(
+        provider_id=plan.provider_id,
+        connector_id=plan.connector_id,
+        table=plan.table,
+        options={"selected_fields": ["id"], "row_filter": "id > 0"},
+    )
     result = DaftIcebergBinding().compile(
         _request(
-            _iceberg_plan(),
+            plan,
             runtime_options={
                 "catalog_name": "prod",
                 "catalog_properties": {"type": "rest", "uri": "http://catalog"},
@@ -262,6 +280,9 @@ def test_daft_iceberg_binding_delegates_catalog_and_scan(
     assert isinstance(result.handle, DaftDataFrameHandle)
     assert loaded_tables == ["analytics.events"]
     assert read_calls[0][0] is table
+    assert result.handle.dataframe.predicates == ("id > 0",)
+    assert result.handle.dataframe.selected == ("id",)
+    assert any("Daft lazy residual filter" in item for item in result.diagnostics)
     assert result.reader_api == "daft.read_iceberg"
 
 
@@ -305,6 +326,88 @@ def test_lance_bindings_use_public_engine_readers(
     assert isinstance(result.handle, handle_type)
     assert result.reader_api in {"ray.data.read_lance", "daft.read_lance"}
     assert len(ray_calls) + len(daft_calls) == 1
+
+
+@pytest.mark.parametrize("binding", [RayLanceBinding(), DaftLanceBinding()])
+def test_lance_bindings_reject_iceberg_snapshot_refs(
+    binding: EngineBinding,
+) -> None:
+    plan = TableScan(
+        provider_id="tributo.lance",
+        connector_id="lance",
+        table=UriTableRef(uri="/data/table.lance"),
+        version_ref=SnapshotVersionRef(snapshot_id=7),
+    )
+
+    with pytest.raises(BindingStageError) as exc_info:
+        binding.compile(_request(plan))
+
+    assert exc_info.value.diagnostic_code == "unsupported_lance_snapshot_ref"
+
+
+def test_daft_olap_default_auto_sharding_is_delegated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+    module = ModuleType("daft_olap")
+    module.read_clickhouse = lambda **kwargs: calls.append(kwargs) or _DaftDataFrame()
+    module.read_doris = lambda **kwargs: _DaftDataFrame()
+    monkeypatch.setitem(sys.modules, "daft_olap", module)
+    monkeypatch.setattr(
+        "tributo.data.bindings.daft_olap.importlib.metadata.version",
+        lambda name: "0.7.21",
+    )
+    plan = SqlScan(
+        provider_id="tributo.clickhouse",
+        connector_id="clickhouse",
+        target=SqlTableRead(schema="analytics", table="events"),
+        sharding=SqlShardRequirement(mode=SqlShardMode.AUTO),
+    )
+
+    DaftClickHouseBinding().compile(
+        _request(
+            plan,
+            runtime_options={
+                "host": "db.example",
+                "port": 8123,
+                "database": "analytics",
+            },
+        )
+    )
+
+    assert calls[0]["split"] == "auto"
+
+
+def test_daft_olap_single_read_rejects_parallelism_with_actionable_modes() -> None:
+    plan = SqlScan(
+        provider_id="tributo.clickhouse",
+        connector_id="clickhouse",
+        target=SqlTableRead(schema="analytics", table="events"),
+    )
+
+    with pytest.raises(
+        BindingStageError,
+        match=("partitioning.mode to 'auto' or 'parallel'.*remove target_parallelism"),
+    ) as exc_info:
+        DaftClickHouseBinding().compile(
+            _request(plan, read_options=ReadOptions(target_parallelism=4))
+        )
+
+    assert exc_info.value.diagnostic_code == "single_sql_read_rejects_parallelism_hint"
+
+
+def test_sql_binding_port_error_is_structured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TRIBUTO_POSTGRESQL_PORT", "not-a-port")
+    plan = SqlScan(
+        provider_id="tributo.postgresql",
+        connector_id="postgresql",
+        target=SqlTableRead(schema="public", table="events"),
+    )
+
+    with pytest.raises(JobConfigurationError, match="port must be an integer"):
+        resolve_sql_target(plan, {"host": "postgres", "database": "analytics"})
 
 
 def _sql_plan(connector_id: str) -> SqlScan:
@@ -443,6 +546,7 @@ def test_postgresql_bindings_delegate_to_public_sql_readers(
         f"{type(binding).__module__}.importlib.metadata.version",
         lambda name: engine_version,
     )
+    parallel = isinstance(binding, DaftPostgreSqlBinding)
     plan = SqlScan(
         provider_id="tributo.postgresql",
         connector_id="postgresql",
@@ -451,10 +555,14 @@ def test_postgresql_bindings_delegate_to_public_sql_readers(
             table='event"facts',
             projection=("id",),
         ),
-        sharding=SqlShardRequirement(
-            mode=SqlShardMode.PARALLEL,
-            columns=("id",),
-            target_partitions=6,
+        sharding=(
+            SqlShardRequirement(
+                mode=SqlShardMode.PARALLEL,
+                columns=("id",),
+                target_partitions=6,
+            )
+            if parallel
+            else SqlShardRequirement()
         ),
         options={"partition_bound_strategy": "min-max"},
     )
@@ -477,13 +585,28 @@ def test_postgresql_bindings_delegate_to_public_sql_readers(
     assert calls[0][0] == ('SELECT "id" FROM "feature_store"."event""facts"')
     assert "top-secret" not in repr(calls[0][1])
     assert result.reader_api in {"ray.data.read_sql", "daft.read_sql"}
-    if ray_calls:
-        assert "shard_keys" not in ray_calls[0][2]
-        assert "override_num_blocks" not in ray_calls[0][2]
-        assert any("not type-safe" in item for item in result.diagnostics)
-    else:
+    if daft_calls:
         assert daft_calls[0][2]["partition_col"] == "id"
         assert daft_calls[0][2]["num_partitions"] == 6
+
+
+def test_ray_postgresql_parallel_read_fails_closed() -> None:
+    plan = SqlScan(
+        provider_id="tributo.postgresql",
+        connector_id="postgresql",
+        target=SqlTableRead(schema="public", table="events"),
+        sharding=SqlShardRequirement(
+            mode=SqlShardMode.PARALLEL,
+            columns=("id",),
+            target_partitions=6,
+        ),
+    )
+
+    with pytest.raises(BindingStageError) as exc_info:
+        RayPostgreSqlBinding().compile(_request(plan))
+
+    assert exc_info.value.diagnostic_code == "unsupported_postgresql_parallel_read"
+    assert "select Daft" in str(exc_info.value)
 
 
 def test_postgresql_query_compiler_rejects_raw_query_plan() -> None:

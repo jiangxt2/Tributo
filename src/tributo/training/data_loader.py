@@ -5,21 +5,26 @@ helpers preserve existing JSON shapes and Ray Dataset return values, but no
 longer contain an independent reader, SQL dispatcher, or rollback backend.
 Legacy flat dictionaries are converted once by ``LegacyConfigNormalizer`` and
 then enter the same Provider path as canonical inputs.
+
+``TRIBUTO_DATA_BACKEND=legacy`` remains a deprecated compatibility selector
+during the migration window. It emits a warning and uses the same conversion
+and Gateway path; it cannot reactivate the removed reader backend.
 """
 
 from __future__ import annotations
 
+import os
 import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from pydantic import TypeAdapter
 
+from tributo.data._compat_read import open_ray_compat
 from tributo.data._source_paths import (
     require_local_file_source_exists,
     resolve_file_source_path,
 )
-from tributo.data.ingestion import IngestionRequest, RayDataHandle, open_ingestion
 from tributo.data.source_config import (
     CanonicalSourceInput,
     LegacyConfigNormalizer,
@@ -31,6 +36,26 @@ from tributo.exceptions import JobConfigurationError
 if TYPE_CHECKING:
     import pandas as pd
     import ray.data
+
+
+DATA_BACKEND = os.getenv("TRIBUTO_DATA_BACKEND", "provider")
+
+
+def _check_data_backend() -> None:
+    """Validate the deprecated selector without restoring duplicate execution."""
+    if DATA_BACKEND == "provider":
+        return
+    if DATA_BACKEND == "legacy":
+        warnings.warn(
+            "TRIBUTO_DATA_BACKEND=legacy is deprecated and now uses the "
+            "canonical Provider/Gateway execution path; remove the selector",
+            FutureWarning,
+            stacklevel=3,
+        )
+        return
+    raise JobConfigurationError(
+        "TRIBUTO_DATA_BACKEND must be 'provider' or deprecated 'legacy'"
+    )
 
 
 def load_ray_dataset_from_source(
@@ -45,6 +70,7 @@ def load_ray_dataset_from_source(
     returns Ray Data for existing training consumers; new code that needs an
     explicit Ray/Daft choice should use ``IngestionGateway``.
     """
+    _check_data_backend()
     adapter: TypeAdapter[Any] = TypeAdapter(CanonicalSourceInput)
     config = adapter.validate_python(source)
     config = resolve_file_source_path(config, project_root_path)
@@ -61,6 +87,7 @@ def load_ray_dataset_from_config(
         Use ``load_ray_dataset_from_source()`` for a canonical Ray adapter or
         ``IngestionGateway`` for an explicit dual-engine request.
     """
+    _check_data_backend()
     warnings.warn(
         "load_ray_dataset_from_config() is deprecated. "
         "Use load_ray_dataset_from_source() with a canonical source dict. "
@@ -95,18 +122,10 @@ def _load_via_ingestion(
     else:
         resolved_input = resolve_file_source_path(source, project_root_path)
     require_local_file_source_exists(resolved_input)
-    result = open_ingestion(
-        IngestionRequest(source=resolved_input, engine="ray"),
+    return open_ray_compat(
+        resolved_input,
         project_root_path=project_root_path,
     )
-    try:
-        if not isinstance(result.handle, RayDataHandle):
-            raise JobConfigurationError(
-                "Ray compatibility adapter received a non-Ray ingestion handle"
-            )
-        return result.handle.dataset
-    finally:
-        result.close()
 
 
 def load_dataframe_from_config(

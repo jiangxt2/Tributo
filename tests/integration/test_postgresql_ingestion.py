@@ -20,6 +20,7 @@ from tributo.data import (
     SqlSourceConfig,
     open_ingestion,
 )
+from tributo.exceptions import JobConfigurationError
 
 pytestmark = [
     pytest.mark.integration,
@@ -71,7 +72,6 @@ def test_postgresql_dual_engine_conformance() -> None:
         password=password,
         table=table,
         columns=["id", "category"],
-        partitioning=SqlPartitioning(column="id", num_partitions=2),
     )
     assert daft.get_or_create_runner().name == "native"
     context = IngestionRuntimeContext()
@@ -79,6 +79,7 @@ def test_postgresql_dual_engine_conformance() -> None:
     daft_result = open_ingestion(
         IngestionRequest(source=source, engine="daft"), context
     )
+    daft_parallel_result = None
     try:
         assert isinstance(ray_result.handle, RayDataHandle)
         assert isinstance(daft_result.handle, DaftDataFrameHandle)
@@ -94,9 +95,31 @@ def test_postgresql_dual_engine_conformance() -> None:
             ],
             require_worker_validation=False,
         )
+        parallel_source = source.model_copy(
+            update={"partitioning": SqlPartitioning(column="id", num_partitions=2)}
+        )
+        with pytest.raises(
+            JobConfigurationError, match="unsupported_postgresql_parallel_read"
+        ):
+            open_ingestion(
+                IngestionRequest(source=parallel_source, engine="ray"), context
+            )
+        daft_parallel_result = open_ingestion(
+            IngestionRequest(source=parallel_source, engine="daft"), context
+        )
+        assert isinstance(daft_parallel_result.handle, DaftDataFrameHandle)
+        assert sorted(
+            daft_parallel_result.handle.dataframe.to_pylist(), key=lambda row: row["id"]
+        ) == [
+            {"id": 1, "category": "drop"},
+            {"id": 2, "category": "keep"},
+            {"id": 3, "category": "keep"},
+        ]
     finally:
         ray_result.close()
         daft_result.close()
+        if daft_parallel_result is not None:
+            daft_parallel_result.close()
         with psycopg.connect(**connection_options) as connection:
             with connection.cursor() as cursor:
                 cursor.execute(

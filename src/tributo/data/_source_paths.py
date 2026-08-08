@@ -14,7 +14,13 @@ from tributo.data.source_config import (
 )
 from tributo.util.annotations import DeveloperAPI
 
-_LOCAL_FILE_PROVIDERS = frozenset({"tributo.parquet", "parquet", "tributo.csv", "csv"})
+
+def _provider_uses_relative_file_uri(source: ProviderSourceConfig) -> bool:
+    """Return the installed Provider's declared URI path semantics."""
+    # Local import avoids the provider <-> source configuration import cycle.
+    from tributo.data.provider_registry import resolve_provider
+
+    return resolve_provider(source).relative_uri_is_path
 
 
 @DeveloperAPI
@@ -33,9 +39,8 @@ def resolve_file_source_path(
     if isinstance(source, (ParquetSourceConfig, CsvSourceConfig)):
         field_name = "path"
         raw_path = source.path
-    elif (
-        isinstance(source, ProviderSourceConfig)
-        and source.provider in _LOCAL_FILE_PROVIDERS
+    elif isinstance(source, ProviderSourceConfig) and _provider_uses_relative_file_uri(
+        source
     ):
         field_name = "uri"
         raw_path = source.uri
@@ -64,9 +69,8 @@ def require_local_file_source_exists(source: CanonicalSourceInput) -> None:
     raw_path: str | None = None
     if isinstance(source, (ParquetSourceConfig, CsvSourceConfig)):
         raw_path = source.path
-    elif (
-        isinstance(source, ProviderSourceConfig)
-        and source.provider in _LOCAL_FILE_PROVIDERS
+    elif isinstance(source, ProviderSourceConfig) and _provider_uses_relative_file_uri(
+        source
     ):
         raw_path = source.uri
     if raw_path is None or any(marker in raw_path for marker in ("*", "?", "[")):

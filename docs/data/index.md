@@ -7,7 +7,7 @@ an installed third-party Connector owns the physical read.
 
 ```text
 IngestionRequest
-    -> ProviderRegistry
+    -> ProviderRegistry (built-ins + installed Provider plugins)
     -> LogicalScanPlan
     -> EngineBinding
     -> Ray Data or Daft native handle
@@ -16,6 +16,23 @@ IngestionRequest
 
 The Gateway never silently selects or falls back to another engine. Existing
 Ray-only loaders are compatibility adapters over this same path.
+
+`tributo.data` is the consumer facade: callers use `IngestionRequest`,
+`IngestionGateway`, typed handles, receipts, and explicit handle adapters.
+`scan_plan`, `engine_binding`, Provider registries, and native Connector plans
+are Developer SPI for ingestion extensions and must not be imported by
+Training, Inference, Embeddings, or graph algorithms. Historical beta Provider
+exports remain only for their documented compatibility window.
+
+New bounded sources use `ProviderSourceConfig(provider, uri, options)` and may
+publish a versioned Provider descriptor through
+`tributo.ingestion_providers`. Physical Ray/Daft implementations publish
+Binding descriptors through `tributo.ingestion_bindings`. Provider metadata
+declares projection-option and relative-file-URI semantics, so consumer modules
+never add source-name branches. `TableScan.storage_format_id` and declarative
+Binding constraints cover catalog tables whose storage resolves to Parquet,
+ORC, or Iceberg. Multiple matching Bindings are an error unless the request
+selects `binding_id` explicitly.
 
 ## Input status
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -225,10 +226,14 @@ class TestLegacyFlow:
     def test_local_trial_routes_validation_and_test_sources_through_gateway(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        loaded: list[dict[str, Any]] = []
+        loaded: list[tuple[dict[str, Any], Path | None]] = []
 
-        def fake_load(source: dict[str, Any]) -> object:
-            loaded.append(source)
+        def fake_load(
+            source: dict[str, Any],
+            *,
+            project_root_path: Path | None = None,
+        ) -> object:
+            loaded.append((source, project_root_path))
             return object()
 
         monkeypatch.setattr(
@@ -255,9 +260,17 @@ class TestLegacyFlow:
 
         assert summary["status"] == "succeeded"
         assert loaded == [
-            {"type": "parquet", "path": "train.parquet", "columns": None, "s3": None},
-            {"type": "parquet", "path": "validation.parquet"},
-            {"type": "parquet", "path": "test.parquet"},
+            (
+                {
+                    "type": "parquet",
+                    "path": "train.parquet",
+                    "columns": None,
+                    "s3": None,
+                },
+                None,
+            ),
+            ({"type": "parquet", "path": "validation.parquet"}, Path.cwd()),
+            ({"type": "parquet", "path": "test.parquet"}, Path.cwd()),
         ]
 
     def test_no_export_override_warns_but_succeeds(

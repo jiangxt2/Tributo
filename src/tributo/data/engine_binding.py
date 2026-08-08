@@ -41,7 +41,14 @@ from tributo.data.ingestion import (
     _raise_after_failed_compilation,
 )
 from tributo.data.refs import _credential_paths
-from tributo.data.scan_plan import FileScan, LogicalScanPlan, ScanKind, SourceCapability
+from tributo.data.scan_plan import (
+    CatalogTableRef,
+    FileScan,
+    LogicalScanPlan,
+    ScanKind,
+    SourceCapability,
+    TableScan,
+)
 from tributo.data.transform_ir import Limit, TransformPipeline
 from tributo.exceptions import (
     DataSourceError,
@@ -49,7 +56,7 @@ from tributo.exceptions import (
     JobConfigurationError,
     TributoError,
 )
-from tributo.util.annotations import DeveloperAPI, PublicAPI
+from tributo.util.annotations import DeveloperAPI
 
 _ENGINE_DISTRIBUTIONS: dict[str, str] = {
     "tributo.ray_data": "ray",
@@ -213,7 +220,7 @@ def binding_stage(stage: BindingCompileStage) -> Iterator[None]:
         raise failure
 
 
-@PublicAPI(stability="alpha")
+@DeveloperAPI
 @dataclass(frozen=True)
 class BindingKey:
     """Unique identity for one physical Binding implementation."""
@@ -242,30 +249,52 @@ class BindingKey:
             raise ValueError("BindingKey.binding_id must be a namespaced identifier")
 
 
-@PublicAPI(stability="alpha")
+@DeveloperAPI
 @dataclass(frozen=True)
 class BindingPlanConstraints:
     """Declarative plan constraints used before loading a Binding factory."""
 
     filesystem_ids: frozenset[str] = frozenset()
+    catalog_ids: frozenset[str] = frozenset()
+    storage_format_ids: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
-        if not isinstance(self.filesystem_ids, frozenset) or any(
-            not isinstance(item, str) or re.fullmatch(r"[A-Za-z0-9_.-]+", item) is None
-            for item in self.filesystem_ids
+        for field_name, values in (
+            ("filesystem_ids", self.filesystem_ids),
+            ("catalog_ids", self.catalog_ids),
+            ("storage_format_ids", self.storage_format_ids),
         ):
-            raise ValueError(
-                "BindingPlanConstraints.filesystem_ids must be identifiers"
-            )
+            if not isinstance(values, frozenset) or any(
+                not isinstance(item, str)
+                or re.fullmatch(r"[A-Za-z0-9_.-]+", item) is None
+                for item in values
+            ):
+                raise ValueError(
+                    f"BindingPlanConstraints.{field_name} must be identifiers"
+                )
 
     def matches(self, plan: LogicalScanPlan) -> bool:
         """Return whether the static logical plan is in this Binding scope."""
-        if not self.filesystem_ids:
-            return True
-        return isinstance(plan, FileScan) and plan.filesystem_id in self.filesystem_ids
+        if self.filesystem_ids and (
+            not isinstance(plan, FileScan)
+            or plan.filesystem_id not in self.filesystem_ids
+        ):
+            return False
+        if self.catalog_ids and (
+            not isinstance(plan, TableScan)
+            or not isinstance(plan.table, CatalogTableRef)
+            or plan.table.catalog_id not in self.catalog_ids
+        ):
+            return False
+        if self.storage_format_ids and (
+            not isinstance(plan, TableScan)
+            or plan.storage_format_id not in self.storage_format_ids
+        ):
+            return False
+        return True
 
 
-@PublicAPI(stability="alpha")
+@DeveloperAPI
 @dataclass(frozen=True)
 class BindingCompileRequest:
     """Credential-isolated request passed to an installed binding."""
@@ -373,7 +402,7 @@ class BindingCompilation:
 
 
 @runtime_checkable
-@PublicAPI(stability="alpha")
+@DeveloperAPI
 class EngineBinding(Protocol):
     """Thin plan-to-native-reader delegation contract."""
 
@@ -384,7 +413,7 @@ class EngineBinding(Protocol):
 BindingFactory = Callable[[], EngineBinding]
 
 
-@PublicAPI(stability="alpha")
+@DeveloperAPI
 @dataclass(frozen=True)
 class BindingDescriptor:
     """Metadata and factory exported by a built-in or third-party package."""
@@ -816,7 +845,20 @@ class EngineBindings:
                         f"Worker version evidence is missing for distribution {name!r}"
                     ),
                 )
-            if any(Version(item) != Version(driver_versions[name]) for item in workers):
+            try:
+                driver_version = Version(driver_versions[name])
+                parsed_workers = tuple(Version(item) for item in workers)
+            except InvalidVersion:
+                raise BindingStageError.framework_diagnostic(
+                    "compile",
+                    error_type=EngineNotAvailableError,
+                    diagnostic_code="worker_version_invalid",
+                    diagnostic=(
+                        f"Driver or worker reported an invalid version for "
+                        f"distribution {name!r}"
+                    ),
+                ) from None
+            if any(item != driver_version for item in parsed_workers):
                 raise BindingStageError.framework_diagnostic(
                     "compile",
                     error_type=EngineNotAvailableError,

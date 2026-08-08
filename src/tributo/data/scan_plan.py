@@ -11,7 +11,7 @@ from types import MappingProxyType
 from typing import Any, Mapping, TypeAlias, cast
 
 from tributo.data.refs import _credential_paths, _ensure_credential_free_uri, digest
-from tributo.util.annotations import PublicAPI
+from tributo.util.annotations import DeveloperAPI
 
 _FILE_PROJECTION_OPTION = "columns"
 
@@ -99,14 +99,14 @@ def _require_string_sequence(value: Any, field_name: str) -> tuple[str, ...]:
     return cast(tuple[str, ...], items)
 
 
-@PublicAPI(stability="alpha")
+@DeveloperAPI
 class ScanKind(str, Enum):
     FILE = "file"
     SQL = "sql"
     TABLE = "table"
 
 
-@PublicAPI(stability="alpha")
+@DeveloperAPI
 class SourceCapability(str, Enum):
     PROJECTION = "projection"
     PREDICATE_PUSHDOWN = "predicate_pushdown"
@@ -124,14 +124,14 @@ def _freeze_capabilities(
     return frozen
 
 
-@PublicAPI(stability="alpha")
+@DeveloperAPI
 class FileDiscoveryMode(str, Enum):
     EXACT = "exact"
     DIRECTORY = "directory"
     GLOB = "glob"
 
 
-@PublicAPI(stability="alpha")
+@DeveloperAPI
 @dataclass(frozen=True)
 class FileDiscoveryStrategy:
     """Logical file discovery requirements delegated to the native reader."""
@@ -155,13 +155,13 @@ class FileDiscoveryStrategy:
         object.__setattr__(self, "extensions", extensions)
 
 
-@PublicAPI(stability="alpha")
+@DeveloperAPI
 class PartitioningKind(str, Enum):
     NONE = "none"
     HIVE = "hive"
 
 
-@PublicAPI(stability="alpha")
+@DeveloperAPI
 @dataclass(frozen=True)
 class PartitioningRule:
     """Logical path partition interpretation, not a filesystem implementation."""
@@ -182,7 +182,7 @@ class PartitioningRule:
         object.__setattr__(self, "field_names", field_names)
 
 
-@PublicAPI(stability="alpha")
+@DeveloperAPI
 @dataclass(frozen=True)
 class FileScan:
     """Logical file read delegated to an engine or installed Connector."""
@@ -231,7 +231,7 @@ class FileScan:
         return ScanKind.FILE
 
 
-@PublicAPI(stability="alpha")
+@DeveloperAPI
 class SqlPredicateOperator(str, Enum):
     EQ = "eq"
     NOT_EQ = "not_eq"
@@ -247,7 +247,7 @@ class SqlPredicateOperator(str, Enum):
 SqlPredicateScalar: TypeAlias = str | int | float | bool
 
 
-@PublicAPI(stability="alpha")
+@DeveloperAPI
 @dataclass(frozen=True)
 class SqlPredicate:
     """Small structured SQL predicate compiled by a dialect whitelist."""
@@ -279,7 +279,7 @@ class SqlPredicate:
         object.__setattr__(self, "values", values)
 
 
-@PublicAPI(stability="alpha")
+@DeveloperAPI
 @dataclass(frozen=True)
 class SqlTableRead:
     """Structured SQL table target; no raw SQL text or connection state."""
@@ -308,7 +308,7 @@ class SqlTableRead:
         object.__setattr__(self, "predicates", predicates)
 
 
-@PublicAPI(stability="alpha")
+@DeveloperAPI
 @dataclass(frozen=True)
 class ParameterizedQuery:
     """Compatibility SQL target identified by a credential-free query digest."""
@@ -322,13 +322,14 @@ class ParameterizedQuery:
 SqlReadTarget: TypeAlias = SqlTableRead | ParameterizedQuery
 
 
-@PublicAPI(stability="alpha")
+@DeveloperAPI
 class SqlShardMode(str, Enum):
     SINGLE = "single"
+    AUTO = "auto"
     PARALLEL = "parallel"
 
 
-@PublicAPI(stability="alpha")
+@DeveloperAPI
 @dataclass(frozen=True)
 class SqlShardRequirement:
     """Logical parallelism requirement; physical splits remain Connector-owned."""
@@ -347,6 +348,10 @@ class SqlShardRequirement:
         columns = _require_string_sequence(self.columns, "SQL shard columns")
         if len(set(columns)) != len(columns):
             raise ValueError("SQL shard columns must not contain duplicates")
+        if self.mode is SqlShardMode.PARALLEL and not columns:
+            raise ValueError("Parallel SQL reads require at least one shard column")
+        if self.mode is SqlShardMode.AUTO and columns:
+            raise ValueError("Automatic SQL reads cannot declare shard columns")
         if self.target_partitions is not None and (
             type(self.target_partitions) is not int or self.target_partitions < 1
         ):
@@ -354,14 +359,14 @@ class SqlShardRequirement:
         object.__setattr__(self, "columns", columns)
 
 
-@PublicAPI(stability="alpha")
+@DeveloperAPI
 class ConsistencyRequirement(str, Enum):
     BEST_EFFORT = "best_effort"
     STATEMENT = "statement_consistent"
     SNAPSHOT = "snapshot_consistent"
 
 
-@PublicAPI(stability="alpha")
+@DeveloperAPI
 @dataclass(frozen=True)
 class SqlScan:
     """Logical database read whose physical plan belongs to the Connector."""
@@ -406,7 +411,7 @@ class SqlScan:
         return ScanKind.SQL
 
 
-@PublicAPI(stability="alpha")
+@DeveloperAPI
 @dataclass(frozen=True)
 class CatalogTableRef:
     catalog_id: str
@@ -423,7 +428,7 @@ class CatalogTableRef:
         object.__setattr__(self, "namespace", namespace)
 
 
-@PublicAPI(stability="alpha")
+@DeveloperAPI
 @dataclass(frozen=True)
 class UriTableRef:
     uri: str
@@ -437,7 +442,7 @@ class UriTableRef:
 TableReference: TypeAlias = CatalogTableRef | UriTableRef
 
 
-@PublicAPI(stability="alpha")
+@DeveloperAPI
 @dataclass(frozen=True)
 class SnapshotVersionRef:
     snapshot_id: int
@@ -447,7 +452,7 @@ class SnapshotVersionRef:
             raise ValueError("Snapshot ID must be a non-negative integer")
 
 
-@PublicAPI(stability="alpha")
+@DeveloperAPI
 @dataclass(frozen=True)
 class NumericVersionRef:
     version: int
@@ -457,7 +462,7 @@ class NumericVersionRef:
             raise ValueError("Table version must be a non-negative integer")
 
 
-@PublicAPI(stability="alpha")
+@DeveloperAPI
 @dataclass(frozen=True)
 class TagVersionRef:
     tag: str
@@ -467,7 +472,7 @@ class TagVersionRef:
             raise ValueError("Table tag must be non-empty")
 
 
-@PublicAPI(stability="alpha")
+@DeveloperAPI
 @dataclass(frozen=True)
 class AsOfVersionRef:
     timestamp: datetime
@@ -482,14 +487,20 @@ VersionRef: TypeAlias = (
 )
 
 
-@PublicAPI(stability="alpha")
+@DeveloperAPI
 @dataclass(frozen=True)
 class TableScan:
-    """Logical versioned-table read delegated to an engine Table reader."""
+    """Logical catalog or versioned-table read delegated to a native reader.
+
+    ``storage_format_id`` is an optional assertion for catalog-resolved tables,
+    such as a Hive external table expected to resolve to Parquet or ORC.  The
+    selected Binding still owns catalog lookup and physical file discovery.
+    """
 
     provider_id: str
     connector_id: str
     table: TableReference
+    storage_format_id: str | None = None
     version_ref: VersionRef | None = None
     required_capabilities: frozenset[SourceCapability] = field(
         default_factory=frozenset
@@ -504,6 +515,8 @@ class TableScan:
         _validate_plan_version(self.version, "TableScan")
         if not isinstance(self.table, (CatalogTableRef, UriTableRef)):
             raise ValueError("TableScan.table must be a table reference")
+        if self.storage_format_id is not None:
+            _validate_identifier(self.storage_format_id, "TableScan.storage_format_id")
         version_types = (
             SnapshotVersionRef,
             NumericVersionRef,
@@ -541,7 +554,7 @@ def _capabilities_to_list(plan: LogicalScanPlan) -> list[str]:
     return sorted(item.value for item in plan.required_capabilities)
 
 
-@PublicAPI(stability="alpha")
+@DeveloperAPI
 def logical_scan_plan_to_dict(plan: LogicalScanPlan) -> dict[str, Any]:
     """Serialize a logical plan without credentials or engine-native objects."""
     common = {
@@ -624,15 +637,18 @@ def logical_scan_plan_to_dict(plan: LogicalScanPlan) -> dict[str, Any]:
             "type": "as_of",
             "timestamp": plan.version_ref.timestamp.isoformat(),
         }
-    return {
+    encoded = {
         "scan_kind": ScanKind.TABLE.value,
         **common,
         "table": table,
         "version_ref": version_ref,
     }
+    if plan.storage_format_id is not None:
+        encoded["storage_format_id"] = plan.storage_format_id
+    return encoded
 
 
-@PublicAPI(stability="alpha")
+@DeveloperAPI
 def logical_scan_plan_from_dict(value: Mapping[str, Any]) -> LogicalScanPlan:
     """Deserialize a version-1 logical plan and reject unknown scan kinds."""
     data = dict(_require_mapping(value, "LogicalScanPlan"))
@@ -793,7 +809,7 @@ def logical_scan_plan_from_dict(value: Mapping[str, Any]) -> LogicalScanPlan:
     if kind == ScanKind.TABLE.value:
         _reject_unknown_fields(
             data,
-            common_fields | frozenset({"table", "version_ref"}),
+            common_fields | frozenset({"table", "storage_format_id", "version_ref"}),
             "TableScan",
         )
         table_data = _require_mapping(data.get("table", {}), "TableScan.table")
@@ -868,6 +884,7 @@ def logical_scan_plan_from_dict(value: Mapping[str, Any]) -> LogicalScanPlan:
             input_schema_fingerprint=input_schema_fingerprint,
             version=version,
             table=table,
+            storage_format_id=cast(str | None, data.get("storage_format_id")),
             version_ref=version_ref,
         )
     raise ValueError(f"Unknown logical scan kind {kind!r}")

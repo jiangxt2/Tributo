@@ -126,6 +126,37 @@ def test_request_trace_context_is_credential_free_and_copied() -> None:
         _request(trace_context={"access_token": "hidden"})
 
 
+def test_request_remote_source_serialization_rejects_inline_credentials() -> None:
+    request = IngestionRequest(
+        source=ProviderSourceConfig(
+            provider="tributo.clickhouse",
+            uri="clickhouse://db/events",
+            options={"table": "events", "password": "hidden"},
+        ),
+        engine="ray",
+    )
+
+    with pytest.raises(ValueError, match="runtime environment") as exc_info:
+        request.source_json_for_remote_transport()
+
+    assert "hidden" not in str(exc_info.value)
+
+
+def test_request_remote_source_serialization_preserves_business_sql_text() -> None:
+    request = IngestionRequest(
+        source=ProviderSourceConfig(
+            provider="tributo.clickhouse",
+            uri="clickhouse://db/events",
+            options={"sql": "SELECT password FROM events"},
+        ),
+        engine="ray",
+    )
+
+    serialized = request.source_json_for_remote_transport()
+
+    assert "SELECT password FROM events" in serialized
+
+
 def test_request_copies_source_and_freezes_nested_mappings() -> None:
     source = ParquetSourceConfig(path="/tmp/input.parquet")
     resource_hints = {"CPU": 1.0}
@@ -268,6 +299,25 @@ def test_storage_profile_endpoint_affects_identity_but_credentials_do_not(
     serialized = result.receipt.model_dump_json()
     assert "profile-key" not in serialized
     assert "profile-secret" not in serialized
+
+
+def test_storage_profile_invalid_endpoint_port_is_data_source_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "tributo.data.ingestion.StorageProfileResolver.resolve",
+        lambda self, name: StorageProfile(endpoint="http://minio:not-a-port"),
+    )
+    request = IngestionRequest(
+        source=ParquetSourceConfig(path="s3://bucket/input.parquet"),
+        engine="ray",
+        storage_profile="production",
+    )
+
+    with pytest.raises(DataSourceError, match="valid port") as exc_info:
+        IngestionGateway(_Bindings()).describe(request)
+
+    assert exc_info.value.__cause__ is None
 
 
 def test_storage_profile_rejects_non_s3_source() -> None:

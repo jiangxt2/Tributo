@@ -113,6 +113,24 @@ def test_structured_sql_scan_round_trip_and_capabilities() -> None:
     )
 
 
+def test_automatic_sql_sharding_round_trip() -> None:
+    plan = SqlScan(
+        provider_id="tributo.clickhouse",
+        connector_id="clickhouse",
+        target=SqlTableRead(schema="analytics", table="events"),
+        sharding=SqlShardRequirement(
+            mode=SqlShardMode.AUTO,
+            target_partitions=8,
+        ),
+    )
+
+    encoded = logical_scan_plan_to_dict(plan)
+    restored = logical_scan_plan_from_dict(encoded)
+
+    assert logical_scan_plan_to_dict(restored) == encoded
+    assert restored.sharding.mode is SqlShardMode.AUTO
+
+
 @pytest.mark.parametrize(
     "version_ref",
     [
@@ -151,6 +169,35 @@ def test_catalog_table_reference_is_not_reduced_to_a_file_path() -> None:
         "namespace": ["analytics"],
         "table": "events",
     }
+
+
+@pytest.mark.parametrize("storage_format_id", ["parquet", "orc", "iceberg"])
+def test_hive_catalog_storage_format_hint_round_trip(
+    storage_format_id: str,
+) -> None:
+    plan = TableScan(
+        provider_id="example.hive",
+        connector_id="hive",
+        table=CatalogTableRef("hive", ("analytics",), "events"),
+        storage_format_id=storage_format_id,
+        required_capabilities=frozenset({SourceCapability.PARTITION_PRUNING}),
+    )
+
+    encoded = logical_scan_plan_to_dict(plan)
+    restored = logical_scan_plan_from_dict(encoded)
+
+    assert encoded["storage_format_id"] == storage_format_id
+    assert logical_scan_plan_to_dict(restored) == encoded
+
+
+def test_table_scan_omits_absent_storage_format_for_v1_compatibility() -> None:
+    plan = TableScan(
+        provider_id="tributo.iceberg",
+        connector_id="iceberg",
+        table=CatalogTableRef("hive", ("analytics",), "events"),
+    )
+
+    assert "storage_format_id" not in logical_scan_plan_to_dict(plan)
 
 
 def test_parameterized_query_round_trip_uses_digest_only() -> None:
@@ -270,6 +317,16 @@ def test_sql_contract_rejects_runtime_type_coercion() -> None:
             mode=SqlShardMode.PARALLEL,
             columns=("id", "id"),
             target_partitions=2,
+        )
+    with pytest.raises(ValueError, match="at least one shard column"):
+        SqlShardRequirement(
+            mode=SqlShardMode.PARALLEL,
+            target_partitions=2,
+        )
+    with pytest.raises(ValueError, match="cannot declare shard columns"):
+        SqlShardRequirement(
+            mode=SqlShardMode.AUTO,
+            columns=("id",),
         )
 
 

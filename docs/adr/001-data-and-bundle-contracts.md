@@ -182,10 +182,42 @@ Resolution order is explicit: `ProviderRegistry.resolve()` selects the provider
 (exact ID → alias → built-in legacy mapping), then the selected provider
 `normalize()`s the input into `ResolvedSource`, then `plan()` returns the
 `LogicalScanPlan`, and the Gateway selects exactly one compatible Binding. The
-old direct dispatch and `TRIBUTO_DATA_BACKEND=legacy` runtime backend are
-removed. Legacy flat dictionaries, `DatasetHandle`, and `DataConnector.read()`
-remain one-way Ray compatibility adapters over the Gateway; they cannot select
-or restore a separate reader implementation.
+old direct dispatch runtime backend is removed. During its compatibility
+window, `TRIBUTO_DATA_BACKEND=legacy` remains accepted with a `FutureWarning`,
+but routes through the same legacy-input conversion and Gateway as the default;
+it cannot select or restore a separate reader implementation. Legacy flat
+dictionaries, `DatasetHandle`, and `DataConnector.read()` remain one-way Ray
+compatibility adapters over the Gateway.
+
+Installed bounded-source extensions use two symmetric, descriptor-only entry
+point groups:
+
+- `tributo.ingestion_providers` registers a versioned
+  `DataSourceProvider` class;
+- `tributo.ingestion_bindings` registers one or more versioned physical
+  Ray/Daft Bindings.
+
+Discovery is deterministic and lazy. A bad plugin is isolated, and an external
+registration can never replace a built-in Provider or Binding. Provider
+metadata owns its projection option name and whether a scheme-less `uri` is a
+relative file path; consumers do not maintain provider-name maps. A catalog
+table may set `TableScan.storage_format_id` to assert Parquet, ORC, or Iceberg,
+and Binding constraints may match filesystem, catalog, and storage format.
+Multiple matching Bindings fail closed unless `IngestionRequest.binding_id` is
+explicit.
+
+Per-entry load and validation failures are isolated and skipped. Failure of
+the entry-point metadata enumeration itself is not cached as a successful
+discovery; a later call retries it. This prevents one transient or malformed
+environment state from disabling all external Providers for the process
+lifetime.
+
+Within the bounded tabular contract and the two supported engines, adding a
+source is therefore an extension-only operation: add Provider/Binding
+descriptors, connector dependencies, Conformance tests, and support-matrix
+evidence. Training, Inference, Embeddings, and Graph must not import or branch
+on the new source. Adding another execution engine, an unbounded source, or a
+new scan semantic remains a separate ADR.
 
 `DatasetHandle` represents a bounded finite read. It does not carry Kafka
 offsets, commits, partition ownership, or other `StreamSource` lifecycle

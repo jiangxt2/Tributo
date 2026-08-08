@@ -14,7 +14,10 @@ from tributo.data.bindings._shared import (
     residual_decisions,
     runtime_s3_profile,
 )
-from tributo.data.bindings.ray_lance import _require_lance
+from tributo.data.bindings.ray_lance import (
+    _reject_lance_snapshot_ref,
+    _require_lance,
+)
 from tributo.data.engine_binding import (
     BindingCompilation,
     BindingCompileRequest,
@@ -56,6 +59,7 @@ class DaftLanceBinding:
     def compile(self, request: BindingCompileRequest) -> BindingCompilation:
         with binding_stage("validate_capabilities"):
             plan = _require_lance(request.plan)
+            _reject_lance_snapshot_ref(plan)
         with binding_stage("classify_transforms"):
             decisions = residual_decisions(request.transforms)
         with binding_stage("build_native_plan"):

@@ -13,6 +13,7 @@ from tributo.data.bindings._sql_shared import require_sql_table, resolve_sql_tar
 from tributo.data.engine_binding import (
     BindingCompilation,
     BindingCompileRequest,
+    BindingStageError,
     binding_stage,
 )
 from tributo.data.ingestion import (
@@ -28,6 +29,7 @@ from tributo.data.transform_compiler import (
     TransformBackend,
     apply_pipeline_to_daft_df,
 )
+from tributo.exceptions import JobConfigurationError
 
 
 @dataclass(frozen=True)
@@ -46,6 +48,20 @@ class _DaftOlapBinding:
     def compile(self, request: BindingCompileRequest) -> BindingCompilation:
         with binding_stage("validate_capabilities"):
             plan = require_sql_table(request.plan, self.connector_id)
+            if (
+                plan.sharding.mode is SqlShardMode.SINGLE
+                and request.read_options.target_parallelism is not None
+            ):
+                raise BindingStageError.framework_diagnostic(
+                    "validate_capabilities",
+                    error_type=JobConfigurationError,
+                    diagnostic_code="single_sql_read_rejects_parallelism_hint",
+                    diagnostic=(
+                        "A single SQL read cannot honor target_parallelism; "
+                        "set partitioning.mode to 'auto' or 'parallel', or "
+                        "remove target_parallelism"
+                    ),
+                )
         with binding_stage("classify_transforms"):
             decisions = residual_decisions(request.transforms)
         with binding_stage("build_native_plan"):
@@ -67,7 +83,7 @@ class _DaftOlapBinding:
             "password": target.password,
             "columns": target.columns or None,
             "split": (
-                "auto" if plan.sharding.mode is SqlShardMode.PARALLEL else "single"
+                "single" if plan.sharding.mode is SqlShardMode.SINGLE else "auto"
             ),
         }
         if request.read_options.batch_size is not None:

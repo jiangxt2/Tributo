@@ -7,32 +7,28 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
-from tributo.data import CsvSourceConfig, ParquetSourceConfig, RayDataHandle
-from tributo.exceptions import EngineNotAvailableError
+from tributo.data import CsvSourceConfig, ParquetSourceConfig
+from tributo.exceptions import EngineNotAvailableError, JobConfigurationError
 from tributo.training.data_loader import load_ray_dataset_from_source
 
 
 def test_s3_parquet_uses_ray_ingestion_binding() -> None:
     dataset = MagicMock()
-    result = MagicMock(handle=RayDataHandle(dataset))
     with patch(
-        "tributo.training.data_loader.open_ingestion", return_value=result
+        "tributo.training.data_loader.open_ray_compat", return_value=dataset
     ) as open_:
         actual = load_ray_dataset_from_source(
             {"type": "parquet", "path": "s3://bucket/data.parquet"}
         )
-    request = open_.call_args.args[0]
-    assert request.engine == "tributo.ray_data"
-    assert isinstance(request.source, ParquetSourceConfig)
+    source = open_.call_args.args[0]
+    assert isinstance(source, ParquetSourceConfig)
     assert actual is dataset
-    result.close.assert_called_once_with()
 
 
 def test_s3_csv_uses_ray_ingestion_binding() -> None:
     dataset = MagicMock()
-    result = MagicMock(handle=RayDataHandle(dataset))
     with patch(
-        "tributo.training.data_loader.open_ingestion", return_value=result
+        "tributo.training.data_loader.open_ray_compat", return_value=dataset
     ) as open_:
         actual = load_ray_dataset_from_source(
             {
@@ -41,11 +37,9 @@ def test_s3_csv_uses_ray_ingestion_binding() -> None:
                 "s3": {"region": "us-east-1"},
             }
         )
-    request = open_.call_args.args[0]
-    assert request.engine == "tributo.ray_data"
-    assert isinstance(request.source, CsvSourceConfig)
+    source = open_.call_args.args[0]
+    assert isinstance(source, CsvSourceConfig)
     assert actual is dataset
-    result.close.assert_called_once_with()
 
 
 def test_s3_unsupported_format_raises():
@@ -70,5 +64,28 @@ def test_doris_requires_independent_ray_doris_binding() -> None:
                 "database": "db",
                 "user": "user",
                 "password": "pass",
+            }
+        )
+
+
+@pytest.mark.parametrize("dialect", ["clickhouse", "doris", "postgresql"])
+def test_legacy_raw_sql_has_structured_source_migration_error(dialect: str) -> None:
+    with pytest.raises(JobConfigurationError, match="structured 'table' source"):
+        load_ray_dataset_from_source(
+            {
+                "type": "sql",
+                "dialect": dialect,
+                "sql": "SELECT * FROM events",
+            }
+        )
+
+
+def test_mysql_has_explicit_migration_error() -> None:
+    with pytest.raises(JobConfigurationError, match="MySQL is unsupported"):
+        load_ray_dataset_from_source(
+            {
+                "type": "sql",
+                "dialect": "mysql",
+                "sql": "SELECT * FROM events",
             }
         )
