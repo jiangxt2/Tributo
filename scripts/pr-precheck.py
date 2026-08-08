@@ -10,8 +10,8 @@ Layered architecture (Ray/Daft-style):
   Layer 3:  Commit Message — Signed-off-by + format check + claims vs diff
   Layer 4:  General Hygiene — unintended files, merge conflicts, large files
   Layer 5:  Run Changed Tests — pytest on changed test files
-  Layer 5.5: CI-parity Collection — dev-only environment collects the CI
-             unit suite (catches optional-dependency imports in tests)
+  Layer 5.5: CI-parity Suite — dev-only environment runs the CI unit suite
+             (catches optional-dependency imports and runtime failures)
   Layer 5.6: Docs Spelling — runs the CI docs spelling build when the docs
              environment is available
 
@@ -975,16 +975,16 @@ def check_run_tests(root: str, changed_files: list[str]) -> list[str]:
     return issues
 
 
-def check_ci_parity_collection(root: str) -> list[str]:
-    """Collect the CI unit suite in a dev-only environment.
+def check_ci_parity_suite(root: str) -> list[str]:
+    """Run the CI unit suite in a dev-only environment.
 
     The CI unit-tests job installs only the ``dev`` extra, while a local
-    worktree usually has the data/data-daft/postgresql extras installed.  A
-    test module importing an optional dependency at import time passes local
-    collection but breaks CI with a ``ModuleNotFoundError`` during
-    collection.  This layer rebuilds the dev-only environment in a temporary
-    venv (from the uv cache, offline) and runs ``pytest --collect-only`` with
-    the CI marker filter.
+    worktree usually has the data/data-daft/postgresql extras installed.
+    Tests that import or execute optional engine/connector dependencies pass
+    locally but fail in CI, either at collection or at runtime.  This layer
+    rebuilds the dev-only environment in a temporary venv (from the uv
+    cache, offline) and runs the complete CI unit suite, so both failure
+    classes are caught before push.
     """
     issues: list[str] = []
     venv_dir = tempfile.mkdtemp(prefix="tributo-ci-parity-")
@@ -1000,37 +1000,45 @@ def check_ci_parity_collection(root: str) -> list[str]:
         if sync.returncode != 0:
             tail = "\n".join((sync.stdout or sync.stderr).splitlines()[-3:])
             issues.append(
-                "WARN: dev-only parity sync failed — CI-parity collection "
-                f"skipped ({tail})"
+                f"WARN: dev-only parity sync failed — CI-parity suite skipped ({tail})"
             )
             return issues
         python = os.path.join(venv_dir, "bin", "python")
-        collect = subprocess.run(
+        suite = subprocess.run(
             [
                 python,
                 "-m",
                 "pytest",
                 "tests/",
-                "--collect-only",
                 "-q",
+                "--tb=short",
+                "--timeout=180",
                 "-m",
                 CHANGED_TEST_MARKER_FILTER,
             ],
             capture_output=True,
             text=True,
             cwd=root,
-            timeout=300,
+            timeout=600,
         )
-        if collect.returncode != 0:
-            errors = [
+        if suite.returncode == 5:
+            # Exit 5 = no tests collected; the marker filter deselected
+            # everything — not a failure.
+            return issues
+        if suite.returncode != 0:
+            failures = [
                 line.strip()
-                for line in collect.stdout.splitlines()
-                if "ERROR" in line or "ModuleNotFoundError" in line
+                for line in suite.stdout.splitlines()
+                if line.startswith("FAILED ") or line.startswith("ERROR ")
             ]
-            issues.append(
-                "FAIL: CI-parity collection failed — a test module imports an "
-                "optional dependency at import time:\n" + "\n".join(errors[:10])
-            )
+            if failures:
+                issues.append(
+                    "FAIL: CI-parity suite failed — a test depends on an "
+                    "optional dependency at runtime:\n" + "\n".join(failures[:10])
+                )
+            else:
+                tail = "\n".join(suite.stdout.splitlines()[-10:])
+                issues.append("FAIL: CI-parity suite failed:\n" + tail)
         return issues
     finally:
         shutil.rmtree(venv_dir, ignore_errors=True)
@@ -1188,8 +1196,8 @@ def main():
         print(f"  {'PASS' if not l5 else 'ISSUES'} — {len(l5)} issue(s)\n")
 
     # Layer 5.5
-    print("=== Layer 5.5: CI-parity Collection ===")
-    l55 = check_ci_parity_collection(root)
+    print("=== Layer 5.5: CI-parity Suite ===")
+    l55 = check_ci_parity_suite(root)
     all_issues.extend(l55)
     for issue in l55:
         print(f"  {issue}")

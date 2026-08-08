@@ -511,11 +511,11 @@ jobs:
           for attempt in $(seq 1 60); do
             ray_out="$(docker compose \
                 --file tests/integrations/docker-compose.data-ingestion.yml \
-                exec --no-tty ray-head \
+                exec -T ray-head \
                 ray status --address=127.0.0.1:6379 2>&1)" && ray_rc=0 || ray_rc=$?
             minio_out="$(docker compose \
                 --file tests/integrations/docker-compose.data-ingestion.yml \
-                exec --no-tty ray-head \
+                exec -T ray-head \
                 python -c "import urllib.request; urllib.request.urlopen('http://minio:9000/minio/health/live', timeout=2).read()" 2>&1)" && minio_rc=0 || minio_rc=$?
             if [ "$ray_rc" -eq 0 ] && [ "$minio_rc" -eq 0 ]; then
               ready=1
@@ -536,7 +536,7 @@ jobs:
           set -o pipefail
           docker compose \
             --file tests/integrations/docker-compose.data-ingestion.yml \
-            exec --no-tty \
+            exec -T \
             --env TRIBUTO_DOCKER_RAY_TEST=1 \
             ray-head \
             python -m tests.integrations.test_data_ingestion_dual_engine \

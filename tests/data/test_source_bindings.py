@@ -239,6 +239,8 @@ def test_ray_iceberg_binding_delegates_catalog_scan(
 def test_daft_iceberg_binding_delegates_catalog_and_scan(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    pytest.importorskip("daft")
+    pytest.importorskip("pyiceberg")
     loaded_tables: list[str] = []
     read_calls: list[tuple[Any, dict[str, Any]]] = []
     table = object()

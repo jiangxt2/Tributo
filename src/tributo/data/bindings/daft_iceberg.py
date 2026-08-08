@@ -63,15 +63,18 @@ class DaftIcebergBinding:
     def _build(
         request: BindingCompileRequest, plan: TableScan
     ) -> _DaftIcebergNativePlan:
-        import daft
-        from pyiceberg.catalog import load_catalog
-
         if not isinstance(plan.table, CatalogTableRef):
             raise JobConfigurationError("Iceberg catalog table is required")
         runtime = request.runtime_options
         profile = runtime_s3_profile(runtime)
+        # Validate the catalog contract (including FileIO selection) before
+        # importing optional engine/connector packages, so a configuration
+        # error is never masked by a missing optional dependency.
         catalog_properties = iceberg_catalog_properties(runtime)
         catalog_name = str(runtime.get("catalog_name") or plan.table.catalog_id)
+        import daft
+        from pyiceberg.catalog import load_catalog
+
         catalog = load_catalog(catalog_name, **catalog_properties)
         table_identifier = ".".join((*plan.table.namespace, plan.table.table))
         table = catalog.load_table(table_identifier)
