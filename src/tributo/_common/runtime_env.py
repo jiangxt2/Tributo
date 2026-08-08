@@ -155,9 +155,9 @@ def build_runtime_env(
         runtime_env["env_vars"] = merged_env_vars
 
     logger.debug(
-        "Built runtime_env: working_dir=%s, py_modules=%s, env_vars=%s",
+        "Built runtime_env: working_dir=%s, py_modules=%s, env_var_keys=%s",
         root,
         src_pkg,
-        merged_env_vars,
+        sorted(merged_env_vars),
     )
     return runtime_env
