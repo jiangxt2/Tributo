@@ -37,7 +37,7 @@ from tributo.exporting.models import (
     UpstreamRequirement,
     ValidatorBinding,
 )
-from tributo.exporting.options import ONNXQuantizerOptions
+from tributo.integrations.exporters.options import ONNXQuantizerOptions
 from tributo.util.annotations import PublicAPI
 
 logger = logging.getLogger(__name__)
@@ -51,7 +51,7 @@ class ONNXQuantizer:
     format ``onnx`` (declared via ``upstream_requirements``).
     """
 
-    api_version: ClassVar[int] = 1
+    api_version: ClassVar[int] = 2
     exporter_id: ClassVar[str] = "onnx-quantizer-v1"
     # Above root exporters: a target that declares a non-explicit dep
     # matching this exporter's upstream_requirements is a transform request
@@ -59,6 +59,7 @@ class ONNXQuantizer:
     # supports() MISSING_UPSTREAM gate keeps it out of plain requests.
     priority: ClassVar[int] = 110
     output_format: ClassVar[str] = "onnx"
+    output_flavor_id: ClassVar[str] = "onnx-int8-v1"
     # Source kind this exporter consumes ("" for transform exporters).
     source_kinds: ClassVar[tuple[str, ...]] = ()
     options_model: ClassVar[type[BaseModel]] = ONNXQuantizerOptions

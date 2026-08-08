@@ -31,7 +31,7 @@ from tributo.exporting.models import (
     SupportResult,
     ValidatorBinding,
 )
-from tributo.exporting.options import XGBoostONNXOptions
+from tributo.integrations.exporters.options import XGBoostONNXOptions
 from tributo.util.annotations import PublicAPI
 
 logger = logging.getLogger(__name__)
@@ -48,10 +48,11 @@ class XGBoostONNXExporter:
     mutates ``booster.feature_names`` during export (``mutates_source=True``).
     """
 
-    api_version: ClassVar[int] = 1
+    api_version: ClassVar[int] = 2
     exporter_id: ClassVar[str] = "xgboost-onnx-v1"
     priority: ClassVar[int] = 100
     output_format: ClassVar[str] = "onnx"
+    output_flavor_id: ClassVar[str] = "onnx-runtime-v1"
     source_kinds: ClassVar[tuple[str, ...]] = ("xgboost_result",)
     options_model: ClassVar[type[BaseModel]] = XGBoostONNXOptions
     validator_bindings: ClassVar[tuple[ValidatorBinding, ...]] = (

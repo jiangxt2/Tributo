@@ -31,7 +31,7 @@ from tributo.exporting.models import (
     SupportResult,
     ValidatorBinding,
 )
-from tributo.exporting.options import SafetensorsOptions
+from tributo.integrations.exporters.options import SafetensorsOptions
 from tributo.util.annotations import PublicAPI
 
 logger = logging.getLogger(__name__)
@@ -45,10 +45,11 @@ class TorchSafetensorsExporter:
     plus an ``model.safetensors.index.json`` when sharding is used.
     """
 
-    api_version: ClassVar[int] = 1
+    api_version: ClassVar[int] = 2
     exporter_id: ClassVar[str] = "torch-safetensors-v1"
     priority: ClassVar[int] = 90
     output_format: ClassVar[str] = "safetensors"
+    output_flavor_id: ClassVar[str] = "safetensors-v1"
     source_kinds: ClassVar[tuple[str, ...]] = ("dnn_result", "torch_module")
     options_model: ClassVar[type[BaseModel]] = SafetensorsOptions
     validator_bindings: ClassVar[tuple[ValidatorBinding, ...]] = (

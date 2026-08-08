@@ -15,7 +15,7 @@ Usage::
             return ExportSource(source_kind="my_kind", model_object=...)
 
         def make_target(self):
-            return ExportTarget(name="test", format="my_format")
+            return ExportTarget(name="test", format="my-format")
 
         def make_context(self, tmp_path):
             return ExportContext(
@@ -73,6 +73,7 @@ class ExporterConformanceTest:
             "exporter_id",
             "priority",
             "output_format",
+            "output_flavor_id",
             "options_model",
             "validator_bindings",
             "mutates_source",
@@ -84,8 +85,8 @@ class ExporterConformanceTest:
             )
 
     def test_api_version(self) -> None:
-        """Verify api_version == 1."""
-        assert self.exporter_cls.api_version == 1
+        """Verify api_version == 2."""
+        assert self.exporter_cls.api_version == 2
 
     def test_exporter_id_format(self) -> None:
         """Verify exporter_id is a non-empty string."""
@@ -98,9 +99,16 @@ class ExporterConformanceTest:
         assert isinstance(self.exporter_cls.priority, int)
 
     def test_output_format_is_str(self) -> None:
-        """Verify output_format is a non-empty string."""
+        """Verify output_format is a canonical open format id."""
+        from tributo.exporting.formats import validate_format_id
+
         fmt = self.exporter_cls.output_format
-        assert isinstance(fmt, str) and fmt
+        assert validate_format_id(fmt) == fmt
+
+    def test_output_flavor_id_is_str(self) -> None:
+        """Verify output_flavor_id is a non-empty string."""
+        flavor_id = self.exporter_cls.output_flavor_id
+        assert isinstance(flavor_id, str) and flavor_id
 
     def test_options_model_is_pydantic(self) -> None:
         """Verify options_model is a pydantic BaseModel subclass."""
@@ -162,6 +170,8 @@ class ExporterConformanceTest:
             # Verify draft structure.
             assert draft.name == target.name
             assert draft.format == self.exporter_cls.output_format
+            assert draft.flavor_id == self.exporter_cls.output_flavor_id
+            assert draft.producer.exporter_id == self.exporter_cls.exporter_id
             assert len(draft.files) > 0
 
             # Verify all declared files exist.

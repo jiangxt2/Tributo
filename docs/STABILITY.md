@@ -1,7 +1,7 @@
 # API Stability Inventory
 
 Canonical stability classification for every Tributo module.
-Last updated: 2026-08-03.
+Last updated: 2026-08-08.
 
 ## Stability Levels
 
@@ -24,7 +24,7 @@ Last updated: 2026-08-03.
 | `tributo.config` — `JobConfig` | `stable` | Primary user-facing config |
 | `tributo.job` — `TributoClient`, `RayJob` | `stable` | Primary user-facing API |
 | `tributo.exceptions` — core exceptions | `stable` | ``TributoError`` and 16 common subtypes |
-| `tributo.exceptions` — Bundle/Plugin exceptions | `beta` | ``BundleExportError``, ``AliasConflict``, ``UnsupportedArtifactFormat``, ``PostPublishCallbackError``, ``PluginLoadIssue`` |
+| `tributo.exceptions` — Bundle/Plugin exceptions | `beta` | ``BundleExportError``, ``BundleCommitBusyError``, ``AliasConflict``, ``UnsupportedArtifactFormat``, ``PostPublishCallbackError``, ``PluginLoadIssue`` |
 | `tributo.exceptions` — Streaming exceptions | `beta` | ``StreamSourceError``, ``KafkaCommitError``, ``KafkaPoisonMessageError`` |
 
 ### Training (tributo.training.*)
@@ -81,10 +81,14 @@ Last updated: 2026-08-03.
 | `tributo.exporting.publisher` | `beta` | Bundle publisher |
 | `tributo.exporting.validators` | `beta` | Artifact validator runner |
 | `tributo.exporting.registries` | `beta` | Exporter/validator registries |
-| `tributo.exporting.options` | `beta` | Export option models |
+| `tributo.exporting.options` | `beta` | Compatibility re-exports; schemas are owned by integration exporters |
 | `tributo.exporting.records` | `beta` | Export record types |
 | `tributo.exporting.gc` | `beta` | Bundle GC |
 | `tributo.exporting.hooks` | `beta` | Export hooks |
+| `tributo.exporting.capabilities` | `beta` | Exporter/Flavor-derived capability declarations |
+| `tributo.exporting.events` | `beta` | Immutable operation event envelope |
+| `tributo.exporting.repository` | `beta` | Bundle repository and alias store ports |
+| `tributo.exporting.runtime` | `beta` | Bundle model runtime and Flavor protocol |
 | `tributo.exporting.conftest` | `developer` | Test fixtures |
 
 ### Integrations (tributo.integrations.*)

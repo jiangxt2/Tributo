@@ -118,6 +118,7 @@ class HuggingFaceSourceProvider:
                 # The tokenizer is carried in-process so exporters can attach
                 # it to their artifact (plan: HF artifact includes tokenizer).
                 "tokenizer": tokenizer,
+                "preprocessor": tokenizer,
             },
             source_fingerprint=fingerprint,
         )

@@ -31,7 +31,7 @@ from tributo.exporting.models import (
     SupportResult,
     ValidatorBinding,
 )
-from tributo.exporting.options import TorchONNXOptions
+from tributo.integrations.exporters.options import TorchONNXOptions
 from tributo.util.annotations import PublicAPI
 
 logger = logging.getLogger(__name__)
@@ -50,10 +50,11 @@ class TorchONNXExporter:
     - Produces a fully-traced ONNX model with dynamic shapes support.
     """
 
-    api_version: ClassVar[int] = 1
+    api_version: ClassVar[int] = 2
     exporter_id: ClassVar[str] = "torch-onnx-v1"
     priority: ClassVar[int] = 95
     output_format: ClassVar[str] = "onnx"
+    output_flavor_id: ClassVar[str] = "onnx-runtime-v1"
     source_kinds: ClassVar[tuple[str, ...]] = (
         "dnn_result",
         "pu_result",

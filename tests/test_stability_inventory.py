@@ -92,6 +92,9 @@ STABILITY_MAP: dict[str, str] = {
     "tributo.exporting.records": "beta",
     "tributo.exporting.gc": "beta",
     "tributo.exporting.hooks": "beta",
+    "tributo.exporting.capabilities": "beta",
+    "tributo.exporting.events": "beta",
+    "tributo.exporting.repository": "beta",
     "tributo.exporting.runtime": "beta",
     # Integrations — beta
     "tributo.integrations.exporters": "beta",
@@ -148,6 +151,7 @@ STABILITY_MAP: dict[str, str] = {
 #: symbol-specific stability.
 _SYMBOL_OVERRIDES: dict[str, str] = {
     "tributo.exceptions.BundleExportError": "beta",
+    "tributo.exceptions.BundleCommitBusyError": "beta",
     "tributo.exceptions.AliasConflict": "beta",
     "tributo.exceptions.UnsupportedArtifactFormat": "beta",
     "tributo.exceptions.PostPublishCallbackError": "beta",
