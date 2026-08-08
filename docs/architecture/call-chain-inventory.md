@@ -80,30 +80,63 @@ packages can contribute versioned descriptors through
 `tributo.ingestion_bindings`; this descriptor-only SPI does not add a plugin
 lifecycle or permit a third ingestion engine.
 
-### 2. Inference Data Loading
+### Inference Data Loading
 
-**Primary entry**: `inference/pipeline.py`
+**Primary bundle-aware entry**: `inference/api.py`
 
 ```
 User code
   ↓
-InferenceConfig(source=... or legacy input fields)
+InferenceRequest(model, input, named bindings, result sink, execution policy)
   ↓
-run_batch_inference(config: InferenceConfig)       ← main public entry
+InferenceResolver.resolve()
   ↓
-_legacy_source(config) or canonical source
+BundleReader.read_manifest_with_bytes() → pinned BundleRef
   ↓
-load_ray_dataset_from_source(source.model_dump(mode="python"))
+IngestionGatewayInputResolver.describe()
+  → IngestionGateway.describe(engine="ray")
+  → pinned binding ID + credential-free descriptor
   ↓
-IngestionGateway.open(engine="ray") → RayDataHandle.dataset
+ResolvedInference (credential-free, immutable)
+  ↓
+RayMapBatchesExecutor
+  ├── IngestionGatewayInputResolver.open()
+  │     → worker-local describe() + open()
+  │     → RayDataHandle.dataset + IngestionPlanReceipt
+  ├── BundleBatchPredictor → BundleModelLoader → named tensor predict
+  └── ParquetResultSink → Dataset.write_parquet()
 ```
 
-Legacy JSON enters through `_legacy_json_source()` and is normalized to the same
-canonical source object before the provider loader is called. Feature columns
-are applied through the provider's native projection option.
+The Executor never imports `training.data_loader`, Provider, LogicalScanPlan,
+or EngineBinding. Feature plus passthrough projection is appended to the
+bounded-ingestion Transform IR before the Gateway opens the source. Source,
+model, and sink storage profiles are resolved independently. Row counts remain
+optional and no extra `Dataset.count()` job is launched for metrics.
 
-**Secondary entry**: `run_inference_from_json(config_path)` — reads JSON → builds
-`InferenceConfig` → calls `run_batch_inference()`.
+External model references are normalized before this chain executes:
+
+```
+RegistryModelReference / ArtifactModelReference
+  → explicit ModelImporter selected by provider ID
+  → immutable version and content verification
+  → verified Bundle publication
+  → BundleRef + internal ResolvedModelSelection
+```
+
+The first-party importers support MLflow numeric versions and Aliases, explicit
+ONNX artifacts, and explicit native XGBoost JSON/UBJ artifacts. Alias resolution
+is frozen to a numeric version before Ray Job submission. No registry SDK object
+or framework model object crosses into `ResolvedInference`.
+
+**Compatibility entry**: `inference/pipeline.py` retains `InferenceConfig`, raw
+ONNX, and strict JSON parsing. Its read path now uses
+`IngestionGatewayInputResolver`, and its output path uses `ParquetResultSink`.
+The flat `s3_config` field warns and remains only inside this adapter.
+
+**Post-training entry**: a published `BundleRef` plus parent run ID is bound by
+`PostTrainingInferenceAction`. Inline and detached modes both create an
+ordinary `InferenceRequest`; no Trainer or in-memory model crosses the domain
+boundary.
 
 ### 3. Embedding Data Loading
 
@@ -280,6 +313,7 @@ Plugin groups also discovered:
 |-------|----------|--------|
 | Existing downstream consumers still expect Ray Dataset values | Training / local runner / inference / embeddings | Their compatibility functions explicitly select Ray and delegate the same Gateway; native Daft consumption requires a later consumer capability change |
 | A Ray-only consumer intentionally selects a Daft-only source | Consumer boundary | `adapt_daft_result_to_ray()` calls Daft's public adapter and records conversion evidence; the Gateway never performs this conversion implicitly |
+| External model importers use explicit IDs and normalize to BundleRef | `inference/importers.py`, `integrations/model_importers/` | MLflow and typed ONNX/XGBoost artifacts pass Conformance and real-service IT |
 | Old XGBoost ONNX export swallows errors | `training/onnx_exporter.py` | E0 fix target |
 | SourceProvider (export) ≠ DataSourceProvider (data) | `exporting/protocols.py` vs `data/provider.py` | D1+D2 / E1 rename target |
 | Transform pushdown optimization has no benchmark evidence; alpha Bindings classify current ETL as residual | `data/transform_compiler.py` | D4 remains NO-GO for pushdown claims |
