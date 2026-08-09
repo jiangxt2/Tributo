@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import sys
 from types import ModuleType
+from typing import Any
 
 import pytest
 
@@ -76,6 +77,43 @@ class TestOnnxValidationFailClosed:
 
         with pytest.raises(RuntimeError, match="batch dimension"):
             _validate_onnx("/tmp/model.onnx", n_features=5)
+
+
+class TestTorchModelPackageMetrics:
+    """Training metrics must be valid JSON before model export starts."""
+
+    def test_non_finite_metrics_fail_before_model_export(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Any,
+    ) -> None:
+        from tributo.training.exporters import torch_onnx_exporter
+
+        export_called = False
+
+        def fake_export(**kwargs: Any) -> Any:
+            nonlocal export_called
+            export_called = True
+            return tmp_path / "model.onnx"
+
+        monkeypatch.setattr(
+            torch_onnx_exporter,
+            "export_pytorch_to_onnx",
+            fake_export,
+        )
+
+        with pytest.raises(ValueError, match="Out of range float values"):
+            torch_onnx_exporter.export_model_package(
+                model=object(),
+                sample_inputs={},
+                output_dir=tmp_path / "package",
+                feature_config={},
+                preprocessor_state={},
+                metrics={"train_loss": float("nan")},
+            )
+
+        assert export_called is False
+        assert not (tmp_path / "package").exists()
 
 
 if __name__ == "__main__":

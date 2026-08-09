@@ -151,9 +151,11 @@ class TestPUBatchContract:
 
         loader.batch_sampler.set_epoch(3)
         first = [batch["row"].tolist() for batch in loader]
+        repeated = [batch["row"].tolist() for batch in loader]
         loader.batch_sampler.set_epoch(3)
         resumed = [batch["row"].tolist() for batch in loader]
 
+        assert repeated == first
         assert resumed == first
 
     def test_stratified_split_preserves_both_groups(self) -> None:
@@ -175,7 +177,7 @@ class TestPUBatchContract:
 
         labels = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
 
-        with pytest.raises(JobConfigurationError, match="at least two positive"):
+        with pytest.raises(JobConfigurationError, match="val_size=0"):
             split_pu_indices(labels, val_size=0.25, seed=42)
 
     @pytest.mark.parametrize("invalid_label", (None, "not-a-number", np.nan))
@@ -189,6 +191,58 @@ class TestPUBatchContract:
 
         with pytest.raises(JobConfigurationError, match="row 1"):
             validate_pu_labels(labels, split="train")
+
+    def test_split_risk_error_is_classified_as_configuration_error(self) -> None:
+        torch = pytest.importorskip("torch")
+
+        from tributo.exceptions import JobConfigurationError
+        from tributo.training.dnn_trainer import evaluate_pu_split
+        from tributo.training.losses.pu_loss import PULoss
+
+        class ConstantModel:
+            def eval(self) -> None:
+                pass
+
+            def __call__(self, inputs: dict[str, Any]) -> Any:
+                return torch.zeros(2)
+
+        dataloader = [{"label": torch.ones(2)}]
+
+        with pytest.raises(JobConfigurationError, match="Invalid PU evaluation split"):
+            evaluate_pu_split(
+                ConstantModel(),
+                dataloader,
+                PULoss(class_prior=0.2),
+                torch.device("cpu"),
+            )
+
+    @pytest.mark.parametrize("value", (float("nan"), float("inf"), float("-inf")))
+    def test_non_finite_training_metrics_fail_closed(self, value: float) -> None:
+        from tributo.exceptions import JobExecutionError
+        from tributo.training.dnn_trainer import validate_finite_training_metrics
+
+        with pytest.raises(JobExecutionError, match="train_loss"):
+            validate_finite_training_metrics(
+                {"train_loss": value},
+                algorithm="PU",
+            )
+
+    def test_non_default_prior_method_logs_compatibility_warning(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+
+        from tributo.training.dnn_trainer import warn_if_ignored_class_prior_method
+
+        warn_if_ignored_class_prior_method(
+            "em",
+            default_method="label_frequency",
+            config_path="pu.class_prior_method",
+            target_logger=logging.getLogger("tributo.test"),
+        )
+
+        assert "does not trigger class-prior estimation" in caplog.text
 
 
 class TestPUE2E:
@@ -722,7 +776,7 @@ class TestPUTrainerResourceSafety:
         assert "train_loss" in reported
         assert "train_optimization_objective" in reported
         assert "train_observed_label_accuracy" in reported
-        assert "train_acc" not in reported
+        assert reported["train_acc"] == reported["train_observed_label_accuracy"]
 
 
 if __name__ == "__main__":

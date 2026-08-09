@@ -157,6 +157,18 @@ def export_model_package(
     Returns:
         Dictionary containing paths to each file.
     """
+    metrics_json = (
+        json.dumps(
+            metrics,
+            indent=2,
+            ensure_ascii=False,
+            default=str,
+            allow_nan=False,
+        )
+        if metrics is not None
+        else None
+    )
+
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -182,10 +194,8 @@ def export_model_package(
 
     # Save training metrics
     metrics_path = output_dir / "metrics.json"
-    if metrics is not None:
-        metrics_path.write_text(
-            json.dumps(metrics, indent=2, ensure_ascii=False, default=str)
-        )
+    if metrics_json is not None:
+        metrics_path.write_text(metrics_json)
 
     result = {
         "onnx_model": onnx_path,

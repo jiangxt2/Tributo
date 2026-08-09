@@ -211,6 +211,35 @@ class TestDNNWorkerBudget:
 
         monkeypatch.setattr(ray.train, "get_dataset_shard", get_dataset_shard)
 
+    @pytest.mark.parametrize("loss_type", ("bce", "focal"))
+    def test_worker_requires_val_shard_when_validation_is_enabled(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        loss_type: str,
+    ) -> None:
+        """Supervised losses must not silently disable configured validation."""
+        pytest.importorskip("torch")
+
+        from tributo.exceptions import JobConfigurationError
+        from tributo.training.dnn_trainer import dnn_train_loop_per_worker
+
+        self._patch_ray(monkeypatch)
+
+        with pytest.raises(
+            JobConfigurationError,
+            match="validation is enabled.*'val' dataset shard",
+        ) as exc_info:
+            dnn_train_loop_per_worker(
+                {
+                    "features": [],
+                    "loss": {"type": loss_type},
+                    "pu_learning": {},
+                    "training": {"val_size": 0.2},
+                    "resource": {},
+                }
+            )
+        assert isinstance(exc_info.value.__cause__, KeyError)
+
     def test_worker_budget_exceeded_fails_before_concat(self, monkeypatch):
         """train 收集超预算在 concat 前失败，算法上下文完整。"""
         pytest.importorskip("torch")
@@ -230,7 +259,7 @@ class TestDNNWorkerBudget:
                     "model": {},
                     "loss": {},
                     "pu_learning": {},
-                    "training": {},
+                    "training": {"val_size": 0},
                     "resource": {"max_worker_materialization_bytes": 10},
                 }
             )
@@ -259,7 +288,7 @@ class TestDNNWorkerBudget:
                     "model": {},
                     "loss": {},
                     "pu_learning": {},
-                    "training": {},
+                    "training": {"val_size": 0},
                     "resource": {
                         "max_batch_bytes": 8,
                         "max_worker_materialization_bytes": 10**9,
@@ -288,7 +317,7 @@ class TestDNNWorkerBudget:
                     "model": {},
                     "loss": {},
                     "pu_learning": {},
-                    "training": {},
+                    "training": {"val_size": 0},
                     "resource": {
                         "max_input_rows_per_worker": 10,
                         "max_batch_bytes": 10**9,
@@ -370,7 +399,7 @@ class TestDNNWorkerBudget:
                 "model": {"dnn_hidden_units": [8]},
                 "loss": {"type": "bce"},
                 "pu_learning": {},
-                "training": {"epochs": 1, "batch_size": 8},
+                "training": {"epochs": 1, "batch_size": 8, "val_size": 0},
                 "resource": {},  # 默认预算
             }
         )
@@ -395,4 +424,4 @@ class TestDNNWorkerBudget:
         assert "train_loss" in reported
         assert "train_optimization_objective" in reported
         assert "train_observed_label_accuracy" in reported
-        assert "train_acc" not in reported
+        assert reported["train_acc"] == reported["train_observed_label_accuracy"]

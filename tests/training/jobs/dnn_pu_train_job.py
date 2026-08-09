@@ -122,6 +122,11 @@ def _run_training(algorithm: str, data_path: str, output_dir: str) -> dict[str, 
         result["train_observed_label_accuracy"] = float(
             metrics["train_observed_label_accuracy"]
         )
+        result["train_acc"] = float(metrics["train_acc"])
+        result["val_observed_label_accuracy"] = float(
+            metrics["val_observed_label_accuracy"]
+        )
+        result["val_acc"] = float(metrics["val_acc"])
     if result["status"] != "succeeded":
         raise AssertionError(f"Unexpected run status: {result['status']}")
     if not result["onnx_exists"] or result["onnx_size"] <= 0:
@@ -130,6 +135,11 @@ def _run_training(algorithm: str, data_path: str, output_dir: str) -> dict[str, 
         raise AssertionError(f"Invalid training metrics: {result}")
     if algorithm == "pu" and result["class_prior"] != 0.35:
         raise AssertionError(f"Class prior was not preserved: {result}")
+    if algorithm in {"dnn_nnpu", "pu"} and (
+        result["train_acc"] != result["train_observed_label_accuracy"]
+        or result["val_acc"] != result["val_observed_label_accuracy"]
+    ):
+        raise AssertionError(f"Compatibility metric aliases diverged: {result}")
     return result
 
 

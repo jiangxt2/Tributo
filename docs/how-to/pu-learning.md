@@ -87,6 +87,15 @@ not yet supported; set `num_workers` to 1.
 | `nnpu` | Non-negative PU learning loss. More stable, recommended default. | Most cases. |
 | `upu` | Unbiased PU learning loss. Can produce negative loss values. | When prior is accurately known. |
 
+Each optimization batch must contain both confirmed-positive and unlabeled
+examples. The built-in DNN and PU trainers enforce this with a deterministic
+paired sampler. Direct callers of `PULoss` must enforce the same invariant;
+otherwise the loss fails closed instead of producing a biased partial risk.
+When validation is enabled, the input therefore needs at least two examples
+from each observed group so both training and validation retain P/U coverage.
+Set `training.val_size` to `0` when validation must be disabled for a very small
+dataset.
+
 ## Class Prior
 
 Training requires `pu.class_prior` in the open interval `(0, 1)`. It is the
@@ -98,7 +107,9 @@ subset of all positives.
 The standalone helpers in `tributo.training.priors` can support an upstream
 estimation workflow. Their result must be reviewed and passed explicitly to
 the trainer. The compatibility field `class_prior_method` records provenance;
-it does not trigger estimation during training.
+it does not trigger estimation during training. A non-default legacy value
+emits a migration warning, but the explicit `class_prior` remains the only
+value used by the loss.
 
 ```{warning}
 Do not use the raw labeled-positive frequency unless the labeling mechanism
@@ -116,8 +127,10 @@ the final result:
 | `train_loss` | Complete training-split uPU risk or Eq. 6 nnPU risk. |
 | `train_optimization_objective` | Algorithm 1 optimization surrogate used for backpropagation. It can differ from `train_loss` in the nnPU correction region. |
 | `train_observed_label_accuracy` | Diagnostic agreement with the observed positive/unlabeled indicator. It is not population classification accuracy. |
+| `train_acc` | Deprecated compatibility alias for `train_observed_label_accuracy`; it is not population classification accuracy. |
 | `val_loss` | Complete validation-split uPU risk or Eq. 6 nnPU risk, when validation is enabled. |
 | `val_observed_label_accuracy` | Validation diagnostic against observed indicators, when validation is enabled. |
+| `val_acc` | Deprecated compatibility alias for `val_observed_label_accuracy`, when validation is enabled. |
 | `class_prior` | Explicit population positive-class prior used by the loss. |
 
 Standard accuracy is not a valid quality measure for PU learning. Tributo also

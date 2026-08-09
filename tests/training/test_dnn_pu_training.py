@@ -80,3 +80,5 @@ def test_training_completes_on_ray_cluster(
     if algorithm in {"dnn_nnpu", "pu"}:
         assert "train_optimization_objective" in result
         assert 0.0 <= result["train_observed_label_accuracy"] <= 1.0
+        assert result["train_acc"] == result["train_observed_label_accuracy"]
+        assert result["val_acc"] == result["val_observed_label_accuracy"]

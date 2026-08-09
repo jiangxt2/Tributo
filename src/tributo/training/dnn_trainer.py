@@ -6,14 +6,15 @@ Supports Sparse/Dense features, PU Learning, Focal Loss and other identity minin
 from __future__ import annotations
 
 import logging
+import math
 import random
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from typing import TYPE_CHECKING, Annotated, Any, Literal, Optional
 
 from pydantic import Field, model_validator
 
 from tributo._common.config import StrictConfigModel
-from tributo.exceptions import JobConfigurationError
+from tributo.exceptions import JobConfigurationError, JobExecutionError
 from tributo.training.algorithm_spec import (
     AlgorithmSpec,
     Capability,
@@ -289,7 +290,8 @@ def split_pu_indices(
     if len(positive_indices) < 2 or len(unlabeled_indices) < 2:
         raise JobConfigurationError(
             "PU validation requires at least two positive and two unlabeled "
-            "examples so both train and validation splits preserve the PU contract"
+            "examples so both train and validation splits preserve the PU contract; "
+            "set training.val_size=0 to disable validation for smaller datasets"
         )
 
     rng = random.Random(seed)
@@ -339,7 +341,6 @@ class _PairedPUBatchSampler:
 
     def __iter__(self) -> Iterator[list[int]]:
         rng = random.Random(self._seed + self._epoch)
-        self._epoch += 1
         positive = list(self._positive)
         unlabeled = list(self._unlabeled)
         rng.shuffle(positive)
@@ -379,6 +380,38 @@ def build_pu_train_loader(
         ),
         num_workers=0,
     )
+
+
+def warn_if_ignored_class_prior_method(
+    method: Any,
+    *,
+    default_method: str,
+    config_path: str,
+    target_logger: logging.Logger,
+) -> None:
+    """Warn when legacy prior-estimation metadata no longer drives training."""
+    if method != default_method:
+        target_logger.warning(
+            "%s=%r is compatibility metadata only and does not trigger "
+            "class-prior estimation; the explicit class_prior value is used",
+            config_path,
+            method,
+        )
+
+
+def validate_finite_training_metrics(
+    metrics: Mapping[str, int | float],
+    *,
+    algorithm: str,
+) -> None:
+    """Reject non-finite metrics before early stopping, reporting, or export."""
+    non_finite = sorted(
+        name for name, value in metrics.items() if not math.isfinite(float(value))
+    )
+    if non_finite:
+        raise JobExecutionError(
+            f"{algorithm} produced non-finite training metrics: {', '.join(non_finite)}"
+        )
 
 
 def build_export_checkpoint_config(
@@ -656,7 +689,13 @@ class DNNTrainerImpl(BaseTrainer):
             metrics_path = Path(cfg.output.metrics_path)
             metrics_path.parent.mkdir(parents=True, exist_ok=True)
             metrics_path.write_text(
-                json.dumps(metrics, indent=2, ensure_ascii=False, default=str)
+                json.dumps(
+                    metrics,
+                    indent=2,
+                    ensure_ascii=False,
+                    default=str,
+                    allow_nan=False,
+                )
             )
 
         self._summary.update(
@@ -741,7 +780,11 @@ def evaluate_pu_split(
             total += batch_total
     if total == 0:
         raise JobConfigurationError("PU evaluation split must not be empty")
-    return risk.value(), correct / total
+    try:
+        empirical_risk = risk.value()
+    except ValueError as exc:
+        raise JobConfigurationError(f"Invalid PU evaluation split: {exc}") from exc
+    return empirical_risk, correct / total
 
 
 # ── Training loop (Ray worker level) ──
@@ -814,6 +857,12 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
             pu_cfg.get("class_prior"),
             config_path="pu_learning.class_prior",
         )
+        warn_if_ignored_class_prior_method(
+            pu_cfg.get("class_prior_method", "simple"),
+            default_method="simple",
+            config_path="pu_learning.class_prior_method",
+            target_logger=logger,
+        )
         try:
             pu_criterion = PULoss(
                 class_prior=class_prior,
@@ -854,9 +903,15 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
     train_ds = ray.train.get_dataset_shard("train")
     try:
         val_ds = ray.train.get_dataset_shard("val")
-    except KeyError:
-        # Ray Train v2 raises when an optional dataset key was not passed.
-        # nnPU deliberately performs its stratified split inside the worker.
+    except KeyError as exc:
+        # Ray Train v2 raises when a dataset key was not passed. nnPU performs
+        # its stratified split inside the worker; supervised losses may omit
+        # the shard only when validation was explicitly disabled.
+        if loss_type != "nnpu" and training_cfg.get("val_size", 0.2) > 0:
+            raise JobConfigurationError(
+                "DNN validation is enabled but Ray Train did not provide the "
+                "'val' dataset shard"
+            ) from exc
         val_ds = None
 
     # Convert to pandas under the worker materialization budget.
@@ -1132,17 +1187,6 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
                 val_loss /= val_total
                 val_observed_label_accuracy = val_correct / val_total
 
-            # Early stopping check
-            if patience is not None:
-                if val_loss < best_val_loss:
-                    best_val_loss = val_loss
-                    patience_counter = 0
-                else:
-                    patience_counter += 1
-                    if patience_counter >= patience:
-                        logger.info("Early stopping at epoch %d", epoch + 1)
-                        stop_after_report = True
-
         # Report metrics
         metrics = {
             "epoch": epoch + 1,
@@ -1151,14 +1195,29 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
         if loss_type == "nnpu":
             metrics["train_optimization_objective"] = train_objective
             metrics["train_observed_label_accuracy"] = train_observed_label_accuracy
+            metrics["train_acc"] = train_observed_label_accuracy
         else:
             metrics["train_acc"] = train_observed_label_accuracy
         if val_loader is not None:
             metrics["val_loss"] = val_loss
             if loss_type == "nnpu":
                 metrics["val_observed_label_accuracy"] = val_observed_label_accuracy
+                metrics["val_acc"] = val_observed_label_accuracy
             else:
                 metrics["val_acc"] = val_observed_label_accuracy
+
+        validate_finite_training_metrics(metrics, algorithm="DNN")
+
+        # Early stopping must never select a checkpoint using NaN or infinity.
+        if val_loader is not None and patience is not None:
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                patience_counter = 0
+            else:
+                patience_counter += 1
+                if patience_counter >= patience:
+                    logger.info("Early stopping at epoch %d", epoch + 1)
+                    stop_after_report = True
 
         should_report = (
             not resume_enabled

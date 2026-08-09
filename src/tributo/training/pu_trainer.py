@@ -59,6 +59,8 @@ from tributo.training.dnn_trainer import (
     evaluate_pu_split,
     parse_positive_class_prior,
     split_pu_indices,
+    validate_finite_training_metrics,
+    warn_if_ignored_class_prior_method,
 )
 from tributo.training.registry import register
 from tributo.training.resource import (
@@ -261,6 +263,12 @@ def pu_train_loop_per_worker(config: dict[str, Any]) -> None:
     class_prior = parse_positive_class_prior(
         pu_cfg.get("class_prior"),
         config_path="pu.class_prior",
+    )
+    warn_if_ignored_class_prior_method(
+        pu_cfg.get("class_prior_method", "label_frequency"),
+        default_method="label_frequency",
+        config_path="pu.class_prior_method",
+        target_logger=logger,
     )
     try:
         criterion = PULoss(
@@ -466,28 +474,32 @@ def pu_train_loop_per_worker(config: dict[str, Any]) -> None:
                 device,
             )
 
-            # Early stopping
-            if patience is not None:
-                if val_loss < best_val_loss:
-                    best_val_loss = val_loss
-                    patience_counter = 0
-                else:
-                    patience_counter += 1
-                    if patience_counter >= patience:
-                        logger.info("Early stopping at epoch %d", epoch + 1)
-                        stop_after_report = True
-
         # Report metrics
         metrics = {
             "epoch": epoch + 1,
             "train_loss": train_loss,
             "train_optimization_objective": train_objective,
             "train_observed_label_accuracy": train_observed_label_accuracy,
+            "train_acc": train_observed_label_accuracy,
             "class_prior": class_prior,
         }
         if val_loader is not None:
             metrics["val_loss"] = val_loss
             metrics["val_observed_label_accuracy"] = val_observed_label_accuracy
+            metrics["val_acc"] = val_observed_label_accuracy
+
+        validate_finite_training_metrics(metrics, algorithm="PU")
+
+        # Early stopping must never select a checkpoint using NaN or infinity.
+        if val_loader is not None and patience is not None:
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                patience_counter = 0
+            else:
+                patience_counter += 1
+                if patience_counter >= patience:
+                    logger.info("Early stopping at epoch %d", epoch + 1)
+                    stop_after_report = True
 
         should_report = (
             not resume_enabled
