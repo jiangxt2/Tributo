@@ -19,31 +19,24 @@ logger = logging.getLogger(__name__)
 class CallbackDispatcher:
     """Dispatch trainer lifecycle events to registered callbacks.
 
-    Error-handling policy:
-    - ``on_setup_start`` propagates exceptions so a callback can abort
-      training early (backward-compatible with ``BaseTrainer.run``).
-    - ``on_run_error`` swallows per-callback errors, but collects and
-      returns the first callback error so the lifecycle can re-raise it
-      chained to the original training error.
-    - Every other event swallows per-callback errors and logs a warning,
-      so a failing callback does not block the training pipeline.
+    A callback may expose ``failure_policy == "required"``.  Required
+    callbacks propagate failures at every normal lifecycle phase; best-effort
+    callbacks log and continue.  Error-handler failures are returned to the
+    lifecycle as diagnostics and never replace the original training error.
     """
 
     def __init__(self, callbacks: Sequence[TrainerCallback]) -> None:
         self._callbacks = list(callbacks)
 
     def on_setup_start(self, trainer: BaseTrainer) -> None:
-        """Fire ``on_setup_start``; exceptions propagate to abort early."""
+        """Fire ``on_setup_start`` under each callback's failure policy."""
         for cb in self._callbacks:
-            cb.on_setup_start(trainer)
+            self._invoke(cb, "on_setup_start", trainer)
 
     def on_training_end(self, trainer: BaseTrainer, result: Any) -> None:
-        """Fire ``on_training_end``; per-callback errors are swallowed."""
+        """Fire ``on_training_end`` under each callback's failure policy."""
         for cb in self._callbacks:
-            try:
-                cb.on_training_end(trainer, result)
-            except Exception as e:
-                logger.warning("Callback on_training_end failed: %s", e)
+            self._invoke(cb, "on_training_end", trainer, result)
 
     def on_artifacts_exported(self, trainer: BaseTrainer, output_path: str) -> None:
         """Fire artifact-export events with backward-compatible fallback.
@@ -56,21 +49,12 @@ class CallbackDispatcher:
         for cb in self._callbacks:
             has_new_hook = "on_artifacts_exported" in type(cb).__dict__
             event = "on_artifacts_exported" if has_new_hook else "on_export_end"
-            try:
-                if has_new_hook:
-                    cb.on_artifacts_exported(trainer, output_path)
-                else:
-                    cb.on_export_end(trainer, output_path)
-            except Exception as e:
-                logger.warning("Callback %s failed: %s", event, e)
+            self._invoke(cb, event, trainer, output_path)
 
     def on_run_complete(self, trainer: BaseTrainer, summary: dict[str, Any]) -> None:
-        """Fire ``on_run_complete``; per-callback errors are swallowed."""
+        """Fire ``on_run_complete`` under each callback's failure policy."""
         for cb in self._callbacks:
-            try:
-                cb.on_run_complete(trainer, summary)
-            except Exception as e:
-                logger.warning("Callback on_run_complete failed: %s", e)
+            self._invoke(cb, "on_run_complete", trainer, summary)
 
     def on_run_error(self, trainer: BaseTrainer, error: Exception) -> Exception | None:
         """Fire ``on_run_error``; return the first callback error, if any."""
@@ -83,3 +67,17 @@ class CallbackDispatcher:
                 if callback_error is None:
                     callback_error = cb_err
         return callback_error
+
+    @staticmethod
+    def _invoke(
+        cb: TrainerCallback,
+        event: str,
+        *args: Any,
+        default_policy: str = "best_effort",
+    ) -> None:
+        try:
+            getattr(cb, event)(*args)
+        except Exception as exc:
+            logger.warning("Callback %s failed: %s", event, exc)
+            if getattr(cb, "failure_policy", default_policy) == "required":
+                raise

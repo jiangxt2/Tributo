@@ -3,14 +3,15 @@
 Integrates with BaseTrainer's Template Method lifecycle,
 automatically logging training params, metrics, and model artifacts.
 
-All callback methods have exception protection to ensure MLflow failures
-do not block the training flow.
+Callback failures are best-effort by default.  With ``raise_on_error=True``,
+the public ``failure_policy`` is ``required`` and the dispatcher applies the
+same strict policy to every normal lifecycle phase.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from tributo.registry.mlflow_util import _MLflowTrackerUtil
 
@@ -29,8 +30,8 @@ class MLflowTrackingCallback:
     Integrates with the BaseTrainer lifecycle, automatically logging
     training params, metrics, and model artifacts.
 
-    All callback methods have exception protection to ensure MLflow failures
-    do not block the training flow.
+    Callback failures are best-effort unless ``raise_on_error=True`` selects
+    the public ``required`` failure policy.
     """
 
     def __init__(
@@ -57,6 +58,11 @@ class MLflowTrackingCallback:
         self._raise_on_error = raise_on_error
         self._util: _MLflowTrackerUtil | None = None
         self._run_id: str | None = None
+
+    @property
+    def failure_policy(self) -> Literal["best_effort", "required"]:
+        """Public dispatcher policy derived from ``raise_on_error``."""
+        return "required" if self._raise_on_error else "best_effort"
 
     def on_setup_start(self, trainer: BaseTrainer) -> None:
         """Before training starts: create MLflow Run, log params.

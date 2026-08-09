@@ -9,6 +9,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from datetime import datetime
+from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Annotated, Any, Literal
 
@@ -57,6 +59,46 @@ def _validate_posix_relative(v: str, label: str) -> str:
 
 
 # ── Configuration models ─────────────────────────────────────────────────────
+
+
+@PublicAPI(stability="beta")
+class HookStatus(StrEnum):
+    """Terminal and future asynchronous hook delivery states."""
+
+    ACCEPTED = "accepted"
+    SUCCEEDED = "succeeded"
+    SKIPPED = "skipped"
+    RETRYABLE_FAILED = "retryable_failed"
+    TERMINAL_FAILED = "terminal_failed"
+
+
+@PublicAPI(stability="beta")
+class HookBinding(BaseModel):
+    """Explicit post-publish hook configuration."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    hook_id: str = Field(..., min_length=1, max_length=128)
+    required: bool = False
+    options: dict[str, Any] = Field(default_factory=dict)
+
+
+@PublicAPI(stability="beta")
+class HookReceipt(BaseModel):
+    """Immutable result of a single post-publish hook delivery."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    event_id: str = Field(..., min_length=1)
+    hook_id: str = Field(..., min_length=1)
+    delivery_id: str = Field(..., min_length=1)
+    idempotency_key: str = Field(..., min_length=1)
+    status: HookStatus
+    started_at: datetime
+    completed_at: datetime
+    error_code: str | None = None
+    error_summary: str | None = Field(default=None, max_length=4096)
+    external_references: dict[str, str] = Field(default_factory=dict)
 
 
 @PublicAPI(stability="beta")
@@ -132,6 +174,7 @@ class BundleOutputConfig(BaseModel):
     )
     alias: AliasConfig | None = None
     roles: dict[str, str] = Field(default_factory=dict)
+    hooks: tuple[HookBinding, ...] = ()
     targets: list[ExportTarget] | None = Field(
         default=None, min_length=1, description="None = legacy mode"
     )
@@ -141,6 +184,9 @@ class BundleOutputConfig(BaseModel):
         if self.request_id is not None and self.run_id is not None:
             if self.request_id != self.run_id:
                 raise ValueError("request_id and run_id must identify the same run")
+        hook_ids = [hook.hook_id for hook in self.hooks]
+        if len(hook_ids) != len(set(hook_ids)):
+            raise ValueError("hook_id values must be unique")
         if self.targets is not None:
             if not self.bundle_uri:
                 raise ValueError("bundle_uri is required when targets are specified")
@@ -385,6 +431,11 @@ class ArtifactRef(BaseModel):
     artifact_name: str
     tree_digest: str = Field(min_length=64, max_length=64)
 
+    @field_validator("artifact_name")
+    @classmethod
+    def _check_artifact_name(cls, v: str) -> str:
+        return _validate_safe_name(v, "artifact name")
+
 
 @PublicAPI(stability="beta")
 class ArtifactDraft(BaseModel):
@@ -405,6 +456,11 @@ class ArtifactDraft(BaseModel):
         pattern=r"^(model|report|diagnostics|graph_snapshot)$",
         description="Artifact kind — model, report, diagnostics, or graph_snapshot.",
     )
+
+    @field_validator("name")
+    @classmethod
+    def _check_name(cls, v: str) -> str:
+        return _validate_safe_name(v, "artifact name")
 
     @model_validator(mode="after")
     def _check_entrypoint(self) -> ArtifactDraft:
@@ -437,6 +493,11 @@ class LogicalArtifact(BaseModel):
         pattern=r"^(model|report|diagnostics|graph_snapshot)$",
         description="Artifact kind — model, report, diagnostics, or graph_snapshot.",
     )
+
+    @field_validator("name")
+    @classmethod
+    def _check_name(cls, v: str) -> str:
+        return _validate_safe_name(v, "artifact name")
 
     @classmethod
     def compute_tree_digest(cls, files: tuple[ArtifactFile, ...]) -> str:
@@ -561,6 +622,7 @@ class BundleResult(BaseModel):
         pattern=r"^(not_requested|updated|unchanged|failed)$",
     )
     alias_failure: FailureInfo | None = None
+    hook_receipts: tuple[HookReceipt, ...] = ()
 
 
 @PublicAPI(stability="beta")

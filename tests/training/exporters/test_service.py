@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import timezone
 from pathlib import Path
 
 import pytest
@@ -10,8 +11,13 @@ from pydantic import BaseModel
 from tributo.exceptions import (
     BundleExportError,
     JobConfigurationError,
+    PostPublishCallbackError,
     UnsupportedArtifactFormat,
 )
+from tributo.exporting.bundle_reader import BundleReader
+from tributo.exporting.events import OperationEvent
+from tributo.exporting.hooks import BundleArtifactAccessor
+from tributo.exporting.manifest import ExportManifest
 from tributo.exporting.models import (
     ArtifactDraft,
     BundleOutputConfig,
@@ -21,6 +27,7 @@ from tributo.exporting.models import (
     ExportContext,
     ExportSource,
     ExportTarget,
+    HookBinding,
     ProducerInfo,
     PublishedBundle,
     SupportRequest,
@@ -148,10 +155,165 @@ def _make_registries() -> tuple[ExportRegistry, ValidatorRegistry]:
     return er, vr
 
 
+class _RecordingDispatcher:
+    def __init__(self) -> None:
+        self.events: list[object] = []
+        self.manifests: list[ExportManifest] = []
+
+    def preflight(self, bindings: tuple[HookBinding, ...]) -> tuple[str, ...]:
+        return ("prepared",) if bindings else ()
+
+    def dispatch(self, *, event: object, bundle_result: object, **kwargs: object):
+        self.events.append(event)
+        artifacts = kwargs["artifacts"]
+        self.manifests.append(artifacts.read_manifest())
+        return bundle_result
+
+
 # ── Tests ────────────────────────────────────────────────────────────────────
 
 
 class TestBundleExportService:
+    def test_empty_hook_config_does_not_resolve_plugins(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(
+            "tributo.plugin.resolve_hook_plugin",
+            lambda hook_id: (_ for _ in ()).throw(AssertionError("must not load")),
+        )
+        er, vr = _make_registries()
+        result = BundleExportService(
+            export_registry=er, validator_registry=vr
+        ).export_bundle(source=_make_source(), config=_make_config(tmp_path))
+        assert result.hook_receipts == ()
+
+    def test_publication_event_is_stable_across_idempotent_replay(
+        self, tmp_path: Path
+    ) -> None:
+        er, vr = _make_registries()
+        dispatcher = _RecordingDispatcher()
+        service = BundleExportService(
+            export_registry=er,
+            validator_registry=vr,
+            hook_dispatcher=dispatcher,
+        )
+        config = _make_config(tmp_path).model_copy(
+            update={
+                "request_id": "stable-run",
+                "hooks": (HookBinding(hook_id="test-hook-v1"),),
+            }
+        )
+
+        service.export_bundle(source=_make_source(), config=config)
+        service.export_bundle(source=_make_source(), config=config)
+
+        assert len(dispatcher.events) == 2
+        assert dispatcher.events[0] == dispatcher.events[1]
+
+    def test_dispatcher_reuses_the_service_verified_manifest(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        original_read = BundleReader.read_manifest_with_bytes
+        reads = 0
+
+        def count_reads(
+            reader: BundleReader,
+            manifest_or_bundle_uri: str,
+            *,
+            storage_profile: str | None = None,
+        ) -> tuple[ExportManifest, bytes]:
+            nonlocal reads
+            reads += 1
+            return original_read(
+                reader,
+                manifest_or_bundle_uri,
+                storage_profile=storage_profile,
+            )
+
+        monkeypatch.setattr(BundleReader, "read_manifest_with_bytes", count_reads)
+        er, vr = _make_registries()
+        dispatcher = _RecordingDispatcher()
+        config = _make_config(tmp_path).model_copy(
+            update={
+                "request_id": "single-manifest-read",
+                "hooks": (HookBinding(hook_id="test-hook-v1"),),
+            }
+        )
+
+        BundleExportService(
+            export_registry=er,
+            validator_registry=vr,
+            hook_dispatcher=dispatcher,
+        ).export_bundle(source=_make_source(), config=config)
+
+        assert reads == 1
+        assert len(dispatcher.manifests) == 1
+
+    def test_naive_committed_timestamp_is_interpreted_as_utc(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        original_read = BundleReader.read_manifest_with_bytes
+
+        def read_naive_timestamp(
+            reader: BundleReader,
+            manifest_or_bundle_uri: str,
+            *,
+            storage_profile: str | None = None,
+        ) -> tuple[ExportManifest, bytes]:
+            manifest, raw = original_read(
+                reader,
+                manifest_or_bundle_uri,
+                storage_profile=storage_profile,
+            )
+            return (
+                manifest.model_copy(
+                    update={"created_at": manifest.created_at.replace(tzinfo=None)}
+                ),
+                raw,
+            )
+
+        monkeypatch.setattr(
+            BundleReader, "read_manifest_with_bytes", read_naive_timestamp
+        )
+        er, vr = _make_registries()
+        dispatcher = _RecordingDispatcher()
+        config = _make_config(tmp_path).model_copy(
+            update={
+                "request_id": "legacy-naive-created-at",
+                "hooks": (HookBinding(hook_id="test-hook-v1"),),
+            }
+        )
+
+        BundleExportService(
+            export_registry=er,
+            validator_registry=vr,
+            hook_dispatcher=dispatcher,
+        ).export_bundle(source=_make_source(), config=config)
+
+        event = dispatcher.events[0]
+        assert isinstance(event, OperationEvent)
+        assert event.occurred_at.tzinfo is timezone.utc
+
+    def test_hook_preflight_failure_happens_before_staging(
+        self, tmp_path: Path
+    ) -> None:
+        class _RejectingDispatcher(_RecordingDispatcher):
+            def preflight(self, bindings: tuple[HookBinding, ...]) -> tuple[str, ...]:
+                raise JobConfigurationError("invalid hook")
+
+        er, vr = _make_registries()
+        service = BundleExportService(
+            export_registry=er,
+            validator_registry=vr,
+            hook_dispatcher=_RejectingDispatcher(),
+        )
+        config = _make_config(tmp_path).model_copy(
+            update={"hooks": (HookBinding(hook_id="unknown"),)}
+        )
+        with pytest.raises(JobConfigurationError, match="invalid hook"):
+            service.export_bundle(source=_make_source(), config=config)
+        assert not (tmp_path / "bundles").exists()
+
     def test_run_id_is_stable_bundle_identity(self, tmp_path: Path) -> None:
         config = _make_config(tmp_path).model_copy(update={"run_id": "run-42"})
         assert bundle_id_for_request("run-42") == bundle_id_for_request("run-42")
@@ -195,6 +357,81 @@ class TestBundleExportService:
         result = service.export_bundle(source=source, config=config)
 
         assert result.manifest_uri.endswith("manifest.json")
+
+    def test_artifact_accessor_materializes_verified_committed_files(
+        self, tmp_path: Path
+    ) -> None:
+        er, vr = _make_registries()
+        result = BundleExportService(
+            export_registry=er, validator_registry=vr
+        ).export_bundle(source=_make_source(), config=_make_config(tmp_path))
+        committed_root = Path(result.canonical_uri)
+        (committed_root / "untracked-secret.txt").write_text("must-not-upload")
+        manifest = BundleReader().read_manifest(result.canonical_uri)
+        event = OperationEvent.bundle_published(
+            occurred_at=manifest.created_at,
+            bundle_id=result.bundle_id,
+            canonical_uri=result.canonical_uri,
+            manifest_sha256=result.manifest_sha256,
+            source_kind=manifest.source_info.source_kind,
+        )
+
+        accessor = BundleArtifactAccessor(event)
+        expected_manifest_bytes = Path(result.manifest_uri).read_bytes()
+        materialized_manifest: Path | None = None
+        with accessor.materialize_manifest() as manifest_path:
+            materialized_manifest = manifest_path
+            assert manifest_path.read_bytes() == expected_manifest_bytes
+        assert materialized_manifest is not None
+        assert not materialized_manifest.exists()
+
+        materialized: Path | None = None
+        with accessor.materialize_bundle() as bundle_root:
+            materialized = bundle_root
+            assert bundle_root != committed_root
+            assert (bundle_root / "manifest.json").is_file()
+            assert (bundle_root / "artifacts" / "fp32" / "model.onnx").is_file()
+            assert not (bundle_root / "untracked-secret.txt").exists()
+        assert materialized is not None
+        assert not materialized.exists()
+
+    def test_manifest_integrity_failure_precedes_hook_receipts(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        original_read = BundleReader.read_manifest_with_bytes
+
+        def read_with_changed_bytes(
+            reader: BundleReader,
+            manifest_or_bundle_uri: str,
+            *,
+            storage_profile: str | None = None,
+        ) -> tuple[ExportManifest, bytes]:
+            manifest, raw = original_read(
+                reader,
+                manifest_or_bundle_uri,
+                storage_profile=storage_profile,
+            )
+            return manifest, raw + b" "
+
+        monkeypatch.setattr(
+            BundleReader, "read_manifest_with_bytes", read_with_changed_bytes
+        )
+        er, vr = _make_registries()
+        dispatcher = _RecordingDispatcher()
+        config = _make_config(tmp_path).model_copy(
+            update={"hooks": (HookBinding(hook_id="test-hook-v1"),)}
+        )
+
+        with pytest.raises(PostPublishCallbackError) as exc_info:
+            BundleExportService(
+                export_registry=er,
+                validator_registry=vr,
+                hook_dispatcher=dispatcher,
+            ).export_bundle(source=_make_source(), config=config)
+
+        assert exc_info.value.bundle_result.status == "succeeded"
+        assert exc_info.value.receipts == ()
+        assert dispatcher.events == []
 
     def test_pre_e2_export_is_rejected_by_default_serving_gate(
         self, tmp_path: Path
@@ -324,8 +561,6 @@ class TestBundleExportService:
         assert result.status == "succeeded"
 
     def test_callback_error_raises_when_configured(self, tmp_path: Path) -> None:
-        from tributo.exceptions import PostPublishCallbackError
-
         er, vr = _make_registries()
         service = BundleExportService(export_registry=er, validator_registry=vr)
         source = _make_source()

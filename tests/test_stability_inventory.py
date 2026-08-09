@@ -106,6 +106,8 @@ STABILITY_MAP: dict[str, str] = {
     "tributo.exporting.records": "beta",
     "tributo.exporting.gc": "beta",
     "tributo.exporting.hooks": "beta",
+    "tributo.exporting.events": "beta",
+    "tributo.exporting.dispatch": "beta",
     "tributo.exporting.runtime": "beta",
     # Integrations — beta
     "tributo.integrations.algorithm_inputs": "alpha",

@@ -76,6 +76,7 @@ entrypoint
 entrypoints
 env
 enums
+Eq
 ETag
 ExportSource
 ExportSpec
@@ -92,6 +93,7 @@ grpc
 hashable
 HDFS
 HandleOwnership
+HookBinding
 HTTP
 http
 hyperparameter
@@ -221,8 +223,10 @@ Symlink
 symlinks
 telecom
 tokenizer
+topologies
 TorchScript
 tracebacks
+tunable
 TransformDecision
 TransformPipeline
 Tributo

@@ -14,6 +14,7 @@ import os
 import tempfile
 from uuid import uuid4
 
+import mlflow
 import pytest
 import requests
 
@@ -21,10 +22,9 @@ from tributo.registry.callback import MLflowTrackingCallback
 from tributo.registry.mlflow_util import _MLflowTrackerUtil
 from tributo.registry.model_registry import ModelRegistry
 
-# mlflow lives in the registry extra - skip collection without it
-# (importorskip comes after all imports to avoid E402).
-mlflow = pytest.importorskip("mlflow", reason="mlflow not installed")
 MlflowClient = mlflow.tracking.MlflowClient
+
+pytestmark = pytest.mark.integration
 
 logger = logging.getLogger(__name__)
 
@@ -44,10 +44,13 @@ def _mlflow_available() -> bool:
         return False
 
 
-requires_mlflow = pytest.mark.skipif(
-    not _mlflow_available(),
-    reason="MLflow server not reachable at http://127.0.0.1:8050",
-)
+@pytest.fixture(scope="module", autouse=True)
+def require_mlflow_server() -> None:
+    if not _mlflow_available():
+        pytest.fail(
+            "MLflow integration tests require a healthy server at "
+            f"{MLFLOW_TRACKING_URI}"
+        )
 
 
 @pytest.fixture
@@ -97,8 +100,6 @@ def model_name():
 # ---------------------------------------------------------------------------
 
 
-@requires_mlflow
-@pytest.mark.integration
 class TestMLflowUtilIntegration:
     """_MLflowTrackerUtil 集成测试。"""
 
@@ -237,8 +238,6 @@ def _make_trainer(config: dict | None = None):
     return trainer
 
 
-@requires_mlflow
-@pytest.mark.integration
 class TestCallbackIntegration:
     """MLflowTrackingCallback 集成测试。"""
 
@@ -324,8 +323,6 @@ class TestCallbackIntegration:
 # ---------------------------------------------------------------------------
 
 
-@requires_mlflow
-@pytest.mark.integration
 @pytest.mark.filterwarnings("ignore::FutureWarning")
 class TestModelRegistryIntegration:
     """ModelRegistry 集成测试。"""

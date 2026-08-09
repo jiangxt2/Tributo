@@ -15,3 +15,13 @@ exporter, registry, and stream-source contracts.
 An installed dependency does not by itself imply an end-to-end supported
 workflow. Consult the [support matrix](../reference/support-matrix.md) for the
 current maturity and limitations of each integration.
+
+## Guides
+
+- [Track published bundles with MLflow](../how-to/mlflow.md)
+
+```{toctree}
+:hidden:
+
+../how-to/mlflow
+```

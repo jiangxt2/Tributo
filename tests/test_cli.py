@@ -8,6 +8,7 @@ import pytest
 from click.testing import CliRunner
 
 from tributo.cli import main
+from tributo.exceptions import PostPublishCallbackError
 
 
 @pytest.fixture
@@ -222,6 +223,107 @@ class TestStopCommand:
             )
             assert result.exit_code == 1
             assert "forbidden" in result.output
+
+
+class TestExportCommand:
+    def test_parses_explicit_hook_binding(self, runner, tmp_path):
+        bundle_result = MagicMock()
+        bundle_result.canonical_uri = str(tmp_path / "bundle")
+        bundle_result.bundle_id = "bundle-1"
+        bundle_result.manifest_uri = str(tmp_path / "bundle" / "manifest.json")
+        bundle_result.status = "succeeded"
+        bundle_result.alias_uri = None
+        bundle_result.hook_receipts = ()
+
+        with (
+            patch("tributo.exporting.service.BundleExportService") as service_cls,
+            patch(
+                "tributo.integrations.sources.ray_xgboost.RayXGBoostSourceProvider"
+            ) as provider_cls,
+        ):
+            service_cls.return_value.export_bundle.return_value = bundle_result
+            provider_cls.return_value.open_source.return_value.__enter__.return_value = MagicMock()
+            result = runner.invoke(
+                main,
+                [
+                    "export",
+                    "--source",
+                    str(tmp_path / "checkpoint"),
+                    "--targets",
+                    "onnx",
+                    "--output",
+                    str(tmp_path / "bundle"),
+                    "--hook",
+                    '{"hook_id":"mlflow-log-artifacts-v1",'
+                    '"required":true,"options":{"experiment_name":"demo"}}',
+                ],
+            )
+
+        assert result.exit_code == 0
+        config = service_cls.return_value.export_bundle.call_args.kwargs["config"]
+        assert config.hooks[0].hook_id == "mlflow-log-artifacts-v1"
+        assert config.hooks[0].required is True
+        assert config.hooks[0].options == {"experiment_name": "demo"}
+
+    def test_rejects_invalid_hook_json(self, runner, tmp_path):
+        result = runner.invoke(
+            main,
+            [
+                "export",
+                "--source",
+                str(tmp_path / "checkpoint"),
+                "--targets",
+                "onnx",
+                "--output",
+                str(tmp_path / "bundle"),
+                "--hook",
+                "not-json",
+            ],
+        )
+        assert result.exit_code == 1
+        assert "Hook must be a valid HookBinding JSON object" in result.output
+
+    def test_required_hook_failure_reports_committed_bundle(self, runner, tmp_path):
+        bundle_result = MagicMock()
+        bundle_result.canonical_uri = str(tmp_path / "committed-bundle")
+        bundle_result.manifest_uri = str(
+            tmp_path / "committed-bundle" / "manifest.json"
+        )
+        receipt = MagicMock()
+        receipt.hook_id = "mlflow-log-artifacts-v1"
+        receipt.status.value = "retryable_failed"
+
+        with (
+            patch("tributo.exporting.service.BundleExportService") as service_cls,
+            patch(
+                "tributo.integrations.sources.ray_xgboost.RayXGBoostSourceProvider"
+            ) as provider_cls,
+        ):
+            service_cls.return_value.export_bundle.side_effect = (
+                PostPublishCallbackError(
+                    "required Hook failed",
+                    bundle_result=bundle_result,
+                    receipts=(receipt,),
+                )
+            )
+            provider_cls.return_value.open_source.return_value.__enter__.return_value = MagicMock()
+            result = runner.invoke(
+                main,
+                [
+                    "export",
+                    "--source",
+                    str(tmp_path / "checkpoint"),
+                    "--targets",
+                    "onnx",
+                    "--output",
+                    str(tmp_path / "bundle"),
+                ],
+            )
+
+        assert result.exit_code == 1
+        assert "Bundle committed" in result.output
+        assert bundle_result.canonical_uri in result.output
+        assert "retryable_failed" in result.output
 
 
 # --- embed ---

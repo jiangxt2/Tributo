@@ -97,11 +97,11 @@ class TrainingLifecycle:
         # in both places so that contract keeps working.
         trainer._summary = summary
 
-        # Let the callback decide whether to raise (via raise_on_error).
-        # Not caught here so callbacks can abort training early.
-        self._dispatcher.on_setup_start(trainer)
-
         try:
+            # Required setup callbacks may abort before trainer setup.  They
+            # remain inside the lifecycle error boundary so on_run_error can
+            # close any external run that was created before the failure.
+            self._dispatcher.on_setup_start(trainer)
             logger.info("Starting %s training...", type(trainer).__name__)
             trainer.setup()
             checkpoint = trainer.training_loop()
@@ -115,7 +115,7 @@ class TrainingLifecycle:
                 and len(bundle_config.targets) > 0
             ):
                 # Bundle mode: post-publish actions run through the
-                # PublicationRunner hooks — legacy artifact-export
+                # publication Hook dispatcher — legacy artifact-export
                 # callbacks are not fired (backward-compat contract).
                 # Subclass overrides of the historical
                 # ``BaseTrainer._export_bundle`` hook keep working: dispatch
@@ -134,11 +134,14 @@ class TrainingLifecycle:
             self._dispatcher.on_run_complete(trainer, summary)
 
         except Exception as e:
-            # Fire on_run_error; use exception chaining if a callback also
-            # raises so the original training error is preserved.
+            # Error callbacks may fail too, but the training exception remains
+            # the primary error and is always re-raised unchanged.
             callback_error = self._dispatcher.on_run_error(trainer, e)
             if callback_error is not None:
-                raise callback_error from e
+                e.add_note(
+                    "on_run_error callback also failed: "
+                    f"{type(callback_error).__name__}: {callback_error}"
+                )
             raise
 
         return summary

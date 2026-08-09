@@ -156,7 +156,7 @@ class ModelRegistry:
             ValueError: Neither version nor stage provided, or no model in the specified stage.
         """
         if version is not None:
-            mv = self._client.get_model_version(name=name, version=version)
+            mv = self._client.get_model_version(name=name, version=str(version))
         elif stage is not None:
             # Allowlist validation on model name to defend against filter string injection.
             if not re.match(r"^[\w\-\./]+$", name):
@@ -201,8 +201,8 @@ class ModelRegistry:
             List of model names.
         """
         try:
-            results = self._client.search_registered_models()
-            names = sorted(model.name for model in results)
+            registered_models = self._client.search_registered_models()
+            names = sorted(model.name for model in registered_models)
             if names:
                 return names
         except MlflowException:
@@ -211,9 +211,9 @@ class ModelRegistry:
             )
 
         # Fallback: extract unique model names from model versions
-        results = self._client.search_model_versions()
+        model_versions = self._client.search_model_versions()
         name_set: set[str] = set()
-        for mv in results:
+        for mv in model_versions:
             name_set.add(mv.name)
         return sorted(name_set)
 
@@ -266,7 +266,7 @@ class ModelRegistry:
 
         for version in versions:
             try:
-                mv = self._client.get_model_version(name=name, version=version)
+                mv = self._client.get_model_version(name=name, version=str(version))
                 # Prefer run_id, fall back to extracting from source URI
                 run_id = mv.run_id
                 if not run_id:
@@ -301,5 +301,5 @@ class ModelRegistry:
             name: Model name.
             version: Version number.
         """
-        self._client.delete_model_version(name=name, version=version)
+        self._client.delete_model_version(name=name, version=str(version))
         logger.info("Model '%s' v%d deleted.", name, version)

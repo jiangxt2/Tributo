@@ -83,13 +83,42 @@ class TestEventDispatch:
     def test_empty_dispatcher_is_noop(self) -> None:
         CallbackDispatcher([]).on_setup_start(_trainer())
 
-    def test_on_setup_start_propagates_exceptions(self) -> None:
+    def test_unspecified_setup_policy_is_best_effort(self) -> None:
         class _AbortingCallback(_RecordingCallback):
             def on_setup_start(self, trainer: BaseTrainer) -> None:
                 raise RuntimeError("abort")
 
-        with pytest.raises(RuntimeError, match="abort"):
-            CallbackDispatcher([_AbortingCallback()]).on_setup_start(_trainer())
+        CallbackDispatcher([_AbortingCallback()]).on_setup_start(_trainer())
+
+    def test_explicit_best_effort_setup_error_is_swallowed(self) -> None:
+        class _BestEffortCallback(_RecordingCallback):
+            failure_policy = "best_effort"
+
+            def on_setup_start(self, trainer: BaseTrainer) -> None:
+                raise RuntimeError("abort")
+
+        CallbackDispatcher([_BestEffortCallback()]).on_setup_start(_trainer())
+
+    def test_required_policy_propagates_at_setup_and_training_end(self) -> None:
+        class _RequiredCallback(_RecordingCallback):
+            failure_policy = "required"
+
+            def on_setup_start(self, trainer: BaseTrainer) -> None:
+                raise RuntimeError("setup abort")
+
+        with pytest.raises(RuntimeError, match="setup abort"):
+            CallbackDispatcher([_RequiredCallback()]).on_setup_start(_trainer())
+
+        class _RequiredTrainingCallback(_RecordingCallback):
+            failure_policy = "required"
+
+            def on_training_end(self, trainer: BaseTrainer, result: Any) -> None:
+                raise RuntimeError("training abort")
+
+        with pytest.raises(RuntimeError, match="training abort"):
+            CallbackDispatcher([_RequiredTrainingCallback()]).on_training_end(
+                _trainer(), "ckpt"
+            )
 
     def test_on_training_end_swallows_errors(
         self, caplog: pytest.LogCaptureFixture

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 import pytest
 from pydantic import ValidationError
 
+from tributo.exporting.events import OperationEvent
 from tributo.exporting.models import (
     AliasConfig,
     ArtifactDraft,
@@ -18,6 +20,7 @@ from tributo.exporting.models import (
     ExportExecutionResult,
     ExportTarget,
     FailureInfo,
+    HookBinding,
     LogicalArtifact,
     NodeResult,
     PlannedTarget,
@@ -53,6 +56,33 @@ class TestExportTarget:
         assert t.depends_on == ("fp32",)
 
 
+def test_operation_event_rejects_unstable_time_and_correlation_fields() -> None:
+    event = OperationEvent.bundle_published(
+        occurred_at=datetime(2025, 1, 1, 8, tzinfo=timezone.utc),
+        bundle_id="bundle-1",
+        canonical_uri="file:///bundle-1",
+        manifest_sha256="a" * 64,
+        correlation_ids={"run_id": "run-1"},
+    )
+    assert event.occurred_at.tzinfo is timezone.utc
+
+    with pytest.raises(ValidationError, match="timezone-aware"):
+        OperationEvent.bundle_published(
+            occurred_at=datetime(2025, 1, 1),
+            bundle_id="bundle-1",
+            canonical_uri="file:///bundle-1",
+            manifest_sha256="a" * 64,
+        )
+    with pytest.raises(ValidationError, match="unsupported correlation ID"):
+        OperationEvent.bundle_published(
+            occurred_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+            bundle_id="bundle-1",
+            canonical_uri="file:///bundle-1",
+            manifest_sha256="a" * 64,
+            correlation_ids={"attempt_id": "attempt-1"},
+        )
+
+
 # ── BundleOutputConfig ───────────────────────────────────────────────────────
 
 
@@ -65,6 +95,19 @@ class TestBundleOutputConfig:
     def test_bundle_mode_requires_uri(self) -> None:
         with pytest.raises(ValidationError, match="bundle_uri is required"):
             BundleOutputConfig(targets=[ExportTarget(name="a", format="onnx")])
+
+    def test_hook_bindings_are_explicit_and_unique(self) -> None:
+        cfg = BundleOutputConfig(
+            hooks=(HookBinding(hook_id="mlflow-v1", required=True),)
+        )
+        assert cfg.hooks[0].required is True
+        with pytest.raises(ValidationError, match="hook_id values must be unique"):
+            BundleOutputConfig(
+                hooks=(
+                    HookBinding(hook_id="mlflow-v1"),
+                    HookBinding(hook_id="mlflow-v1"),
+                )
+            )
 
     def test_unique_target_names(self) -> None:
         with pytest.raises(ValidationError, match="target names must be unique"):
@@ -195,6 +238,25 @@ class TestArtifactFile:
 
 
 class TestLogicalArtifactTreeDigest:
+    @pytest.mark.parametrize("name", ["", ".", "..", "../escape", "a/b", "a\\b"])
+    def test_rejects_unsafe_artifact_name(self, name: str) -> None:
+        with pytest.raises(ValidationError, match="artifact name"):
+            LogicalArtifact(
+                name=name,
+                format="onnx",
+                flavor_id="onnx-runtime-v1",
+                files=(
+                    ArtifactFile(
+                        relative_path="model.onnx",
+                        sha256="a" * 64,
+                        size_bytes=1,
+                    ),
+                ),
+                entrypoint="model.onnx",
+                tree_digest="b" * 64,
+                producer=ProducerInfo(exporter_id="test-v1"),
+            )
+
     def test_deterministic(self) -> None:
         files1 = (
             ArtifactFile(relative_path="a.onnx", sha256="a" * 64, size_bytes=1),
@@ -242,6 +304,18 @@ class TestLogicalArtifactTreeDigest:
 
 
 class TestArtifactDraft:
+    @pytest.mark.parametrize("name", ["../escape", "a/b", "a\\b"])
+    def test_rejects_unsafe_name_before_publish(self, name: str) -> None:
+        with pytest.raises(ValidationError, match="artifact name"):
+            ArtifactDraft(
+                name=name,
+                format="onnx",
+                flavor_id="onnx-runtime-v1",
+                files=(DraftFile(relative_path="model.onnx", role="model"),),
+                entrypoint="model.onnx",
+                producer=ProducerInfo(exporter_id="test-v1"),
+            )
+
     def test_valid(self) -> None:
         draft = ArtifactDraft(
             name="fp32",
