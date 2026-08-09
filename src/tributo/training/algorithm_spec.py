@@ -37,6 +37,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 from tributo._common.immutable import deep_freeze
+from tributo.exceptions import JobConfigurationError
 from tributo.util.annotations import PublicAPI
 
 if TYPE_CHECKING:
@@ -263,7 +264,8 @@ class AlgorithmSpec:
 
     Attributes:
         name: Short algorithm name (e.g. ``"xgboost"``).
-        trainer_cls: ``BaseTrainer`` subclass.
+        trainer_cls: Legacy ``BaseTrainer`` subclass. New portable
+            registrations set this explicitly to ``None``.
         default_config: Default configuration dict (deep-frozen at init).
         supported_tasks: Lifecycle actions the algorithm supports.
         version: Algorithm implementation version.
@@ -283,11 +285,24 @@ class AlgorithmSpec:
         deprecated_since: Version when deprecated (e.g. ``"0.4.0"``).
         replacement: Name of the replacement algorithm.
         data_loading: Who owns data loading.
+        operations: Portable operation names. When set, this is projected to
+            the legacy ``supported_tasks`` read view during migration.
+        learning_paradigm: Supervision semantics such as ``supervised`` or
+            ``positive_unlabeled``.
+        model_family: Framework-neutral model family.
+        data_modalities: Portable input modalities. When set, this is
+            projected to the legacy ``data_modality`` read view.
+        lifecycle_kind: Portable lifecycle identity.
+        allowed_execution_modes: Execution modes permitted for registered
+            implementations.
+        config_contract_ref: Versioned configuration contract identifier.
+        input_contract_ref: Versioned input contract identifier.
+        output_contract_ref: Versioned output contract identifier.
     """
 
     # -- required fields -------------------------------------------------------
     name: str
-    trainer_cls: type
+    trainer_cls: type | None
 
     # -- legacy TrainerSpec fields ---------------------------------------------
     default_config: Mapping[str, Any] = field(default_factory=dict)
@@ -325,6 +340,19 @@ class AlgorithmSpec:
     # -- data loading ----------------------------------------------------------
     data_loading: DataLoadingMode = DataLoadingMode.LEGACY_DRIVER
 
+    # -- portable execution target fields ------------------------------------
+    # These fields are framework-neutral strings so that Driver-side catalog
+    # and planning code never imports a user implementation or framework.
+    operations: tuple[str, ...] = ()
+    learning_paradigm: str | None = None
+    model_family: str | None = None
+    data_modalities: tuple[str, ...] = ()
+    lifecycle_kind: str | None = None
+    allowed_execution_modes: tuple[str, ...] = ()
+    config_contract_ref: str | None = None
+    input_contract_ref: str | None = None
+    output_contract_ref: str | None = None
+
     def __post_init__(self) -> None:
         # Runtime plugin entry points are not type-checked. Normalize valid
         # string enum values here so every Registry consumer sees one canonical
@@ -359,6 +387,50 @@ class AlgorithmSpec:
         object.__setattr__(self, "supported_tasks", tuple(self.supported_tasks))
         object.__setattr__(self, "data_modality", tuple(self.data_modality))
         object.__setattr__(self, "tags", tuple(self.tags))
+        object.__setattr__(self, "operations", tuple(self.operations))
+        object.__setattr__(self, "data_modalities", tuple(self.data_modalities))
+        object.__setattr__(
+            self, "allowed_execution_modes", tuple(self.allowed_execution_modes)
+        )
+
+        if self.operations:
+            if (
+                self.supported_tasks != ("train",)
+                and self.supported_tasks != self.operations
+            ):
+                raise ValueError(
+                    f"Algorithm '{self.name}': operations and supported_tasks conflict"
+                )
+            object.__setattr__(self, "supported_tasks", self.operations)
+        if self.data_modalities:
+            if self.data_modality and self.data_modality != self.data_modalities:
+                raise ValueError(
+                    f"Algorithm '{self.name}': data_modalities and data_modality conflict"
+                )
+            object.__setattr__(self, "data_modality", self.data_modalities)
+
+        for field_name, values in (
+            ("operations", self.operations),
+            ("data_modalities", self.data_modalities),
+            ("allowed_execution_modes", self.allowed_execution_modes),
+        ):
+            if any(not isinstance(value, str) or not value for value in values):
+                raise ValueError(
+                    f"Algorithm '{self.name}': {field_name} requires non-empty strings"
+                )
+        for field_name in (
+            "learning_paradigm",
+            "model_family",
+            "lifecycle_kind",
+            "config_contract_ref",
+            "input_contract_ref",
+            "output_contract_ref",
+        ):
+            value = getattr(self, field_name)
+            if value is not None and (not isinstance(value, str) or not value):
+                raise ValueError(
+                    f"Algorithm '{self.name}': {field_name} must be a non-empty string"
+                )
 
         # ── lifecycle invariants ──
         if self.status == AlgorithmStatus.DEPRECATED:
@@ -387,3 +459,22 @@ class AlgorithmSpec:
                     f"Algorithm '{self.name}': replacement must be None "
                     f"when status={self.status.value}"
                 )
+
+
+def require_legacy_trainer_cls(
+    spec: AlgorithmSpec,
+    *,
+    consumer: str,
+) -> type:
+    """Return a legacy Trainer class or raise an accurate compatibility error."""
+    trainer_cls = spec.trainer_cls
+    if trainer_cls is not None:
+        return trainer_cls
+    if spec.operations:
+        reason = "uses the portable execution path"
+    else:
+        reason = "is missing the required trainer_cls declaration"
+    raise JobConfigurationError(
+        f"Algorithm {spec.name!r} {reason} and cannot be constructed by "
+        f"the legacy {consumer}"
+    )

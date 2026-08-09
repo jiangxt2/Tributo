@@ -41,6 +41,12 @@ class TestTrainerSpecAlias:
         assert isinstance(spec, TrainerSpec)  # works both ways
         assert spec.name == "dnn"
 
+    def test_trainer_cls_remains_an_explicit_constructor_argument(self) -> None:
+        kwargs = {"name": "incomplete-plugin"}
+
+        with pytest.raises(TypeError, match="trainer_cls"):
+            AlgorithmSpec(**kwargs)
+
     def test_default_fields(self) -> None:
         spec = AlgorithmSpec(name="test", trainer_cls=type("Fake", (), {}))
         assert spec.default_config == {}
