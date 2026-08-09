@@ -42,9 +42,11 @@ prototypes.
 | Capability | Status | Boundary |
 | --- | --- | --- |
 | Ray Tune | Beta | Capability-gated algorithms only |
+| Portable managed sklearn and Custom Ray Function | Alpha | Provisional programmatic registration; shared Plan/Input/Lifecycle/Result contracts and real Ray Jobs coverage; no stable plugin entry point or Bundle cutover yet |
+| Portable distributed execution | Alpha | Explicit sklearn Ray joblib and Custom Ray Function data-parallel topologies; heavy distributed Ray Jobs tests are an explicit, default-skipped gate |
 | Graph training | Alpha skeleton | No built-in PyG/DGL trainer |
 | Causal estimation | Extension contract | No concrete estimator is bundled |
-| Streaming user recovery decisions | Extension direction | Kafka source exists; no built-in recovery algorithm or complete source-to-sink runtime |
+| Streaming user recovery decisions | Not implemented | Kafka source remains separate; no recovery algorithm or source-to-sink runtime is planned by the algorithm-module refactor |
 
 The executable deep-learning implementations are the tabular DNN trainer and
 its PU specialization. XGBoost is supported, but belongs to tree-based machine
