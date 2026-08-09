@@ -321,7 +321,7 @@ jobs:
       - name: Run unit tests
         run: |
           uv run --locked --no-sync python -m pytest tests/ \
-            -m "not integration and not slow and not minio_compat and not ray_runtime_env" \
+            -m "not integration and not slow and not distributed and not minio_compat and not ray_runtime_env" \
             -v --tb=short --timeout=180
 
   # Domain gate for the export framework (plan: export-contract job).

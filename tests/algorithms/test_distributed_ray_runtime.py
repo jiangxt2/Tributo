@@ -23,9 +23,10 @@ from .conftest import (
     sklearn_registration,
 )
 
-pytestmark = pytest.mark.filterwarnings(
-    "ignore::pytest.PytestUnraisableExceptionWarning"
-)
+pytestmark = [
+    pytest.mark.distributed,
+    pytest.mark.filterwarnings("ignore::pytest.PytestUnraisableExceptionWarning"),
+]
 
 
 @pytest.fixture(scope="module", autouse=True)

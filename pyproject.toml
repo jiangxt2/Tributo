@@ -227,7 +227,7 @@ markers = [
     "ingestion_conformance: validates Ray Data and Daft ingestion semantics",
     "distributed: marks explicit multi-Worker or multi-node Ray tests that are excluded from default CI",
 ]
-addopts = "-m 'not slow and not minio_compat and not ray_runtime_env'"
+addopts = "-m 'not slow and not distributed and not minio_compat and not ray_runtime_env'"
 
 [tool.coverage.run]
 source = ["src/tributo"]
