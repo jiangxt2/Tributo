@@ -1,7 +1,7 @@
 # API Stability Inventory
 
 Canonical stability classification for every Tributo module.
-Last updated: 2026-08-07.
+Last updated: 2026-08-09.
 
 ## Stability Levels
 
@@ -54,6 +54,17 @@ Last updated: 2026-08-07.
 | `tributo.training.job_submitter` | `beta` | Job submission helpers |
 | `tributo.training.local_runner` | `beta` | Local training runner |
 
+### Portable algorithm execution (tributo.algorithms.*)
+
+| Module | Level | Notes |
+|--------|-------|-------|
+| `tributo.algorithms.api.models` | `alpha` | Portable registration, request, plan, result, environment, runtime, input, and artifact value objects |
+| `tributo.algorithms.api.context` — `UserExecutionContext` | `alpha` | Restricted context for trusted module-qualified Worker functions |
+| `tributo.algorithms.api.errors` | `alpha` | Portable execution error taxonomy |
+| `tributo.algorithms.core.builder` — `AlgorithmBuilder` | `alpha` | Provisional sklearn and Custom Ray Function registration builders |
+| `tributo.algorithms.spi.execution` | `alpha` | Provisional operation and Runtime execution protocols |
+| `tributo.algorithms.spi.input` | `alpha` | Two-stage input resolution and Driver/Worker ownership contracts |
+
 ### Data (tributo.data.*)
 
 | Module | Level | Notes |
@@ -101,6 +112,7 @@ Last updated: 2026-08-07.
 
 | Module | Level | Notes |
 |--------|-------|-------|
+| `tributo.integrations.algorithm_inputs` | `alpha` | Production IngestionGateway bridge with invocation-scoped request refs and explicit Ray/Daft Worker adapters |
 | `tributo.integrations.exporters.*` | `beta` | Built-in exporter implementations |
 | `tributo.integrations.validators.*` | `beta` | Built-in validator implementations |
 | `tributo.integrations.sources.*` | `beta` | Built-in source providers |
