@@ -516,6 +516,19 @@ class TestBundleMode:
 
 
 class TestFailurePaths:
+    def test_setup_callback_failure_fires_on_run_error(self) -> None:
+        class _RequiredSetupCallback(_RecordingCallback):
+            failure_policy = "required"
+
+            def on_setup_start(self, trainer: BaseTrainer) -> None:
+                self._record("setup_start")
+                raise RuntimeError("callback setup boom")
+
+        callback = _RequiredSetupCallback()
+        with pytest.raises(RuntimeError, match="callback setup boom"):
+            _lifecycle(_FakeTrainer(), [callback]).run()
+        assert [call[0] for call in callback.calls] == ["setup_start", "run_error"]
+
     def test_setup_failure_fires_on_run_error_and_preserves_error(self) -> None:
         trainer = _FailingSetupTrainer()
         cb = _RecordingCallback()
@@ -526,15 +539,15 @@ class TestFailurePaths:
         assert [c[0] for c in cb.calls] == ["setup_start", "run_error"]
         assert isinstance(cb.calls[1][1], RuntimeError)
 
-    def test_callback_error_chained_from_original(self) -> None:
+    def test_callback_error_never_replaces_original(self) -> None:
         class _RaisingErrorCallback(_RecordingCallback):
             def on_run_error(self, trainer: BaseTrainer, error: Exception) -> None:
                 raise ValueError("callback blew up")
 
-        with pytest.raises(ValueError, match="callback blew up") as exc_info:
+        with pytest.raises(RuntimeError, match="setup boom") as exc_info:
             _lifecycle(_FailingSetupTrainer(), [_RaisingErrorCallback()]).run()
 
-        assert isinstance(exc_info.value.__cause__, RuntimeError)
+        assert any("callback blew up" in note for note in exc_info.value.__notes__)
 
 
 class TestTrainerConstructorContract:

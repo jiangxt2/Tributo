@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -193,7 +193,7 @@ class TestGetModel:
 
         assert result.version == 3
         mock_client.get_model_version.assert_called_once_with(
-            name="test-model", version=3
+            name="test-model", version="3"
         )
 
     def test_get_by_stage(self):
@@ -336,6 +336,10 @@ class TestCompareModels:
             result = reg.compare_models("test-model", [1, 2], metric="loss")
 
         assert result == {1: 0.5, 2: 0.3}
+        assert mock_client.get_model_version.call_args_list == [
+            call(name="test-model", version="1"),
+            call(name="test-model", version="2"),
+        ]
 
     def test_per_version_query(self):
         mock_client = MagicMock()
@@ -412,7 +416,7 @@ class TestDeleteModel:
             reg.delete_model_version("test-model", 2)
 
         mock_client.delete_model_version.assert_called_once_with(
-            name="test-model", version=2
+            name="test-model", version="2"
         )
 
 

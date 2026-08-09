@@ -168,7 +168,7 @@ onnx-runtime-v1 = "tributo.integrations.flavors.onnx_runtime:ONNXRuntimeFlavor"
 [project.entry-points."tributo.model_factories"]
 
 [project.entry-points."tributo.hooks"]
-mlflow-log-v1 = "tributo.integrations.hooks.mlflow_hook:MLflowPostPublishHook"
+mlflow-log-artifacts-v1 = "tributo.integrations.hooks.mlflow_hook:MLflowPostPublishHook"
 
 [project.entry-points."tributo.stream_sources"]
 kafka = "tributo.streaming.kafka_source:KafkaStreamSource"
@@ -227,7 +227,7 @@ markers = [
     "ingestion_conformance: validates Ray Data and Daft ingestion semantics",
     "distributed: marks explicit multi-Worker or multi-node Ray tests that are excluded from default CI",
 ]
-addopts = "-m 'not slow and not distributed and not minio_compat and not ray_runtime_env'"
+addopts = "-m 'not slow and not distributed and not minio_compat and not ray_runtime_env and not integration'"
 
 [tool.coverage.run]
 source = ["src/tributo"]

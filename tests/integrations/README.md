@@ -1,7 +1,7 @@
 # Tributo Integration Tests
 
-> Run inside a Docker Ray cluster. Test scripts are executed via `docker exec` in
-> the `ray-head` container, validating end-to-end workflows against real infrastructure.
+> Most end-to-end scripts run inside a Docker Ray cluster. The MLflow Hook suite
+> is collected by pytest and runs against a real MLflow Tracking Server.
 
 ---
 
@@ -9,7 +9,7 @@
 
 | Test | File | Coverage | Prerequisites |
 |------|------|----------|---------------|
-| MLflow E2E | `test_e2e_mlflow.py` | Synthetic data → XGBoost → MLflow tracking → ONNX export → model registry | Ray + MLflow |
+| MLflow Hook | `test_e2e_mlflow.py` | Committed Bundle upload, replay deduplication, explicit run reuse, and failure semantics | MLflow + `registry` extra |
 | ClickHouse E2E | `test_e2e_clickhouse.py` | ClickHouse table → Daft OLAP Binding → explicit Daft-to-Ray adapter → XGBoost distributed training → MLflow → ONNX | Ray + Daft + `daft-olap-connectors` + ClickHouse + MLflow |
 | Dual-engine Docker | `test_data_ingestion_dual_engine.py` | Local Parquet, full ETL chain, typed handles, worker-version evidence | Docker Ray cluster + Daft |
 | File conformance | `../integration/test_data_ingestion_conformance.py` | Local/MinIO Parquet and CSV through Ray Data and Daft | Local Ray runtime + MinIO |
@@ -20,7 +20,34 @@
 
 ---
 
-## Environment Setup
+## MLflow Hook Suite
+
+The Hook suite validates the committed-bundle integration rather than automatic
+Model Registry or Stage behavior. Missing infrastructure is a test failure, not
+a reason to skip the suite.
+
+Start and verify the existing local service:
+
+```bash
+docker start pista-mlflow-server
+curl --fail 'http://127.0.0.1:8050/api/2.0/mlflow/experiments/search?max_results=1'
+```
+
+Run the dedicated suites:
+
+```bash
+uv run --extra registry pytest tests/integrations/test_e2e_mlflow.py \
+  -m integration -vv
+uv run --extra registry pytest tests/registry/test_integration.py \
+  -m integration -vv
+```
+
+Set `MLFLOW_TRACKING_URI` to use another real server. The default is
+`http://127.0.0.1:8050`.
+
+---
+
+## Distributed Test Environment
 
 ### Start Docker Cluster
 
@@ -52,9 +79,10 @@ Test files are available at `/opt/tributo/tests/integrations/` inside the contai
 
 ---
 
-## Running Tests
+## Running Distributed Tests
 
-All tests are executed from the host machine via `docker exec ray-head`.
+The remaining end-to-end scripts are executed from the host machine via
+`docker exec ray-head`.
 
 ### Individual Tests
 
@@ -64,9 +92,6 @@ docker exec ray-head python /opt/tributo/tests/integrations/test_e2e_clickhouse.
 
 # Redis Stream full-pipeline test
 docker exec ray-head python /opt/tributo/tests/integrations/test_e2e_redis_stream.py
-
-# MLflow test
-docker exec ray-head python /opt/tributo/tests/integrations/test_e2e_mlflow.py
 
 # Required Docker-cluster ingestion slice
 docker exec ray-head env TRIBUTO_DOCKER_RAY_TEST=1 \
@@ -92,11 +117,17 @@ infrastructure absence is a failure rather than a passing skip.
 ```bash
 docker exec ray-head bash -c '
   for t in /opt/tributo/tests/integrations/test_e2e_*.py; do
+    if [ "$(basename "$t")" = "test_e2e_mlflow.py" ]; then
+      continue
+    fi
     echo "=== Running $t ==="
     python "$t" && echo "PASS" || echo "FAIL"
   done
 '
 ```
+
+The batch loop excludes `test_e2e_mlflow.py` because that module is a pytest
+suite and must be run with the fail-fast command above.
 
 ### Expected Output
 
@@ -126,7 +157,7 @@ COMPLETED event validation passed ✅
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                         Docker Network                                   │
+│                         Docker Network                                  │
 │                                                                         │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐ │
 │  │ ray-head │  │ worker-1 │  │ worker-2 │  │ worker-3 │  │  minio   │ │

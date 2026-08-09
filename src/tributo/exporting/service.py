@@ -17,6 +17,7 @@ import tempfile
 import uuid
 from collections.abc import Generator
 from contextlib import contextmanager
+from datetime import timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -26,7 +27,9 @@ from tributo.exceptions import (
     JobConfigurationError,
     PostPublishCallbackError,
 )
+from tributo.exporting.events import OperationEvent
 from tributo.exporting.executor import ExportManager
+from tributo.exporting.hooks import BundleArtifactAccessor
 from tributo.exporting.manifest import (
     ManifestExecutionNode,
     ManifestSchemaRegistry,
@@ -96,6 +99,7 @@ class BundleExportService:
         storage_resolver: StorageProfileResolver | None = None,
         manifest_registry: ManifestSchemaRegistry | None = None,
         operation_store: Any | None = None,
+        hook_dispatcher: Any | None = None,
     ) -> None:
         self._exports = export_registry or ExportRegistry()
         self._providers = source_provider_registry or SourceProviderRegistry()
@@ -103,7 +107,11 @@ class BundleExportService:
         self._storage_resolver = storage_resolver or StorageProfileResolver()
         self._manifest_registry = manifest_registry or ManifestSchemaRegistry()
         self._operation_store = operation_store
-        self._hooks_runner: Any = None  # Lazily initialized in export_bundle.
+        if hook_dispatcher is None:
+            from tributo.exporting.dispatch import InlineHookDispatcher
+
+            hook_dispatcher = InlineHookDispatcher(operation_store)
+        self._hook_dispatcher = hook_dispatcher
 
         # Register built-in schema readers.
         from tributo.exporting.manifest import _read_manifest_v1
@@ -160,6 +168,11 @@ class BundleExportService:
             raise JobConfigurationError(
                 "BundleExportService requires targets (bundle mode)"
             )
+
+        # Fail before planning or staging if a requested side effect is
+        # unknown, disabled, unloadable, or has invalid options.  An empty
+        # binding list performs no hook discovery or optional imports.
+        prepared_hooks = self._hook_dispatcher.preflight(config.hooks)
 
         # Generate stable logical IDs.  A retry gets a fresh attempt_id, but
         # the run/request identity remains the sole input to bundle_id and
@@ -272,51 +285,64 @@ class BundleExportService:
                 )
                 self._operation_store.record_execution(record)
 
-            # Phase 6: Post-publish hooks.  Hooks are pure functions of the
-            # published bundle (canonical_uri + manifest) and always run —
-            # each hook decides whether it applies (e.g. MLflow log_artifacts
-            # skips when mlflow is not installed).
-            from tributo.exporting.hooks import PublicationRunner
+            # Phase 6: Build the event from the committed manifest, then run
+            # only explicitly configured adapters.  Re-reading canonical
+            # storage makes the original created_at the replay-stable time.
+            if prepared_hooks:
+                from tributo.exporting.bundle_reader import BundleReader
 
-            manifest_dict = _build_manifest_dict(
-                published.result,
-                config.storage_profile,
-                self._storage_resolver,
-            )
-
-            # Load hooks from entry points and build runner.
-            hooks_entries = _discover_hook_plugins()
-            if hooks_entries:
-                hooks_list: list[tuple[Any, dict[str, Any], bool]] = [
-                    (h(), {}, False) for h in hooks_entries
-                ]
-                self._hooks_runner = PublicationRunner(hooks_list)
-
-            if self._hooks_runner is not None:
-                receipts = self._hooks_runner.run(
-                    canonical_uri=published.result.canonical_uri,
-                    manifest=manifest_dict,
-                    manifest_sha256=published.result.manifest_sha256,
-                    # Valid only during the staging window — hooks run
-                    # before Phase 7 (callback) and staging cleanup.
-                    local_bundle_dir=str(published.local_bundle_dir),
+                reader = BundleReader(
+                    storage_resolver=self._storage_resolver,
+                    manifest_registry=self._manifest_registry,
                 )
-
-                # Record publication attempts (when OperationStore is available).
-                if self._operation_store is not None:
-                    from tributo.exporting.records import PublicationAttempt
-
-                    for receipt in receipts:
-                        attempt = PublicationAttempt(
-                            attempt_id=uuid.uuid4().hex,
-                            bundle_digest=bundle_digest,
-                            hook_id=receipt.hook_id,
-                            status=receipt.status,
-                            retryable=receipt.retryable,
-                            idempotency_key=receipt.idempotency_key,
-                            error=receipt.error,
-                        )
-                        self._operation_store.record_publication_attempt(attempt)
+                manifest, raw_manifest = reader.read_manifest_with_bytes(
+                    published.result.canonical_uri,
+                    storage_profile=config.storage_profile,
+                )
+                actual_sha256 = hashlib.sha256(raw_manifest).hexdigest()
+                if actual_sha256 != published.result.manifest_sha256:
+                    raise PostPublishCallbackError(
+                        "Cannot dispatch hooks because the committed manifest "
+                        "digest differs from BundleResult",
+                        bundle_result=published.result,
+                    )
+                occurred_at = manifest.created_at
+                if occurred_at.tzinfo is None or occurred_at.utcoffset() is None:
+                    occurred_at = occurred_at.replace(tzinfo=timezone.utc)
+                try:
+                    event = OperationEvent.bundle_published(
+                        occurred_at=occurred_at,
+                        bundle_id=published.result.bundle_id,
+                        canonical_uri=published.result.canonical_uri,
+                        manifest_sha256=published.result.manifest_sha256,
+                        source_kind=manifest.source_info.source_kind,
+                        correlation_ids={
+                            "run_id": run_id,
+                            "request_id": request_id,
+                            "execution_id": execution_id,
+                        },
+                    )
+                    artifacts = BundleArtifactAccessor(
+                        event,
+                        storage_profile=config.storage_profile,
+                        storage_resolver=self._storage_resolver,
+                        manifest_registry=self._manifest_registry,
+                        manifest=manifest,
+                        manifest_bytes=raw_manifest,
+                    )
+                except ValueError as exc:
+                    raise PostPublishCallbackError(
+                        "Cannot dispatch hooks because the committed manifest "
+                        "cannot form a valid publication event",
+                        bundle_result=published.result,
+                    ) from exc
+                published.result = self._hook_dispatcher.dispatch(
+                    event=event,
+                    bundle_result=published.result,
+                    bundle_digest=bundle_digest,
+                    prepared_hooks=prepared_hooks,
+                    artifacts=artifacts,
+                )
 
             # Phase 7: Callback (before staging cleanup).
             if callback is not None:
@@ -455,23 +481,3 @@ def _build_manifest_dict(
         return data
     local_data: dict[str, Any] = json.loads(Path(manifest_uri).read_bytes())
     return local_data
-
-
-_hook_plugins_cache: list[Any] | None = None
-
-
-def _discover_hook_plugins() -> list[Any]:
-    """Discover post-publish hook plugins (cached)."""
-    global _hook_plugins_cache
-    if _hook_plugins_cache is None:
-        from tributo.plugin import _iter_entry_points
-
-        _hook_plugins_cache = []
-        for ep in _iter_entry_points("tributo.hooks"):
-            try:
-                cls = ep.load()
-                if hasattr(cls, "hook_id"):
-                    _hook_plugins_cache.append(cls)
-            except Exception:
-                logger.debug("Failed to load hook plugin %r", ep.name, exc_info=True)
-    return _hook_plugins_cache

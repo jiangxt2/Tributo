@@ -1,4 +1,4 @@
-"""JSON file-backed operation store — persists ExecutionRecord and PublicationAttempt.
+"""JSON file-backed operation store for execution and hook delivery records.
 
 Uses atomic per-file writes (write-to-tmp-then-rename) for crash safety.
 Production deployments should prefer a database-backed implementation.
@@ -13,7 +13,10 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from tributo.exporting.models import HookStatus
 from tributo.exporting.records import (
+    DeliveryClaim,
+    DeliveryRecord,
     ExecutionRecord,
     InMemoryOperationStore,
     PublicationAttempt,
@@ -37,26 +40,28 @@ class JsonFileOperationStore:
         self._store_dir = Path(store_dir)
         self._executions_dir = self._store_dir / "executions"
         self._attempts_dir = self._store_dir / "attempts"
-        self._lock = threading.Lock()
+        self._deliveries_dir = self._store_dir / "deliveries"
+        self._lock = threading.RLock()
         self._mem = InMemoryOperationStore()
+        self._deliveries_loaded = False
 
     # ── Persistence ──────────────────────────────────────────────────────────
 
     def record_execution(self, record: ExecutionRecord) -> None:
         """Persist *record* atomically."""
-        self._mem.record_execution(record)
         self._executions_dir.mkdir(parents=True, exist_ok=True)
         fpath = self._executions_dir / (
             f"{record.execution_id}--{uuid.uuid4().hex}.json"
         )
         _atomic_write_json(fpath, record.model_dump(mode="json"), self._lock)
+        self._mem.record_execution(record)
 
     def record_publication_attempt(self, attempt: PublicationAttempt) -> None:
         """Persist *attempt* atomically."""
-        self._mem.record_publication_attempt(attempt)
         self._attempts_dir.mkdir(parents=True, exist_ok=True)
         fpath = self._attempts_dir / f"{attempt.attempt_id}.json"
         _atomic_write_json(fpath, attempt.model_dump(mode="json"), self._lock)
+        self._mem.record_publication_attempt(attempt)
 
     # ── Queries ──────────────────────────────────────────────────────────────
 
@@ -108,13 +113,96 @@ class JsonFileOperationStore:
                 results.append(PublicationAttempt(**raw))
         return results
 
+    def claim_delivery(
+        self,
+        *,
+        event_id: str,
+        bundle_digest: str,
+        hook_id: str,
+        idempotency_key: str,
+        lease_seconds: int = 300,
+    ) -> DeliveryClaim:
+        """Atomically claim a hook delivery within this store process."""
+        with self._lock:
+            self._load_deliveries()
+            claim = self._mem.claim_delivery(
+                event_id=event_id,
+                bundle_digest=bundle_digest,
+                hook_id=hook_id,
+                idempotency_key=idempotency_key,
+                lease_seconds=lease_seconds,
+            )
+            if claim.disposition == "acquired":
+                try:
+                    self._persist_delivery(claim.record)
+                except Exception:
+                    self._mem.remove_delivery(claim.record.delivery_id)
+                    raise
+            return claim
+
+    def complete_delivery(
+        self,
+        delivery_id: str,
+        *,
+        status: HookStatus,
+        error_code: str | None = None,
+        error_summary: str | None = None,
+        external_references: dict[str, str] | None = None,
+    ) -> DeliveryRecord:
+        """Persist the terminal state of a claimed delivery."""
+        with self._lock:
+            self._load_deliveries()
+            previous = self._mem.get_delivery(delivery_id)
+            record = self._mem.complete_delivery(
+                delivery_id,
+                status=status,
+                error_code=error_code,
+                error_summary=error_summary,
+                external_references=external_references,
+            )
+            try:
+                self._persist_delivery(record)
+            except Exception:
+                self._mem.replace_delivery(previous)
+                raise
+            return record
+
+    def list_deliveries(self, bundle_digest: str, hook_id: str) -> list[DeliveryRecord]:
+        """Return persisted delivery attempts in claim order."""
+        with self._lock:
+            self._load_deliveries()
+            return self._mem.list_deliveries(bundle_digest, hook_id)
+
+    def _load_deliveries(self) -> None:
+        if self._deliveries_loaded:
+            return
+        if self._deliveries_dir.exists():
+            records: list[DeliveryRecord] = []
+            for fpath in self._deliveries_dir.glob("*.json"):
+                raw = _read_json(fpath)
+                if raw:
+                    records.append(DeliveryRecord.model_validate(raw))
+            for record in sorted(records, key=lambda item: item.started_at):
+                self._mem.restore_delivery(record)
+        self._deliveries_loaded = True
+
+    def _persist_delivery(self, record: DeliveryRecord) -> None:
+        self._deliveries_dir.mkdir(parents=True, exist_ok=True)
+        fpath = self._deliveries_dir / f"{record.delivery_id}.json"
+        _atomic_write_json(fpath, record.model_dump(mode="json"), self._lock)
+
     # ── Maintenance ──────────────────────────────────────────────────────────
 
     def clear(self) -> None:
         """Remove all persisted records (for testing)."""
         with self._lock:
             self._mem = InMemoryOperationStore()
-            for d in (self._executions_dir, self._attempts_dir):
+            self._deliveries_loaded = False
+            for d in (
+                self._executions_dir,
+                self._attempts_dir,
+                self._deliveries_dir,
+            ):
                 if d.exists():
                     for f in d.glob("*.json"):
                         f.unlink()
@@ -123,7 +211,9 @@ class JsonFileOperationStore:
 # ── Helpers ──────────────────────────────────────────────────────────────────────
 
 
-def _atomic_write_json(fpath: Path, data: dict[str, Any], lock: threading.Lock) -> None:
+def _atomic_write_json(
+    fpath: Path, data: dict[str, Any], lock: threading.RLock
+) -> None:
     """Write JSON data atomically via tmp-file + rename."""
     tmp_path = fpath.with_suffix(".tmp")
     payload = json.dumps(data, sort_keys=True, indent=2, ensure_ascii=False)

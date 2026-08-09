@@ -72,10 +72,9 @@ class BaseTrainer(ABC):
     An optional callback mechanism supports integration with experiment
     trackers such as MLflow.  Callback methods are guarded with exception
     handling by default so that callback failures do not block the training
-    pipeline.  Note: ``on_setup_start`` exceptions are handled by the
-    callback itself (based on its ``raise_on_error`` attribute); the base
-    class does NOT catch them in ``run()`` so that callbacks can abort
-    training early when needed.
+    pipeline.  Callbacks that expose ``failure_policy == "required"`` may
+    abort normal lifecycle phases, including ``on_setup_start``; callbacks
+    without an explicit policy are best-effort.
 
     Args:
         datasets: Dataset dictionary.

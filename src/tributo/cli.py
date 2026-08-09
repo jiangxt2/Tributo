@@ -15,7 +15,11 @@ import click
 
 from tributo import JobConfig
 from tributo._common import DEFAULT_DASHBOARD_URL, configure_logging
-from tributo.exceptions import JobConfigurationError, TributoError
+from tributo.exceptions import (
+    JobConfigurationError,
+    PostPublishCallbackError,
+    TributoError,
+)
 from tributo.job import TributoClient
 
 logger = logging.getLogger(__name__)
@@ -196,6 +200,15 @@ def stop(address: str, job_id: str):
     help="Role assignments: name=target (repeatable)",
 )
 @click.option(
+    "--hook",
+    "hooks",
+    multiple=True,
+    help=(
+        "Post-publish HookBinding as JSON (repeatable), for example "
+        '\'{"hook_id":"mlflow-log-artifacts-v1","options":{...}}\''
+    ),
+)
+@click.option(
     "--json",
     "json_output",
     is_flag=True,
@@ -210,6 +223,7 @@ def export(
     storage_profile: str | None,
     request_id: str | None,
     roles: tuple[str, ...],
+    hooks: tuple[str, ...],
     json_output: bool,
 ):
     """Export a trained model to one or more formats as a bundle."""
@@ -218,6 +232,7 @@ def export(
             AliasConfig,
             BundleOutputConfig,
             ExportTarget,
+            HookBinding,
         )
         from tributo.exporting.service import BundleExportService
 
@@ -238,6 +253,17 @@ def export(
             name, target = r.split("=", 1)
             roles_dict[name.strip()] = target.strip()
 
+        hook_bindings: list[HookBinding] = []
+        for raw_hook in hooks:
+            try:
+                hook_bindings.append(HookBinding.model_validate_json(raw_hook))
+            except Exception as exc:
+                raise click.BadParameter(
+                    "Hook must be a valid HookBinding JSON object "
+                    f"({type(exc).__name__})",
+                    param_hint="--hook",
+                ) from exc
+
         # Build config.
         config = BundleOutputConfig(
             bundle_uri=output,
@@ -245,6 +271,7 @@ def export(
             request_id=request_id,
             storage_profile=storage_profile,
             roles=roles_dict,
+            hooks=tuple(hook_bindings),
             alias=AliasConfig(name=alias) if alias else None,
         )
 
@@ -292,7 +319,22 @@ def export(
             click.echo(f"  Status:      {result.status}")
             if result.alias_uri:
                 click.echo(f"  Alias:       {result.alias_uri} ({result.alias_status})")
+            for receipt in result.hook_receipts:
+                click.echo(f"  Hook:        {receipt.hook_id} ({receipt.status.value})")
 
+    except PostPublishCallbackError as e:
+        click.echo(
+            "Bundle committed, but a required post-publish Hook failed.", err=True
+        )
+        if e.bundle_result is not None:
+            click.echo(f"  Bundle:      {e.bundle_result.canonical_uri}", err=True)
+            click.echo(f"  Manifest:    {e.bundle_result.manifest_uri}", err=True)
+            for receipt in e.receipts:
+                click.echo(
+                    f"  Hook:        {receipt.hook_id} ({receipt.status.value})",
+                    err=True,
+                )
+        sys.exit(1)
     except Exception as e:
         click.echo(f"Export failed: {e}", err=True)
         sys.exit(1)

@@ -217,11 +217,31 @@ BundleExportService.export(result)
      └── ExportValidator.validate(artifact)
            └── integrations/validators/
                  └── onnx_runtime.py        ← ONNX Runtime inference check
-  4. Publisher.publish(bundle)              ← local / S3
-  5. Hook callbacks (MLflow, etc.)
+  4. Publisher.publish(bundle)              ← local / S3 commit
+  5. Re-read committed manifest
+     └── OperationEvent(bundle.published)      ← stable event_id / occurred_at
+  6. InlineHookDispatcher
+     ├── OperationStore.claim_delivery()     ← local lease + idempotency
+     ├── ArtifactAccessor                  ← committed bundle, never staging
+     └── PublicationHook adapter
+           └── MLflowPostPublishHook       ← optional integration boundary
+  7. OperationStore.complete_delivery()
+     └── HookReceipt                       ← succeeded / skipped / failed
   ↓
 BundleRef (manifest_sha256, uri, status)
 ```
+
+Hook execution is synchronous in the current implementation.  `OperationEvent`
+is an in-process delivery contract derived from the committed manifest;
+`ExecutionRecord` and delivery records remain the persisted operation facts.
+An Outbox and asynchronous worker are a future execution policy, not a
+transparent replacement for `InlineHookDispatcher` and not a capability
+provided by this call chain today.
+
+Hook plugins are resolved only when listed in `BundleOutputConfig.hooks`.
+Plugin resolution and option validation happen before planning or staging.  A
+required Hook failure raises `PostPublishCallbackError` with the committed
+`BundleResult` and receipts; it never rolls back the bundle commit.
 
 ### 2. Old Per-Trainer Export (Deprecated)
 

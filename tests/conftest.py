@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import ast
 import importlib
 import os
-from collections.abc import Iterator
+import sys
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -19,7 +21,6 @@ from tests.support.object_storage import S3InfrastructureUnavailable, S3Service
 _TESTS_DIR = Path(__file__).parent
 
 _OPTIONAL_IMPORTS = {
-    "integrations": ["mlflow"],
     "integrations/test_e2e_streaming.py": ["httpx"],
     "serving/test_streaming_http.py": ["httpx"],
     "serving/test_streaming_integration.py": ["httpx"],
@@ -34,11 +35,79 @@ _OPTIONAL_IMPORTS = {
 
 collect_ignore: list[str] = []
 
+
+def _marker_selects_integration(expression: str) -> bool:
+    """Return whether an integration-only test satisfies a marker expression."""
+
+    def evaluate(node: ast.AST) -> bool:
+        if isinstance(node, ast.Expression):
+            return evaluate(node.body)
+        if isinstance(node, ast.Name):
+            return node.id == "integration"
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+            return not evaluate(node.operand)
+        if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.And):
+            return all(evaluate(value) for value in node.values)
+        if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or):
+            return any(evaluate(value) for value in node.values)
+        raise ValueError("unsupported marker expression")
+
+    try:
+        parsed = ast.parse(expression, mode="eval")
+        return evaluate(parsed)
+    except (SyntaxError, ValueError):
+        return False
+
+
+def _mlflow_integration_requested(arguments: Sequence[str] | None = None) -> bool:
+    targets = (
+        (_TESTS_DIR / "integrations/test_e2e_mlflow.py").resolve(),
+        (_TESTS_DIR / "registry/test_integration.py").resolve(),
+    )
+    selected_arguments = list(arguments if arguments is not None else sys.argv[1:])
+    marker_expression: str | None = None
+    for index, argument in enumerate(selected_arguments):
+        if argument.startswith("-m="):
+            marker_expression = argument[3:]
+        elif argument == "-m" and index + 1 < len(selected_arguments):
+            marker_expression = selected_arguments[index + 1]
+
+    if marker_expression is not None:
+        return _marker_selects_integration(marker_expression)
+
+    for argument in selected_arguments:
+        if argument.startswith("-"):
+            continue
+        candidate = argument.split("::", 1)[0]
+        if not candidate:
+            continue
+        selected_path = Path(candidate).resolve()
+        if selected_path in targets:
+            return True
+    return False
+
+
+try:
+    importlib.import_module("mlflow")
+except ImportError:
+    if not _mlflow_integration_requested():
+        collect_ignore.extend(
+            [
+                str(_TESTS_DIR / "integrations/test_e2e_mlflow.py"),
+                str(_TESTS_DIR / "registry/test_integration.py"),
+            ]
+        )
+
 for path, modules in _OPTIONAL_IMPORTS.items():
     for mod in modules:
         try:
             importlib.import_module(mod)
         except ImportError:
+            if (
+                path == "registry/test_integration.py"
+                and _mlflow_integration_requested()
+            ):
+                break
             target = _TESTS_DIR / path
             if target.is_dir():
                 collect_ignore.extend(str(p) for p in target.rglob("*.py"))

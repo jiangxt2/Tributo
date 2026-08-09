@@ -30,6 +30,11 @@ Last updated: 2026-08-09.
 
 ### Training (tributo.training.*)
 
+Callbacks without a public `failure_policy` are best-effort in every normal
+lifecycle phase, including `on_setup_start`. Callbacks that must abort training
+need to declare `failure_policy = "required"`; this is a Beta behavior change
+from the legacy setup-only propagation rule.
+
 | Module | Level | Notes |
 |--------|-------|-------|
 | `tributo.training.config` — `TrainingConfig` | `beta` | Unified training config |
@@ -103,9 +108,11 @@ Last updated: 2026-08-09.
 | `tributo.exporting.validators` | `beta` | Artifact validator runner |
 | `tributo.exporting.registries` | `beta` | Exporter/validator registries |
 | `tributo.exporting.options` | `beta` | Export option models |
-| `tributo.exporting.records` | `beta` | Export record types |
+| `tributo.exporting.records` | `beta` | Export record types; `PublicationAttempt` is read-only legacy compatibility and receives no new writes |
 | `tributo.exporting.gc` | `beta` | Bundle GC |
-| `tributo.exporting.hooks` | `beta` | Export hooks |
+| `tributo.exporting.events` | `beta` | Immutable publication event contract |
+| `tributo.exporting.hooks` | `beta` | Adapter and committed-artifact access contracts |
+| `tributo.exporting.dispatch` | `beta` | Inline Hook dispatch policy |
 | `tributo.exporting.conftest` | `developer` | Test fixtures |
 
 ### Integrations (tributo.integrations.*)

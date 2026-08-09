@@ -26,6 +26,7 @@ class TestMLflowTrackingCallbackInit:
         assert cb._run_name is None
         assert cb._tags is None
         assert cb._raise_on_error is False
+        assert cb.failure_policy == "best_effort"
         assert cb._util is None
         assert cb._run_id is None
 
@@ -41,6 +42,7 @@ class TestMLflowTrackingCallbackInit:
         assert cb._run_name == "run1"
         assert cb._tags == {"team": "ml"}
         assert cb._raise_on_error is True
+        assert cb.failure_policy == "required"
 
 
 class TestOnSetupStart:

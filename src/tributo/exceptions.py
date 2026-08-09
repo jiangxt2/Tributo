@@ -152,12 +152,20 @@ class PostPublishCallbackError(TributoError):
     """Post-publish callback failed after the bundle was already published.
 
     The model is published — this error means the callback (e.g. MLflow)
-    failed, not the export itself.  Carries ``bundle_result``.
+    failed, not the export itself.  Carries ``bundle_result``.  ``receipts``
+    is empty when a post-commit integrity check fails before any Hook delivery
+    can be claimed.
     """
 
-    def __init__(self, message: str, bundle_result: Any = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        bundle_result: Any = None,
+        receipts: tuple[Any, ...] = (),
+    ) -> None:
         super().__init__(message)
         self.bundle_result = bundle_result
+        self.receipts = receipts
 
 
 @PublicAPI(stability="beta")

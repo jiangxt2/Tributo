@@ -36,8 +36,11 @@ from __future__ import annotations
 import logging
 import os
 from importlib.metadata import entry_points
-from typing import Any, TypeGuard
+from typing import Any, TypeGuard, cast
 
+from pydantic import BaseModel
+
+from tributo.exceptions import JobConfigurationError
 from tributo.exporting.models import PluginLoadDiagnostic
 from tributo.exporting.protocols import (
     ExportSourceProvider,
@@ -338,6 +341,81 @@ def _looks_like_exporter(cls: type) -> TypeGuard[type[ModelExporter]]:
         "mutates_source",
     )
     return all(hasattr(cls, a) for a in required_attrs)
+
+
+def resolve_hook_plugin(hook_id: str) -> type[Any]:
+    """Load and validate one explicitly configured hook plugin.
+
+    Unlike general discovery, hook resolution is fail-closed: a configured
+    side effect must never disappear because an entry point failed to import.
+    """
+    enabled = _get_enabled_plugins()
+    if enabled is not None and hook_id not in enabled:
+        raise JobConfigurationError(f"Hook {hook_id!r} is disabled by TRIBUTO_PLUGINS")
+
+    matches = [ep for ep in _iter_entry_points("tributo.hooks") if ep.name == hook_id]
+    if not matches:
+        raise JobConfigurationError(f"Unknown hook_id {hook_id!r}")
+    if len(matches) > 1:
+        raise JobConfigurationError(
+            f"Multiple entry points are registered for hook_id {hook_id!r}"
+        )
+
+    ep = matches[0]
+    try:
+        cls = ep.load()
+    except Exception as exc:
+        raise JobConfigurationError(
+            f"Failed to load hook {hook_id!r} ({type(exc).__name__})"
+        ) from exc
+
+    if not isinstance(cls, type):
+        raise JobConfigurationError(
+            f"Hook entry point {hook_id!r} must resolve to a class implementing "
+            "the PublicationHook v1 contract"
+        )
+    contract_issues = _hook_contract_issues(cls)
+    if contract_issues:
+        legacy_hint = (
+            "; legacy execute(canonical_uri, manifest, options, "
+            "local_bundle_dir) detected; migrate to "
+            "deliver(event, artifacts, options)"
+            if callable(getattr(cls, "execute", None))
+            else ""
+        )
+        raise JobConfigurationError(
+            f"Hook entry point {hook_id!r} does not implement the "
+            "PublicationHook v1 contract; missing or invalid members: "
+            f"{', '.join(contract_issues)}{legacy_hint}"
+        )
+    if not _validate_api_version(cls, 1):
+        raise JobConfigurationError(
+            f"Hook {hook_id!r} has unsupported api_version "
+            f"{getattr(cls, 'api_version', None)!r}; expected 1"
+        )
+    resolved_hook_id = cast(Any, cls).hook_id
+    if resolved_hook_id != ep.name:
+        raise JobConfigurationError(
+            f"Hook entry-point name {ep.name!r} does not match hook_id "
+            f"{resolved_hook_id!r}"
+        )
+    return cls
+
+
+def _hook_contract_issues(cls: type[Any]) -> list[str]:
+    issues: list[str] = []
+    if not hasattr(cls, "api_version"):
+        issues.append("api_version")
+    if not hasattr(cls, "hook_id"):
+        issues.append("hook_id")
+    options_model = getattr(cls, "options_model", None)
+    if not (isinstance(options_model, type) and issubclass(options_model, BaseModel)):
+        issues.append("options_model (BaseModel subclass)")
+    if not callable(getattr(cls, "deliver", None)):
+        issues.append("deliver(event, artifacts, options)")
+    if not callable(getattr(cls, "idempotency_key", None)):
+        issues.append("idempotency_key(event, options)")
+    return issues
 
 
 def _looks_like_source_provider(cls: type) -> TypeGuard[type[ExportSourceProvider]]:
