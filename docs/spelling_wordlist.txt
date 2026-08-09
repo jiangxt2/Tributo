@@ -13,6 +13,7 @@ autodoc
 backend
 backends
 backpressure
+backpropagation
 BaseModel
 BasePredictor
 BaseTrainer
@@ -44,6 +45,7 @@ ConnectorX
 cpus
 CSV
 CsvSourceConfig
+cutover
 Daft
 DaftDataFrameHandle
 dataclass
@@ -56,6 +58,7 @@ DGL
 dicts
 dir
 DNN
+dnn
 Docker
 DistributionVersionEvidence
 deserialize
@@ -111,6 +114,7 @@ jiangxt
 JobConfig
 JobConfigurationError
 JobExecutionError
+joblib
 JobSubmissionError
 JobTimeoutError
 JSON
@@ -168,6 +172,7 @@ ProblemType
 Proto
 protobuf
 ProviderSourceConfig
+pu
 PublicAPI
 pushdown
 py
@@ -200,6 +205,7 @@ SchemaContract
 SDK
 SemVer
 serveable
+sklearn
 SourceProvider
 Sphinx
 SQL

@@ -2,15 +2,24 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
 import pytest
+from click.testing import CliRunner
 
 from tools.check_docs import (
     validate_api_reference,
     validate_cli_reference,
     validate_python_examples,
+    validate_support_matrix,
+)
+from tributo.cli import main
+from tributo.training.catalog import get_algorithm_catalog
+from tributo.training.support_snapshot import (
+    build_algorithm_support_snapshot,
+    snapshot_json_objects,
 )
 
 pytestmark = pytest.mark.integration
@@ -37,6 +46,21 @@ def test_complete_cli_tree_imports_with_real_dependencies() -> None:
 
 def test_documentation_python_examples_compile() -> None:
     assert validate_python_examples(DOCS_ROOT) == []
+
+
+def test_support_matrix_and_cli_share_registry_snapshot() -> None:
+    snapshot = build_algorithm_support_snapshot(get_algorithm_catalog().list_specs())
+    result = CliRunner().invoke(main, ["algo", "list", "--json"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.output) == snapshot_json_objects(snapshot)
+    assert (
+        validate_support_matrix(
+            DOCS_ROOT / "reference" / "support-matrix.md",
+            compare_snapshot=True,
+        )
+        == []
+    )
 
 
 def test_generated_sidebar_contains_global_navigation() -> None:

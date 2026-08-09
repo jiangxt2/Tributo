@@ -12,7 +12,9 @@ on:
       - "pyproject.toml"
       - "requirements-doc.in"
       - "requirements-doc.lock"
+      - "tools/__init__.py"
       - "tools/check_docs.py"
+      - "tools/generate_algorithm_support_matrix.py"
       - "uv.lock"
   workflow_dispatch:
 

@@ -19,8 +19,9 @@ class TestPUTrainingConfig:
         """默认配置应合法。"""
         from tributo.training.pu_trainer import PUTrainingConfig
 
-        cfg = PUTrainingConfig()
+        cfg = PUTrainingConfig(pu={"class_prior": 0.2})
         assert cfg.pu.loss_type == "nnpu"
+        assert cfg.pu.class_prior == 0.2
         assert cfg.pu.class_prior_method == "label_frequency"
         assert cfg.pu.beta == 0.0
         assert cfg.pu.gamma == 1.0
@@ -35,7 +36,7 @@ class TestPUTrainingConfig:
                 "class_prior": 0.15,
                 "class_prior_method": "em",
                 "beta": 0.1,
-                "gamma": 2.0,
+                "gamma": 0.5,
             },
             training={"epochs": 20, "batch_size": 64},
         )
@@ -51,16 +52,53 @@ class TestPUTrainingConfig:
         from tributo.training.pu_trainer import PUTrainingConfig
 
         with pytest.raises(ValidationError):
-            PUTrainingConfig(pu={"loss_type": "invalid"})
+            PUTrainingConfig(pu={"loss_type": "invalid", "class_prior": 0.2})
 
-    def test_invalid_prior_method(self):
-        """无效 class prior 方法应抛异常。"""
+    def test_prior_method_is_compatibility_metadata(self):
+        """Legacy prior-method values are preserved but do not drive training."""
+        from tributo.training.pu_trainer import PUTrainingConfig
+
+        cfg = PUTrainingConfig(
+            pu={"class_prior": 0.2, "class_prior_method": "external_estimator"}
+        )
+
+        assert cfg.pu.class_prior_method == "external_estimator"
+
+    def test_missing_class_prior(self) -> None:
+        """PU training must not silently infer a class prior from observed labels."""
+        from pydantic import ValidationError
+
+        from tributo.training.pu_trainer import PUTrainingConfig
+
+        with pytest.raises(ValidationError, match="class_prior"):
+            PUTrainingConfig()
+
+    @pytest.mark.parametrize(
+        "pu",
+        (
+            {"class_prior": 0.2, "beta": -0.1},
+            {"class_prior": 0.2, "gamma": -0.1},
+            {"class_prior": 0.2, "gamma": 1.1},
+        ),
+    )
+    def test_invalid_correction_parameters(self, pu: dict[str, float]) -> None:
         from pydantic import ValidationError
 
         from tributo.training.pu_trainer import PUTrainingConfig
 
         with pytest.raises(ValidationError):
-            PUTrainingConfig(pu={"class_prior_method": "invalid"})
+            PUTrainingConfig(pu=pu)
+
+    def test_batch_size_one_is_rejected(self) -> None:
+        from pydantic import ValidationError
+
+        from tributo.training.pu_trainer import PUTrainingConfig
+
+        with pytest.raises(ValidationError, match="batch_size"):
+            PUTrainingConfig(
+                pu={"class_prior": 0.2},
+                training={"batch_size": 1},
+            )
 
 
 class TestPUTrainerRegistration:
@@ -73,6 +111,138 @@ class TestPUTrainerRegistration:
         spec = get_trainer("pu")
         assert spec is not None
         assert spec.name == "pu"
+
+
+class TestPUBatchContract:
+    """PU training and validation preserve independent P/U samples."""
+
+    def test_paired_loader_keeps_both_groups_in_sparse_batches(self) -> None:
+        torch = pytest.importorskip("torch")
+
+        from tributo.training.dnn_trainer import build_pu_train_loader
+
+        labels = np.array([1.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        dataset = [
+            {"feature": torch.tensor(float(index)), "label": torch.tensor(label)}
+            for index, label in enumerate(labels)
+        ]
+
+        loader = build_pu_train_loader(
+            dataset,
+            labels,
+            batch_size=4,
+            seed=7,
+        )
+
+        for batch in loader:
+            assert set(batch["label"].tolist()) == {0.0, 1.0}
+
+    def test_paired_loader_uses_absolute_epoch_for_resume(self) -> None:
+        torch = pytest.importorskip("torch")
+
+        from tributo.training.dnn_trainer import build_pu_train_loader
+
+        labels = np.array([1.0, 1.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        dataset = [
+            {"row": torch.tensor(index), "label": torch.tensor(label)}
+            for index, label in enumerate(labels)
+        ]
+        loader = build_pu_train_loader(dataset, labels, batch_size=4, seed=7)
+
+        loader.batch_sampler.set_epoch(3)
+        first = [batch["row"].tolist() for batch in loader]
+        repeated = [batch["row"].tolist() for batch in loader]
+        loader.batch_sampler.set_epoch(3)
+        resumed = [batch["row"].tolist() for batch in loader]
+
+        assert repeated == first
+        assert resumed == first
+
+    def test_stratified_split_preserves_both_groups(self) -> None:
+        from tributo.training.dnn_trainer import split_pu_indices
+
+        labels = np.array([1.0, 1.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        train_indices, val_indices = split_pu_indices(
+            labels,
+            val_size=0.25,
+            seed=42,
+        )
+
+        assert set(labels[train_indices]) == {0.0, 1.0}
+        assert set(labels[val_indices]) == {0.0, 1.0}
+
+    def test_validation_split_rejects_insufficient_positive_rows(self) -> None:
+        from tributo.exceptions import JobConfigurationError
+        from tributo.training.dnn_trainer import split_pu_indices
+
+        labels = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+
+        with pytest.raises(JobConfigurationError, match="val_size=0"):
+            split_pu_indices(labels, val_size=0.25, seed=42)
+
+    @pytest.mark.parametrize("invalid_label", (None, "not-a-number", np.nan))
+    def test_invalid_labels_raise_configuration_error(
+        self, invalid_label: object
+    ) -> None:
+        from tributo.exceptions import JobConfigurationError
+        from tributo.training.dnn_trainer import validate_pu_labels
+
+        labels = np.array([1.0, invalid_label, 0.0], dtype=object)
+
+        with pytest.raises(JobConfigurationError, match="row 1"):
+            validate_pu_labels(labels, split="train")
+
+    def test_split_risk_error_is_classified_as_configuration_error(self) -> None:
+        torch = pytest.importorskip("torch")
+
+        from tributo.exceptions import JobConfigurationError
+        from tributo.training.dnn_trainer import evaluate_pu_split
+        from tributo.training.losses.pu_loss import PULoss
+
+        class ConstantModel:
+            def eval(self) -> None:
+                pass
+
+            def __call__(self, inputs: dict[str, Any]) -> Any:
+                return torch.zeros(2)
+
+        dataloader = [{"label": torch.ones(2)}]
+
+        with pytest.raises(JobConfigurationError, match="Invalid PU evaluation split"):
+            evaluate_pu_split(
+                ConstantModel(),
+                dataloader,
+                PULoss(class_prior=0.2),
+                torch.device("cpu"),
+            )
+
+    @pytest.mark.parametrize("value", (float("nan"), float("inf"), float("-inf")))
+    def test_non_finite_training_metrics_fail_closed(self, value: float) -> None:
+        from tributo.exceptions import JobExecutionError
+        from tributo.training.dnn_trainer import validate_finite_training_metrics
+
+        with pytest.raises(JobExecutionError, match="train_loss"):
+            validate_finite_training_metrics(
+                {"train_loss": value},
+                algorithm="PU",
+            )
+
+    def test_non_default_prior_method_logs_compatibility_warning(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+
+        from tributo.training.dnn_trainer import warn_if_ignored_class_prior_method
+
+        warn_if_ignored_class_prior_method(
+            "em",
+            default_method="label_frequency",
+            config_path="pu.class_prior_method",
+            target_logger=logging.getLogger("tributo.test"),
+        )
+
+        assert "does not trigger class-prior estimation" in caplog.text
 
 
 class TestPUE2E:
@@ -112,8 +282,8 @@ class TestPUE2E:
     def test_pu_training_bce(self):
         """PU 训练（nnPU）→ ONNX 推理。"""
         import torch
-        from torch.utils.data import DataLoader
 
+        from tributo.training.dnn_trainer import build_pu_train_loader
         from tributo.training.features.column_types import (
             DenseFeat,
             NormMethod,
@@ -150,7 +320,9 @@ class TestPUE2E:
             # 4. 创建 Dataset
             dataset = IdentityDataset(processed, labels, features)
             torch_dataset = dataset.to_torch_dataset()
-            dataloader = DataLoader(torch_dataset, batch_size=32, shuffle=True)
+            dataloader = build_pu_train_loader(
+                torch_dataset, labels, batch_size=32, seed=42
+            )
 
             # 5. 创建模型
             model = DNNModel(features, dnn_hidden_units=[32, 16])
@@ -183,9 +355,11 @@ class TestPUE2E:
             )
 
             sample_inputs = {
-                name: np.array([0, 1], dtype=np.int64)
-                if isinstance(f, SparseFeat)
-                else np.array([0.0, 1.0], dtype=np.float32)
+                name: (
+                    np.array([0, 1], dtype=np.int64)
+                    if isinstance(f, SparseFeat)
+                    else np.array([0.0, 1.0], dtype=np.float32)
+                )
                 for name, f in zip(feature_names, features)
             }
 
@@ -221,8 +395,8 @@ class TestPUE2E:
     def test_pu_training_upu(self):
         """PU 训练（uPU）→ ONNX 推理。"""
         import torch
-        from torch.utils.data import DataLoader
 
+        from tributo.training.dnn_trainer import build_pu_train_loader
         from tributo.training.features.column_types import (
             DenseFeat,
             NormMethod,
@@ -252,8 +426,8 @@ class TestPUE2E:
             processed = transformer.fit_transform(data_dict)
 
             dataset = IdentityDataset(processed, labels, features)
-            dataloader = DataLoader(
-                dataset.to_torch_dataset(), batch_size=32, shuffle=True
+            dataloader = build_pu_train_loader(
+                dataset.to_torch_dataset(), labels, batch_size=32, seed=42
             )
 
             model = DNNModel(features, dnn_hidden_units=[32, 16])
@@ -277,9 +451,11 @@ class TestPUE2E:
             )
 
             sample_inputs = {
-                name: np.array([0, 1], dtype=np.int64)
-                if isinstance(f, SparseFeat)
-                else np.array([0.0, 1.0], dtype=np.float32)
+                name: (
+                    np.array([0, 1], dtype=np.int64)
+                    if isinstance(f, SparseFeat)
+                    else np.array([0.0, 1.0], dtype=np.float32)
+                )
                 for name, f in zip(feature_names, features)
             }
             preprocessor_path = tmpdir / "preprocessor.json"
@@ -327,7 +503,7 @@ class TestPUTrainerResourceSafety:
         from tributo.training.pu_trainer import PUTrainingConfig
         from tributo.training.resource import MIB
 
-        cfg = PUTrainingConfig()
+        cfg = PUTrainingConfig(pu={"class_prior": 0.2})
         assert cfg.resource.max_batch_bytes == 64 * MIB
         assert cfg.resource.max_worker_materialization_bytes == 1024 * MIB
         assert cfg.resource.max_input_rows_per_worker is None
@@ -335,22 +511,72 @@ class TestPUTrainerResourceSafety:
     def test_custom_resource_budget(self):
         from tributo.training.pu_trainer import PUTrainingConfig
 
-        cfg = PUTrainingConfig(resource={"max_batch_bytes": 1024})
+        cfg = PUTrainingConfig(
+            pu={"class_prior": 0.2}, resource={"max_batch_bytes": 1024}
+        )
         assert cfg.resource.max_batch_bytes == 1024
 
     def test_num_workers_gt_1_rejected_at_construction(self):
         """构造期拒绝 num_workers > 1（早于任何训练）。"""
-        from tributo.exceptions import JobConfigurationError
-        from tributo.training.pu_trainer import PUTrainerImpl
+        from pydantic import ValidationError
 
-        with pytest.raises(JobConfigurationError, match="num_workers=1"):
-            PUTrainerImpl(datasets={}, config={"ray": {"num_workers": 2}})
+        from tributo.training.pu_trainer import PUTrainingConfig
+
+        with pytest.raises(ValidationError, match="num_workers"):
+            PUTrainingConfig(pu={"class_prior": 0.2}, ray={"num_workers": 2})
 
     def test_num_workers_1_constructs(self):
         from tributo.training.pu_trainer import PUTrainerImpl
 
-        trainer = PUTrainerImpl(datasets={}, config={"ray": {"num_workers": 1}})
+        trainer = PUTrainerImpl(
+            datasets={},
+            config={"pu": {"class_prior": 0.2}, "ray": {"num_workers": 1}},
+        )
         assert trainer._pu_config.ray.num_workers == 1
+
+    def test_worker_loop_rejects_missing_prior_before_data(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Missing class prior fails before opening the configured source."""
+        pytest.importorskip("torch")
+        from types import SimpleNamespace
+
+        import ray.train
+
+        import tributo.training.data_loader as data_loader_mod
+        from tributo.exceptions import JobConfigurationError
+        from tributo.training.pu_trainer import pu_train_loop_per_worker
+
+        monkeypatch.setattr(
+            ray.train,
+            "get_context",
+            lambda: SimpleNamespace(get_world_size=lambda: 1, get_world_rank=lambda: 0),
+        )
+        source_opened = False
+
+        def fail_if_source_opens(_source: object) -> object:
+            nonlocal source_opened
+            source_opened = True
+            raise AssertionError("source must not be opened")
+
+        monkeypatch.setattr(
+            data_loader_mod,
+            "load_ray_dataset_from_source",
+            fail_if_source_opens,
+        )
+        with pytest.raises(JobConfigurationError, match="class_prior"):
+            pu_train_loop_per_worker(
+                {
+                    "data": {"source": {"type": "parquet", "path": "x"}},
+                    "features": [],
+                    "label_col": "label",
+                    "model": {},
+                    "pu": {},
+                    "training": {},
+                    "resource": {},
+                }
+            )
+        assert not source_opened
 
     def test_worker_loop_rejects_world_size_gt_1(self, monkeypatch):
         """worker 入口二次拒绝，早于数据加载。"""
@@ -374,7 +600,7 @@ class TestPUTrainerResourceSafety:
                     "features": [],
                     "label_col": "label",
                     "model": {},
-                    "pu": {},
+                    "pu": {"class_prior": 0.2},
                     "training": {},
                     "resource": {},
                 }
@@ -417,7 +643,7 @@ class TestPUTrainerResourceSafety:
                     "features": [],
                     "label_col": "label",
                     "model": {},
-                    "pu": {},
+                    "pu": {"class_prior": 0.2},
                     "training": {},
                     "resource": {"max_worker_materialization_bytes": 10},
                 }
@@ -462,7 +688,7 @@ class TestPUTrainerResourceSafety:
                     "features": [],
                     "label_col": "label",
                     "model": {},
-                    "pu": {},
+                    "pu": {"class_prior": 0.2},
                     "training": {},
                     "resource": {
                         "max_input_rows_per_worker": 10,
@@ -541,12 +767,16 @@ class TestPUTrainerResourceSafety:
                 ],
                 "label_col": "label",
                 "model": {"dnn_hidden_units": [8]},
-                "pu": {"loss_type": "nnpu"},
+                "pu": {"loss_type": "nnpu", "class_prior": 0.2},
                 "training": {"epochs": 1, "batch_size": 8},
                 "resource": {},  # 默认预算
             }
         )
         assert reported["epoch"] == 1  # 训练完成且 metrics 已上报
+        assert "train_loss" in reported
+        assert "train_optimization_objective" in reported
+        assert "train_observed_label_accuracy" in reported
+        assert reported["train_acc"] == reported["train_observed_label_accuracy"]
 
 
 if __name__ == "__main__":

@@ -33,6 +33,13 @@ STABILITY_MAP: dict[str, str] = {
     "tributo.exceptions": "stable",
     # Core — beta
     "tributo.cli": "beta",
+    # Portable algorithm execution — alpha
+    "tributo.algorithms.api.context": "alpha",
+    "tributo.algorithms.api.errors": "alpha",
+    "tributo.algorithms.api.models": "alpha",
+    "tributo.algorithms.core.builder": "alpha",
+    "tributo.algorithms.spi.execution": "alpha",
+    "tributo.algorithms.spi.input": "alpha",
     # Util — stable
     "tributo.util.annotations": "stable",
     # Training — beta
@@ -101,6 +108,8 @@ STABILITY_MAP: dict[str, str] = {
     "tributo.exporting.hooks": "beta",
     "tributo.exporting.runtime": "beta",
     # Integrations — beta
+    "tributo.integrations.algorithm_inputs": "alpha",
+    "tributo.integrations.algorithm_inputs.ingestion": "alpha",
     "tributo.integrations.exporters": "beta",
     "tributo.integrations.flavors": "beta",
     "tributo.integrations.flavors.onnx_runtime": "beta",

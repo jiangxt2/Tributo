@@ -26,7 +26,11 @@ import time
 from pathlib import Path
 from typing import Any
 
-from tributo.training.algorithm_spec import AlgorithmSpec, DataLoadingMode
+from tributo.training.algorithm_spec import (
+    AlgorithmSpec,
+    DataLoadingMode,
+    require_legacy_trainer_cls,
+)
 from tributo.training.config import (
     resolve_data_source,
     validate_and_normalize_config,
@@ -115,7 +119,11 @@ def run_local_trial(
     logger.info("Running local trial: trainer=%s", trainer_spec.name)
     t0 = time.monotonic()
 
-    trainer = trainer_spec.trainer_cls(datasets=datasets, config=config)
+    trainer_cls = require_legacy_trainer_cls(
+        trainer_spec,
+        consumer="local runner",
+    )
+    trainer = trainer_cls(datasets=datasets, config=config)
     summary = trainer.run(output_path=output_path)
 
     duration = time.monotonic() - t0

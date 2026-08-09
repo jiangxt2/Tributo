@@ -22,6 +22,7 @@ from typing import Any
 
 from tributo._common.dag import topological_order
 from tributo.exceptions import JobConfigurationError
+from tributo.training.algorithm_spec import require_legacy_trainer_cls
 from tributo.util.annotations import PublicAPI
 
 logger = logging.getLogger(__name__)
@@ -297,7 +298,10 @@ class Pipeline:
             spec = get_trainer(step.algorithm)
             step_config = dict(step.config)
             step_config["_pipeline_inputs"] = resolved_inputs
-            trainer_cls = spec.trainer_cls
+            trainer_cls = require_legacy_trainer_cls(
+                spec,
+                consumer="Pipeline runner",
+            )
             trainer = trainer_cls(
                 datasets={},  # pipeline steps receive resolved inputs
                 config=step_config,

@@ -11,11 +11,13 @@ Implementation based on:
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 try:
     import torch
     import torch.nn as nn
+    import torch.nn.functional as F
 
     HAS_TORCH = True
 except ImportError:
@@ -27,6 +29,82 @@ from tributo.util.annotations import PublicAPI  # noqa: E402
 
 if HAS_TORCH:
 
+    def _validate_pu_labels(
+        positive_mask: torch.Tensor,
+        unlabeled_mask: torch.Tensor,
+        *,
+        require_both: bool,
+    ) -> None:
+        """Validate the binary PU label contract for one tensor batch."""
+        if not bool(torch.all(positive_mask | unlabeled_mask)):
+            raise ValueError(
+                "PU labels must contain only 1 (positive) or 0 (unlabeled)"
+            )
+        if require_both and (
+            not bool(positive_mask.any()) or not bool(unlabeled_mask.any())
+        ):
+            raise ValueError(
+                "PU optimization requires every batch to contain both positive "
+                "and unlabeled examples"
+            )
+
+    @dataclass
+    class PURiskAccumulator:
+        """Constant-memory accumulator for a split-level PU empirical risk."""
+
+        class_prior: float
+        loss_type: str
+        positive_loss_sum: float = 0.0
+        positive_as_negative_loss_sum: float = 0.0
+        unlabeled_negative_loss_sum: float = 0.0
+        positive_count: int = 0
+        unlabeled_count: int = 0
+
+        def update(self, logits: torch.Tensor, labels: torch.Tensor) -> None:
+            """Accumulate loss sums without requiring both groups in each batch."""
+            positive_mask = labels == 1
+            unlabeled_mask = labels == 0
+            _validate_pu_labels(
+                positive_mask,
+                unlabeled_mask,
+                require_both=False,
+            )
+
+            positive_count = int(positive_mask.sum().item())
+            unlabeled_count = int(unlabeled_mask.sum().item())
+            if positive_count:
+                self.positive_loss_sum += float(
+                    F.softplus(-logits[positive_mask]).sum().item()
+                )
+                self.positive_as_negative_loss_sum += float(
+                    F.softplus(logits[positive_mask]).sum().item()
+                )
+                self.positive_count += positive_count
+            if unlabeled_count:
+                self.unlabeled_negative_loss_sum += float(
+                    F.softplus(logits[unlabeled_mask]).sum().item()
+                )
+                self.unlabeled_count += unlabeled_count
+
+        def value(self) -> float:
+            """Return the uPU or Eq. 6 nnPU risk over all accumulated rows."""
+            if self.positive_count == 0 or self.unlabeled_count == 0:
+                raise ValueError(
+                    "PU empirical risk requires both positive and unlabeled examples"
+                )
+            positive_risk = self.class_prior * (
+                self.positive_loss_sum / self.positive_count
+            )
+            negative_risk = (
+                self.unlabeled_negative_loss_sum / self.unlabeled_count
+                - self.class_prior
+                * self.positive_as_negative_loss_sum
+                / self.positive_count
+            )
+            if self.loss_type == "nnpu":
+                negative_risk = max(0.0, negative_risk)
+            return positive_risk + negative_risk
+
     @PublicAPI(stability="beta")
     class PULoss(nn.Module):
         """nnPU loss function.
@@ -34,7 +112,8 @@ if HAS_TORCH:
         Non-negative risk estimator for Positive-Unlabeled learning scenarios.
 
         Attributes:
-            class_prior: Proportion of positive examples in unlabeled data (π_p).
+            class_prior: Positive-class prior P(Y=1) in the population
+                distribution (π_p).
             beta: Non-negative constraint threshold to prevent excessive negative risk.
             gamma: Negative risk scaling factor.
             loss_type: Loss type, 'nnpu' or 'upu'.
@@ -50,17 +129,22 @@ if HAS_TORCH:
             """Initialize nnPU loss.
 
             Args:
-                class_prior: Positive class proportion, range (0, 1).
+                class_prior: Positive-class prior P(Y=1) in the population
+                    distribution, range (0, 1).
                 beta: Non-negative constraint threshold.
                 gamma: Negative risk scaling factor.
                 loss_type: 'nnpu' (non-negative) or 'upu' (unbiased).
 
             Raises:
-                ValueError: If class_prior is not in (0, 1).
+                ValueError: If an argument is outside the nnPU contract.
             """
             super().__init__()
             if not 0 < class_prior < 1:
                 raise ValueError(f"class_prior must be in (0, 1), got {class_prior}")
+            if beta < 0:
+                raise ValueError(f"beta must be non-negative, got {beta}")
+            if not 0 <= gamma <= 1:
+                raise ValueError(f"gamma must be in [0, 1], got {gamma}")
             if loss_type not in ("nnpu", "upu"):
                 raise ValueError(f"loss_type must be 'nnpu' or 'upu', got {loss_type}")
 
@@ -82,34 +166,32 @@ if HAS_TORCH:
                 labels: Labels, 1 for positive, 0 for unlabeled.
 
             Returns:
-                Loss value.
+                Optimization surrogate whose backward pass follows Algorithm 1.
+
+            Raises:
+                ValueError: If labels are not binary PU labels or the batch does
+                    not contain both positive and unlabeled examples.
             """
-            # Compute losses for positive and unlabeled samples
             positive_mask = labels == 1
             unlabeled_mask = labels == 0
-
-            # Compute probabilities via sigmoid
-            pos_probs = torch.sigmoid(logits)
-
-            # Positive loss: -log(σ(x))
-            positive_loss = (
-                -torch.log(pos_probs[positive_mask] + 1e-10).mean()
-                if positive_mask.any()
-                else torch.tensor(0.0, device=logits.device)
+            _validate_pu_labels(
+                positive_mask,
+                unlabeled_mask,
+                require_both=True,
             )
 
-            # Unlabeled loss decomposed into positive and negative parts
-            # Positive part: π_p * (-log(1 - σ(x)))
-            # Negative part: -log(1 - σ(x))
-            unlabeled_pos_loss = (
-                -torch.log(1 - pos_probs[unlabeled_mask] + 1e-10).mean()
-                if unlabeled_mask.any()
-                else torch.tensor(0.0, device=logits.device)
-            )
+            # Logistic losses in logit space avoid log(sigmoid(x)) overflow
+            # for large positive or negative logits.
+            positive_losses = F.softplus(-logits)
+            negative_losses = F.softplus(logits)
+            positive_loss = positive_losses[positive_mask].mean()
+            positive_as_negative_loss = negative_losses[positive_mask].mean()
+            unlabeled_negative_loss = negative_losses[unlabeled_mask].mean()
 
-            # Risk estimation
             positive_risk = self.class_prior * positive_loss
-            negative_risk = unlabeled_pos_loss - self.class_prior * unlabeled_pos_loss
+            negative_risk = (
+                unlabeled_negative_loss - self.class_prior * positive_as_negative_loss
+            )
 
             if self.loss_type == "nnpu":
                 # nnPU: non-negative constraint
@@ -122,6 +204,34 @@ if HAS_TORCH:
                 loss = positive_risk + negative_risk
 
             return loss
+
+        def empirical_risk(
+            self,
+            logits: torch.Tensor,
+            labels: torch.Tensor,
+        ) -> torch.Tensor:
+            """Compute the reportable uPU or Eq. 6 nnPU empirical risk."""
+            positive_mask = labels == 1
+            unlabeled_mask = labels == 0
+            _validate_pu_labels(
+                positive_mask,
+                unlabeled_mask,
+                require_both=True,
+            )
+            positive_risk = self.class_prior * F.softplus(-logits[positive_mask]).mean()
+            negative_risk = F.softplus(logits[unlabeled_mask]).mean() - (
+                self.class_prior * F.softplus(logits[positive_mask]).mean()
+            )
+            if self.loss_type == "nnpu":
+                negative_risk = torch.clamp(negative_risk, min=0.0)
+            return positive_risk + negative_risk
+
+        def new_risk_accumulator(self) -> PURiskAccumulator:
+            """Create a split-level accumulator using this loss configuration."""
+            return PURiskAccumulator(
+                class_prior=self.class_prior,
+                loss_type=self.loss_type,
+            )
 
     @PublicAPI(stability="beta")
     def nnpu_loss(
@@ -136,7 +246,7 @@ if HAS_TORCH:
         Args:
             logits: Model output logits.
             labels: Labels, 1 for positive, 0 for unlabeled.
-            class_prior: Positive class proportion.
+            class_prior: Positive-class prior P(Y=1) in the population distribution.
             beta: Non-negative constraint threshold.
             gamma: Negative risk scaling factor.
 

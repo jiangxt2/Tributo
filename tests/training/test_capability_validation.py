@@ -122,7 +122,11 @@ class TestBuiltinSpecs:
         from tributo.training.registry import get_trainer
 
         xgb = get_trainer("xgboost")
-        assert xgb.capabilities == (Capability.TUNABLE, Capability.EXPORTABLE)
+        assert xgb.capabilities == (
+            Capability.TUNABLE,
+            Capability.EXPORTABLE,
+            Capability.DISTRIBUTED,
+        )
 
         pytest.importorskip("torch")
         assert get_trainer("pu").capabilities == (

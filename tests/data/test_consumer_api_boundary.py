@@ -12,6 +12,7 @@ from tributo.util.annotations import get_stability
 
 _SOURCE_ROOT = Path(__file__).resolve().parents[2] / "src" / "tributo"
 _CONSUMER_PATHS = (
+    _SOURCE_ROOT / "algorithms",
     _SOURCE_ROOT / "training",
     _SOURCE_ROOT / "inference",
     _SOURCE_ROOT / "embeddings",

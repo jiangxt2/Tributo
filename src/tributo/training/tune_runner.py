@@ -18,7 +18,11 @@ from ray.tune.search import BasicVariantGenerator
 
 from tributo._common.immutable import deep_thaw
 from tributo.exceptions import JobConfigurationError, JobExecutionError
-from tributo.training.algorithm_spec import AlgorithmSpec, Capability
+from tributo.training.algorithm_spec import (
+    AlgorithmSpec,
+    Capability,
+    require_legacy_trainer_cls,
+)
 from tributo.training.config import (
     apply_dot_overrides,
     validate_and_normalize_config,
@@ -138,7 +142,10 @@ class TuneRunner:
         """
         spec = self._trainer_spec
         effective_base = self._effective_config
-        trainer_cls = spec.trainer_cls
+        trainer_cls = require_legacy_trainer_cls(
+            spec,
+            consumer="TuneRunner",
+        )
 
         def trainable(sampled_values: dict[str, Any]) -> None:
             from ray import tune as ray_tune

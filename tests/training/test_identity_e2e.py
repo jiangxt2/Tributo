@@ -192,8 +192,8 @@ class TestIdentityE2E:
     def test_parquet_to_onnx_pu_learning(self):
         """测试 Parquet → 训练(nnPU) → ONNX 完整流程。"""
         import torch
-        from torch.utils.data import DataLoader
 
+        from tributo.training.dnn_trainer import build_pu_train_loader
         from tributo.training.features.column_types import (
             DenseFeat,
             NormMethod,
@@ -234,7 +234,9 @@ class TestIdentityE2E:
             # 5. 创建 Dataset
             dataset = IdentityDataset(processed, labels, features)
             torch_dataset = dataset.to_torch_dataset()
-            dataloader = DataLoader(torch_dataset, batch_size=32, shuffle=True)
+            dataloader = build_pu_train_loader(
+                torch_dataset, labels, batch_size=32, seed=42
+            )
 
             # 6. 创建模型
             model = DNNModel(features, dnn_hidden_units=[32, 16])

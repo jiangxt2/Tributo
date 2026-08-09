@@ -1098,7 +1098,11 @@ _trainer_spec = AlgorithmSpec(
     ),
     data_modality=("tabular",),
     extras_group="training",
-    capabilities=(Capability.TUNABLE, Capability.EXPORTABLE),
+    capabilities=(
+        Capability.TUNABLE,
+        Capability.EXPORTABLE,
+        Capability.DISTRIBUTED,
+    ),
     data_loading=DataLoadingMode.CANONICAL_DRIVER,
     resource_hints=ResourceHints(gpu_required=False),
     config_model=XGBoostTrainingConfig,

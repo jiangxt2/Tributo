@@ -1,4 +1,4 @@
-"""DNN distributed trainer based on Ray Train TorchTrainer.
+"""Single-worker DNN trainer based on Ray Train TorchTrainer.
 
 Supports Sparse/Dense features, PU Learning, Focal Loss and other identity mining scenarios.
 """
@@ -6,11 +6,15 @@ Supports Sparse/Dense features, PU Learning, Focal Loss and other identity minin
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Literal, Optional
+import math
+import random
+from collections.abc import Iterator, Mapping
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Optional
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from tributo._common.config import StrictConfigModel
+from tributo.exceptions import JobConfigurationError, JobExecutionError
 from tributo.training.algorithm_spec import (
     AlgorithmSpec,
     Capability,
@@ -64,20 +68,37 @@ class FeatureItemConfig(StrictConfigModel):
     )
 
 
+PositiveClassPrior = Annotated[float, Field(gt=0, lt=1)]
+
+
 class PULearningConfig(StrictConfigModel):
     """PU Learning configuration."""
 
     enabled: bool = Field(default=False, description="Whether to enable PU Learning")
-    class_prior: Optional[float] = Field(
+    class_prior: Optional[PositiveClassPrior] = Field(
         default=None,
-        description="Positive class proportion, None for automatic estimation",
+        description=(
+            "Explicit positive class proportion. Required when PU learning is enabled."
+        ),
     )
     class_prior_method: str = Field(
         default="simple",
-        description="Class prior estimation method: simple",
+        description=(
+            "Compatibility metadata only; the trainer does not estimate a class "
+            "prior automatically."
+        ),
     )
-    beta: float = Field(default=0.0, description="Non-negative constraint threshold")
-    gamma: float = Field(default=1.0, description="Negative risk scaling factor")
+    beta: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Non-negative constraint threshold",
+    )
+    gamma: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=1.0,
+        description="Correction-step gradient scale",
+    )
 
 
 class LossConfig(StrictConfigModel):
@@ -120,9 +141,16 @@ class DNNTrainingParams(StrictConfigModel):
 
 
 class DNNRayConfig(StrictConfigModel):
-    """Ray cluster configuration."""
+    """Ray execution configuration.
 
-    num_workers: int = Field(default=2, ge=1)
+    DNN is single-worker until preprocessing, model parameters, metrics,
+    early stopping, and checkpoints are synchronized across workers.
+    """
+
+    num_workers: Literal[1] = Field(
+        default=1,
+        description="Number of workers; only one worker is currently supported",
+    )
     use_gpu: bool = Field(default=False)
     storage_path: Optional[str] = None
     max_failures: int = Field(
@@ -146,7 +174,7 @@ class DNNOutputConfig(StrictConfigModel):
 
 
 class DNNTrainingConfig(StrictConfigModel):
-    """Complete configuration for DNN distributed training."""
+    """Complete configuration for DNN training on Ray."""
 
     data: Any = Field(default=None, description="Data source configuration")
     features: list[FeatureItemConfig] = Field(
@@ -165,6 +193,22 @@ class DNNTrainingConfig(StrictConfigModel):
     output: DNNOutputConfig = Field(default_factory=DNNOutputConfig)
     label_col: str = Field(default="label", description="Label column name")
 
+    @model_validator(mode="after")
+    def validate_pu_loss_contract(self) -> DNNTrainingConfig:
+        """Keep the PU feature flag, loss, and explicit prior consistent."""
+        if self.loss.type == "nnpu":
+            if not self.pu_learning.enabled:
+                raise ValueError("loss.type='nnpu' requires pu_learning.enabled=true")
+            if self.pu_learning.class_prior is None:
+                raise ValueError(
+                    "PU training requires an explicit pu_learning.class_prior"
+                )
+            if self.training.batch_size < 2:
+                raise ValueError("nnPU training requires training.batch_size >= 2")
+        elif self.pu_learning.enabled:
+            raise ValueError("pu_learning.enabled=true requires loss.type='nnpu'")
+        return self
+
 
 # ── Config conversion functions ──
 
@@ -181,6 +225,193 @@ def build_features_from_config(
         List of feature columns.
     """
     return features_from_dicts([cfg.model_dump() for cfg in feature_configs])
+
+
+def validate_pu_labels(labels: Any, *, split: str) -> tuple[list[int], list[int]]:
+    """Validate a PU split and return its positive and unlabeled row indices."""
+    positive_indices: list[int] = []
+    unlabeled_indices: list[int] = []
+    for index, raw_label in enumerate(labels):
+        try:
+            label = float(raw_label)
+        except (TypeError, ValueError) as exc:
+            raise JobConfigurationError(
+                f"PU {split} labels must contain only 1 (positive) or 0 "
+                f"(unlabeled); got non-numeric {type(raw_label).__name__} "
+                f"at row {index}"
+            ) from exc
+        if label == 1.0:
+            positive_indices.append(index)
+        elif label == 0.0:
+            unlabeled_indices.append(index)
+        else:
+            raise JobConfigurationError(
+                f"PU {split} labels must contain only 1 (positive) or 0 "
+                f"(unlabeled); got {label} at row {index}"
+            )
+    if not positive_indices or not unlabeled_indices:
+        raise JobConfigurationError(
+            f"PU {split} split requires both positive and unlabeled examples; "
+            f"got positive={len(positive_indices)}, "
+            f"unlabeled={len(unlabeled_indices)}"
+        )
+    return positive_indices, unlabeled_indices
+
+
+def parse_positive_class_prior(value: Any, *, config_path: str) -> float:
+    """Parse an untyped worker config value using the shared prior contract."""
+    if value is None:
+        raise JobConfigurationError(
+            f"PU training requires an explicit {config_path} in the range (0, 1)"
+        )
+    try:
+        class_prior = float(value)
+    except (TypeError, ValueError) as exc:
+        raise JobConfigurationError(
+            f"{config_path} must be a number in the range (0, 1)"
+        ) from exc
+    if not 0 < class_prior < 1:
+        raise JobConfigurationError(
+            f"{config_path} must be in the range (0, 1), got {class_prior}"
+        )
+    return class_prior
+
+
+def split_pu_indices(
+    labels: Any,
+    *,
+    val_size: float,
+    seed: int,
+) -> tuple[list[int], list[int]]:
+    """Build a deterministic stratified PU train/validation split."""
+    positive_indices, unlabeled_indices = validate_pu_labels(labels, split="input")
+    if val_size <= 0:
+        return positive_indices + unlabeled_indices, []
+    if len(positive_indices) < 2 or len(unlabeled_indices) < 2:
+        raise JobConfigurationError(
+            "PU validation requires at least two positive and two unlabeled "
+            "examples so both train and validation splits preserve the PU contract; "
+            "set training.val_size=0 to disable validation for smaller datasets"
+        )
+
+    rng = random.Random(seed)
+    rng.shuffle(positive_indices)
+    rng.shuffle(unlabeled_indices)
+
+    def _validation_count(count: int) -> int:
+        return max(1, min(count - 1, round(count * val_size)))
+
+    positive_val_count = _validation_count(len(positive_indices))
+    unlabeled_val_count = _validation_count(len(unlabeled_indices))
+    val_indices = (
+        positive_indices[:positive_val_count] + unlabeled_indices[:unlabeled_val_count]
+    )
+    train_indices = (
+        positive_indices[positive_val_count:] + unlabeled_indices[unlabeled_val_count:]
+    )
+    rng.shuffle(train_indices)
+    rng.shuffle(val_indices)
+    return train_indices, val_indices
+
+
+class _PairedPUBatchSampler:
+    """Pair independently shuffled positive and unlabeled mini-batches."""
+
+    def __init__(self, labels: Any, *, batch_size: int, seed: int) -> None:
+        if batch_size < 2:
+            raise JobConfigurationError("PU training requires batch_size >= 2")
+        self._positive, self._unlabeled = validate_pu_labels(labels, split="train")
+        self._positive_batch_size = max(1, batch_size // 2)
+        self._unlabeled_batch_size = batch_size - self._positive_batch_size
+        self._seed = seed
+        self._epoch = 0
+
+    def __len__(self) -> int:
+        positive_batches = (
+            len(self._positive) + self._positive_batch_size - 1
+        ) // self._positive_batch_size
+        unlabeled_batches = (
+            len(self._unlabeled) + self._unlabeled_batch_size - 1
+        ) // self._unlabeled_batch_size
+        return max(positive_batches, unlabeled_batches)
+
+    def set_epoch(self, epoch: int) -> None:
+        """Select the deterministic ordering for an absolute training epoch."""
+        self._epoch = epoch
+
+    def __iter__(self) -> Iterator[list[int]]:
+        rng = random.Random(self._seed + self._epoch)
+        positive = list(self._positive)
+        unlabeled = list(self._unlabeled)
+        rng.shuffle(positive)
+        rng.shuffle(unlabeled)
+
+        for batch_index in range(len(self)):
+            positive_start = batch_index * self._positive_batch_size
+            unlabeled_start = batch_index * self._unlabeled_batch_size
+            batch = [
+                positive[(positive_start + offset) % len(positive)]
+                for offset in range(self._positive_batch_size)
+            ]
+            batch.extend(
+                unlabeled[(unlabeled_start + offset) % len(unlabeled)]
+                for offset in range(self._unlabeled_batch_size)
+            )
+            rng.shuffle(batch)
+            yield batch
+
+
+def build_pu_train_loader(
+    dataset: Any,
+    labels: Any,
+    *,
+    batch_size: int,
+    seed: int,
+) -> Any:
+    """Create a DataLoader whose every training batch contains P and U rows."""
+    from torch.utils.data import DataLoader
+
+    return DataLoader(
+        dataset,
+        batch_sampler=_PairedPUBatchSampler(
+            labels,
+            batch_size=batch_size,
+            seed=seed,
+        ),
+        num_workers=0,
+    )
+
+
+def warn_if_ignored_class_prior_method(
+    method: Any,
+    *,
+    default_method: str,
+    config_path: str,
+    target_logger: logging.Logger,
+) -> None:
+    """Warn when legacy prior-estimation metadata no longer drives training."""
+    if method != default_method:
+        target_logger.warning(
+            "%s=%r is compatibility metadata only and does not trigger "
+            "class-prior estimation; the explicit class_prior value is used",
+            config_path,
+            method,
+        )
+
+
+def validate_finite_training_metrics(
+    metrics: Mapping[str, int | float],
+    *,
+    algorithm: str,
+) -> None:
+    """Reject non-finite metrics before early stopping, reporting, or export."""
+    non_finite = sorted(
+        name for name, value in metrics.items() if not math.isfinite(float(value))
+    )
+    if non_finite:
+        raise JobExecutionError(
+            f"{algorithm} produced non-finite training metrics: {', '.join(non_finite)}"
+        )
 
 
 def build_export_checkpoint_config(
@@ -254,7 +485,7 @@ def build_export_checkpoint_config(
 
 @PublicAPI(stability="beta")
 class DNNTrainerImpl(BaseTrainer):
-    """DNN distributed trainer, the deep learning implementation of BaseTrainer.
+    """Single-worker DNN implementation of BaseTrainer.
 
     Supports Sparse/Dense features, PU Learning, Focal Loss and other identity mining scenarios.
     """
@@ -296,7 +527,7 @@ class DNNTrainerImpl(BaseTrainer):
 
         # Split train/val
         val_size = cfg.training.val_size
-        if val_size > 0:
+        if val_size > 0 and cfg.loss.type != "nnpu":
             train_ds, val_ds = ds.train_test_split(
                 test_size=val_size, seed=cfg.training.seed
             )
@@ -312,7 +543,6 @@ class DNNTrainerImpl(BaseTrainer):
         from ray.train import FailureConfig, RunConfig, ScalingConfig
         from ray.train.torch import TorchTrainer
 
-        from tributo.exceptions import JobConfigurationError
         from tributo.training.checkpoint import (
             checkpoint_config,
             load_initial_checkpoint,
@@ -322,12 +552,6 @@ class DNNTrainerImpl(BaseTrainer):
             ray.init(address="auto", ignore_reinit_error=True)
 
         cfg = self._train_config
-
-        if cfg.ray.resume.effective_enabled and cfg.ray.num_workers != 1:
-            raise JobConfigurationError(
-                "T4-A resume currently supports num_workers=1 only; "
-                "multi-worker checkpoint coordination is deferred to T4-D."
-            )
 
         # Prepare training config
         train_loop_config = {
@@ -465,7 +689,13 @@ class DNNTrainerImpl(BaseTrainer):
             metrics_path = Path(cfg.output.metrics_path)
             metrics_path.parent.mkdir(parents=True, exist_ok=True)
             metrics_path.write_text(
-                json.dumps(metrics, indent=2, ensure_ascii=False, default=str)
+                json.dumps(
+                    metrics,
+                    indent=2,
+                    ensure_ascii=False,
+                    default=str,
+                    allow_nan=False,
+                )
             )
 
         self._summary.update(
@@ -502,19 +732,59 @@ def _forward_step(
     Returns:
         Tuple of (loss_tensor, correct_count, sample_count).
     """
+    logits, labels, correct, total = _predict_step(model, batch, device)
+    loss = criterion(logits, labels)
+    return loss, correct, total
+
+
+def _predict_step(
+    model: Any,
+    batch: dict[str, Any],
+    device: Any,
+) -> tuple[Any, Any, int, int]:
+    """Run inference for one batch and return observed-label statistics."""
     import torch
 
     inputs = {k: v.to(device) for k, v in batch.items() if k != "label"}
     labels = batch["label"].to(device)
 
     logits = model(inputs)
-    loss = criterion(logits, labels)
-
     preds = (torch.sigmoid(logits) > 0.5).float()
     correct = (preds == labels).sum().item()
     total = labels.size(0)
+    return logits, labels, correct, total
 
-    return loss, correct, total
+
+def evaluate_pu_split(
+    model: Any,
+    dataloader: Any,
+    criterion: Any,
+    device: Any,
+) -> tuple[float, float]:
+    """Evaluate one complete PU split without paired-sampler oversampling."""
+    import torch
+
+    risk = criterion.new_risk_accumulator()
+    correct = 0
+    total = 0
+    model.eval()
+    with torch.no_grad():
+        for batch in dataloader:
+            logits, labels, batch_correct, batch_total = _predict_step(
+                model,
+                batch,
+                device,
+            )
+            risk.update(logits, labels)
+            correct += batch_correct
+            total += batch_total
+    if total == 0:
+        raise JobConfigurationError("PU evaluation split must not be empty")
+    try:
+        empirical_risk = risk.value()
+    except ValueError as exc:
+        raise JobConfigurationError(f"Invalid PU evaluation split: {exc}") from exc
+    return empirical_risk, correct / total
 
 
 # ── Training loop (Ray worker level) ──
@@ -554,7 +824,6 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
     from tributo.training.losses.focal_loss import FocalLoss
     from tributo.training.losses.pu_loss import PULoss
     from tributo.training.models.dnn import DNNModel
-    from tributo.training.priors import estimate_class_prior
 
     # Configure logger inside worker
     logger = logging.getLogger(__name__)
@@ -567,14 +836,52 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
     loss_cfg = config.get("loss", {})
     pu_cfg = config.get("pu_learning", {})
     training_cfg = config.get("training", {})
+    context = ray.train.get_context()
+    world_size = context.get_world_size()
+    if world_size != 1:
+        raise JobConfigurationError(
+            "DNN training currently supports a single worker; got "
+            f"world_size={world_size}. Multi-worker execution is disabled until "
+            "preprocessing, DDP metrics, early stopping, and checkpoints are "
+            "coordinated."
+        )
+
+    loss_type = loss_cfg.get("type", "bce")
+    pu_criterion = None
+    if loss_type == "nnpu":
+        if not pu_cfg.get("enabled", False):
+            raise JobConfigurationError(
+                "loss.type='nnpu' requires pu_learning.enabled=true"
+            )
+        class_prior = parse_positive_class_prior(
+            pu_cfg.get("class_prior"),
+            config_path="pu_learning.class_prior",
+        )
+        warn_if_ignored_class_prior_method(
+            pu_cfg.get("class_prior_method", "simple"),
+            default_method="simple",
+            config_path="pu_learning.class_prior_method",
+            target_logger=logger,
+        )
+        try:
+            pu_criterion = PULoss(
+                class_prior=class_prior,
+                beta=float(pu_cfg.get("beta", 0.0)),
+                gamma=float(pu_cfg.get("gamma", 1.0)),
+                loss_type="nnpu",
+            )
+        except (TypeError, ValueError) as exc:
+            raise JobConfigurationError(
+                f"Invalid nnPU loss configuration: {exc}"
+            ) from exc
+    elif pu_cfg.get("enabled", False):
+        raise JobConfigurationError(
+            "pu_learning.enabled=true requires loss.type='nnpu'"
+        )
+
     resume_cfg = ResumeConfig.model_validate(config.get("resume") or {})
     resume_enabled = resume_cfg.effective_enabled
     checkpoint_interval = resume_cfg.checkpoint_interval
-    if resume_enabled and ray.train.get_context().get_world_size() != 1:
-        raise JobConfigurationError(
-            "T4-A resume currently supports num_workers=1 only; "
-            "multi-worker checkpoint coordination is deferred to T4-D."
-        )
     resume_checkpoint = ray.train.get_checkpoint() if resume_enabled else None
     resume_transformer = None
     if resume_checkpoint is not None:
@@ -594,7 +901,18 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
 
     # Get data (StreamSplitDataIterator, must collect via iter_batches)
     train_ds = ray.train.get_dataset_shard("train")
-    val_ds = ray.train.get_dataset_shard("val")
+    try:
+        val_ds = ray.train.get_dataset_shard("val")
+    except KeyError as exc:
+        # Ray Train v2 raises when a dataset key was not passed. nnPU performs
+        # its stratified split inside the worker; supervised losses may omit
+        # the shard only when validation was explicitly disabled.
+        if loss_type != "nnpu" and training_cfg.get("val_size", 0.2) > 0:
+            raise JobConfigurationError(
+                "DNN validation is enabled but Ray Train did not provide the "
+                "'val' dataset shard"
+            ) from exc
+        val_ds = None
 
     # Convert to pandas under the worker materialization budget.
     # train and val share one budget — both frames stay alive together —
@@ -603,7 +921,7 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
     import pandas as pd
 
     budget = ResourceBudget.model_validate(config.get("resource") or {})
-    worker_rank = ray.train.get_context().get_world_rank()
+    worker_rank = context.get_world_rank()
     row_bytes = estimate_row_bytes_from_schema(train_ds.schema())
     preflight_check(
         rows=None,
@@ -661,14 +979,37 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
 
     # Prepare data
     feature_names = [f.name for f in features]
-    train_data = {name: train_df[name].values for name in feature_names}
-    train_labels = train_df[label_col].values.astype(np.float32)
+    all_train_data = {name: train_df[name].values for name in feature_names}
+    all_train_labels = train_df[label_col].values.astype(np.float32)
 
     val_data = None
     val_labels = None
     if val_df is not None:
+        train_data = all_train_data
+        train_labels = all_train_labels
         val_data = {name: val_df[name].values for name in feature_names}
         val_labels = val_df[label_col].values.astype(np.float32)
+        if loss_type == "nnpu":
+            validate_pu_labels(train_labels, split="train")
+            validate_pu_labels(val_labels, split="validation")
+    elif loss_type == "nnpu":
+        train_indices, val_indices = split_pu_indices(
+            all_train_labels,
+            val_size=training_cfg.get("val_size", 0.2),
+            seed=training_cfg.get("seed", 42),
+        )
+        train_data = {
+            name: values[train_indices] for name, values in all_train_data.items()
+        }
+        train_labels = all_train_labels[train_indices]
+        if val_indices:
+            val_data = {
+                name: values[val_indices] for name, values in all_train_data.items()
+            }
+            val_labels = all_train_labels[val_indices]
+    else:
+        train_data = all_train_data
+        train_labels = all_train_labels
 
     # Fit preprocessor
     transformer = resume_transformer or FeatureTransformer(features)
@@ -690,11 +1031,29 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
     # Create DataLoader
     torch_train_dataset = train_dataset.to_torch_dataset()
     batch_size = training_cfg.get("batch_size", 256)
-    train_loader = DataLoader(
-        torch_train_dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=0,
+    if loss_type == "nnpu":
+        train_loader = build_pu_train_loader(
+            torch_train_dataset,
+            train_labels,
+            batch_size=batch_size,
+            seed=training_cfg.get("seed", 42),
+        )
+    else:
+        train_loader = DataLoader(
+            torch_train_dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=0,
+        )
+    pu_train_eval_loader = (
+        DataLoader(
+            torch_train_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=0,
+        )
+        if loss_type == "nnpu"
+        else None
     )
 
     torch_val_dataset = val_dataset.to_torch_dataset() if val_dataset else None
@@ -715,37 +1074,9 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
     model = model.to(device)
 
     # Configure loss function
-    loss_type = loss_cfg.get("type", "bce")
     if loss_type == "nnpu":
-        # PU Learning
-        if pu_cfg.get("enabled", False):
-            class_prior = pu_cfg.get("class_prior")
-            if class_prior is None:
-                # Auto-estimate
-                positive_count = int(train_labels.sum())
-                total_count = len(train_labels)
-                prior_method = pu_cfg.get("class_prior_method", "label_frequency")
-                class_prior = estimate_class_prior(
-                    positive_count,
-                    total_count,
-                    method=prior_method,
-                )
-                logger.info(
-                    "Estimated class_prior: %.4f (method=%s)", class_prior, prior_method
-                )
-
-            criterion = PULoss(
-                class_prior=class_prior,
-                beta=pu_cfg.get("beta", 0.0),
-                gamma=pu_cfg.get("gamma", 1.0),
-                loss_type="nnpu",
-            )
-        else:
-            criterion = PULoss(
-                class_prior=0.5,
-                beta=pu_cfg.get("beta", 0.0),
-                gamma=pu_cfg.get("gamma", 1.0),
-            )
+        assert pu_criterion is not None
+        criterion = pu_criterion
     elif loss_type == "focal":
         criterion = FocalLoss(
             alpha=loss_cfg.get("alpha", 0.25),
@@ -802,7 +1133,9 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
         stop_after_report = False
         # Training phase
         model.train()
-        train_loss = 0.0
+        if loss_type == "nnpu":
+            train_loader.batch_sampler.set_epoch(epoch)
+        train_objective = 0.0
         train_correct = 0
         train_total = 0
 
@@ -812,53 +1145,79 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
             loss.backward()
             optimizer.step()
 
-            train_loss += loss.item() * total
+            train_objective += loss.item() * total
             train_correct += correct
             train_total += total
 
-        train_loss /= train_total
-        train_acc = train_correct / train_total
+        train_objective /= train_total
+        if pu_train_eval_loader is not None:
+            train_loss, train_observed_label_accuracy = evaluate_pu_split(
+                model,
+                pu_train_eval_loader,
+                criterion,
+                device,
+            )
+        else:
+            train_loss = train_objective
+            train_observed_label_accuracy = train_correct / train_total
 
         # Validation phase
         val_loss = 0.0
-        val_acc = 0.0
+        val_observed_label_accuracy = 0.0
         if val_loader is not None:
-            model.eval()
-            val_correct = 0
-            val_total = 0
-
-            with torch.no_grad():
-                for batch in val_loader:
-                    loss, correct, total = _forward_step(
-                        model, batch, criterion, device
-                    )
-                    val_loss += loss.item() * total
-                    val_correct += correct
-                    val_total += total
-
-            val_loss /= val_total
-            val_acc = val_correct / val_total
-
-            # Early stopping check
-            if patience is not None:
-                if val_loss < best_val_loss:
-                    best_val_loss = val_loss
-                    patience_counter = 0
-                else:
-                    patience_counter += 1
-                    if patience_counter >= patience:
-                        logger.info("Early stopping at epoch %d", epoch + 1)
-                        stop_after_report = True
+            if loss_type == "nnpu":
+                val_loss, val_observed_label_accuracy = evaluate_pu_split(
+                    model,
+                    val_loader,
+                    criterion,
+                    device,
+                )
+            else:
+                model.eval()
+                val_correct = 0
+                val_total = 0
+                with torch.no_grad():
+                    for batch in val_loader:
+                        loss, correct, total = _forward_step(
+                            model, batch, criterion, device
+                        )
+                        val_loss += loss.item() * total
+                        val_correct += correct
+                        val_total += total
+                val_loss /= val_total
+                val_observed_label_accuracy = val_correct / val_total
 
         # Report metrics
         metrics = {
             "epoch": epoch + 1,
             "train_loss": train_loss,
-            "train_acc": train_acc,
         }
+        if loss_type == "nnpu":
+            metrics["train_optimization_objective"] = train_objective
+            metrics["train_observed_label_accuracy"] = train_observed_label_accuracy
+            metrics["train_acc"] = train_observed_label_accuracy
+        else:
+            metrics["train_acc"] = train_observed_label_accuracy
         if val_loader is not None:
             metrics["val_loss"] = val_loss
-            metrics["val_acc"] = val_acc
+            if loss_type == "nnpu":
+                metrics["val_observed_label_accuracy"] = val_observed_label_accuracy
+                metrics["val_acc"] = val_observed_label_accuracy
+            else:
+                metrics["val_acc"] = val_observed_label_accuracy
+
+        validate_finite_training_metrics(metrics, algorithm="DNN")
+
+        # Early stopping must never select a checkpoint using NaN or infinity.
+        if val_loader is not None and patience is not None:
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                patience_counter = 0
+            else:
+                patience_counter += 1
+                if patience_counter >= patience:
+                    logger.info("Early stopping at epoch %d", epoch + 1)
+                    stop_after_report = True
 
         should_report = (
             not resume_enabled
@@ -964,7 +1323,7 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
 
 @PublicAPI(stability="beta")
 def run_dnn_training_with_config(config: dict[str, Any]) -> dict[str, Any]:
-    """Run DNN distributed training from a configuration dictionary.
+    """Run single-worker DNN training from a configuration dictionary.
 
     Args:
         config: Training configuration dictionary.
@@ -993,7 +1352,7 @@ def run_dnn_training_with_config(config: dict[str, Any]) -> dict[str, Any]:
 
 @PublicAPI(stability="beta")
 def run_dnn_training_from_json(config_path: str) -> dict[str, Any]:
-    """Run DNN distributed training from a JSON configuration file.
+    """Run single-worker DNN training from a JSON configuration file.
 
     Args:
         config_path: Path to the JSON configuration file.

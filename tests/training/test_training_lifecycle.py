@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from tributo.exceptions import JobConfigurationError
 from tributo.training.algorithm_spec import AlgorithmSpec, DataLoadingMode
 from tributo.training.base import BaseTrainer, TrainerCallback
 from tributo.training.callbacks import CallbackDispatcher
@@ -106,6 +107,21 @@ def _lifecycle(
 
 
 class TestLegacyFlow:
+    def test_local_runner_rejects_portable_registration(self) -> None:
+        spec = AlgorithmSpec(
+            name="portable",
+            trainer_cls=None,
+            data_loading=DataLoadingMode.CANONICAL_TRAINER,
+            operations=("fit",),
+        )
+
+        with pytest.raises(JobConfigurationError, match="portable execution path"):
+            run_local_trial(
+                spec,
+                "/tmp/out",
+                effective_config={"data": {"source": {}}},
+            )
+
     def test_run_orders_events_and_returns_summary(self) -> None:
         trainer = _ExportingTrainer()
         cb = _RecordingCallback()
@@ -528,7 +544,11 @@ class TestTrainerConstructorContract:
         from tributo.training.pu_trainer import PUTrainerImpl
 
         cb = _RecordingCallback()
-        trainer = PUTrainerImpl(datasets={}, config={"features": []}, callbacks=[cb])
+        trainer = PUTrainerImpl(
+            datasets={},
+            config={"features": [], "pu": {"class_prior": 0.2}},
+            callbacks=[cb],
+        )
         assert trainer._callbacks == [cb]
 
     def test_dnn_trainer_accepts_callbacks(self) -> None:
