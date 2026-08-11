@@ -367,7 +367,7 @@ Plugin groups also discovered:
 | External model importers use explicit IDs and normalize to BundleRef | `inference/importers.py`, `integrations/model_importers/` | MLflow and typed ONNX/XGBoost artifacts pass Conformance and real-service IT |
 | Raw-artifact compatibility still exists | `BaseTrainer.run(..., legacy_export=True)` | Removal waits for the documented compatibility window and a separate E4 change |
 | ExportSourceProvider ≠ DataSourceProvider | `exporting/protocols.py` vs `data/provider.py` | The distinct names and ownership prevent model-checkpoint conversion from leaking into data ingestion |
-| Only ONNX has a first-party runtime flavor | `exporting/runtime.py` | UBJ, JSON, Safetensors, and PT2 are exportable/readable artifacts, not automatically batch- or serve-capable models |
+| ONNX Runtime and native XGBoost have first-party runtime flavors | `exporting/runtime.py` | Safetensors and PT2 are readable Bundle artifacts without executable loaders; raw UBJ/JSON load only through the explicit `xgboost-native-v1` flavor |
 | Hook delivery is in-process | `exporting/dispatch.py` | A committed Bundle survives Hook failure, but cross-process retry/recovery needs the separately scoped Outbox design |
 | Transform pushdown optimization has no benchmark evidence; alpha Bindings classify current ETL as residual | `data/transform_compiler.py` | D4 remains NO-GO for pushdown claims |
 | HDFS, Hive, ClickHouse, and Doris have incomplete delivery evidence | Bindings and external packages | Keep them at adapted/unsupported status until their real-infrastructure gates pass |

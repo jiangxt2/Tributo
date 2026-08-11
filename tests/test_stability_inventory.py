@@ -327,7 +327,17 @@ def _documented_stability_modules() -> set[str]:
 def test_stability_map_is_documented() -> None:
     """Every module-level stability declaration must appear in STABILITY.md."""
     documented = _documented_stability_modules()
-    missing = sorted(set(STABILITY_MAP) - documented)
+    # A trailing ``.*`` entry (e.g. ``tributo.integrations.model_importers.*``)
+    # documents every submodule below that prefix.
+    covered: set[str] = set()
+    for pattern in documented:
+        if pattern.endswith(".*"):
+            covered.update(
+                module for module in STABILITY_MAP if module.startswith(pattern[:-1])
+            )
+        else:
+            covered.add(pattern)
+    missing = sorted(set(STABILITY_MAP) - covered)
     assert not missing, (
         "STABILITY_MAP modules missing from docs/STABILITY.md: " + ", ".join(missing)
     )

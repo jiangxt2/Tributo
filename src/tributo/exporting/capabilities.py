@@ -118,6 +118,25 @@ class CapabilityRegistry:
                     format_ids=format_ids,
                 )
             )
+
+        # First-party flavors without a producing exporter (e.g. the
+        # xgboost-native-v1 loader from the upstream inference gate) still
+        # declare read/batch/serve capabilities; they are not exportable.
+        for flavor_id, flavor_cls in sorted(flavor_plugins.items()):
+            if flavor_id in by_flavor:
+                continue
+            entries.append(
+                ArtifactCapability(
+                    flavor_id=flavor_id,
+                    exporter_ids=(),
+                    exportable=False,
+                    readable=True,
+                    batch=bool(getattr(flavor_cls, "batch_supported", False)),
+                    serveable=bool(getattr(flavor_cls, "serveable", False)),
+                    runtime_flavor_id=flavor_id,
+                    format_ids=tuple(getattr(flavor_cls, "supported_formats", ())),
+                )
+            )
         return cls(tuple(entries))
 
     def entries(self) -> tuple[ArtifactCapability, ...]:

@@ -19,6 +19,9 @@ class XGBoostNativeFlavor:
 
     api_version: ClassVar[int] = 1
     flavor_id: ClassVar[str] = "xgboost-native-v1"
+    supported_formats: ClassVar[tuple[str, ...]] = ("ubj", "xgboost-json")
+    batch_supported: ClassVar[bool] = True
+    serveable: ClassVar[bool] = True
     security_mode: ClassVar[str] = SECURITY_MODE_SAFE
     signature_required: ClassVar[bool] = True
     required_dependencies: ClassVar[tuple[str, ...]] = ("xgboost",)
