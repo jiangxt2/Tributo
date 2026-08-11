@@ -186,11 +186,11 @@ def _export_with_transformers_onnx(
     opset: int,
     artifact_dir: Path,
 ) -> Path:
-    """Use ``transformers.onnx`` after the caller's dependency check."""
-    require_dependency(TRANSFORMERS)
-    from transformers.onnx import FeaturesManager, export
-
+    """Use Transformers ONNX for configured HF models, else Torch directly."""
     if hasattr(model, "config"):
+        require_dependency(TRANSFORMERS)
+        from transformers.onnx import FeaturesManager, export
+
         if preprocessor is None:
             raise JobConfigurationError(
                 "Transformers ONNX export requires a preprocessor in "
@@ -201,7 +201,7 @@ def _export_with_transformers_onnx(
             model, feature=task
         )
     else:
-        # Fallback: direct torch.onnx.export with dummy inputs.
+        # The direct fallback does not use the Transformers ONNX module.
         return _export_torch_onnx_fallback(model, artifact_dir, opset)
 
     onnx_path = artifact_dir / "model.onnx"

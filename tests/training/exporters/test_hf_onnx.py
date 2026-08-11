@@ -97,6 +97,8 @@ def test_direct_torch_fallback_does_not_require_preprocessor(
         "tributo.integrations.exporters.hf_onnx.require_dependency",
         lambda dependency: SimpleNamespace(__version__="test"),
     )
+    monkeypatch.setitem(sys.modules, "transformers", None)
+    monkeypatch.setitem(sys.modules, "transformers.onnx", None)
 
     def fake_torch_export(model: object, artifact_dir: Path, opset: int) -> Path:
         del model, artifact_dir, opset
