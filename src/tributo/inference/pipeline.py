@@ -33,6 +33,7 @@ from tributo.data.source_config import (
     RawSourceConfig,
 )
 from tributo.exceptions import JobConfigurationError
+from tributo.inference._credential_safety import credential_paths
 from tributo.util.annotations import PublicAPI
 
 logger = logging.getLogger(__name__)
@@ -63,7 +64,11 @@ class InferenceConfig(BaseModel):
         predictor_config: Passthrough dict for predictor-specific config.
     """
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(
+        frozen=True,
+        extra="forbid",
+        hide_input_in_errors=True,
+    )
 
     source: CanonicalSourceInput | None = None
     input_uri: str | None = Field(default=None, min_length=1)
@@ -153,11 +158,71 @@ class InferenceConfig(BaseModel):
         return self.predictor_config.get("prediction_column", "prediction")
 
 
+class _StrictJsonSection(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+
+class _JsonDataSection(_StrictJsonSection):
+    type: str | None = None
+    uri: str | None = None
+    input: str | None = None
+    format: str | None = None
+    feature_columns: list[str] | None = None
+    s3: dict[str, Any] | None = None
+    source: Any | None = None
+    storage_profile: str | None = None
+    clickhouse: dict[str, Any] | None = None
+    ch_host: str | None = None
+    ch_port: int | None = None
+    ch_database: str | None = None
+    ch_user: str | None = None
+    ch_password: str | None = None
+    ch_sql: str | None = None
+    ch_sql_params: dict[str, Any] | None = None
+
+
+class _JsonModelSection(_StrictJsonSection):
+    uri: str | None = None
+    path: str | None = None
+    bundle_uri: str | None = None
+    role: str = "inference"
+    unsafe: bool = False
+    storage_profile: str | None = None
+    return_probs: bool | None = None
+
+
+class _JsonOutputSection(_StrictJsonSection):
+    uri: str | None = None
+    path: str | None = None
+    prediction_column: str | None = None
+    compression: str = "zstd"
+    min_rows_per_file: int | None = None
+    storage_profile: str | None = None
+
+
+class _JsonRaySection(_StrictJsonSection):
+    concurrency: int = 4
+    batch_size: int = 4096
+    num_cpus_per_actor: float = 1.0
+    num_gpus_per_actor: float = 0.0
+
+
+class _JsonInferenceEnvelope(_StrictJsonSection):
+    data: _JsonDataSection = Field(default_factory=_JsonDataSection)
+    model: _JsonModelSection = Field(default_factory=_JsonModelSection)
+    output: _JsonOutputSection = Field(default_factory=_JsonOutputSection)
+    ray: _JsonRaySection = Field(default_factory=_JsonRaySection)
+    source: Any | None = None
+    source_storage_profile: str | None = None
+    output_storage_profile: str | None = None
+    s3_config: dict[str, str] | None = None
+
+
 def _credential_free_uri(uri: str) -> str:
     """Remove userinfo and query parameters from a display URI."""
     parsed = urlsplit(uri)
     if parsed.hostname is None:
-        return uri
+        return urlunsplit((parsed.scheme, "", parsed.path, "", ""))
     netloc = parsed.hostname
     if parsed.port is not None:
         netloc = f"{netloc}:{parsed.port}"
@@ -176,6 +241,46 @@ def _source_display_uri(source: CanonicalSourceInput) -> str:
     port = f":{source.port}" if source.port is not None else ""
     database = source.database or ""
     return f"{source.dialect}://{host}{port}/{database}"
+
+
+def _source_has_inline_s3_settings(source: CanonicalSourceInput) -> bool:
+    """Return whether a canonical source owns non-empty inline S3 settings."""
+    if isinstance(source, ProviderSourceConfig):
+        if urlsplit(source.uri).scheme.lower() != "s3":
+            return False
+        return bool(source.options.get("s3")) or bool(credential_paths(source.options))
+    s3 = getattr(source, "s3", None)
+    if isinstance(s3, BaseModel):
+        return bool(s3.model_dump(mode="python", exclude_none=True))
+    return bool(s3)
+
+
+def _warn_source_s3_domain_migration(
+    config: InferenceConfig, source: CanonicalSourceInput
+) -> None:
+    """Warn when old source-to-target S3 credential reuse could be expected."""
+    if config.s3_config or not _source_has_inline_s3_settings(source):
+        return
+
+    missing_profiles: list[str] = []
+    model_uri = config.bundle_uri or config.model_uri
+    if (
+        model_uri is not None
+        and urlsplit(model_uri).scheme.lower() == "s3"
+        and config.storage_profile is None
+    ):
+        missing_profiles.append("model.storage_profile")
+    if (
+        urlsplit(config.output_uri).scheme.lower() == "s3"
+        and config.output_storage_profile is None
+    ):
+        missing_profiles.append("output.storage_profile")
+    if missing_profiles:
+        logger.warning(
+            "Canonical source S3 settings are source-only and are not propagated "
+            "to model or result-sink domains; configure %s independently",
+            " and ".join(missing_profiles),
+        )
 
 
 def _legacy_source(config: InferenceConfig) -> CanonicalSourceInput:
@@ -318,6 +423,7 @@ def run_batch_inference(
         predictor_cls = XGBoostONNXPredictor
 
     source = _legacy_source(config)
+    _warn_source_s3_domain_migration(config, source)
     source_columns = source_projection(source)
 
     # The legacy flat S3 field remains a one-window compatibility adapter.
@@ -392,7 +498,7 @@ def run_batch_inference(
         "Starting inference: predictor=%s model=%s concurrency=%d batch_size=%d "
         "cpus_per_actor=%.1f gpus_per_actor=%.1f",
         predictor_cls.__name__,
-        model_ref,
+        _credential_free_uri(model_ref or "<unset>"),
         config.concurrency,
         config.batch_size,
         config.num_cpus_per_actor,
@@ -425,7 +531,9 @@ def run_batch_inference(
         )
 
         # ── 3. Streaming write-back through the independent ResultSink ──
-        logger.info("Writing predictions to %s", config.output_uri)
+        logger.info(
+            "Writing predictions to %s", _credential_free_uri(config.output_uri)
+        )
         sink: ParquetResultSink
         sink_profile = config.output_storage_profile
         if sink_profile is None and legacy_s3_config:
@@ -449,16 +557,23 @@ def run_batch_inference(
     except Exception:
         opened_input.cancel()
         raise
-    opened_input.close()
+    try:
+        opened_input.close()
+    except Exception as exc:
+        logger.warning(
+            "Inference input close failed after result commit (%s); "
+            "preserving completed status",
+            type(exc).__name__,
+        )
 
     logger.info(
         "Batch inference complete: %s → %s",
         _source_display_uri(source),
-        config.output_uri,
+        _credential_free_uri(config.output_uri),
     )
     return {
         "input_path": _source_display_uri(source),
-        "output_path": config.output_uri,
+        "output_path": _credential_free_uri(config.output_uri),
         "status": "completed",
         "rows_written": receipt.rows_written,
     }
@@ -522,35 +637,21 @@ def run_inference_from_json(config_path: str) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise JobConfigurationError("config root must be a mapping")
 
-    data_cfg = raw.get("data", {})
-    model_cfg = raw.get("model", {})
-    output_cfg = raw.get("output", {})
-    ray_cfg = raw.get("ray", {})
-    if not isinstance(data_cfg, dict):
-        raise JobConfigurationError("config.data must be a mapping")
-    if not isinstance(model_cfg, dict):
-        raise JobConfigurationError("config.model must be a mapping")
-    if not isinstance(output_cfg, dict):
-        raise JobConfigurationError("config.output must be a mapping")
-    if not isinstance(ray_cfg, dict):
-        raise JobConfigurationError("config.ray must be a mapping")
+    try:
+        envelope = _JsonInferenceEnvelope.model_validate(raw)
+    except ValidationError as exc:
+        raise JobConfigurationError(
+            f"Invalid inference config: {_validation_message(exc)}"
+        ) from None
+
+    data_cfg = envelope.data.model_dump(exclude_none=True)
+    model_cfg = envelope.model.model_dump(exclude_none=True)
+    output_cfg = envelope.output.model_dump(exclude_none=True)
+    ray_cfg = envelope.ray.model_dump(exclude_none=True)
 
     model_uri = model_cfg.get("uri") or model_cfg.get("path", "")
     bundle_uri = model_cfg.get("bundle_uri")
     output_uri = output_cfg.get("uri") or output_cfg.get("path", "")
-
-    legacy_source_s3 = data_cfg.get("s3")
-    s3_targets = [
-        target
-        for target in (model_uri, bundle_uri, output_uri)
-        if isinstance(target, str) and urlsplit(target).scheme.lower() == "s3"
-    ]
-    if legacy_source_s3 and s3_targets:
-        logger.warning(
-            "data.s3 credentials are source-only and are not propagated to S3 "
-            "model or result-sink domains; configure model.storage_profile and "
-            "output.storage_profile independently"
-        )
 
     if data_cfg.get("input") and not data_cfg.get("uri"):
         logger.warning("data.input is deprecated, use data.uri instead")
@@ -566,7 +667,7 @@ def run_inference_from_json(config_path: str) -> dict[str, Any]:
     if "prediction_column" in output_cfg:
         predictor_config["prediction_column"] = output_cfg["prediction_column"]
 
-    top_level_source = raw.get("source")
+    top_level_source = envelope.source
     nested_source = data_cfg.get("source")
     if top_level_source is not None and nested_source is not None:
         raise JobConfigurationError(
@@ -594,7 +695,9 @@ def run_inference_from_json(config_path: str) -> dict[str, Any]:
         try:
             source = TypeAdapter(CanonicalSourceInput).validate_python(source_payload)
         except ValidationError as e:
-            raise JobConfigurationError(f"Invalid inference config: {e}") from e
+            raise JobConfigurationError(
+                f"Invalid inference config: {_validation_message(e)}"
+            ) from None
     else:
         try:
             source = _legacy_json_source(
@@ -609,7 +712,10 @@ def run_inference_from_json(config_path: str) -> dict[str, Any]:
                 data_cfg.get("feature_columns") or [],
             )
         except (ValidationError, ValueError) as e:
-            raise JobConfigurationError(f"Invalid inference config: {e}") from e
+            detail = (
+                _validation_message(e) if isinstance(e, ValidationError) else str(e)
+            )
+            raise JobConfigurationError(f"Invalid inference config: {detail}") from None
 
     try:
         config = InferenceConfig(
@@ -623,10 +729,10 @@ def run_inference_from_json(config_path: str) -> dict[str, Any]:
             unsafe_model=model_cfg.get("unsafe", False),
             storage_profile=model_cfg.get("storage_profile"),
             source_storage_profile=data_cfg.get("storage_profile")
-            or raw.get("source_storage_profile"),
+            or envelope.source_storage_profile,
             output_storage_profile=output_cfg.get("storage_profile")
-            or raw.get("output_storage_profile"),
-            s3_config=raw.get("s3_config") or {},
+            or envelope.output_storage_profile,
+            s3_config=envelope.s3_config or {},
             feature_columns=[],
             predictor_config=predictor_config,
             batch_size=ray_cfg.get("batch_size", 4096),
@@ -637,6 +743,17 @@ def run_inference_from_json(config_path: str) -> dict[str, Any]:
             min_rows_per_file=output_cfg.get("min_rows_per_file"),
         )
     except (ValidationError, ValueError) as e:
-        raise JobConfigurationError(f"Invalid inference config: {e}") from e
+        detail = _validation_message(e) if isinstance(e, ValidationError) else str(e)
+        raise JobConfigurationError(f"Invalid inference config: {detail}") from None
 
     return run_batch_inference(config)
+
+
+def _validation_message(error: ValidationError) -> str:
+    """Format Pydantic failures without echoing credential-bearing input."""
+    details = error.errors(
+        include_url=False,
+        include_context=False,
+        include_input=False,
+    )
+    return json.dumps(details, sort_keys=True, separators=(",", ":"))

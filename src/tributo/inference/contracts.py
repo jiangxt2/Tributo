@@ -8,15 +8,15 @@ live outside the contract module.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
 from typing import Annotated, Any, ClassVar, Literal, Protocol, Union, runtime_checkable
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from tributo.data import IngestionDescriptor, IngestionPlanReceipt, IngestionRequest
 from tributo.exporting.manifest import ManifestSignature
 from tributo.exporting.models import BundleRef
+from tributo.inference._credential_safety import credential_paths
 from tributo.util.annotations import PublicAPI
 
 
@@ -286,7 +286,7 @@ class InferenceRequest(_FrozenContract):
             raise ValueError(
                 f"result columns collide with retained input columns: {collisions}"
             )
-        paths = _credential_paths(self.model_dump(mode="python"), "request")
+        paths = credential_paths(self.model_dump(mode="python"), "request")
         if paths:
             raise ValueError(
                 "InferenceRequest must not contain plaintext credentials; use "
@@ -357,7 +357,7 @@ class ResolvedInference(_FrozenContract):
 
     @model_validator(mode="after")
     def _preserve_credential_free_transport(self) -> "ResolvedInference":
-        paths = _credential_paths(self.model_dump(mode="python"), "plan")
+        paths = credential_paths(self.model_dump(mode="python"), "plan")
         if paths:
             raise ValueError(
                 "ResolvedInference transport must not contain plaintext "
@@ -379,13 +379,13 @@ class ResultSinkReceipt(_FrozenContract):
     @field_validator("uri")
     @classmethod
     def _credential_free_uri(cls, value: str) -> str:
-        if _credential_paths(value, "receipt.uri"):
+        if credential_paths(value, "receipt.uri"):
             raise ValueError("ResultSinkReceipt.uri must be credential-free")
         return value
 
     @model_validator(mode="after")
     def _credential_free_payload(self) -> "ResultSinkReceipt":
-        paths = _credential_paths(self.model_dump(mode="python"), "receipt")
+        paths = credential_paths(self.model_dump(mode="python"), "receipt")
         if paths:
             raise ValueError(
                 f"ResultSinkReceipt must be credential-free (fields: {sorted(paths)})"
@@ -435,13 +435,21 @@ class InferenceResult(_FrozenContract):
                 raise ValueError("succeeded inference requires an ingestion receipt")
             if self.failure is not None:
                 raise ValueError("succeeded inference cannot carry a failure")
-        if self.status == "failed" and self.failure is None:
-            raise ValueError("failed inference requires a failure diagnostic")
+            if self.retryable:
+                raise ValueError("succeeded inference cannot be retryable")
+        elif self.status == "failed":
+            if self.failure is None:
+                raise ValueError("failed inference requires a failure diagnostic")
+        else:
+            if self.failure is not None:
+                raise ValueError("cancelled inference cannot carry a failure")
+            if self.retryable:
+                raise ValueError("cancelled inference cannot be retryable")
         if self.failure is not None and self.retryable != self.failure.retryable:
             raise ValueError(
                 "InferenceResult.retryable must match FailureDiagnostic.retryable"
             )
-        paths = _credential_paths(self.model_dump(mode="python"), "result")
+        paths = credential_paths(self.model_dump(mode="python"), "result")
         if paths:
             raise ValueError(
                 f"InferenceResult must be credential-free (fields: {sorted(paths)})"
@@ -480,28 +488,6 @@ class ResultSink(Protocol):
     ) -> ResultSinkReceipt: ...
 
 
-_CREDENTIAL_KEYS = frozenset(
-    {
-        "password",
-        "secret",
-        "secretaccesskey",
-        "accesskeyid",
-        "token",
-        "sessiontoken",
-        "credential",
-        "clientsecret",
-        "apikey",
-        "apitoken",
-        "authorization",
-        "cookie",
-        "oauthtoken",
-        "privatekey",
-        "refreshtoken",
-        "setcookie",
-        "authtoken",
-    }
-)
-
 _SUPPORTED_BINDING_DTYPES = frozenset(
     {
         "bool",
@@ -515,17 +501,6 @@ _SUPPORTED_BINDING_DTYPES = frozenset(
     }
 )
 
-_SAFE_CREDENTIAL_LIKE_KEYS = frozenset(
-    {
-        "inputsignature",
-        "outputsignature",
-    }
-)
-
-
-def _normalized_key(value: str) -> str:
-    return "".join(character for character in value.lower() if character.isalnum())
-
 
 def _validate_binding_dtype(value: str | None) -> str | None:
     if value is not None and value not in _SUPPORTED_BINDING_DTYPES:
@@ -534,50 +509,6 @@ def _validate_binding_dtype(value: str | None) -> str | None:
             f"{sorted(_SUPPORTED_BINDING_DTYPES)}"
         )
     return value
-
-
-def _is_credential_key(value: str) -> bool:
-    normalized = _normalized_key(value)
-    if normalized in _SAFE_CREDENTIAL_LIKE_KEYS:
-        return False
-    return (
-        normalized in _CREDENTIAL_KEYS
-        or normalized.startswith(("xamz", "awsaccesskey", "awssecretaccesskey"))
-        or normalized.endswith(
-            (
-                "password",
-                "secret",
-                "token",
-                "credential",
-                "signature",
-                "apikey",
-                "accesskeyid",
-                "secretaccesskey",
-            )
-        )
-    )
-
-
-def _credential_paths(value: Any, path: str = "input") -> set[str]:
-    """Find explicit credential fields without logging their values."""
-    found: set[str] = set()
-    if isinstance(value, Mapping):
-        for key, item in value.items():
-            child = f"{path}.{key}"
-            if item not in (None, "") and _is_credential_key(str(key)):
-                found.add(child)
-            found.update(_credential_paths(item, child))
-    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        for index, item in enumerate(value):
-            found.update(_credential_paths(item, f"{path}[{index}]"))
-    elif isinstance(value, str):
-        parsed = urlsplit(value)
-        if parsed.username is not None or parsed.password is not None:
-            found.add(path)
-        for key, _ in parse_qsl(parsed.query, keep_blank_values=True):
-            if _is_credential_key(key):
-                found.add(path)
-    return found
 
 
 __all__ = [

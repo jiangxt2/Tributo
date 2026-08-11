@@ -13,7 +13,7 @@ from tributo.exceptions import JobConfigurationError, UnsupportedArtifactFormat
 from tributo.exporting.bundle_reader import BundleReader
 from tributo.exporting.manifest import ExportManifest, SignatureField
 from tributo.exporting.models import BundleRef, LogicalArtifact
-from tributo.exporting.runtime import SERVEABLE_FLAVOR_MATRIX
+from tributo.exporting.runtime import FLAVOR_SUPPORT_MATRIX
 from tributo.inference.contracts import (
     ArtifactModelReference,
     BundleModelReference,
@@ -23,13 +23,13 @@ from tributo.inference.contracts import (
     ResolvedInputSelection,
     ResolvedModelSelection,
 )
-from tributo.inference.importers import (
-    ModelImporterRegistry,
-    build_default_model_importer_registry,
-)
 from tributo.inference.input_resolver import (
     IngestionGatewayInputResolver,
     InputResolverPort,
+)
+from tributo.integrations.model_importers import (
+    ModelImporterRegistry,
+    build_default_model_importer_registry,
 )
 from tributo.util.annotations import PublicAPI
 
@@ -183,14 +183,19 @@ def _select_artifact(
     matrix_entry = next(
         (
             entry
-            for entry in SERVEABLE_FLAVOR_MATRIX
+            for entry in FLAVOR_SUPPORT_MATRIX
             if entry.flavor_id == artifact.flavor_id
         ),
         None,
     )
     if matrix_entry is None:
         raise UnsupportedArtifactFormat(
-            f"Flavor {artifact.flavor_id!r} is not in the serveable flavor matrix"
+            f"Flavor {artifact.flavor_id!r} is not in the capability matrix"
+        )
+    if not matrix_entry.batch_inference_capable:
+        raise UnsupportedArtifactFormat(
+            f"Flavor {artifact.flavor_id!r} is readable but does not declare "
+            "batch inference capability"
         )
     if artifact.artifact_kind != matrix_entry.artifact_role:
         raise UnsupportedArtifactFormat(

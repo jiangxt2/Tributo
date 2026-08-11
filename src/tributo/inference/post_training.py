@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from tributo.data import IngestionRequest
 from tributo.exporting.models import BundleRef
+from tributo.inference._credential_safety import credential_paths
 from tributo.inference.api import run_inference
 from tributo.inference.contracts import (
     BundleModelReference,
@@ -23,7 +24,6 @@ from tributo.inference.contracts import (
     OutputBindingSpec,
     ParquetResultSinkRequest,
     RayExecutionPolicy,
-    _credential_paths,
 )
 from tributo.util.annotations import PublicAPI
 
@@ -50,9 +50,7 @@ class PostTrainingInferenceAction(BaseModel):
 
     @model_validator(mode="after")
     def _reject_plaintext_credentials(self) -> "PostTrainingInferenceAction":
-        paths = _credential_paths(
-            self.model_dump(mode="python"), "post_training_action"
-        )
+        paths = credential_paths(self.model_dump(mode="python"), "post_training_action")
         if paths:
             raise ValueError(
                 "PostTrainingInferenceAction must not contain plaintext "

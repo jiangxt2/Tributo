@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 import tempfile
 from pathlib import Path
 from typing import ClassVar, Literal
-from urllib.parse import unquote, urlsplit
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -83,6 +84,7 @@ class ArtifactModelImporter:
             raise ValueError("tributo.artifact requires an artifact reference")
         options = ArtifactImportOptions.model_validate(reference.options)
         entrypoint, variant = _validate_format(reference, options)
+        source_identity = _normalized_source_identity(reference.uri)
         with tempfile.TemporaryDirectory(prefix="tributo-artifact-acquire-") as raw:
             acquired = Path(raw) / entrypoint
             _acquire(reference, acquired, max_bytes=options.max_bytes)
@@ -99,6 +101,12 @@ class ArtifactModelImporter:
                         "External artifact digest mismatch: expected "
                         f"{reference.expected_sha256[:16]}..., got {digest[:16]}..."
                     )
+            source_fingerprint = _artifact_source_fingerprint(
+                reference,
+                variant=variant,
+                source_identity=source_identity,
+                content_digest=digest,
+            )
 
             return publish_model_artifact(
                 files={entrypoint: acquired},
@@ -112,7 +120,7 @@ class ArtifactModelImporter:
                 producer_id=self.provider_id,
                 source_info=ManifestSourceInfo(
                     source_kind="external-artifact",
-                    source_fingerprint=digest,
+                    source_fingerprint=source_fingerprint,
                     framework=(
                         "xgboost" if reference.format_id == "xgboost" else "onnx"
                     ),
@@ -177,12 +185,19 @@ def _acquire(
             path_style=profile.path_style,
             profile_name=profile.profile_name,
         )
-        size = int(client.head_object(Bucket=bucket, Key=key)["ContentLength"])
-        if size > max_bytes:
+        try:
+            size = int(client.head_object(Bucket=bucket, Key=key)["ContentLength"])
+            if size > max_bytes:
+                raise JobConfigurationError(
+                    f"Artifact size {size} exceeds configured limit {max_bytes}"
+                )
+            client.download_file(bucket, key, str(destination))
+        except JobConfigurationError:
+            raise
+        except Exception as exc:
             raise JobConfigurationError(
-                f"Artifact size {size} exceeds configured limit {max_bytes}"
-            )
-        client.download_file(bucket, key, str(destination))
+                f"S3 artifact acquisition failed ({type(exc).__name__})"
+            ) from None
         return
 
     if parsed.scheme.lower() not in {"", "file"}:
@@ -200,6 +215,49 @@ def _acquire(
             f"Artifact size {size} exceeds configured limit {max_bytes}"
         )
     shutil.copyfile(source, destination)
+
+
+def _normalized_source_identity(uri: str) -> str:
+    """Return a credential-free canonical source identity for hashing."""
+    parsed = urlsplit(uri)
+    if parsed.username is not None or parsed.password is not None:
+        raise JobConfigurationError("Artifact URI must not contain credentials")
+    if parsed.query or parsed.fragment:
+        raise JobConfigurationError("Artifact URI must not contain query or fragment")
+    scheme = parsed.scheme.lower()
+    if scheme == "s3":
+        return urlunsplit((scheme, parsed.netloc.lower(), parsed.path, "", ""))
+    if scheme == "file":
+        if parsed.netloc not in {"", "localhost"}:
+            raise JobConfigurationError("file URI must not name a remote host")
+        return Path(unquote(parsed.path)).resolve().as_uri()
+    if not scheme:
+        return Path(uri).resolve().as_uri()
+    raise JobConfigurationError(f"Unsupported artifact URI scheme {scheme!r}")
+
+
+def _artifact_source_fingerprint(
+    reference: ArtifactModelReference,
+    *,
+    variant: str | None,
+    source_identity: str,
+    content_digest: str,
+) -> str:
+    payload = {
+        "provider_id": ArtifactModelImporter.provider_id,
+        "source_identity_sha256": hashlib.sha256(
+            source_identity.encode("utf-8")
+        ).hexdigest(),
+        "content_sha256": content_digest,
+        "format_id": reference.format_id,
+        "flavor_id": reference.flavor_id,
+        "variant": variant,
+        "architecture_id": reference.architecture_id,
+    }
+    encoded = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _sha256(path: Path) -> str:

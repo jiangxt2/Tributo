@@ -4,17 +4,21 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from typing import Any, ClassVar, Protocol
 from urllib.parse import unquote, urlsplit
 
 from tributo._common.storage_profiles import StorageProfile, StorageProfileResolver
 from tributo.data.base import S3Config
 from tributo.exceptions import ResultMaterializationError, ResultWriteError
+from tributo.inference._credential_safety import safe_exception_summary
 from tributo.inference.contracts import (
     ParquetResultSinkRequest,
     ResultSinkReceipt,
 )
 from tributo.util.annotations import PublicAPI
+
+logger = logging.getLogger(__name__)
 
 
 class _StorageProfileResolverLike(Protocol):
@@ -88,6 +92,11 @@ class ParquetResultSink:
         try:
             dataset.write_parquet(output_path, **write_kwargs)
         except Exception as exc:
+            logger.warning(
+                "Parquet result materialization failed (%s): %s",
+                type(exc).__name__,
+                safe_exception_summary(exc),
+            )
             raise ResultMaterializationError(type(exc).__name__) from None
 
         result_id = _result_id(

@@ -26,6 +26,7 @@ DEFAULT_TIMEOUT = 180
 InferenceJobStatus = Literal["pending", "running", "succeeded", "failed", "cancelled"]
 TerminalInferenceJobStatus = Literal["succeeded", "failed", "cancelled"]
 _TERMINAL_RAY_STATUSES = frozenset({"SUCCEEDED", "FAILED", "STOPPED"})
+_MAX_RESOLVED_PLAN_B64_BYTES = 64 * 1024
 _RESERVED_ENV_KEYS = frozenset(
     {
         "TRIBUTO_RUN_ID",
@@ -258,6 +259,12 @@ def _submit_resolved_plan(
     encoded_plan = base64.urlsafe_b64encode(
         plan.model_dump_json().encode("utf-8")
     ).decode("ascii")
+    encoded_plan_size = len(encoded_plan.encode("ascii"))
+    if encoded_plan_size > _MAX_RESOLVED_PLAN_B64_BYTES:
+        raise ValueError(
+            "Resolved inference plan exceeds the 65536-byte Ray Jobs "
+            "environment transport limit"
+        )
     job_env = dict(env_vars or {})
     job_env.update(
         {

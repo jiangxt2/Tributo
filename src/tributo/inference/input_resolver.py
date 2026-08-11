@@ -17,6 +17,7 @@ from tributo.data import (
 )
 from tributo.exceptions import DataSourceError, JobConfigurationError
 from tributo.inference.contracts import ResolvedInputSelection
+from tributo.util.annotations import PublicAPI
 
 if TYPE_CHECKING:
     import ray.data
@@ -32,6 +33,7 @@ class _IngestionGatewayLike(Protocol):
     ) -> IngestionOpenResult: ...
 
 
+@PublicAPI(stability="alpha")
 @dataclass(frozen=True)
 class OpenedInferenceInput:
     """Ray Dataset plus ingestion provenance and delegated lifecycle."""
@@ -50,6 +52,7 @@ class OpenedInferenceInput:
 
 
 @runtime_checkable
+@PublicAPI(stability="alpha")
 class InputResolverPort(Protocol):
     """Inference-owned boundary for describing and opening bounded input."""
 
@@ -58,6 +61,7 @@ class InputResolverPort(Protocol):
     def open(self, selection: ResolvedInputSelection) -> OpenedInferenceInput: ...
 
 
+@PublicAPI(stability="alpha")
 class IngestionGatewayInputResolver:
     """Pin and open explicit Ray ingestion through the public Data facade."""
 

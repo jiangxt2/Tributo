@@ -63,8 +63,8 @@ def main(args: argparse.Namespace | None = None) -> int:
             result_for_log = run_inference_from_json(args.config)
         logger.info("Inference completed: %s", result_for_log)
         return 0
-    except Exception:
-        logger.exception("Inference job failed")
+    except Exception as exc:
+        logger.error("Inference job failed (%s)", type(exc).__name__)
         return 1
 
 

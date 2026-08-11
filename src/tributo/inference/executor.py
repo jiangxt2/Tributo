@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import ClassVar, Literal, TypedDict
 
 from tributo.data import IngestionPlanReceipt
@@ -20,6 +21,8 @@ from tributo.inference.input_resolver import (
     OpenedInferenceInput,
 )
 from tributo.util.annotations import PublicAPI
+
+logger = logging.getLogger(__name__)
 
 
 @PublicAPI(stability="alpha")
@@ -113,12 +116,10 @@ class RayMapBatchesExecutor:
         try:
             opened.close()
         except Exception as exc:
-            return _failed_result(
-                plan,
-                phase="execution",
-                exc=exc,
-                ingestion_receipt=opened.receipt,
-                sink_receipt=receipt,
+            logger.warning(
+                "Inference input close failed after result commit (%s); "
+                "preserving succeeded status",
+                type(exc).__name__,
             )
 
         return InferenceResult(

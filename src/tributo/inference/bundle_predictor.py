@@ -33,6 +33,7 @@ class BundleBatchPredictor:
             storage_profile=model.storage_profile,
             unsafe=model.unsafe,
             expected_manifest_sha256=model.bundle_ref.manifest_sha256,
+            use_case="batch",
         )
 
     def __call__(self, batch: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
