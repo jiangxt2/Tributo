@@ -145,6 +145,7 @@ class BundleArtifactAccessor:
                     artifact_name=artifact.name,
                     storage_profile=self._storage_profile,
                     manifest=manifest,
+                    manifest_bytes=self._manifest_bytes,
                 ) as resolved:
                     for artifact_file in artifact.files:
                         source = resolved.path_for(artifact_file.relative_path)

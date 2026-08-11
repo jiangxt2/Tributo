@@ -220,6 +220,7 @@ class ExportManager:
 
             execution_started = True
             start_ms = int(time.time() * 1000)
+            failure_category = "export"
 
             try:
                 # -- Setup staging --
@@ -294,6 +295,7 @@ class ExportManager:
                 resolved_artifacts[node_id] = ra
 
                 # -- Validator chain --
+                failure_category = "validation"
                 validation_results: list[ValidationResult] = []
                 for vb in node.validator_bindings:
                     try:
@@ -322,6 +324,7 @@ class ExportManager:
                             raise
 
                 # Attach validation results to artifact.
+                failure_category = "export"
                 validated = LogicalArtifact(
                     name=artifact.name,
                     format=artifact.format,
@@ -364,7 +367,7 @@ class ExportManager:
 
                 failure = FailureInfo(
                     code=type(exc).__name__,
-                    category="export",
+                    category=failure_category,
                     message=sanitize_error_message(str(exc))[:4096],
                     retryable=False,
                 )

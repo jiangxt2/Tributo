@@ -667,15 +667,16 @@ class TestRuntimeLifecycle:
             def __init__(self) -> None:
                 self.exits: list[bool] = []
 
-            def read_manifest(
+            def read_manifest_with_bytes(
                 self, manifest_or_bundle_uri: str, *, storage_profile: str | None = None
-            ) -> Any:
+            ) -> tuple[Any, bytes]:
                 import json
 
                 from tributo.exporting.manifest import _read_manifest_v1
 
-                raw = json.loads((tmp_path / "bundle" / "manifest.json").read_text())
-                return _read_manifest_v1(raw, b"")
+                manifest_bytes = (tmp_path / "bundle" / "manifest.json").read_bytes()
+                raw = json.loads(manifest_bytes)
+                return _read_manifest_v1(raw, manifest_bytes), manifest_bytes
 
             def open_artifact(
                 self,
@@ -685,6 +686,7 @@ class TestRuntimeLifecycle:
                 artifact_name: str | None = None,
                 storage_profile: str | None = None,
                 manifest: Any = None,
+                manifest_bytes: bytes | None = None,
             ) -> Any:
                 from contextlib import contextmanager
 

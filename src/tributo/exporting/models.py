@@ -196,9 +196,10 @@ class ExportTarget(BaseModel):
 class BundleOutputConfig(BaseModel):
     """Top-level configuration for multi-format bundle export.
 
-    When ``targets`` is ``None`` the system operates in legacy single-path
-    mode.  When ``targets`` is non-empty the system operates in bundle mode
-    and ``bundle_uri`` is required.
+    First-party training lifecycles fill in their standard targets when
+    ``targets`` is ``None``. Direct ``BundleExportService`` callers must
+    provide targets explicitly. Whenever targets are present, ``bundle_uri``
+    is required.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -224,7 +225,9 @@ class BundleOutputConfig(BaseModel):
     roles: dict[str, str] = Field(default_factory=dict)
     hooks: tuple[HookBinding, ...] = ()
     targets: list[ExportTarget] | None = Field(
-        default=None, min_length=1, description="None = legacy mode"
+        default=None,
+        min_length=1,
+        description="None lets a first-party training lifecycle select defaults",
     )
 
     @model_validator(mode="after")
@@ -285,14 +288,15 @@ class BundleOutputConfig(BaseModel):
                 raise ValueError("s3:// URI must not contain credentials")
             if "?" in rest or "#" in rest:
                 raise ValueError("s3:// URI must not contain query or fragment")
-            return v
+            return v.rstrip("/")
         if v.startswith("file://"):
             path = v[7:]
             if not path or path == "/":
                 raise ValueError("file:// URI must not point to filesystem root")
             if not Path(v[7:]).is_absolute():
                 raise ValueError(f"file:// URI must be an absolute path, got {v!r}")
-            return v
+            resolved = Path(path).resolve()
+            return f"file://{resolved}"
         if v.startswith("/") or v.startswith("./") or v.startswith("../"):
             # Reject paths that resolve to filesystem root.
             from pathlib import Path as _Path
@@ -300,7 +304,7 @@ class BundleOutputConfig(BaseModel):
             resolved = _Path(v).resolve()
             if resolved == _Path("/"):
                 raise ValueError("bundle_uri must not point to filesystem root")
-            return v
+            return str(resolved)
         raise ValueError(
             f"bundle_uri must be s3://, file://, or a local path, got {v!r}"
         )
@@ -667,6 +671,7 @@ class BundleResult(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     bundle_id: str
+    execution_id: str | None = None
     canonical_uri: str
     manifest_uri: str
     manifest_sha256: str = Field(min_length=64, max_length=64)

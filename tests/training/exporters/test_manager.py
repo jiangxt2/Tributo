@@ -623,3 +623,6 @@ class TestValidatorChain:
         mgr = ExportManager(er2, vr2)
         result = mgr.execute(plan, _make_source(), tmp_path / "staging", "exec-1")
         assert result.status == "failed"
+        failure = result.node_results[0].failure
+        assert failure is not None
+        assert failure.category == "validation"

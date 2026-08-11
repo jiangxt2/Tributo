@@ -94,6 +94,7 @@ class BundleReaderLike(Protocol):
         artifact_name: str | None = None,
         storage_profile: str | None = None,
         manifest: ExportManifest | None = None,
+        manifest_bytes: bytes | None = None,
     ) -> Any: ...
 
 
@@ -387,14 +388,10 @@ class BundleModelLoader:
             ModelLoadError: A required dependency is missing or the
                 model file could not be loaded.
         """
-        if expected_manifest_sha256 is None:
-            manifest = self._reader.read_manifest(
-                bundle_uri, storage_profile=storage_profile
-            )
-        else:
-            manifest, manifest_bytes = self._reader.read_manifest_with_bytes(
-                bundle_uri, storage_profile=storage_profile
-            )
+        manifest, manifest_bytes = self._reader.read_manifest_with_bytes(
+            bundle_uri, storage_profile=storage_profile
+        )
+        if expected_manifest_sha256 is not None:
             actual_manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
             if actual_manifest_sha256 != expected_manifest_sha256:
                 raise ModelLoadError(
@@ -476,6 +473,7 @@ class BundleModelLoader:
                     # against a freshly re-read one would create a TOCTOU
                     # window (validation sees manifest A, loading sees B).
                     manifest=manifest,
+                    manifest_bytes=manifest_bytes,
                 )
             )
             flavor = flavor_cls()
@@ -494,6 +492,7 @@ class BundleModelLoader:
         return BundleModelRuntime(
             reader=self._reader,
             manifest=manifest,
+            manifest_bytes=manifest_bytes,
             artifact=artifact,
             resolved_artifact=resolved,
             model=model,
@@ -522,6 +521,7 @@ class BundleModelRuntime:
         *,
         reader: BundleReaderLike,
         manifest: ExportManifest,
+        manifest_bytes: bytes,
         artifact: LogicalArtifact,
         resolved_artifact: ResolvedArtifact,
         model: BundleModel,
@@ -531,6 +531,7 @@ class BundleModelRuntime:
     ) -> None:
         self._reader = reader
         self._manifest = manifest
+        self._manifest_bytes = manifest_bytes
         self._artifact = artifact
         self._resolved = resolved_artifact
         self._model = model
@@ -577,6 +578,11 @@ class BundleModelRuntime:
     def manifest(self) -> ExportManifest:
         """The verified bundle manifest."""
         return self._manifest
+
+    @property
+    def manifest_bytes(self) -> bytes:
+        """Exact committed manifest bytes verified while opening the bundle."""
+        return self._manifest_bytes
 
     @property
     def artifact(self) -> LogicalArtifact:

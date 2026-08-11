@@ -499,3 +499,340 @@ def test_local_alias_compare_and_set_serializes_concurrent_writers(
         statuses = list(executor.map(update, candidates))
 
     assert sorted(statuses) == ["failed", "updated"]
+
+
+def test_gc_rechecks_manifest_after_acquiring_lease(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from botocore.exceptions import ClientError as _ClientError
+
+    from tributo.integrations.storage import gc
+
+    bundle_id = "bundle-" + "a" * 32
+    manifest_key = f"models/{bundle_id}/manifest.json"
+
+    class _Exceptions:
+        ClientError = _ClientError
+
+    class _Paginator:
+        def paginate(self, **kwargs):
+            del kwargs
+            return [{"CommonPrefixes": [{"Prefix": f"models/{bundle_id}/"}]}]
+
+    class _Client:
+        exceptions = _Exceptions()
+
+        def __init__(self) -> None:
+            self.head_calls = 0
+
+        def get_paginator(self, name):
+            assert name == "list_objects_v2"
+            return _Paginator()
+
+        def head_object(self, **kwargs):
+            assert kwargs["Key"] == manifest_key
+            self.head_calls += 1
+            if self.head_calls == 1:
+                raise _ClientError(
+                    {"Error": {"Code": "404", "Message": "missing"}}, "HeadObject"
+                )
+            return {"ContentLength": 1}
+
+    client = _Client()
+    deleted: list[str] = []
+    released: list[str] = []
+    monkeypatch.setattr(gc, "_make_client", lambda *args: client)
+    monkeypatch.setattr(gc, "_check_orphan_age", lambda *args: True)
+    monkeypatch.setattr(gc, "_acquire_gc_lease", lambda *args: "lease-key")
+    monkeypatch.setattr(
+        gc, "_delete_prefix_safely", lambda *args: deleted.append(args[-1])
+    )
+    monkeypatch.setattr(
+        gc, "_release_gc_lease", lambda *args: released.append(args[-2])
+    )
+
+    result = gc.S3BundleGarbageCollector().collect(
+        "s3://bucket/models", orphan_ttl_seconds=0, dry_run=False
+    )
+
+    assert result["deleted"] == 0
+    assert deleted == []
+    assert released == ["lease-key"]
+
+
+def test_gc_warns_when_scanning_bucket_root(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from tributo.integrations.storage import gc
+
+    class _Paginator:
+        def paginate(self, **kwargs):
+            assert kwargs == {"Bucket": "bucket", "Prefix": "", "Delimiter": "/"}
+            return []
+
+    class _Client:
+        def get_paginator(self, name):
+            assert name == "list_objects_v2"
+            return _Paginator()
+
+    monkeypatch.setattr(gc, "_make_client", lambda *args: _Client())
+
+    with caplog.at_level("WARNING"):
+        result = gc.S3BundleGarbageCollector().collect("s3://bucket")
+
+    assert result["scanned"] == 0
+    assert "exact store root used by Publisher" in caplog.text
+
+
+def test_gc_skips_orphan_when_publish_lease_is_held(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from botocore.exceptions import ClientError as _ClientError
+
+    from tributo.integrations.storage import gc
+
+    bundle_id = "bundle-" + "f" * 32
+
+    class _Exceptions:
+        ClientError = _ClientError
+
+    class _Paginator:
+        def paginate(self, **kwargs):
+            del kwargs
+            return [{"CommonPrefixes": [{"Prefix": f"models/{bundle_id}/"}]}]
+
+    class _Client:
+        exceptions = _Exceptions()
+
+        def get_paginator(self, name):
+            assert name == "list_objects_v2"
+            return _Paginator()
+
+        def head_object(self, **kwargs):
+            del kwargs
+            raise _ClientError(
+                {"Error": {"Code": "404", "Message": "missing"}}, "HeadObject"
+            )
+
+    deleted: list[str] = []
+    released: list[str] = []
+    monkeypatch.setattr(gc, "_make_client", lambda *args: _Client())
+    monkeypatch.setattr(gc, "_check_orphan_age", lambda *args: True)
+    monkeypatch.setattr(gc, "_acquire_gc_lease", lambda *args: None)
+    monkeypatch.setattr(
+        gc, "_delete_prefix_safely", lambda *args: deleted.append(args[-1])
+    )
+    monkeypatch.setattr(
+        gc, "_release_gc_lease", lambda *args: released.append(args[-2])
+    )
+
+    result = gc.S3BundleGarbageCollector().collect(
+        "s3://bucket/models", orphan_ttl_seconds=0, dry_run=False
+    )
+
+    assert result["deleted"] == 0
+    assert result["errors"] == []
+    assert deleted == []
+    assert released == []
+
+
+def test_gc_rechecks_age_after_acquiring_lease(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from botocore.exceptions import ClientError as _ClientError
+
+    from tributo.integrations.storage import gc
+
+    bundle_id = "bundle-" + "e" * 32
+
+    class _Exceptions:
+        ClientError = _ClientError
+
+    class _Paginator:
+        def paginate(self, **kwargs):
+            del kwargs
+            return [{"CommonPrefixes": [{"Prefix": f"models/{bundle_id}/"}]}]
+
+    class _Client:
+        exceptions = _Exceptions()
+
+        def get_paginator(self, name):
+            assert name == "list_objects_v2"
+            return _Paginator()
+
+        def head_object(self, **kwargs):
+            del kwargs
+            raise _ClientError(
+                {"Error": {"Code": "404", "Message": "missing"}}, "HeadObject"
+            )
+
+    age_checks = iter((True, False))
+    deleted: list[str] = []
+    released: list[str] = []
+    monkeypatch.setattr(gc, "_make_client", lambda *args: _Client())
+    monkeypatch.setattr(gc, "_check_orphan_age", lambda *args: next(age_checks))
+    monkeypatch.setattr(gc, "_acquire_gc_lease", lambda *args: "lease-key")
+    monkeypatch.setattr(
+        gc, "_delete_prefix_safely", lambda *args: deleted.append(args[-1])
+    )
+    monkeypatch.setattr(
+        gc, "_release_gc_lease", lambda *args: released.append(args[-2])
+    )
+
+    result = gc.S3BundleGarbageCollector().collect(
+        "s3://bucket/models", orphan_ttl_seconds=60, dry_run=False
+    )
+
+    assert result["deleted"] == 0
+    assert deleted == []
+    assert released == ["lease-key"]
+
+
+def test_gc_releases_lease_when_delete_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    from botocore.exceptions import ClientError as _ClientError
+
+    from tributo.integrations.storage import gc
+
+    bundle_id = "bundle-" + "b" * 32
+
+    class _Exceptions:
+        ClientError = _ClientError
+
+    class _Paginator:
+        def paginate(self, **kwargs):
+            del kwargs
+            return [{"CommonPrefixes": [{"Prefix": f"models/{bundle_id}/"}]}]
+
+    class _Client:
+        exceptions = _Exceptions()
+
+        def get_paginator(self, name):
+            assert name == "list_objects_v2"
+            return _Paginator()
+
+        def head_object(self, **kwargs):
+            del kwargs
+            raise _ClientError(
+                {"Error": {"Code": "404", "Message": "missing"}}, "HeadObject"
+            )
+
+    released: list[str] = []
+    monkeypatch.setattr(gc, "_make_client", lambda *args: _Client())
+    monkeypatch.setattr(gc, "_check_orphan_age", lambda *args: True)
+    monkeypatch.setattr(gc, "_acquire_gc_lease", lambda *args: "lease-key")
+    monkeypatch.setattr(
+        gc,
+        "_delete_prefix_safely",
+        lambda *args: (_ for _ in ()).throw(RuntimeError("delete failed")),
+    )
+    monkeypatch.setattr(
+        gc, "_release_gc_lease", lambda *args: released.append(args[-2])
+    )
+
+    result = gc.S3BundleGarbageCollector().collect(
+        "s3://bucket/models", orphan_ttl_seconds=0, dry_run=False
+    )
+
+    assert result["deleted"] == 0
+    assert result["errors"] and "delete failed" in result["errors"][0]
+    assert released == ["lease-key"]
+
+
+def test_gc_reports_partial_delete_response_as_failure() -> None:
+    from tributo.integrations.storage import gc
+
+    class _Paginator:
+        def paginate(self, **kwargs):
+            del kwargs
+            return [
+                {
+                    "Contents": [
+                        {"Key": "models/bundle-a/model.onnx"},
+                        {"Key": "models/bundle-a/manifest.tmp"},
+                    ]
+                }
+            ]
+
+    class _Client:
+        def get_paginator(self, name):
+            assert name == "list_objects_v2"
+            return _Paginator()
+
+        def delete_objects(self, **kwargs):
+            assert len(kwargs["Delete"]["Objects"]) == 2
+            return {
+                "Deleted": [{"Key": "models/bundle-a/model.onnx"}],
+                "Errors": [
+                    {
+                        "Key": "models/bundle-a/manifest.tmp",
+                        "Code": "AccessDenied",
+                    }
+                ],
+            }
+
+    with pytest.raises(RuntimeError, match="AccessDenied"):
+        gc._delete_prefix_safely(_Client(), "bucket", "models/bundle-a/")
+
+
+def test_gc_does_not_reuse_previous_lease_when_next_acquire_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from botocore.exceptions import ClientError as _ClientError
+
+    from tributo.integrations.storage import gc
+
+    bundle_ids = ["bundle-" + "c" * 32, "bundle-" + "d" * 32]
+
+    class _Exceptions:
+        ClientError = _ClientError
+
+    class _Paginator:
+        def paginate(self, **kwargs):
+            del kwargs
+            return [
+                {
+                    "CommonPrefixes": [
+                        {"Prefix": f"models/{bundle_id}/"} for bundle_id in bundle_ids
+                    ]
+                }
+            ]
+
+    class _Client:
+        exceptions = _Exceptions()
+
+        def get_paginator(self, name):
+            assert name == "list_objects_v2"
+            return _Paginator()
+
+        def head_object(self, **kwargs):
+            del kwargs
+            raise _ClientError(
+                {"Error": {"Code": "404", "Message": "missing"}}, "HeadObject"
+            )
+
+    acquire_calls = 0
+
+    def acquire(*args):
+        nonlocal acquire_calls
+        del args
+        acquire_calls += 1
+        if acquire_calls == 1:
+            return "first-lease"
+        raise RuntimeError("acquire failed")
+
+    released: list[str] = []
+    monkeypatch.setattr(gc, "_make_client", lambda *args: _Client())
+    monkeypatch.setattr(gc, "_check_orphan_age", lambda *args: True)
+    monkeypatch.setattr(gc, "_acquire_gc_lease", acquire)
+    monkeypatch.setattr(gc, "_delete_prefix_safely", lambda *args: None)
+    monkeypatch.setattr(
+        gc, "_release_gc_lease", lambda *args: released.append(args[-2])
+    )
+
+    result = gc.S3BundleGarbageCollector().collect(
+        "s3://bucket/models", orphan_ttl_seconds=0, dry_run=False
+    )
+
+    assert result["deleted"] == 1
+    assert result["errors"] and "acquire failed" in result["errors"][0]
+    assert released == ["first-lease"]

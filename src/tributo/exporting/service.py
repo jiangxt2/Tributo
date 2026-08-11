@@ -3,8 +3,8 @@
 ``BundleExportService`` wires together all export components:
 ExportSource → StagingArea → Planner → Manager → Publisher → callback.
 
-It is the single entry point for bundle-mode export, replacing the
-legacy ``BaseTrainer.export_model()`` path when ``output.targets`` is set.
+It is the single entry point for Bundle export. First-party training
+lifecycles supply their standard targets when the caller omits them.
 """
 
 from __future__ import annotations
@@ -242,13 +242,25 @@ class BundleExportService:
             # Phase 5: Compute bundle_digest and record execution.
             from tributo.exporting.manifest import compute_bundle_digest
 
-            bundle_digest = compute_bundle_digest(
-                artifacts=published.result.artifacts,
-                roles=published.result.roles,
-                exporter_options={
-                    nr.node_id: {} for nr in execution.node_results if nr.exporter_id
-                },
-            )
+            try:
+                bundle_digest = compute_bundle_digest(
+                    artifacts=published.result.artifacts,
+                    roles=published.result.roles,
+                    exporter_options={
+                        nr.node_id: {}
+                        for nr in execution.node_results
+                        if nr.exporter_id
+                    },
+                )
+            except Exception as exc:
+                logger.error(
+                    "Bundle digest computation failed after bundle publish (%s)",
+                    type(exc).__name__,
+                )
+                raise PostPublishCallbackError(
+                    "Bundle digest computation failed after bundle publish",
+                    bundle_result=published.result,
+                ) from exc
 
             # Write execution record (when OperationStore is available).
             if self._operation_store is not None:
@@ -282,7 +294,17 @@ class BundleExportService:
                     roles=published.result.roles,
                     tributo_version=tributo_version,
                 )
-                self._operation_store.record_execution(record)
+                try:
+                    self._operation_store.record_execution(record)
+                except Exception as exc:
+                    logger.error(
+                        "Execution recording failed after bundle publish (%s)",
+                        type(exc).__name__,
+                    )
+                    raise PostPublishCallbackError(
+                        "Execution recording failed after bundle publish",
+                        bundle_result=published.result,
+                    ) from exc
 
             # Phase 6: Derive the event from the exact manifest bytes that won
             # the repository commit, then run only explicitly configured hooks.

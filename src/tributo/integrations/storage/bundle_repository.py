@@ -57,9 +57,44 @@ _LEASE_RENEW_RETRIES = 3
 _LEASE_STOP_TIMEOUT_SECONDS = 5.0
 _ALIAS_MAX_RETRIES = 3
 _S3_SINGLE_PUT_MAX_BYTES = 5_000_000_000
+_CONTROL_DOCUMENT_MAX_BYTES = 10 * 1024 * 1024
 
 
 # ── S3 helpers ─────────────────────────────────────────────────────────────────
+
+
+def _read_local_bytes_bounded(path: Path, limit: int, kind: str) -> bytes:
+    """Read at most *limit* bytes, rejecting oversized files before allocation."""
+    size = path.stat().st_size
+    if size > limit:
+        raise ValueError(f"{kind} size {size} exceeds limit {limit}")
+    with path.open("rb") as stream:
+        data = stream.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError(f"{kind} size exceeds limit {limit}")
+    return data
+
+
+def _read_s3_body_bounded(response: Any, limit: int, kind: str) -> bytes:
+    """Read one S3 response body without trusting optional size metadata."""
+    content_length = response.get("ContentLength")
+    if isinstance(content_length, int) and content_length > limit:
+        raise ValueError(f"{kind} size {content_length} exceeds limit {limit}")
+    data: bytes = response["Body"].read(limit + 1)
+    if len(data) > limit:
+        raise ValueError(f"{kind} size exceeds limit {limit}")
+    return data
+
+
+def _decode_json_object(data: bytes, kind: str) -> dict[str, Any]:
+    """Decode a bounded UTF-8 JSON control document and require an object."""
+    try:
+        decoded = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{kind} is not valid UTF-8 JSON") from exc
+    if not isinstance(decoded, dict):
+        raise ValueError(f"{kind} must contain a JSON object")
+    return decoded
 
 
 def _s3_client_from_profile(
@@ -187,25 +222,35 @@ def _s3_put_stream(
 
 
 def _s3_get_json_with_etag(
-    client: Any, bucket: str, key: str
-) -> tuple[Any, str] | None:
+    client: Any,
+    bucket: str,
+    key: str,
+    max_bytes: int = _CONTROL_DOCUMENT_MAX_BYTES,
+) -> tuple[dict[str, Any], str] | None:
     """Get one JSON object and its ETag from the same S3 object version."""
     try:
         response = client.get_object(Bucket=bucket, Key=key)
-        raw: bytes = response["Body"].read()
-        return json.loads(raw.decode("utf-8")), str(response["ETag"]).strip('"')
+        raw = _read_s3_body_bounded(response, max_bytes, "S3 control document")
+        return (
+            _decode_json_object(raw, "S3 control document"),
+            str(response["ETag"]).strip('"'),
+        )
     except client.exceptions.ClientError as exc:
         if exc.response["Error"]["Code"] in {"NoSuchKey", "404"}:
             return None
         raise
 
 
-def _s3_get_bytes(client: Any, bucket: str, key: str) -> bytes | None:
+def _s3_get_bytes(
+    client: Any,
+    bucket: str,
+    key: str,
+    max_bytes: int = _CONTROL_DOCUMENT_MAX_BYTES,
+) -> bytes | None:
     """Read an object's body as bytes, or None if not found."""
     try:
         resp = client.get_object(Bucket=bucket, Key=key)
-        body: bytes = resp["Body"].read()
-        return body
+        return _read_s3_body_bounded(resp, max_bytes, "S3 control document")
     except client.exceptions.ClientError as exc:
         if exc.response["Error"]["Code"] == "NoSuchKey":
             return None
@@ -267,7 +312,11 @@ def _local_identical_manifest(
     if not existing_manifest_path.is_file():
         return None
     try:
-        existing_bytes = existing_manifest_path.read_bytes()
+        existing_bytes = _read_local_bytes_bounded(
+            existing_manifest_path,
+            _CONTROL_DOCUMENT_MAX_BYTES,
+            "Manifest",
+        )
     except OSError:
         return None
     if not _manifest_logically_equal(existing_bytes, manifest_bytes):
@@ -571,9 +620,13 @@ def _s3_lease_release(client: Any, bucket: str, lease_key: str, owner: str) -> N
     etag: str | None = None
     try:
         response = client.get_object(Bucket=bucket, Key=lease_key)
-        raw: bytes = response["Body"].read()
-        decoded_lease = json.loads(raw.decode("utf-8"))
-        if not isinstance(decoded_lease, dict) or decoded_lease.get("owner") != owner:
+        raw = _read_s3_body_bounded(
+            response,
+            _CONTROL_DOCUMENT_MAX_BYTES,
+            "Lease",
+        )
+        decoded_lease = _decode_json_object(raw, "Lease")
+        if decoded_lease.get("owner") != owner:
             return
         lease = decoded_lease
         etag = str(response.get("ETag", "")).strip('"')
@@ -1081,11 +1134,11 @@ class LocalBundleRepository:
         )
         return RepositoryCommit(
             bundle_ref=BundleRef(
-                canonical_uri=str(final_dir),
+                canonical_uri=staged_bundle.manifest.canonical_uri,
                 bundle_id=staged_bundle.bundle_id,
                 manifest_sha256=manifest_sha256,
             ),
-            manifest_uri=str(final_dir / "manifest.json"),
+            manifest_uri=f"{staged_bundle.manifest.canonical_uri}/manifest.json",
             manifest_bytes=committed_manifest_bytes,
             local_bundle_dir=final_dir,
             local_dir_ephemeral=False,
@@ -1102,11 +1155,7 @@ class LocalBundleRepository:
         """Read exact local manifest bytes with a size bound."""
         del storage_profile
         path = _resolve_local_manifest_path(Path(_strip_file_scheme(bundle_uri)))
-        data = path.read_bytes()
-        if len(data) > max_manifest_bytes:
-            raise ValueError(
-                f"Manifest size {len(data)} exceeds limit {max_manifest_bytes}"
-            )
+        data = _read_local_bytes_bounded(path, max_manifest_bytes, "Manifest")
         return _parse_manifest(data, manifest_registry), data
 
     @contextmanager
@@ -1169,14 +1218,14 @@ class S3BundleRepository:
             bundle_id=staged_bundle.bundle_id,
             execution_id=staged_bundle.execution_id,
         )
-        canonical_uri = f"s3://{bucket}/{bundle_prefix}"
+        canonical_uri = staged_bundle.manifest.canonical_uri
         return RepositoryCommit(
             bundle_ref=BundleRef(
                 canonical_uri=canonical_uri,
                 bundle_id=staged_bundle.bundle_id,
                 manifest_sha256=publish_meta["manifest_sha256"],
             ),
-            manifest_uri=f"{canonical_uri}manifest.json",
+            manifest_uri=f"{canonical_uri}/manifest.json",
             manifest_bytes=publish_meta["manifest_bytes"],
             local_bundle_dir=staged_bundle.staging_root,
             local_dir_ephemeral=True,
@@ -1201,16 +1250,7 @@ class S3BundleRepository:
                     f"Manifest not found: s3://{bucket}/{key}"
                 ) from exc
             raise
-        content_length = response.get("ContentLength", 0)
-        if content_length > max_manifest_bytes:
-            raise ValueError(
-                f"Manifest size {content_length} exceeds limit {max_manifest_bytes}"
-            )
-        data: bytes = response["Body"].read()
-        if len(data) > max_manifest_bytes:
-            raise ValueError(
-                f"Manifest size {len(data)} exceeds limit {max_manifest_bytes}"
-            )
+        data = _read_s3_body_bounded(response, max_manifest_bytes, "Manifest")
         return _parse_manifest(data, manifest_registry), data
 
     @contextmanager
@@ -1336,10 +1376,10 @@ class LocalBundleAliasStore:
         path = Path(_strip_file_scheme(alias_uri))
         if not path.is_file():
             raise FileNotFoundError(f"Alias not found: {path}")
-        data = path.read_bytes()
-        if len(data) > max_alias_bytes:
-            raise ValueError(f"Alias size {len(data)} exceeds limit {max_alias_bytes}")
-        return _bundle_ref_from_alias(json.loads(data), alias_uri)
+        data = _read_local_bytes_bounded(path, max_alias_bytes, "Alias")
+        return _bundle_ref_from_alias(
+            _decode_json_object(data, f"Alias {alias_uri}"), alias_uri
+        )
 
     def update(
         self,
@@ -1400,15 +1440,10 @@ class S3BundleAliasStore:
             if exc.response["Error"]["Code"] in {"NoSuchKey", "404"}:
                 raise FileNotFoundError(f"Alias not found: {alias_uri}") from exc
             raise
-        content_length = response.get("ContentLength", 0)
-        if content_length > max_alias_bytes:
-            raise ValueError(
-                f"Alias size {content_length} exceeds limit {max_alias_bytes}"
-            )
-        data: bytes = response["Body"].read()
-        if len(data) > max_alias_bytes:
-            raise ValueError(f"Alias size {len(data)} exceeds limit {max_alias_bytes}")
-        return _bundle_ref_from_alias(json.loads(data), alias_uri)
+        data = _read_s3_body_bounded(response, max_alias_bytes, "Alias")
+        return _bundle_ref_from_alias(
+            _decode_json_object(data, f"Alias {alias_uri}"), alias_uri
+        )
 
     def update(
         self,
@@ -1595,7 +1630,12 @@ def _update_local_alias(
     failure_code: str | None = None
     should_write = True
     if alias_path.exists():
-        existing = json.loads(alias_path.read_bytes())
+        existing_bytes = _read_local_bytes_bounded(
+            alias_path,
+            _CONTROL_DOCUMENT_MAX_BYTES,
+            "Alias",
+        )
+        existing = _decode_json_object(existing_bytes, f"Alias {alias_path}")
         if alias_config.policy == "compare_and_swap":
             if alias_config.expected_manifest_sha256 is None:
                 failure_code = "ALIAS_EXISTS"
@@ -1631,8 +1671,13 @@ def _update_local_alias(
         f".{alias_path.name}.{uuid.uuid4().hex[:8]}.tmp"
     )
     try:
-        temporary_path.write_bytes(json.dumps(alias_data, indent=2).encode("utf-8"))
+        encoded = json.dumps(alias_data, indent=2).encode("utf-8")
+        with temporary_path.open("wb") as stream:
+            stream.write(encoded)
+            stream.flush()
+            os.fsync(stream.fileno())
         os.replace(temporary_path, alias_path)
+        _fsync_dir(alias_path.parent)
     finally:
         temporary_path.unlink(missing_ok=True)
     return AliasUpdate(alias_uri=str(alias_path), status="updated")
@@ -1648,7 +1693,9 @@ def _bundle_ref_from_alias(data: Any, alias_uri: str) -> BundleRef:
     except KeyError as exc:
         raise ValueError(f"Alias {alias_uri} is missing {exc.args[0]!r}") from exc
     if manifest_uri.startswith("s3://"):
-        canonical_uri = manifest_uri.removesuffix("manifest.json")
+        canonical_uri = manifest_uri.removesuffix("/manifest.json")
+    elif manifest_uri.startswith("file://"):
+        canonical_uri = manifest_uri.removesuffix("/manifest.json")
     else:
         canonical_uri = str(Path(_strip_file_scheme(manifest_uri)).parent)
     return BundleRef(

@@ -34,12 +34,12 @@ from tributo.exporting.models import (
     SupportResult,
     ValidatorBinding,
 )
+from tributo.exporting.publisher import Publisher
 from tributo.exporting.registries import (
     ExportRegistry,
     FlavorRegistry,
     ValidatorRegistry,
 )
-from tributo.exporting.publisher import Publisher
 from tributo.exporting.runtime import BundleModel, BundleModelLoader
 from tributo.exporting.service import BundleExportService, bundle_id_for_request
 from tributo.exporting.validators import StructureValidator
@@ -174,10 +174,63 @@ class _RecordingDispatcher:
         return bundle_result
 
 
+class _FailingOperationStore:
+    def record_execution(self, record: object) -> None:
+        del record
+        raise OSError("database unavailable")
+
+
 # ── Tests ────────────────────────────────────────────────────────────────────
 
 
 class TestBundleExportService:
+    def test_digest_failure_preserves_committed_bundle_fact(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        def fail_digest(*args: object, **kwargs: object) -> str:
+            del args, kwargs
+            raise ValueError("digest failed")
+
+        monkeypatch.setattr(
+            "tributo.exporting.manifest.compute_bundle_digest", fail_digest
+        )
+        er, vr = _make_registries()
+        service = BundleExportService(export_registry=er, validator_registry=vr)
+
+        with pytest.raises(PostPublishCallbackError) as exc_info:
+            service.export_bundle(
+                source=_make_source(),
+                config=_make_config(tmp_path),
+            )
+
+        result = exc_info.value.bundle_result
+        assert result.status == "succeeded"
+        assert result.canonical_uri
+        assert result.execution_id
+        assert Path(result.manifest_uri).is_file()
+        assert service.last_operation_event is None
+
+    def test_record_failure_preserves_committed_bundle_fact(
+        self, tmp_path: Path
+    ) -> None:
+        er, vr = _make_registries()
+        service = BundleExportService(
+            export_registry=er,
+            validator_registry=vr,
+            operation_store=_FailingOperationStore(),
+        )
+
+        with pytest.raises(PostPublishCallbackError) as exc_info:
+            service.export_bundle(
+                source=_make_source(),
+                config=_make_config(tmp_path),
+            )
+
+        result = exc_info.value.bundle_result
+        assert result.status == "succeeded"
+        assert Path(result.manifest_uri).is_file()
+        assert service.last_operation_event is None
+
     def test_empty_hook_config_does_not_resolve_plugins(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:

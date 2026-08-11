@@ -79,6 +79,11 @@ class S3BundleGarbageCollector:
 
         bucket, prefix_raw = parse_s3_url(bundle_uri)
         prefix = prefix_raw.rstrip("/") + "/" if prefix_raw else ""
+        if not prefix_raw:
+            logger.warning(
+                "GC is scanning the S3 bucket root; bundle_uri must be the exact "
+                "store root used by Publisher or its lease namespace will differ"
+            )
         client = _make_client(self._storage_resolver, storage_profile)
 
         scanned = 0
@@ -104,6 +109,7 @@ class S3BundleGarbageCollector:
 
                 # Check for manifest.
                 manifest_key = f"{child_prefix}manifest.json"
+                lease_key: str | None = None
                 try:
                     client.head_object(Bucket=bucket, Key=manifest_key)
                     continue  # has manifest → not an orphan.
@@ -125,6 +131,7 @@ class S3BundleGarbageCollector:
         deleted = 0
         if not dry_run:
             for orphan_prefix in orphans:
+                lease_key = None
                 try:
                     # Acquire GC lease (same .leases/ prefix as Publisher)
                     # to protect against concurrent publish.
@@ -137,8 +144,29 @@ class S3BundleGarbageCollector:
                             orphan_prefix,
                         )
                         continue
+                    manifest_key = f"{orphan_prefix}manifest.json"
+                    try:
+                        client.head_object(Bucket=bucket, Key=manifest_key)
+                        logger.info(
+                            "GC: skipping %s — manifest appeared after scan",
+                            orphan_prefix,
+                        )
+                        continue
+                    except client.exceptions.ClientError as exc:
+                        if exc.response["Error"]["Code"] != "404":
+                            raise
+                    if not _check_orphan_age(
+                        client,
+                        bucket,
+                        orphan_prefix,
+                        orphan_ttl_seconds,
+                    ):
+                        logger.info(
+                            "GC: skipping %s — a recent object appeared after scan",
+                            orphan_prefix,
+                        )
+                        continue
                     _delete_prefix_safely(client, bucket, orphan_prefix)
-                    _release_gc_lease(client, bucket, lease_key, gc_owner)
                     deleted += 1
                     logger.info(
                         "GC: deleted orphan prefix s3://%s/%s", bucket, orphan_prefix
@@ -146,6 +174,9 @@ class S3BundleGarbageCollector:
                 except Exception as exc:
                     errors.append(f"DELETE {orphan_prefix}: {exc}")
                     logger.warning("GC: failed to delete %s: %s", orphan_prefix, exc)
+                finally:
+                    if lease_key is not None:
+                        _release_gc_lease(client, bucket, lease_key, gc_owner)
 
         return {
             "scanned": scanned,
@@ -238,10 +269,24 @@ def _delete_prefix_safely(client: Any, bucket: str, prefix: str) -> None:
     for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
         objects = page.get("Contents", [])
         if objects:
-            client.delete_objects(
+            response = client.delete_objects(
                 Bucket=bucket,
                 Delete={"Objects": [{"Key": obj["Key"]} for obj in objects]},
             )
+            failures = response.get("Errors", [])
+            if failures:
+                details = ", ".join(
+                    f"{failure.get('Key', '<unknown>')} "
+                    f"({failure.get('Code', 'UNKNOWN')})"
+                    for failure in failures[:10]
+                )
+                remaining = len(failures) - 10
+                if remaining > 0:
+                    details = f"{details}, and {remaining} more"
+                raise RuntimeError(
+                    f"S3 DeleteObjects reported {len(failures)} object failure(s): "
+                    f"{details}"
+                )
 
 
 __all__ = ["S3BundleGarbageCollector"]

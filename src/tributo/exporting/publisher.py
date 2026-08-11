@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from tributo._common.storage_profiles import StorageProfileResolver
 from tributo.exporting.assembler import BundleAssembler
+from tributo.exporting.errors import sanitize_error_message
 from tributo.exporting.manifest import (
     ManifestSignature,
     ManifestSourceInfo,
@@ -14,13 +16,17 @@ from tributo.exporting.models import (
     AliasConfig,
     BundleResult,
     ExportExecutionResult,
+    FailureInfo,
     PublishedBundle,
 )
 from tributo.exporting.repository import (
+    AliasUpdate,
     BundleRepositoryRouter,
     build_default_repository_router,
 )
 from tributo.util.annotations import PublicAPI
+
+logger = logging.getLogger(__name__)
 
 
 @PublicAPI(stability="beta")
@@ -86,19 +92,37 @@ class Publisher:
 
         alias_update = None
         if alias_config is not None:
-            alias_store = self._repository_router.alias_store_for(bundle_uri)
-            alias_update = alias_store.update(
-                bundle_uri=bundle_uri,
-                alias_config=alias_config,
-                bundle_ref=commit.bundle_ref,
-                manifest_uri=commit.manifest_uri,
-                created_at=staged_bundle.manifest.created_at.isoformat(),
-                storage_profile=storage_profile,
-            )
+            try:
+                alias_store = self._repository_router.alias_store_for(bundle_uri)
+                alias_update = alias_store.update(
+                    bundle_uri=bundle_uri,
+                    alias_config=alias_config,
+                    bundle_ref=commit.bundle_ref,
+                    manifest_uri=commit.manifest_uri,
+                    created_at=staged_bundle.manifest.created_at.isoformat(),
+                    storage_profile=storage_profile,
+                )
+            except Exception as exc:
+                # The immutable manifest is already committed. Alias updates
+                # are deliberately non-transactional, so preserve that fact
+                # and report the secondary failure through BundleResult.
+                logger.error(
+                    "Alias update failed after bundle publish (%s)",
+                    type(exc).__name__,
+                )
+                alias_update = AliasUpdate(
+                    status="failed",
+                    failure=FailureInfo(
+                        code=type(exc).__name__,
+                        category="publish",
+                        message=sanitize_error_message(str(exc))[:4096],
+                    ),
+                )
 
         effective_roles = roles if roles is not None else execution.roles
         result = BundleResult(
             bundle_id=bundle_id,
+            execution_id=execution_id,
             canonical_uri=commit.bundle_ref.canonical_uri,
             manifest_uri=commit.manifest_uri,
             manifest_sha256=commit.bundle_ref.manifest_sha256,

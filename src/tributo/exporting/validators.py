@@ -1,9 +1,7 @@
-"""Built-in export validators.
+"""Built-in storage-independent export validators.
 
-First phase ships ``StructureValidator`` only — the plan scopes the
-required validation chain to file integrity, format detection, signature
-and path safety.  Roundtrip and parity validators are planned for a later
-PR (explicitly deferred, not silently stubbed).
+``StructureValidator`` enforces file and path safety in Core. Integration
+packages add runtime-specific validators such as the ONNX Runtime smoke gate.
 """
 
 from __future__ import annotations

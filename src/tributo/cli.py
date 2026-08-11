@@ -414,8 +414,9 @@ def export_gc(
 ):
     """Collect orphaned bundle prefixes on S3 (dry-run by default).
 
-    Only prefixes that look like bundle IDs, have no manifest, are older
-    than --orphan-ttl, and are not lease-protected are deleted.
+    BUNDLE_URI must be the exact store root used for publication. Only
+    prefixes that look like bundle IDs, have no manifest, are older than
+    --orphan-ttl, and are not lease-protected are deleted.
     """
     try:
         from tributo.exporting.gc import BundleGarbageCollector

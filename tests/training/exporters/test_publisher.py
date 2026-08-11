@@ -150,6 +150,82 @@ def _make_source_info() -> ManifestSourceInfo:
 
 
 class TestLocalPublish:
+    def test_alias_decode_failure_does_not_erase_committed_bundle(
+        self, tmp_path: Path
+    ) -> None:
+        staging = tmp_path / "staging"
+        dest = tmp_path / "dest"
+        artifact = _make_logical_artifact("fp32")
+        staged = _setup_staging(staging, [artifact])
+        ref = ArtifactRef(
+            node_id="fp32",
+            artifact_name="fp32",
+            tree_digest=artifact.tree_digest,
+        )
+        execution = _make_execution(
+            nodes=(_make_node_result(artifact_ref=ref),),
+            staged_artifacts=staged,
+        )
+        alias_dir = dest / "aliases"
+        alias_dir.mkdir(parents=True)
+        (alias_dir / "latest.json").write_bytes(b"{not-json")
+
+        published = Publisher().publish(
+            execution=execution,
+            staging_root=staging,
+            bundle_uri=str(dest),
+            bundle_id="test-bundle-alias-failure",
+            execution_id="exec-1",
+            tributo_version="0.1.0",
+            source_info=_make_source_info(),
+            alias_config=AliasConfig(name="latest", policy="newer"),
+        )
+
+        assert published.result.status == "succeeded"
+        assert published.result.alias_status == "failed"
+        assert published.result.alias_failure is not None
+        assert published.result.alias_failure.code == "ValueError"
+        assert Path(published.result.manifest_uri).is_file()
+
+    def test_oversized_alias_is_bounded_after_bundle_commit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from tributo.integrations.storage import bundle_repository
+
+        monkeypatch.setattr(bundle_repository, "_CONTROL_DOCUMENT_MAX_BYTES", 8)
+        staging = tmp_path / "staging"
+        dest = tmp_path / "dest"
+        artifact = _make_logical_artifact("fp32")
+        staged = _setup_staging(staging, [artifact])
+        ref = ArtifactRef(
+            node_id="fp32",
+            artifact_name="fp32",
+            tree_digest=artifact.tree_digest,
+        )
+        execution = _make_execution(
+            nodes=(_make_node_result(artifact_ref=ref),),
+            staged_artifacts=staged,
+        )
+        alias_dir = dest / "aliases"
+        alias_dir.mkdir(parents=True)
+        (alias_dir / "latest.json").write_bytes(b'{"value":1}')
+
+        published = Publisher().publish(
+            execution=execution,
+            staging_root=staging,
+            bundle_uri=str(dest),
+            bundle_id="test-bundle-oversized-alias",
+            execution_id="exec-1",
+            tributo_version="0.1.0",
+            source_info=_make_source_info(),
+            alias_config=AliasConfig(name="latest", policy="newer"),
+        )
+
+        assert published.result.alias_status == "failed"
+        assert published.result.alias_failure is not None
+        assert "exceeds limit" in published.result.alias_failure.message
+        assert Path(published.result.manifest_uri).is_file()
+
     def test_basic_publish(self, tmp_path: Path) -> None:
         staging = tmp_path / "staging"
         dest = tmp_path / "dest"
@@ -714,6 +790,22 @@ class TestS3PublishLogic:
     Integration tests with a real S3-compatible endpoint (MinIO) are in
     ``tests/integration/test_export_s3.py`` (pytest ``s3`` marker).
     """
+
+    def test_s3_control_document_read_is_bounded_without_content_length(
+        self,
+    ) -> None:
+        from tributo.integrations.storage import bundle_repository
+
+        fake = _FakeS3()
+        fake.objects["models/aliases/latest.json"] = b'{"value":"too-large"}'
+
+        with pytest.raises(ValueError, match="exceeds limit"):
+            bundle_repository._s3_get_json_with_etag(
+                fake,
+                "test-bucket",
+                "models/aliases/latest.json",
+                8,
+            )
 
     def test_s3_manifest_uses_condition_write_and_checksum_metadata(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

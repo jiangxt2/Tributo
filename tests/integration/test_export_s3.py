@@ -267,7 +267,7 @@ class TestS3Publish:
         assert published.result.alias_uri is not None
 
         reader = BundleReader(cache_dir=tmp_path / "cache")
-        manifest = reader.read_manifest(
+        manifest, manifest_bytes = reader.read_manifest_with_bytes(
             published.result.alias_uri, storage_profile="test"
         )
         assert manifest.bundle_id == published.result.bundle_id
@@ -276,6 +276,7 @@ class TestS3Publish:
             artifact_name="fp32",
             storage_profile="test",
             manifest=manifest,
+            manifest_bytes=manifest_bytes,
         ) as artifact:
             assert artifact.entrypoint_path.read_bytes() == payload
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -132,6 +133,10 @@ class TestBundleOutputConfig:
         assert cfg.targets is None
         assert cfg.bundle_uri is None
 
+    def test_explicit_empty_targets_are_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="at least 1 item"):
+            BundleOutputConfig(bundle_uri="s3://bucket/models", targets=[])
+
     def test_bundle_mode_requires_uri(self) -> None:
         with pytest.raises(ValidationError, match="bundle_uri is required"):
             BundleOutputConfig(targets=[ExportTarget(name="a", format="onnx")])
@@ -217,14 +222,33 @@ class TestBundleOutputConfig:
             bundle_uri="file:///tmp/models",
             targets=[ExportTarget(name="a", format="onnx")],
         )
-        assert cfg.bundle_uri == "file:///tmp/models"
+        assert cfg.bundle_uri == f"file://{Path('/tmp/models').resolve()}"
 
     def test_bare_path_accepted(self) -> None:
         cfg = BundleOutputConfig(
             bundle_uri="/tmp/models",
             targets=[ExportTarget(name="a", format="onnx")],
         )
-        assert cfg.bundle_uri == "/tmp/models"
+        assert cfg.bundle_uri == str(Path("/tmp/models").resolve())
+
+    def test_bundle_uri_is_canonicalized_once(self, tmp_path: Path) -> None:
+        local = BundleOutputConfig(
+            bundle_uri=f"{tmp_path}/models/../models/",
+            targets=[ExportTarget(name="a", format="onnx")],
+        )
+        file_uri = BundleOutputConfig(
+            bundle_uri=f"file://{tmp_path}/models/../models/",
+            targets=[ExportTarget(name="a", format="onnx")],
+        )
+        s3 = BundleOutputConfig(
+            bundle_uri="s3://bucket/models/",
+            targets=[ExportTarget(name="a", format="onnx")],
+        )
+
+        expected_local = (tmp_path / "models").resolve()
+        assert local.bundle_uri == str(expected_local)
+        assert file_uri.bundle_uri == f"file://{expected_local}"
+        assert s3.bundle_uri == "s3://bucket/models"
 
     def test_rejects_root_file_uri(self) -> None:
         with pytest.raises(ValidationError, match="filesystem root"):

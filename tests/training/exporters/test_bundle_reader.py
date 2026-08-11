@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -107,7 +108,7 @@ class TestReadManifest:
     def test_read_manifest_from_root(self, tmp_path: Path) -> None:
         bundle_dir, manifest_sha256, _ = _create_test_bundle(tmp_path)
         reader = BundleReader()
-        manifest = reader.read_manifest(str(bundle_dir))
+        manifest, manifest_bytes = reader.read_manifest_with_bytes(str(bundle_dir))
         assert manifest.bundle_id == "reader-test-1"
         assert manifest.status == "succeeded"
         assert len(manifest.artifacts) == 1
@@ -219,23 +220,126 @@ class TestOpenArtifact:
         """传入 manifest 时不重新读取（TOCTOU 防护：校验与加载同一快照）。"""
         bundle_dir, _, _ = _create_test_bundle(tmp_path)
         reader = BundleReader()
-        manifest = reader.read_manifest(str(bundle_dir))
+        manifest, manifest_bytes = reader.read_manifest_with_bytes(str(bundle_dir))
 
         calls = 0
-        original = reader.read_manifest
+        original = reader.read_manifest_with_bytes
 
         def counting_read_manifest(*args, **kwargs):
             nonlocal calls
             calls += 1
             return original(*args, **kwargs)
 
-        monkeypatch.setattr(reader, "read_manifest", counting_read_manifest)
+        monkeypatch.setattr(reader, "read_manifest_with_bytes", counting_read_manifest)
 
         with reader.open_artifact(
-            str(bundle_dir), role="inference", manifest=manifest
+            str(bundle_dir),
+            role="inference",
+            manifest=manifest,
+            manifest_bytes=manifest_bytes,
         ) as ra:
             assert ra.descriptor.name == "fp32"
         assert calls == 0, "passed manifest must skip re-reading from storage"
+
+    def test_open_artifact_snapshot_does_not_resolve_alias_twice(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        bundle_dir, manifest_sha256, _ = _create_test_bundle(tmp_path)
+        reader = BundleReader()
+        manifest, manifest_bytes = reader.read_manifest_with_bytes(str(bundle_dir))
+        alias_path = bundle_dir.parent / "aliases" / "latest.json"
+        alias_path.parent.mkdir()
+        alias_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "bundle_id": manifest.bundle_id,
+                    "manifest_sha256": manifest_sha256,
+                    "canonical_uri": str(bundle_dir),
+                    "manifest_uri": str(bundle_dir / "manifest.json"),
+                    "created_at": manifest.created_at.isoformat(),
+                }
+            )
+        )
+
+        monkeypatch.setattr(
+            reader._repository_router,
+            "resolve_alias",
+            lambda *args, **kwargs: pytest.fail("alias was resolved twice"),
+        )
+
+        with reader.open_artifact(
+            str(alias_path),
+            role="inference",
+            manifest=manifest,
+            manifest_bytes=manifest_bytes,
+        ) as resolved:
+            assert resolved.entrypoint_path.read_bytes() == b"onnx-model-content-123"
+
+    def test_local_manifest_and_alias_reject_oversize_before_full_read(
+        self, tmp_path: Path
+    ) -> None:
+        bundle_dir, _, _ = _create_test_bundle(tmp_path)
+        manifest_path = bundle_dir / "manifest.json"
+        manifest_limit = manifest_path.stat().st_size - 1
+        reader = BundleReader(
+            limits=ReaderResourceLimits(max_manifest_bytes=manifest_limit)
+        )
+        with pytest.raises(ValueError, match="Manifest size"):
+            reader.read_manifest(str(bundle_dir))
+
+        alias_path = bundle_dir.parent / "aliases" / "oversized.json"
+        alias_path.parent.mkdir(exist_ok=True)
+        alias_path.write_bytes(b"x" * (manifest_limit + 1))
+        with pytest.raises(ValueError, match="Alias size"):
+            reader.read_manifest(str(alias_path))
+
+    def test_open_artifact_requires_exact_bytes_with_passed_manifest(
+        self, tmp_path: Path
+    ) -> None:
+        bundle_dir, _, _ = _create_test_bundle(tmp_path)
+        reader = BundleReader()
+        manifest, manifest_bytes = reader.read_manifest_with_bytes(str(bundle_dir))
+
+        with pytest.raises(ValueError, match="provided together"):
+            with reader.open_artifact(
+                str(bundle_dir), role="inference", manifest=manifest
+            ):
+                pass
+
+        mismatched_manifest_bytes = manifest.model_copy(
+            update={"bundle_id": "different-bundle"}
+        ).canonical_json()
+        with pytest.raises(ValueError, match="does not match"):
+            with reader.open_artifact(
+                str(bundle_dir),
+                role="inference",
+                manifest=manifest,
+                manifest_bytes=mismatched_manifest_bytes,
+            ):
+                pass
+
+    def test_open_artifact_validates_passed_bytes_against_bundle_ref(
+        self, tmp_path: Path
+    ) -> None:
+        bundle_dir, manifest_sha256, _ = _create_test_bundle(tmp_path)
+        reader = BundleReader()
+        manifest, manifest_bytes = reader.read_manifest_with_bytes(str(bundle_dir))
+        ref = BundleRef(
+            canonical_uri=str(bundle_dir),
+            bundle_id=manifest.bundle_id,
+            manifest_sha256="f" * 64,
+        )
+        assert manifest_sha256 != ref.manifest_sha256
+
+        with pytest.raises(ValueError, match="Manifest digest mismatch"):
+            with reader.open_artifact(
+                ref,
+                role="inference",
+                manifest=manifest,
+                manifest_bytes=manifest_bytes,
+            ):
+                pass
 
     def test_s3_integrity_failure_repairs_cache_atomically(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -277,6 +381,7 @@ class TestOpenArtifact:
             "s3://bucket/prefix/x",
             artifact_name="fp32",
             manifest=manifest,
+            manifest_bytes=manifest.canonical_json(),
         ) as resolved:
             assert resolved.entrypoint_path.read_bytes() == b"onnx-model-content-123"
         after = set(Path(tempfile.gettempdir()).glob("tributo-bundle-artifact-*"))
@@ -363,6 +468,7 @@ class TestOpenArtifact:
                 "s3://bucket/prefix/x",
                 artifact_name="fp32",
                 manifest=manifest,
+                manifest_bytes=manifest.canonical_json(),
             ):
                 raise RuntimeError("consumer failed")
 
@@ -413,6 +519,7 @@ class TestOpenArtifact:
                 manifest.canonical_uri,
                 artifact_name="fp32",
                 manifest=manifest,
+                manifest_bytes=manifest.canonical_json(),
             ) as resolved:
                 return resolved.entrypoint_path.read_bytes()
 
