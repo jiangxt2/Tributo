@@ -1,14 +1,15 @@
 """PyTorch → ONNX exporter — ``ModelExporter`` protocol for torch.onnx.
 
-Supports both legacy ``torch.onnx.export(dynamo=False)`` and the new
-``torch.onnx.dynamo_export()`` path (PyTorch >= 2.1).  The dynamo path
-uses the TorchDynamo ONNX exporter which produces a more optimised graph.
+Supports both ``torch.onnx.export(dynamo=False)`` and the current
+``torch.onnx.export(dynamo=True)`` path. The dynamo path uses the TorchDynamo
+ONNX exporter while preserving the requested opset and dynamic batch contract.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import warnings
 from typing import Any, ClassVar, Mapping
 
 from pydantic import BaseModel
@@ -41,8 +42,8 @@ logger = logging.getLogger(__name__)
 class TorchONNXExporter:
     """Export a PyTorch module to ONNX.
 
-    Uses ``torch.onnx.dynamo_export()`` when ``dynamo=True`` and PyTorch
-    >= 2.1, falling back to ``torch.onnx.export(dynamo=False)``.
+    Uses ``torch.onnx.export(dynamo=True)`` when requested, falling back to
+    ``torch.onnx.export(dynamo=False)``.
 
     The dynamo path:
     - Uses FX graph capture instead of tracing.
@@ -63,7 +64,7 @@ class TorchONNXExporter:
     options_model: ClassVar[type[BaseModel]] = TorchONNXOptions
     validator_bindings: ClassVar[tuple[ValidatorBinding, ...]] = (
         ValidatorBinding(validator_id="structure-v1", required=True),
-        ValidatorBinding(validator_id="onnx-runtime-v1", required=False),
+        ValidatorBinding(validator_id="onnx-runtime-v1", required=True),
     )
     mutates_source: ClassVar[bool] = False
     upstream_requirements: ClassVar[tuple[Any, ...]] = ()
@@ -109,12 +110,12 @@ class TorchONNXExporter:
 
         opts: dict[str, Any] = target.typed_options
         opset: int = opts.get("opset", 18)
-        dynamo: bool = opts.get("dynamo", False)
+        dynamo: bool = opts.get("dynamo", True)
         external_data: bool = opts.get("external_data", False)
 
         # Resolve input names and shapes.
         input_names = _resolve_input_names(source)
-        sample_inputs = _resolve_sample_inputs(source, model)
+        sample_inputs = _resolve_sample_inputs(source, input_names)
         output_names = ["output"]
 
         # Tracks which path actually ran — the dynamo path may fall back
@@ -126,41 +127,27 @@ class TorchONNXExporter:
             # ── Dynamo path (PyTorch >= 2.1) ──
             if dynamo:
                 try:
-                    if hasattr(torch.onnx, "dynamo_export"):
-                        # ExportOptions 在较旧 torch 的 stub 中缺失（运行时由
-                        # hasattr 守卫）——Any 访问避免 mypy attr-defined。
-                        onnx_module: Any = torch.onnx
-                        export_options = onnx_module.ExportOptions(
-                            dynamic_shapes=True,
-                            onnx_registry=None,
-                        )
-                        onnx_program = torch.onnx.dynamo_export(
-                            model,
-                            *sample_inputs,
-                            export_options=export_options,
-                        )
-                        output_path = context.artifact_dir / "model.onnx"
-                        onnx_program.save(
-                            str(output_path),
-                            **(
-                                {"external_weights_path": "model_weights.bin"}
-                                if external_data
-                                else {}
-                            ),
-                        )
-                        used_dynamo = True
-                        logger.info(
-                            "ONNX model exported via dynamo_export to %s",
-                            output_path,
-                        )
-                    else:
-                        # No dynamo_export available — fall through to legacy.
-                        raise NotImplementedError(
-                            "torch.onnx.dynamo_export not available"
-                        )
+                    # ``torch.onnx.export(..., dynamo=True)`` is the current
+                    # public API and, unlike the deprecated ``dynamo_export``
+                    # helper, accepts the requested opset explicitly.
+                    output_path = self._legacy_export(
+                        model,
+                        sample_inputs,
+                        input_names,
+                        output_names,
+                        opset,
+                        context.artifact_dir,
+                        external_data,
+                        use_dynamo=True,
+                    )
+                    used_dynamo = True
+                    logger.info(
+                        "ONNX model exported via torch.onnx.export(dynamo=True) to %s",
+                        output_path,
+                    )
                 except Exception as exc:
                     logger.warning(
-                        "torch.onnx.dynamo_export failed: %s — falling back to legacy export(dynamo=False)",
+                        "torch.onnx.export(dynamo=True) failed: %s — falling back to legacy export(dynamo=False)",
                         exc,
                     )
                     output_path = self._legacy_export(
@@ -259,14 +246,31 @@ class TorchONNXExporter:
             "opset_version": opset,
             "input_names": input_names,
             "output_names": output_names,
-            "dynamic_axes": {name: {0: "batch_size"} for name in input_names},
             "export_params": True,
             "do_constant_folding": True,
+            "external_data": external_data,
         }
         # TORCH requires PyTorch >= 2.5.0, whose export API supports this
         # keyword unconditionally.
         export_kwargs["dynamo"] = use_dynamo
-        torch.onnx.export(model, model_input, str(output_path), **export_kwargs)
+        if use_dynamo:
+            batch_dim = torch.export.Dim("batch_size")
+            export_kwargs["dynamic_shapes"] = tuple({0: batch_dim} for _ in input_names)
+        else:
+            export_kwargs["dynamic_axes"] = {
+                name: {0: "batch_size"} for name in input_names
+            }
+        with warnings.catch_warnings():
+            # PyTorch 2.13.0 still triggers this upstream pytree deprecation
+            # while deep-copying the exported program.  Tributo treats all
+            # other warnings normally; this exact warning must not turn a
+            # successful dynamo conversion into a legacy fallback.
+            warnings.filterwarnings(
+                "ignore",
+                message=r"`isinstance\(treespec, LeafSpec\)` is deprecated,.*",
+                category=FutureWarning,
+            )
+            torch.onnx.export(model, model_input, str(output_path), **export_kwargs)
         return output_path
 
 
@@ -281,19 +285,28 @@ def _resolve_input_names(source: ExportSource) -> list[str]:
     return ["input"]
 
 
-def _resolve_sample_inputs(source: ExportSource, model: Any) -> tuple[Any, ...]:
-    """Resolve sample inputs for ONNX export."""
+def _resolve_sample_inputs(
+    source: ExportSource, input_names: list[str]
+) -> tuple[Any, ...]:
+    """Resolve sample inputs in the same order as the declared input names."""
     torch = require_dependency(TORCH)
 
     sample = source.sample_inputs
     if sample:
-        if isinstance(sample, dict):
-            return tuple(sample.values())
-        if isinstance(sample, (list, tuple)):
-            return tuple(sample)
-        return (torch.tensor(sample),)
+        missing = [name for name in input_names if name not in sample]
+        unexpected = [name for name in sample if name not in input_names]
+        if missing or unexpected:
+            raise ValueError(
+                "sample_inputs must match declared input names exactly; "
+                f"missing={missing}, unexpected={unexpected}"
+            )
+        return tuple(sample[name] for name in input_names)
 
     # Generate dummy from config or model weights.
+    if len(input_names) != 1:
+        raise ValueError(
+            "sample_inputs are required when exporting a multi-input PyTorch model"
+        )
     model_config = source.model_config_data
     input_dim = model_config.get("input_dim", 64)
     return (torch.randn(1, input_dim),)

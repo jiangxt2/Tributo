@@ -189,6 +189,7 @@ class IdentityPredictor:
             storage_profile=storage_profile,
             # Same snapshot as the model runtime — never re-read.
             manifest=self._runtime.manifest,
+            manifest_bytes=self._runtime.manifest_bytes,
         ) as aux:
             self._load_aux_files(aux, aux.descriptor)
             logger.info("Loaded auxiliary artifact role=%r", aux_role)
@@ -270,12 +271,13 @@ class IdentityPredictor:
             else:
                 ort_inputs[name] = np.array([value], dtype=np.float32)
 
-        # Execute inference (using logits output)
-        logits = self.model.predict_numpy(ort_inputs, output_index=0)
-        logit_value = float(logits[0]) if logits.ndim > 0 else float(logits)
-
-        # Apply sigmoid to get probability
-        prob = 1.0 / (1.0 + np.exp(-logit_value))
+        probabilities = self._predict_probabilities(ort_inputs)
+        if probabilities.size != 1:
+            raise ValueError(
+                "IdentityPredictor.predict expected one output probability, "
+                f"got shape {probabilities.shape}"
+            )
+        prob = float(probabilities.reshape(-1)[0])
 
         return {
             "probability": prob,
@@ -327,21 +329,7 @@ class IdentityPredictor:
             else:
                 ort_inputs[name] = np.array(value, dtype=np.float32)
 
-        # Execute inference (using logits output)
-        logits = self.model.predict_numpy(ort_inputs, output_index=0)
-
-        # Apply sigmoid to get probability
-        if isinstance(logits, np.ndarray):
-            if logits.ndim == 0:
-                probs = [1.0 / (1.0 + np.exp(-float(logits)))]
-            else:
-                probs = (1.0 / (1.0 + np.exp(-logits))).tolist()
-        else:
-            # Fallback: non-ndarray type (e.g., list, float)
-            logit_val = (
-                float(logits) if not isinstance(logits, list) else float(logits[0])
-            )
-            probs = [1.0 / (1.0 + np.exp(-logit_val))]
+        probs = self._predict_probabilities(ort_inputs).reshape(-1).tolist()
 
         # Build results
         return [
@@ -351,6 +339,58 @@ class IdentityPredictor:
             }
             for p in probs
         ]
+
+    def _predict_probabilities(self, inputs: dict[str, np.ndarray]) -> np.ndarray:
+        """Select probability outputs by name, or apply sigmoid to logits."""
+        output_names = self._output_names()
+        probability_index = next(
+            (
+                index
+                for index, name in enumerate(output_names)
+                if "probab" in name.lower()
+            ),
+            None,
+        )
+        if probability_index is not None:
+            raw = np.asarray(
+                self.model.predict_numpy(inputs, output_index=probability_index)
+            )
+            if raw.ndim >= 2 and raw.shape[-1] == 2:
+                return np.asarray(raw[..., 1], dtype=np.float64)
+            if raw.ndim >= 1 and raw.shape[-1] == 1:
+                return np.asarray(raw[..., 0], dtype=np.float64)
+            return np.asarray(raw, dtype=np.float64)
+
+        logits_index = next(
+            (
+                index
+                for index, name in enumerate(output_names)
+                if "logit" in name.lower() or name.lower() == "output"
+            ),
+            None,
+        )
+        if logits_index is None:
+            raise ValueError(
+                "IdentityPredictor requires a probability or logits output; "
+                f"available outputs are {list(output_names)}"
+            )
+        logits = np.asarray(self.model.predict_numpy(inputs, output_index=logits_index))
+        if logits.ndim >= 2 and logits.shape[-1] != 1:
+            raise ValueError(
+                "IdentityPredictor only supports binary logits with one value per row; "
+                f"got shape {logits.shape}"
+            )
+        values = np.asarray(logits, dtype=np.float64).reshape(-1)
+        return 1.0 / (1.0 + np.exp(-values))
+
+    def _output_names(self) -> tuple[str, ...]:
+        names = getattr(self.model, "output_names", None)
+        if names is not None:
+            return tuple(names)
+        session = getattr(self.model, "_session", None)
+        if session is None:
+            raise ValueError("Loaded ONNX model does not expose output metadata")
+        return tuple(output.name for output in session.get_outputs())
 
 
 class _BundleModelAdapter:
@@ -362,6 +402,11 @@ class _BundleModelAdapter:
 
     def __init__(self, runtime: Any) -> None:
         self._runtime = runtime
+
+    @property
+    def output_names(self) -> tuple[str, ...]:
+        """Expose runtime output names for semantic result selection."""
+        return tuple(self._runtime.model.output_names)
 
     def predict_numpy(
         self,

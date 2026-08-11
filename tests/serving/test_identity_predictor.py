@@ -15,6 +15,26 @@ import pytest
 from tributo.serving.identity_predictor import IdentityPredictor
 
 
+def _make_single_output_onnx(tmp_path: Path, *, output_name: str) -> str:
+    onnx = pytest.importorskip("onnx")
+    from onnx import TensorProto, helper
+
+    path = tmp_path / f"{output_name}.onnx"
+    graph = helper.make_graph(
+        [helper.make_node("Identity", inputs=["score"], outputs=[output_name])],
+        "identity-single-output",
+        [helper.make_tensor_value_info("score", TensorProto.FLOAT, [None])],
+        [helper.make_tensor_value_info(output_name, TensorProto.FLOAT, [None])],
+    )
+    model = helper.make_model(
+        graph,
+        opset_imports=[helper.make_opsetid("", 18)],
+        ir_version=10,
+    )
+    onnx.save(model, path)
+    return str(path)
+
+
 def _make_bundle_with_aux_artifact(tmp_path: Path, onnx_path: str) -> str:
     """构造 bundle：模型 + 独立的 feature config artifact。"""
     from tests.serving.bundle_fixtures import build_test_bundle
@@ -151,6 +171,48 @@ def test_close_legacy_path_is_noop(tmp_path: Path):
     onnx_path = make_dummy_onnx(tmp_path)
     predictor = IdentityPredictor(model_path=onnx_path)
     predictor.close()  # 不抛即通过
+
+
+def test_sklearn_probability_output_is_selected_without_sigmoid(tmp_path: Path):
+    """skl2onnx label output must not be treated as a binary logit."""
+    import numpy as np
+    import onnxruntime as ort
+
+    from tests.serving.bundle_fixtures import make_dummy_onnx
+
+    onnx_path = make_dummy_onnx(tmp_path)
+    predictor = IdentityPredictor(model_path=onnx_path)
+    inputs = {"float_input": np.array([[0.25, 0.75]], dtype=np.float32)}
+    expected = ort.InferenceSession(onnx_path).run(None, inputs)[1][0, 1]
+
+    actual = predictor._predict_probabilities(inputs)
+
+    assert actual.shape == (1,)
+    assert actual[0] == pytest.approx(expected)
+
+
+def test_single_output_logits_predict_and_batch_apply_sigmoid(tmp_path: Path):
+    predictor = IdentityPredictor(
+        model_path=_make_single_output_onnx(tmp_path, output_name="output")
+    )
+
+    single = predictor.predict({"score": 0.0})
+    batch = predictor.predict_batch([{"score": -2.0}, {"score": 2.0}])
+
+    assert single == {"probability": pytest.approx(0.5), "prediction": 1}
+    assert batch[0]["probability"] == pytest.approx(0.11920292)
+    assert batch[0]["prediction"] == 0
+    assert batch[1]["probability"] == pytest.approx(0.88079708)
+    assert batch[1]["prediction"] == 1
+
+
+def test_unknown_single_output_is_not_guessed_as_logits(tmp_path: Path):
+    predictor = IdentityPredictor(
+        model_path=_make_single_output_onnx(tmp_path, output_name="prediction")
+    )
+
+    with pytest.raises(ValueError, match="requires a probability or logits output"):
+        predictor.predict({"score": 0.0})
 
 
 def test_aux_load_failure_closes_runtime(

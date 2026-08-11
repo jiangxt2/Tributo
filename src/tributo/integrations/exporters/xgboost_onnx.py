@@ -57,7 +57,7 @@ class XGBoostONNXExporter:
     options_model: ClassVar[type[BaseModel]] = XGBoostONNXOptions
     validator_bindings: ClassVar[tuple[ValidatorBinding, ...]] = (
         ValidatorBinding(validator_id="structure-v1", required=True),
-        ValidatorBinding(validator_id="onnx-runtime-v1", required=False),
+        ValidatorBinding(validator_id="onnx-runtime-v1", required=True),
     )
     mutates_source: ClassVar[bool] = True
     upstream_requirements: ClassVar[tuple[Any, ...]] = ()

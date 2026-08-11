@@ -60,7 +60,7 @@ class HuggingFaceONNXExporter:
     options_model: ClassVar[type[BaseModel]] = HFONNXOptions
     validator_bindings: ClassVar[tuple[ValidatorBinding, ...]] = (
         ValidatorBinding(validator_id="structure-v1", required=True),
-        ValidatorBinding(validator_id="onnx-runtime-v1", required=False),
+        ValidatorBinding(validator_id="onnx-runtime-v1", required=True),
     )
     mutates_source: ClassVar[bool] = False
     upstream_requirements: ClassVar[tuple[Any, ...]] = ()

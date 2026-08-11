@@ -62,122 +62,142 @@ class RayXGBoostSourceProvider:
 
     @contextmanager
     def _open(self, result: Any) -> Generator[ExportSource, None, None]:
-        import xgboost
+        checkpoint = _resolve_checkpoint(result)
+        with _checkpoint_directory(checkpoint) as checkpoint_dir:
+            source = _build_source(
+                checkpoint_dir, use_ray_loader=not isinstance(checkpoint, Path)
+            )
+            yield source
+
+
+def _build_source(checkpoint_dir: Path, *, use_ray_loader: bool) -> ExportSource:
+    """Load a checkpoint while its managed directory is alive."""
+    import xgboost
+
+    if use_ray_loader:
         from ray.train.xgboost import XGBoostCheckpoint
 
-        # Resolve to a directory path.
-        if hasattr(result, "checkpoint"):
-            # Ray Train Result object.
-            checkpoint = result.checkpoint
-        elif hasattr(result, "to_directory"):
-            # Direct checkpoint object.
-            checkpoint = result
-        elif isinstance(result, (str, Path)):
-            checkpoint_dir = Path(result)
-            # For local paths, use the path directly.
-            checkpoint = _path_to_checkpoint(checkpoint_dir)
+        xgb_checkpoint = XGBoostCheckpoint.from_directory(str(checkpoint_dir))
+        booster = cast(Any, xgb_checkpoint).get_model()
+    else:
+        booster = xgboost.Booster()
+        model_path = checkpoint_dir / "model.json"
+        if model_path.exists():
+            booster.load_model(str(model_path))
         else:
-            raise TypeError(
-                f"Expected Ray Result, Checkpoint, or path string, got {type(result)}"
-            )
-
-        if isinstance(checkpoint, Path):
-            checkpoint_dir = checkpoint
-            booster = xgboost.Booster()
-            model_path = checkpoint_dir / "model.json"
-            if model_path.exists():
-                booster.load_model(str(model_path))
+            ubj_path = checkpoint_dir / "model.ubj"
+            if ubj_path.exists():
+                booster.load_model(str(ubj_path))
             else:
-                # Try ubj format.
-                ubj_path = checkpoint_dir / "model.ubj"
-                if ubj_path.exists():
-                    booster.load_model(str(ubj_path))
-                else:
-                    raise FileNotFoundError(f"No model file found in {checkpoint_dir}")
-        else:
-            # Ray XGBoostCheckpoint.
-            xgb_checkpoint = XGBoostCheckpoint.from_directory(checkpoint.to_directory())
-            # get_model() is a runtime method not present in the ray.train
-            # type stubs — cast to Any to access it.
-            booster = cast(Any, xgb_checkpoint).get_model()
+                raise FileNotFoundError(f"No model file found in {checkpoint_dir}")
 
-        # Compute source fingerprint.
-        model_dump = booster.save_raw()
-        fingerprint = hashlib.sha256(
-            model_dump if isinstance(model_dump, bytes) else str(model_dump).encode()
-        ).hexdigest()[:16]
+    # Compute source fingerprint.
+    model_dump = booster.save_raw()
+    fingerprint = hashlib.sha256(
+        model_dump if isinstance(model_dump, bytes) else str(model_dump).encode()
+    ).hexdigest()[:16]
 
-        # Extract feature names and build the framework-neutral checkpoint
-        # contract used by the manifest signature.
-        feature_names = booster.feature_names
-        n_features = (
-            len(feature_names) if feature_names else int(booster.num_features())
-        )
-        effective_feature_names = feature_names or [f"f{i}" for i in range(n_features)]
-        feature_schema: dict[str, Any] = {
-            "feature_names": list(effective_feature_names)
-        }
-        objective = _booster_objective(booster)
-        is_classification = objective.startswith(("binary:", "multi:"))
-        task_type = (
-            "classification"
-            if is_classification
-            else "regression"
-            if objective.startswith("reg:")
-            else "unknown"
-        )
-        if is_classification:
-            n_classes = _booster_num_classes(booster, objective)
-            output_schema: tuple[CheckpointField, ...] = (
-                CheckpointField(name="label", dtype="int64", shape=("batch",)),
-                CheckpointField(
-                    name="probabilities",
-                    dtype="float32",
-                    shape=("batch", n_classes),
-                ),
-            )
-        else:
-            output_schema = (
-                # onnxmltools XGBRegressor emits a two-dimensional [batch, 1] tensor.
-                CheckpointField(name="prediction", dtype="float32", shape=("batch", 1)),
-            )
-        contract = ExportCheckpointV1(
-            trainer_type="xgboost",
-            architecture_id="xgboost",
-            input_schema=(
-                CheckpointField(
-                    name="float_input",
-                    dtype="float32",
-                    shape=("batch", n_features),
-                ),
+    # Extract feature names and build the framework-neutral checkpoint
+    # contract used by the manifest signature.
+    feature_names = booster.feature_names
+    n_features = len(feature_names) if feature_names else int(booster.num_features())
+    effective_feature_names = feature_names or [f"f{i}" for i in range(n_features)]
+    feature_schema: dict[str, Any] = {"feature_names": list(effective_feature_names)}
+    objective = _booster_objective(booster)
+    is_classification = objective.startswith(("binary:", "multi:"))
+    task_type = (
+        "classification"
+        if is_classification
+        else "regression"
+        if objective.startswith("reg:")
+        else "unknown"
+    )
+    if is_classification:
+        n_classes = _booster_num_classes(booster, objective)
+        output_schema: tuple[CheckpointField, ...] = (
+            CheckpointField(name="label", dtype="int64", shape=("batch",)),
+            CheckpointField(
+                name="probabilities",
+                dtype="float32",
+                shape=("batch", n_classes),
             ),
-            output_schema=output_schema,
-            preprocessing={"type": "none"},
-            task_type=task_type,
-            framework="xgboost",
-            framework_version=xgboost.__version__,
-            checkpoint_format_version=1,
         )
+    else:
+        output_schema = (
+            CheckpointField(name="prediction", dtype="float32", shape=("batch", 1)),
+        )
+    contract = ExportCheckpointV1(
+        trainer_type="xgboost",
+        architecture_id="xgboost",
+        input_schema=(
+            CheckpointField(
+                name="float_input",
+                dtype="float32",
+                shape=("batch", n_features),
+            ),
+        ),
+        output_schema=output_schema,
+        preprocessing={"type": "none"},
+        task_type=task_type,
+        framework="xgboost",
+        framework_version=xgboost.__version__,
+        checkpoint_format_version=1,
+    )
 
-        source = ExportSource(
-            source_kind="xgboost_result",
-            model_object=booster,
-            architecture_id="xgboost",
-            feature_schema=feature_schema,
-            metadata={
-                "framework": "xgboost",
-                "framework_version": xgboost.__version__,
-                "n_features": n_features,
-                "objective": objective,
-                "task_type": task_type,
-                "has_categorical_features": any(
-                    ft and ft.startswith("c") for ft in (booster.feature_types or [])
-                ),
-            },
-            source_fingerprint=fingerprint,
-            checkpoint_contract=contract,
+    return ExportSource(
+        source_kind="xgboost_result",
+        model_object=booster,
+        architecture_id="xgboost",
+        feature_schema=feature_schema,
+        metadata={
+            "framework": "xgboost",
+            "framework_version": xgboost.__version__,
+            "n_features": n_features,
+            "objective": objective,
+            "task_type": task_type,
+            "has_categorical_features": any(
+                ft and ft.startswith("c") for ft in (booster.feature_types or [])
+            ),
+        },
+        source_fingerprint=fingerprint,
+        checkpoint_contract=contract,
+    )
+
+
+def _resolve_checkpoint(result: Any) -> Any:
+    """Return a local Path or a Ray Checkpoint without materializing it."""
+    if hasattr(result, "checkpoint"):
+        checkpoint = result.checkpoint
+    elif isinstance(result, (str, Path)):
+        checkpoint = _path_to_checkpoint(Path(result))
+    elif hasattr(result, "as_directory"):
+        checkpoint = result
+    else:
+        raise TypeError(
+            f"Expected Ray Result, Checkpoint, or path string, got {type(result)}"
         )
-        yield source
+    if checkpoint is None:
+        raise ValueError("Training result has no checkpoint")
+    if isinstance(checkpoint, (str, Path)):
+        return _path_to_checkpoint(Path(checkpoint))
+    return checkpoint
+
+
+@contextmanager
+def _checkpoint_directory(checkpoint: Any) -> Generator[Path, None, None]:
+    """Keep remote Ray checkpoint materialization scoped to one source context."""
+    if isinstance(checkpoint, Path):
+        yield checkpoint
+        return
+    if not hasattr(checkpoint, "as_directory"):
+        raise TypeError("Ray Checkpoint must provide as_directory()")
+    with checkpoint.as_directory() as directory:
+        checkpoint_dir = Path(directory)
+        if not checkpoint_dir.is_dir():
+            raise NotADirectoryError(
+                f"Checkpoint path is not a directory: {checkpoint_dir}"
+            )
+        yield checkpoint_dir
 
 
 def _booster_objective(booster: Any) -> str:
