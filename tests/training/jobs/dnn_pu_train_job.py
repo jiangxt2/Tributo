@@ -71,7 +71,7 @@ def _training_config(algorithm: str, data_path: str, output_dir: str) -> dict[st
             "seed": 42,
         },
         "ray": {"num_workers": 1, "use_gpu": False, "max_failures": 0},
-        "output": {"onnx_path": output_dir},
+        "output": {"bundle_uri": output_dir},
     }
     if algorithm in {"dnn", "dnn_nnpu"}:
         config["data"] = {"type": "parquet", "path": data_path}
@@ -103,9 +103,15 @@ def _run_training(algorithm: str, data_path: str, output_dir: str) -> dict[str, 
 
         summary = run_pu_training_with_config(config)
 
-    onnx_path = Path(summary["onnx_path"])
+    from tributo.exporting.bundle_reader import BundleReader
+
     metrics = summary["metrics"]
-    onnx_exists = onnx_path.is_file()
+    with BundleReader().open_artifact(
+        summary["bundle_uri"], role="inference"
+    ) as artifact:
+        onnx_path = artifact.path_for("model.onnx")
+        onnx_exists = onnx_path.is_file()
+        onnx_size = onnx_path.stat().st_size if onnx_exists else 0
     result = {
         "algorithm": algorithm,
         "status": summary["status"],
@@ -113,7 +119,7 @@ def _run_training(algorithm: str, data_path: str, output_dir: str) -> dict[str, 
         "train_loss": float(metrics["train_loss"]),
         "class_prior": float(metrics["class_prior"]) if algorithm == "pu" else None,
         "onnx_exists": onnx_exists,
-        "onnx_size": onnx_path.stat().st_size if onnx_exists else 0,
+        "onnx_size": onnx_size,
     }
     if algorithm in {"dnn_nnpu", "pu"}:
         result["train_optimization_objective"] = float(
@@ -130,7 +136,7 @@ def _run_training(algorithm: str, data_path: str, output_dir: str) -> dict[str, 
     if result["status"] != "succeeded":
         raise AssertionError(f"Unexpected run status: {result['status']}")
     if not result["onnx_exists"] or result["onnx_size"] <= 0:
-        raise AssertionError(f"Missing ONNX artifact: {onnx_path}")
+        raise AssertionError(f"Missing ONNX artifact in {summary['bundle_uri']}")
     if result["epoch"] != 1 or not math.isfinite(result["train_loss"]):
         raise AssertionError(f"Invalid training metrics: {result}")
     if algorithm == "pu" and result["class_prior"] != 0.35:

@@ -56,7 +56,9 @@ class CallbackDispatcher:
         for cb in self._callbacks:
             self._invoke(cb, "on_run_complete", trainer, summary)
 
-    def on_run_error(self, trainer: BaseTrainer, error: Exception) -> Exception | None:
+    def on_run_error(
+        self, trainer: BaseTrainer, error: BaseException
+    ) -> Exception | None:
         """Fire ``on_run_error``; return the first callback error, if any."""
         callback_error: Exception | None = None
         for cb in self._callbacks:

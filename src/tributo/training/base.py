@@ -49,7 +49,7 @@ class TrainerCallback(Protocol):
     def on_run_complete(
         self, trainer: BaseTrainer, summary: dict[str, Any]
     ) -> None: ...
-    def on_run_error(self, trainer: BaseTrainer, error: Exception) -> None: ...
+    def on_run_error(self, trainer: BaseTrainer, error: BaseException) -> None: ...
 
 
 @PublicAPI(stability="beta")
@@ -200,25 +200,29 @@ class BaseTrainer(ABC):
         output_path: str = "",
         *,
         bundle_config: Any | None = None,
+        legacy_export: bool = False,
     ) -> dict[str, Any]:
-        """Template Method: ``setup → training_loop → export_artifacts``.
+        """Template Method: ``setup → training_loop → publish``.
 
         Subclasses should write their actual results into ``self._summary``
         inside ``export_artifacts`` (or the legacy ``export_model``); this
         method returns that dict.
 
-        When *bundle_config* is set (a ``BundleOutputConfig`` with non-empty
-        ``targets``), the export path is routed through
-        ``BundleExportService`` instead of the legacy ``export_artifacts()``
-        method.  This is the **bundle mode** entry point — it uses the
-        new export framework (planner → executor → publisher).
+        First-party trainers publish through ``BundleExportService`` by
+        default.  They require an explicit Bundle destination through
+        ``bundle_config.bundle_uri`` or *output_path* and fill in their
+        standard targets when ``bundle_config.targets`` is omitted.  The
+        deprecated raw-artifact path is available only through
+        ``legacy_export=True``.
 
         Args:
-            output_path: Artifact export path (legacy mode only; bundle
-                mode passes an empty string by default).
-            bundle_config: Optional ``BundleOutputConfig`` for bundle-mode
-                export.  When provided and has non-empty targets, the
-                export is routed through the new bundle pipeline.
+            output_path: Explicit Bundle destination for first-party trainers,
+                or the raw-artifact destination when ``legacy_export=True``.
+            bundle_config: Optional ``BundleOutputConfig``.  First-party
+                default targets are added when ``targets`` is omitted.
+            legacy_export: Explicit compatibility switch for the deprecated
+                raw artifact exporter. First-party trainers otherwise default
+                to Bundle export.
 
         Returns:
             A summary dict, containing at minimum ``{"status":
@@ -229,7 +233,11 @@ class BaseTrainer(ABC):
         from tributo.training.lifecycle import TrainingLifecycle
 
         lifecycle = TrainingLifecycle(self, CallbackDispatcher(self._callbacks))
-        return lifecycle.run(output_path, bundle_config=bundle_config)
+        return lifecycle.run(
+            output_path,
+            bundle_config=bundle_config,
+            legacy_export=legacy_export,
+        )
 
     def _export_bundle(self, checkpoint: Any, bundle_config: Any) -> None:
         """Legacy bundle-export hook (backward compatible).
@@ -261,6 +269,16 @@ class BaseTrainer(ABC):
             "BaseTrainer subclasses must declare _get_trainer_type() "
             "before using Bundle export"
         )
+
+    @staticmethod
+    def _default_bundle_targets() -> tuple[Any, ...] | None:
+        """Return first-party default targets, or ``None`` for legacy extensions."""
+        return None
+
+    @staticmethod
+    def _default_bundle_roles() -> dict[str, str]:
+        """Return role bindings used with first-party default targets."""
+        return {}
 
     @staticmethod
     def _get_tributo_version() -> str:

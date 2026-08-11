@@ -163,10 +163,27 @@ class DNNRayConfig(StrictConfigModel):
 class DNNOutputConfig(StrictConfigModel):
     """Output configuration."""
 
+    bundle_uri: Optional[str] = None
     onnx_path: Optional[str] = None
     onnx_opset: int = Field(default=12, ge=1)
     metrics_path: Optional[str] = None
     preprocessor_path: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_destination_contract(self) -> DNNOutputConfig:
+        legacy_fields = {
+            "onnx_path",
+            "onnx_opset",
+            "metrics_path",
+            "preprocessor_path",
+        }
+        configured_legacy = sorted(legacy_fields & self.model_fields_set)
+        if self.bundle_uri is not None and configured_legacy:
+            raise ValueError(
+                "output.bundle_uri cannot be combined with legacy output fields: "
+                + ", ".join(configured_legacy)
+            )
+        return self
 
 
 class DNNTrainingConfig(StrictConfigModel):
@@ -707,6 +724,16 @@ class DNNTrainerImpl(BaseTrainer):
     def _get_trainer_type() -> str:
         return "dnn"
 
+    @staticmethod
+    def _default_bundle_targets() -> tuple[Any, ...]:
+        from tributo.exporting.models import ExportTarget
+
+        return (ExportTarget(name="onnx-model", format="onnx", options={"opset": 18}),)
+
+    @staticmethod
+    def _default_bundle_roles() -> dict[str, str]:
+        return {"inference": "onnx-model"}
+
 
 # ── Training loop helpers ──
 
@@ -794,6 +821,7 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
     """
     import json
     import logging
+    import shutil
     import tempfile
     from pathlib import Path
 
@@ -1231,80 +1259,84 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
             from ray.train import Checkpoint
 
             checkpoint_dir = Path(tempfile.mkdtemp(prefix="dnn_ckpt_"))
+            try:
+                # Save model
+                torch.save(model.state_dict(), checkpoint_dir / "model.pt")
 
-            # Save model
-            torch.save(model.state_dict(), checkpoint_dir / "model.pt")
-
-            # Save preprocessor
-            preprocessor_state = {
-                "features": [f.__dict__ for f in features],
-                "label_encoders": {
-                    k: {
-                        str(kk): (
-                            int(vv) if isinstance(vv, (np.integer, np.int64)) else vv
-                        )
-                        for kk, vv in v.items()
-                    }
-                    for k, v in transformer.label_encoders.items()
-                },
-                "norm_params": transformer.norm_params,
-            }
-            (checkpoint_dir / "preprocessor.json").write_text(
-                json.dumps(preprocessor_state, ensure_ascii=False, default=str)
-            )
-
-            model_config = build_export_checkpoint_config(
-                [f.__dict__ for f in features],
-                model_cfg,
-                trainer_type="dnn",
-                task_type="classification",
-                framework_version=torch.__version__,
-            )
-            (checkpoint_dir / "model_config.json").write_text(
-                json.dumps(model_config, ensure_ascii=False, default=str)
-            )
-
-            if resume_enabled:
-                torch.save(optimizer.state_dict(), checkpoint_dir / "optimizer.pt")
-                (checkpoint_dir / "rng_state.json").write_text(
-                    json.dumps(capture_rng_state(), ensure_ascii=False)
-                )
-                (checkpoint_dir / "training_state.json").write_text(
-                    json.dumps(
-                        {
-                            "best_val_loss": best_val_loss,
-                            "patience_counter": patience_counter,
-                        },
-                        ensure_ascii=False,
-                    )
-                )
-                envelope = write_resume_manifest(
-                    checkpoint_dir,
-                    resume_id=resume_cfg.resume_id,
-                    trainer_type="dnn",
-                    completed_step=epoch + 1,
-                    framework="pytorch",
-                    framework_version=torch.__version__,
-                    payload_files=(
-                        "model.pt",
-                        "model_config.json",
-                        "optimizer.pt",
-                        "preprocessor.json",
-                        "rng_state.json",
-                        "training_state.json",
-                    ),
-                    payload_metadata={
-                        "model": "model.pt",
-                        "optimizer": "optimizer.pt",
-                        "preprocessing": "preprocessor.json",
-                        "rng": "rng_state.json",
-                        "early_stopping": "training_state.json",
+                # Save preprocessor
+                preprocessor_state = {
+                    "features": [f.__dict__ for f in features],
+                    "label_encoders": {
+                        k: {
+                            str(kk): (
+                                int(vv)
+                                if isinstance(vv, (np.integer, np.int64))
+                                else vv
+                            )
+                            for kk, vv in v.items()
+                        }
+                        for k, v in transformer.label_encoders.items()
                     },
+                    "norm_params": transformer.norm_params,
+                }
+                (checkpoint_dir / "preprocessor.json").write_text(
+                    json.dumps(preprocessor_state, ensure_ascii=False, default=str)
                 )
-                metrics["resume_id"] = envelope.resume_id
 
-            checkpoint = Checkpoint.from_directory(str(checkpoint_dir))
-            ray.train.report(metrics, checkpoint=checkpoint)
+                model_config = build_export_checkpoint_config(
+                    [f.__dict__ for f in features],
+                    model_cfg,
+                    trainer_type="dnn",
+                    task_type="classification",
+                    framework_version=torch.__version__,
+                )
+                (checkpoint_dir / "model_config.json").write_text(
+                    json.dumps(model_config, ensure_ascii=False, default=str)
+                )
+
+                if resume_enabled:
+                    torch.save(optimizer.state_dict(), checkpoint_dir / "optimizer.pt")
+                    (checkpoint_dir / "rng_state.json").write_text(
+                        json.dumps(capture_rng_state(), ensure_ascii=False)
+                    )
+                    (checkpoint_dir / "training_state.json").write_text(
+                        json.dumps(
+                            {
+                                "best_val_loss": best_val_loss,
+                                "patience_counter": patience_counter,
+                            },
+                            ensure_ascii=False,
+                        )
+                    )
+                    envelope = write_resume_manifest(
+                        checkpoint_dir,
+                        resume_id=resume_cfg.resume_id,
+                        trainer_type="dnn",
+                        completed_step=epoch + 1,
+                        framework="pytorch",
+                        framework_version=torch.__version__,
+                        payload_files=(
+                            "model.pt",
+                            "model_config.json",
+                            "optimizer.pt",
+                            "preprocessor.json",
+                            "rng_state.json",
+                            "training_state.json",
+                        ),
+                        payload_metadata={
+                            "model": "model.pt",
+                            "optimizer": "optimizer.pt",
+                            "preprocessing": "preprocessor.json",
+                            "rng": "rng_state.json",
+                            "early_stopping": "training_state.json",
+                        },
+                    )
+                    metrics["resume_id"] = envelope.resume_id
+
+                checkpoint = Checkpoint.from_directory(str(checkpoint_dir))
+                ray.train.report(metrics, checkpoint=checkpoint)
+            finally:
+                shutil.rmtree(checkpoint_dir, ignore_errors=True)
         else:
             ray.train.report(metrics)
 
@@ -1342,8 +1374,19 @@ def run_dnn_training_with_config(config: dict[str, Any]) -> dict[str, Any]:
         config=config,
         _validated_config=cfg,
     )
-    onnx_path = cfg.output.onnx_path or "model_output"
-    return trainer.run(output_path=onnx_path)
+    if cfg.output.bundle_uri:
+        return trainer.run(output_path=cfg.output.bundle_uri)
+    if cfg.output.onnx_path:
+        import warnings
+
+        warnings.warn(
+            "output.onnx_path selects the deprecated legacy export path; "
+            "configure output.bundle_uri for Bundle publication",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return trainer.run(output_path=cfg.output.onnx_path, legacy_export=True)
+    return trainer.run()
 
 
 @PublicAPI(stability="beta")

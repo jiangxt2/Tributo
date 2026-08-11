@@ -61,8 +61,9 @@ class TestRequiredOnnxFailure:
         trainer, _ = _make_trainer(monkeypatch)
         monkeypatch.setattr("tributo.training.xgboost_exporter.export_onnx", _boom)
 
-        with pytest.raises(RuntimeError, match="simulated ONNX export failure"):
-            trainer.run(output_path="model.onnx")
+        with pytest.warns(DeprecationWarning, match="legacy_export"):
+            with pytest.raises(RuntimeError, match="simulated ONNX export failure"):
+                trainer.run(output_path="model.onnx", legacy_export=True)
 
     def test_missing_checkpoint_fails_run(
         self, monkeypatch: pytest.MonkeyPatch
@@ -70,15 +71,17 @@ class TestRequiredOnnxFailure:
         trainer, result = _make_trainer(monkeypatch)
         result.checkpoint = None
 
-        with pytest.raises(RuntimeError, match="no checkpoint"):
-            trainer.run(output_path="model.onnx")
+        with pytest.warns(DeprecationWarning, match="legacy_export"):
+            with pytest.raises(RuntimeError, match="no checkpoint"):
+                trainer.run(output_path="model.onnx", legacy_export=True)
 
     def test_no_onnx_path_is_not_required(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         trainer, _ = _make_trainer(monkeypatch, onnx_path=None)
 
-        summary = trainer.run()
+        with pytest.warns(DeprecationWarning, match="legacy_export"):
+            summary = trainer.run(legacy_export=True)
 
         assert summary["status"] == "succeeded"
         assert summary["onnx_path"] is None

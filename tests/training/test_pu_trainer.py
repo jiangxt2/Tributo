@@ -26,6 +26,15 @@ class TestPUTrainingConfig:
         assert cfg.pu.beta == 0.0
         assert cfg.pu.gamma == 1.0
 
+    def test_bundle_destination_is_supported(self):
+        from tributo.training.pu_trainer import PUTrainingConfig
+
+        cfg = PUTrainingConfig(
+            pu={"class_prior": 0.2},
+            output={"bundle_uri": "s3://bucket/pu-bundles"},
+        )
+        assert cfg.output.bundle_uri == "s3://bucket/pu-bundles"
+
     def test_custom_config(self):
         """自定义配置应合法。"""
         from tributo.training.pu_trainer import PUTrainingConfig
@@ -706,7 +715,7 @@ class TestPUTrainerResourceSafety:
         覆盖默认预算的 happy path——收集通过、训练循环执行、metrics 上报。
         mock ray.train 与数据源，不依赖真实集群。
         """
-        pytest.importorskip("torch")
+        torch = pytest.importorskip("torch")
         from types import SimpleNamespace
 
         import numpy as np
@@ -734,11 +743,17 @@ class TestPUTrainerResourceSafety:
         )
 
         reported: dict[str, Any] = {}
+        checkpoint_dirs: list[Path] = []
 
         def fake_report(metrics, checkpoint=None):
             reported.update(metrics)
 
         monkeypatch.setattr(ray.train, "report", fake_report)
+        monkeypatch.setattr(
+            ray.train.Checkpoint,
+            "from_directory",
+            staticmethod(lambda path: checkpoint_dirs.append(Path(path)) or object()),
+        )
         monkeypatch.setattr(
             ray.train,
             "get_context",
@@ -777,6 +792,42 @@ class TestPUTrainerResourceSafety:
         assert "train_optimization_objective" in reported
         assert "train_observed_label_accuracy" in reported
         assert reported["train_acc"] == reported["train_observed_label_accuracy"]
+        assert checkpoint_dirs and all(not path.exists() for path in checkpoint_dirs)
+
+        import tempfile
+
+        created_dirs: list[Path] = []
+        original_mkdtemp = tempfile.mkdtemp
+
+        def tracked_mkdtemp(*args: Any, **kwargs: Any) -> str:
+            path = Path(original_mkdtemp(*args, **kwargs))
+            created_dirs.append(path)
+            return str(path)
+
+        def fail_checkpoint_write(*args: Any, **kwargs: Any) -> None:
+            del args, kwargs
+            raise OSError("checkpoint write failed")
+
+        monkeypatch.setattr(tempfile, "mkdtemp", tracked_mkdtemp)
+        monkeypatch.setattr(torch, "save", fail_checkpoint_write)
+
+        with pytest.raises(OSError, match="checkpoint write failed"):
+            pu_train_loop_per_worker(
+                {
+                    "data": {"source": {"type": "parquet", "path": "x"}},
+                    "features": [
+                        {"name": "f0", "type": "dense"},
+                        {"name": "f1", "type": "dense"},
+                    ],
+                    "label_col": "label",
+                    "model": {"dnn_hidden_units": [8]},
+                    "pu": {"loss_type": "nnpu", "class_prior": 0.2},
+                    "training": {"epochs": 1, "batch_size": 8},
+                    "resource": {},
+                }
+            )
+
+        assert created_dirs and all(not path.exists() for path in created_dirs)
 
 
 if __name__ == "__main__":

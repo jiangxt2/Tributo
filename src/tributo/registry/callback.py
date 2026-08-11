@@ -142,7 +142,7 @@ class MLflowTrackingCallback:
             if self._raise_on_error:
                 raise
 
-    def on_run_error(self, trainer: BaseTrainer, error: Exception) -> None:
+    def on_run_error(self, trainer: BaseTrainer, error: BaseException) -> None:
         """Training failed: end Run (FAILED status).
 
         Args:
