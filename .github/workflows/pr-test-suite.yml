@@ -89,8 +89,12 @@ jobs:
               - "tests/integrations/Dockerfile.data-ingestion"
               - "tests/integrations/Dockerfile.data-ingestion.dockerignore"
               - "tests/integrations/docker-compose.data-ingestion.yml"
+              - "tests/integrations/runtime-profiles.json"
+              - "scripts/run_data_ingestion_it.sh"
+              - "tools/tributo_it.py"
               - "pyproject.toml"
               - "uv.lock"
+              - ".github/workflows/it-runtime-image.yml"
               - ".github/workflows/pr-test-suite.yml"
             inference:
               - "src/tributo/inference/**"
@@ -173,14 +177,12 @@ jobs:
       - name: Lint (ruff)
         run: >-
           uv run --locked --no-sync ruff check
-          src/ tests/ tools/__init__.py tools/check_docs.py
-          tools/generate_algorithm_support_matrix.py docs/conf.py docs/_ext/
+          src/ tests/ tools/ docs/conf.py docs/_ext/
 
       - name: Format check (ruff)
         run: >-
           uv run --locked --no-sync ruff format --check
-          src/ tests/ tools/__init__.py tools/check_docs.py
-          tools/generate_algorithm_support_matrix.py docs/conf.py docs/_ext/
+          src/ tests/ tools/ docs/conf.py docs/_ext/
 
       - name: Verify generated protobuf sources
         run: |
@@ -513,65 +515,19 @@ jobs:
   data-ingestion-distributed:
     name: Data Ingestion Distributed (Docker Ray + MinIO)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     needs: [paths-filter, lint]
     if: needs.paths-filter.outputs.data_ingestion == 'true'
     env:
       COMPOSE_PROJECT_NAME: tributo-ingestion-${{ github.run_id }}-${{ github.run_attempt }}
-      TRIBUTO_INGESTION_IMAGE_TAG: ${{ github.run_id }}-${{ github.run_attempt }}
+      TRIBUTO_IT_ALLOW_LOCAL_BUILD: ${{ github.event_name == 'push' && '0' || '1' }}
+      TRIBUTO_IT_RUNTIME_REGISTRY: ghcr.io/jiangxt2/tributo-it-runtime
+      TRIBUTO_IT_RUNTIME_REGISTRY_WAIT_SECONDS: ${{ github.event_name == 'push' && '900' || '0' }}
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
 
-      - name: Build and start isolated Ray ingestion infrastructure
-        run: >-
-          docker compose
-          --file tests/integrations/docker-compose.data-ingestion.yml
-          up --detach --build
-
-      - name: Wait for Ray and MinIO readiness
-        run: |
-          ready=0
-          for attempt in $(seq 1 60); do
-            ray_out="$(docker compose \
-                --file tests/integrations/docker-compose.data-ingestion.yml \
-                exec -T ray-head \
-                ray status --address=127.0.0.1:6379 2>&1)" && ray_rc=0 || ray_rc=$?
-            minio_out="$(docker compose \
-                --file tests/integrations/docker-compose.data-ingestion.yml \
-                exec -T ray-head \
-                python -c "import urllib.request; urllib.request.urlopen('http://minio:9000/minio/health/live', timeout=2).read()" 2>&1)" && minio_rc=0 || minio_rc=$?
-            if [ "$ray_rc" -eq 0 ] && [ "$minio_rc" -eq 0 ]; then
-              ready=1
-              break
-            fi
-            if [ "$attempt" -le 3 ]; then
-              echo "attempt ${attempt}: ray_rc=${ray_rc} minio_rc=${minio_rc}"
-              printf 'ray stderr: %s\n' "$(printf '%s' "$ray_out" | head -4)"
-              printf 'minio stderr: %s\n' "$(printf '%s' "$minio_out" | head -4)"
-            fi
-            echo "Waiting for Docker Ray and MinIO (attempt ${attempt}/60)"
-            sleep 2
-          done
-          test "$ready" = "1"
-
-      - name: Run distributed dual-engine ingestion gate
-        run: |
-          set -o pipefail
-          docker compose \
-            --file tests/integrations/docker-compose.data-ingestion.yml \
-            exec -T \
-            --env TRIBUTO_DOCKER_RAY_TEST=1 \
-            ray-head \
-            python -m tests.integrations.test_data_ingestion_dual_engine \
-            2>&1 | tee /tmp/data-ingestion-distributed-test.log
-
-      - name: Collect Docker infrastructure logs
-        if: always()
-        run: >-
-          docker compose
-          --file tests/integrations/docker-compose.data-ingestion.yml
-          logs --no-color
-          > /tmp/data-ingestion-distributed-services.log
+      - name: Run isolated reusable-runtime ingestion gate
+        run: ./scripts/run_data_ingestion_it.sh
 
       - name: Upload distributed ingestion logs
         if: always()
@@ -579,17 +535,30 @@ jobs:
         with:
           name: data-ingestion-distributed-logs
           path: |
-            /tmp/data-ingestion-distributed-test.log
-            /tmp/data-ingestion-distributed-services.log
+            /tmp/tributo-it-logs/${{ env.COMPOSE_PROJECT_NAME }}-test.log
+            /tmp/tributo-it-logs/${{ env.COMPOSE_PROJECT_NAME }}-services.log
           if-no-files-found: warn
           retention-days: 7
 
       - name: Stop isolated Ray ingestion infrastructure
         if: always()
-        run: >-
-          docker compose
-          --file tests/integrations/docker-compose.data-ingestion.yml
-          down --volumes --remove-orphans
+        env:
+          # Compose resolves required image variables before `down`; these
+          # placeholders are never pulled or used to create containers.
+          TRIBUTO_IT_MINIO_IMAGE: tributo-cleanup-placeholder:unused
+          TRIBUTO_IT_RUNTIME_IMAGE: tributo-cleanup-placeholder:unused
+          TRIBUTO_IT_SOURCE_ROOT: ${{ github.workspace }}
+          TRIBUTO_IT_TOOL_IMAGE: tributo-cleanup-placeholder:unused
+        run: |
+          docker compose \
+            --file tests/integrations/docker-compose.data-ingestion.yml \
+            down --volumes --remove-orphans --timeout 30
+          test -z "$(docker ps --all --quiet \
+            --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}")"
+          test -z "$(docker network ls --quiet \
+            --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}")"
+          test -z "$(docker volume ls --quiet \
+            --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}")"
 
   inference-distributed:
     name: Inference Distributed (Docker Ray + MLflow + MinIO)

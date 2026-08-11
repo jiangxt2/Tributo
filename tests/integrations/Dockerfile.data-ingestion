@@ -1,10 +1,15 @@
-ARG BASE_IMAGE=rayproject/ray:2.55.1-py312
+ARG BASE_IMAGE=rayproject/ray:2.55.1-py312@sha256:911245f2478ad2e9f67ac13978dc2a75bcae0498b9f188b10bba703324b78379
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.23@sha256:d0a0a753ab981624b49c97abc98821c1c09f4ca69d1ef5cee69c501be3d88479
 
+FROM ${UV_IMAGE} AS uv
 FROM ${BASE_IMAGE}
 
-COPY --from=ghcr.io/astral-sh/uv:0.11.23 /uv /uvx /bin/
+COPY --from=uv /uv /uvx /bin/
 
-USER ray
+USER root
+RUN mkdir -p /opt/tributo && chown 1000:100 /opt/tributo
+
+USER 1000:100
 
 ENV PATH="/opt/tributo/.venv/bin:${PATH}" \
     PYTHONUNBUFFERED=1 \
@@ -13,7 +18,7 @@ ENV PATH="/opt/tributo/.venv/bin:${PATH}" \
     UV_LINK_MODE=copy \
     UV_PROJECT_ENVIRONMENT=/opt/tributo/.venv
 
-COPY --chown=ray:users . /opt/tributo
+COPY --chown=1000:100 pyproject.toml uv.lock /opt/tributo/
 
 WORKDIR /opt/tributo
 
@@ -21,4 +26,9 @@ RUN --mount=type=cache,target=/home/ray/.cache/uv,uid=1000,gid=100 \
     uv sync \
         --extra data-daft \
         --no-default-groups \
+        --no-install-project \
         --locked
+
+RUN python -c "import importlib.metadata as m, sys; assert sys.version_info[:2] == (3, 12); assert m.version('ray') == '2.55.1'; assert m.version('daft').startswith('0.7.')"
+
+WORKDIR /workspace/tributo-src

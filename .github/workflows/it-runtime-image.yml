@@ -1,0 +1,48 @@
+name: IT Runtime Image
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "tests/integrations/Dockerfile.data-ingestion"
+      - "tests/integrations/Dockerfile.data-ingestion.dockerignore"
+      - "tests/integrations/runtime-profiles.json"
+      - "tools/tributo_it.py"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/it-runtime-image.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: it-runtime-image-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish-data-ingestion-runtime:
+    name: Publish Data Ingestion Runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c
+
+      - name: Authenticate to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Publish immutable runtime when missing
+        env:
+          TRIBUTO_IT_BUILDX_CACHE_FROM: type=registry,ref=ghcr.io/jiangxt2/tributo-it-runtime:buildcache-data-ingestion
+          TRIBUTO_IT_BUILDX_CACHE_TO: type=registry,ref=ghcr.io/jiangxt2/tributo-it-runtime:buildcache-data-ingestion,mode=max
+        run: >-
+          python3 tools/tributo_it.py publish-runtime
+          --profile data-ingestion
+          --platform linux/amd64
+          --registry ghcr.io/jiangxt2/tributo-it-runtime

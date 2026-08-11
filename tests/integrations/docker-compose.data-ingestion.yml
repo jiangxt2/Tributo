@@ -1,29 +1,64 @@
 x-ray-common: &ray-common
-  image: tributo-data-ingestion-it:${TRIBUTO_INGESTION_IMAGE_TAG:-local}
-  build:
-    context: ../..
-    dockerfile: tests/integrations/Dockerfile.data-ingestion
+  image: ${TRIBUTO_IT_RUNTIME_IMAGE:?TRIBUTO_IT_RUNTIME_IMAGE is required}
+  pull_policy: never
   init: true
   shm_size: 2gb
+  working_dir: /workspace/tributo-src
   environment:
     AWS_ACCESS_KEY_ID: minioadmin
     AWS_SECRET_ACCESS_KEY: minioadmin123
     AWS_DEFAULT_REGION: us-east-1
+    PYTHONDONTWRITEBYTECODE: "1"
+    PYTHONPATH: /workspace/tributo-src/src:/workspace/tributo-src
     RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO: "0"
+    TMPDIR: /workspace/tributo-work/tmp
     TRIBUTO_MINIO_ENDPOINT: http://minio:9000
     TRIBUTO_MINIO_ACCESS_KEY: minioadmin
     TRIBUTO_MINIO_SECRET_KEY: minioadmin123
+    TRIBUTO_SOURCE_SNAPSHOT_PATH: /workspace/tributo-src
+    XDG_CACHE_HOME: /workspace/tributo-work/cache
   volumes:
-    - ingestion-workspace:/workspace
+    - ingestion-source:/workspace/tributo-src:ro
+    - ingestion-workspace:/workspace/tributo-work
 
 services:
-  workspace-init:
-    <<: *ray-common
-    user: root
+  source-init:
+    image: ${TRIBUTO_IT_TOOL_IMAGE:?TRIBUTO_IT_TOOL_IMAGE is required}
+    pull_policy: never
+    user: "0:0"
+    entrypoint:
+      - python
     command:
-      - chown
-      - ray:users
-      - /workspace
+      - /host-source/tools/tributo_it.py
+      - create-source-snapshot
+      - --source
+      - /host-source
+      - --destination
+      - /snapshot
+      - --owner-uid
+      - "1000"
+      - --owner-gid
+      - "100"
+    volumes:
+      - ${TRIBUTO_IT_SOURCE_ROOT:?TRIBUTO_IT_SOURCE_ROOT is required}:/host-source:ro
+      - ingestion-source:/snapshot
+    restart: "no"
+
+  workspace-init:
+    image: ${TRIBUTO_IT_TOOL_IMAGE:?TRIBUTO_IT_TOOL_IMAGE is required}
+    pull_policy: never
+    user: "0:0"
+    entrypoint:
+      - python
+    command:
+      - -c
+      - >-
+        import os, pathlib;
+        root = pathlib.Path('/workspace/tributo-work');
+        [(root / name).mkdir(parents=True, exist_ok=True) for name in ('cache', 'tmp')];
+        [os.chown(path, 1000, 100) for path in (root, root / 'cache', root / 'tmp')]
+    volumes:
+      - ingestion-workspace:/workspace/tributo-work
     restart: "no"
 
   ray-head:
@@ -45,6 +80,8 @@ services:
     depends_on:
       minio:
         condition: service_started
+      source-init:
+        condition: service_completed_successfully
       workspace-init:
         condition: service_completed_successfully
 
@@ -59,9 +96,14 @@ services:
     depends_on:
       ray-head:
         condition: service_healthy
+      source-init:
+        condition: service_completed_successfully
+      workspace-init:
+        condition: service_completed_successfully
 
   minio:
-    image: minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+    image: ${TRIBUTO_IT_MINIO_IMAGE:?TRIBUTO_IT_MINIO_IMAGE is required}
+    pull_policy: never
     command:
       - server
       - /data
@@ -72,4 +114,5 @@ services:
       MINIO_ROOT_PASSWORD: minioadmin123
 
 volumes:
+  ingestion-source:
   ingestion-workspace:
