@@ -104,6 +104,10 @@ would irreversibly corrupt the value. Binding dtypes use the canonical names
 supported by the runtime; invalid aliases fail during request validation
 instead of inside a Ray actor.
 
+The shared Bundle runtime also validates every actual output array after model
+execution: output names, ndarray type, dtype, rank, fixed dimensions, and the
+row-preserving batch dimension must match the loaded model contract.
+
 ## Post-training inference
 
 After training has published a Bundle, pass only its immutable `BundleRef` and
@@ -174,7 +178,9 @@ Create `inference.json`:
 `source` accepts the same canonical `SourceConfig` and `provider`/`uri`
 shapes used by training and embeddings. The historical `data.uri`,
 `data.input`, and ClickHouse fields remain compatible and are normalized
-before execution; they must not be mixed with `source`.
+before execution; they must not be mixed with `source`. The root, `model`,
+`output`, and `ray` JSON objects reject unknown fields. Validation errors do
+not echo submitted values.
 
 ```python
 from tributo.inference import run_inference_from_json
@@ -193,6 +199,12 @@ job_id = submit_inference_job(
 )
 print(f"Job submitted: {job_id}")
 ```
+
+Resolved request submission freezes the complete credential-free plan and
+transports it through `TRIBUTO_INFERENCE_PLAN_B64`. The encoded value is limited
+to 65,536 bytes; larger plans fail before Ray Job submission. Keep raw SQL and
+binding metadata bounded, or move large external state behind immutable
+references rather than embedding it in a request.
 
 ### Configuration reference
 
@@ -222,9 +234,11 @@ Legacy JSON `data.s3` belongs only to the input source. It is never propagated
 to an S3 model or result sink; configurations that relied on that behavior emit
 a migration warning without logging credential values. Configure
 `model.storage_profile` and `output.storage_profile` independently. Canonical
-sources also cannot be combined with legacy `feature_columns`; built-in file
-sources use `source.columns`, while reusable transformations use the shared
-Transform IR.
+sources constructed through the Python API emit the same sanitized warning when
+they contain inline S3 settings and target an S3 model or sink without the
+corresponding independent profile. Canonical sources also cannot be combined
+with legacy `feature_columns`; built-in file sources use `source.columns`, while
+reusable transformations use the shared Transform IR.
 
 For a canonical SQL input with an S3 output, the output sink remains separate
 from the SQL connection. Configure output credentials through IAM or the AWS
@@ -237,8 +251,11 @@ environment; SQL connection credentials are not reused as S3 credentials.
 available:
 
 - `mlflow.v2` resolves a numeric Model Version or Alias, immediately freezes
-  the result to its numeric version, and accepts either an existing Tributo
-  Bundle or an MLflow model with an ONNX flavor and named tensor signature.
+  the result to its numeric version, and accepts a bounded `runs:/` source
+  containing either an existing Tributo Bundle or an MLflow model with an
+  ONNX flavor and named tensor signature. The importer lists and bounds the
+  artifact tree before download, then rejects path escapes, symlinks, tree
+  changes, excessive depth, excessive entries, and excessive total size.
 - `tributo.artifact` acquires an explicit local, `file://`, or `s3://` artifact.
   It supports ONNX and native XGBoost JSON/UBJ when the caller provides the
   exact format, flavor, and typed input/output signature. An optional expected
@@ -259,12 +276,38 @@ External importers require typed signatures and do not expose the legacy
 `unsafe` escape hatch. Explicit unsafe compatibility is limited to callers
 that already hold a `BundleModelReference` for an old Bundle.
 
+## Reproducible integration gate
+
+Inference integration tests must run through the repository-owned entry point:
+
+```bash
+./scripts/run_inference_it.sh
+```
+
+The runner builds an isolated Docker Ray cluster and test-owned MLflow and
+MinIO services. Python 3.12, Ray 2.55.1, uv 0.11.23, MLflow 2.22.5, ONNX
+1.22.0, ONNX Runtime 1.28.0, PyArrow 19.0.1, and XGBoost 3.3.0 are verified
+before pytest starts; infrastructure images use the immutable digests recorded
+in `tests/integrations/inference-it-versions.conf`.
+
+Each invocation uses a unique Compose project without host ports or fixed
+container names. On success, failure, interrupt, or CI cancellation, the
+runner captures logs and removes only that project's containers, network, and
+volumes. It verifies that no project-labelled resource remains and that every
+container which existed before the test still exists in the same state. The
+runner never performs a Docker prune or shared-image cleanup.
+
 Ray Data executes the lazy input, model, and distributed write graph from the
 terminal sink action. Failures that the public Ray API cannot attribute to one
 operator are reported as `materialization`, rather than incorrectly claiming
 that the model or Sink alone failed. Sink configuration/profile failures remain
 `sink` failures. Executor retry hints remain conservative; detached retries
 require an explicit classifier in the Ray Job adapter.
+
+Once a ResultSink returns its receipt, the output commit is the terminal data
+fact. A subsequent input-lease `close()` failure is logged with only its error
+type and does not retroactively mark the committed result failed or make it
+retryable.
 
 ```python
 from tributo.inference import ArtifactModelReference, RegistryModelReference

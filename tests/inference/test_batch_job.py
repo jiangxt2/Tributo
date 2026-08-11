@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -89,3 +90,22 @@ def test_main_returns_failure_for_structured_failed_result(
         exit_code = main(argparse.Namespace(config=None, resolved_plan_env="PLAN"))
 
     assert exit_code == 1
+
+
+def test_main_logs_only_unhandled_exception_type(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with (
+        patch("tributo.inference.batch_job.configure_logging"),
+        patch("tributo.inference.batch_job.ray.init"),
+        patch(
+            "tributo.inference.batch_job._run_resolved_plan",
+            side_effect=RuntimeError("must-not-leak"),
+        ),
+        caplog.at_level(logging.ERROR, logger="tributo.inference.batch_job"),
+    ):
+        exit_code = main(argparse.Namespace(config=None, resolved_plan_env="PLAN"))
+
+    assert exit_code == 1
+    assert "RuntimeError" in caplog.text
+    assert "must-not-leak" not in caplog.text

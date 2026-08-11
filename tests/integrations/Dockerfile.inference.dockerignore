@@ -1,0 +1,14 @@
+*
+
+!src/
+!src/**
+!tests/
+!tests/**
+!pyproject.toml
+!uv.lock
+!README.md
+!.python-version
+
+**/__pycache__/
+**/*.pyc
+**/*.pyo

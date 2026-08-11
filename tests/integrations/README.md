@@ -15,8 +15,31 @@
 | File conformance | `../integration/test_data_ingestion_conformance.py` | Local/MinIO Parquet and CSV through Ray Data and Daft | Local Ray runtime + MinIO |
 | Table conformance | `../integration/test_table_format_ingestion.py` | Local/MinIO Iceberg and Lance through Ray Data and Daft | Local Ray runtime + MinIO |
 | PostgreSQL conformance | `../integration/test_postgresql_ingestion.py` | Structured table read through Ray Data and Daft | Local Ray runtime + PostgreSQL |
+| Inference Ray Jobs | `../integration/test_inference_ray_jobs.py` | Bundle, real post-training inline/detached inference, MLflow import, external artifacts, retry identity, credential domains, empty/NaN behavior | Isolated version-locked Docker Ray + MLflow + MinIO |
 | Streaming | `test_e2e_streaming.py` | Streaming inference service | TBD |
 | Tune | `test_e2e_tune.py` | Hyperparameter search | TBD |
+
+---
+
+## Inference Ray Jobs Suite
+
+Use only the lifecycle-owned runner:
+
+```bash
+./scripts/run_inference_it.sh
+```
+
+Do not invoke `test_inference_ray_jobs.py` against a developer Ray cluster.
+The test module fails when the Compose ownership marker is absent. The runner
+uses `inference-it-versions.conf`, creates a unique Compose project, exposes no
+host ports, and runs pytest inside `ray-head`; the head has zero Ray CPUs so
+model actors execute on the independent worker.
+
+An EXIT/INT/TERM trap captures logs and executes project-scoped `down
+--volumes --remove-orphans`. CI repeats the same exact-project cleanup with an
+`always()` step. Both paths verify that project-labelled resources are gone;
+no prune, global deletion, or shared-image cleanup is permitted. Test and
+service logs remain under `/tmp/<compose-project>-*.log` after cleanup.
 
 ---
 

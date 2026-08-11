@@ -151,6 +151,12 @@ Ray Data.
 First-party external model importers normalize external systems into verified
 Bundles before inference.
 
+```{autoclass} tributo.integrations.model_importers.ModelImporter
+```
+
+```{autoclass} tributo.integrations.model_importers.ModelImporterRegistry
+```
+
 ```{autoclass} tributo.integrations.model_importers.ArtifactModelImporter
 :members:
 ```

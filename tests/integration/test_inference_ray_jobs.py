@@ -36,6 +36,7 @@ from tributo._common.storage import get_boto3_client
 from tributo._common.submission_id import generate_submission_id
 from tributo.data import IngestionRequest
 from tributo.data.source_config import ParquetSourceConfig
+from tributo.exceptions import JobConfigurationError
 from tributo.exporting.bundle_reader import BundleReader
 from tributo.exporting.models import BundleRef
 from tributo.inference.api import resolve_inference
@@ -82,6 +83,14 @@ class _S3Assets:
     model_bundle: BundleRef
     host_profile: str
     cluster_profile: str
+
+
+@pytest.fixture(scope="module", autouse=True)
+def require_isolated_inference_compose() -> None:
+    if os.environ.get("TRIBUTO_DOCKER_INFERENCE_IT") != "1":
+        pytest.fail(
+            "Inference integration tests must run through scripts/run_inference_it.sh"
+        )
 
 
 @pytest.fixture(scope="module")
@@ -155,15 +164,15 @@ def mlflow_service() -> Iterator[MLflowService]:
 
 @pytest.fixture(scope="module")
 def inference_assets() -> Iterator[_Assets]:
-    shared_host = Path(
-        os.environ.get(
-            "TRIBUTO_RAY_SHARED_WORKSPACE_HOST",
-            "/Users/jiangxintong/Docker/ray-cluster/workspace",
+    shared_host_value = os.environ.get("TRIBUTO_RAY_SHARED_WORKSPACE_HOST")
+    shared_container_value = os.environ.get("TRIBUTO_RAY_SHARED_WORKSPACE_CONTAINER")
+    if not shared_host_value or not shared_container_value:
+        raise RuntimeError(
+            "The isolated inference Compose runner must provide both shared "
+            "workspace paths"
         )
-    )
-    shared_container = os.environ.get(
-        "TRIBUTO_RAY_SHARED_WORKSPACE_CONTAINER", "/workspace"
-    ).rstrip("/")
+    shared_host = Path(shared_host_value)
+    shared_container = shared_container_value.rstrip("/")
     if not shared_host.is_dir():
         raise RuntimeError(f"Ray shared host workspace does not exist: {shared_host}")
 
@@ -180,6 +189,7 @@ def inference_assets() -> Iterator[_Assets]:
                     "entity_id": pa.array([101, 102, 103, 104], type=pa.int64()),
                     "feature_a": pa.array([1.0, -1.0, 2.0, -2.0], type=pa.float32()),
                     "feature_b": pa.array([0.5, 0.5, -0.25, -0.25], type=pa.float32()),
+                    "label": pa.array([1, 0, 1, 0], type=pa.int64()),
                 }
             ),
             input_dir / "part-0.parquet",
@@ -232,6 +242,37 @@ def _classifier_output_binding() -> OutputBindingSpec:
             ),
         )
     )
+
+
+@pytest.fixture(scope="module")
+def trained_bundle(inference_assets: _Assets) -> BundleRef:
+    result_path = inference_assets.host_root / "detached-training-result.json"
+    runtime_env = build_runtime_env(
+        env_vars={
+            "INPUT_URI": f"{inference_assets.container_root}/input/part-0.parquet",
+            "TRAINING_BUNDLE_URI": (
+                f"{inference_assets.container_root}/detached-training-bundles"
+            ),
+            "TRAINING_RESULTS_URI": (
+                f"{inference_assets.container_root}/detached-training-results"
+            ),
+            "TRAINING_RESULT_PATH": (
+                f"{inference_assets.container_root}/{result_path.name}"
+            ),
+            "POST_TRAINING_MODE": "train-only",
+        }
+    )
+    client = JobSubmissionClient(DEFAULT_DASHBOARD_URL)
+    job_id = client.submit_job(
+        entrypoint="python tests/integration/jobs/post_training_inference_job.py",
+        runtime_env=runtime_env,
+        submission_id=generate_submission_id(
+            "train-for-detached-inference", inference_assets.container_root
+        ),
+    )
+    result = wait_for_job(client, job_id, timeout=360, poll_interval=2)
+    assert result["status"] == JobStatus.SUCCEEDED, result["logs"]
+    return BundleRef.model_validate_json(result_path.read_text(encoding="utf-8"))
 
 
 def _ray_input(
@@ -354,6 +395,83 @@ def test_nan_failure_is_classified_as_materialization(
     assert "materialization" in result["logs"]
 
 
+def test_retry_preserves_run_and_plan_identity_but_changes_attempt(
+    inference_assets: _Assets,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_dir = inference_assets.host_root / "retry-nan-input"
+    input_dir.mkdir()
+    pq.write_table(
+        pa.table(
+            {
+                "entity_id": pa.array([301], type=pa.int64()),
+                "feature_a": pa.array([np.nan], type=pa.float32()),
+                "feature_b": pa.array([1.0], type=pa.float32()),
+            }
+        ),
+        input_dir / "part-0.parquet",
+    )
+    request = _request(inference_assets, "retry-output").model_copy(
+        update={
+            "input": _ray_input(
+                ParquetSourceConfig(
+                    path=(
+                        f"{inference_assets.container_root}/"
+                        "retry-nan-input/part-0.parquet"
+                    )
+                )
+            ),
+            "run_id": "inference-it-retry-identity",
+        }
+    )
+    monkeypatch.setenv("TRIBUTO_JOB_KIND", "inference")
+    monkeypatch.setenv("TRIBUTO_RUN_ID", request.run_id or "")
+    monkeypatch.setenv("TRIBUTO_ATTEMPT_ID", "attempt-1")
+    first = resolve_inference(request)
+    monkeypatch.setenv("TRIBUTO_ATTEMPT_ID", "attempt-2")
+    second = resolve_inference(request)
+
+    assert first.run_id == second.run_id
+    assert first.plan_digest == second.plan_digest
+    assert first.attempt_id != second.attempt_id
+    assert first.submission_id != second.submission_id
+
+    client = JobSubmissionClient(DEFAULT_DASHBOARD_URL)
+    for plan in (first, second):
+        job_id = submit_resolved_inference(
+            plan,
+            dashboard_url=DEFAULT_DASHBOARD_URL,
+        )
+        result = wait_for_job(client, job_id, timeout=240, poll_interval=2)
+        assert result["status"] == JobStatus.FAILED
+        assert "materialization" in result["logs"]
+
+
+def test_safetensors_without_trusted_architecture_fails_before_ray_submission(
+    inference_assets: _Assets,
+) -> None:
+    request = _request(inference_assets, "safetensors-output").model_copy(
+        update={
+            "model": ArtifactModelReference(
+                provider_id="tributo.artifact",
+                uri=f"{inference_assets.container_root}/missing.safetensors",
+                format_id="safetensors",
+                flavor_id="safetensors-v1",
+                import_bundle_uri=(
+                    f"{inference_assets.container_root}/safetensors-import"
+                ),
+                options={
+                    "input_fields": [{"name": "x", "dtype": "float32"}],
+                    "output_fields": [{"name": "y", "dtype": "float32"}],
+                },
+            )
+        }
+    )
+
+    with pytest.raises(JobConfigurationError, match="weights-only"):
+        resolve_inference(request)
+
+
 def test_published_bundle_triggers_inline_post_training_inference(
     inference_assets: _Assets,
 ) -> None:
@@ -363,10 +481,14 @@ def test_published_bundle_triggers_inline_post_training_inference(
         env_vars={
             "INPUT_URI": f"{inference_assets.container_root}/input/part-0.parquet",
             "OUTPUT_URI": output_uri,
-            "BUNDLE_URI": inference_assets.container_bundle,
-            "BUNDLE_ID": inference_assets.bundle_id,
-            "MANIFEST_SHA256": inference_assets.manifest_sha256,
+            "TRAINING_BUNDLE_URI": (
+                f"{inference_assets.container_root}/inline-training-bundles"
+            ),
+            "TRAINING_RESULTS_URI": (
+                f"{inference_assets.container_root}/inline-training-results"
+            ),
             "PARENT_RUN_ID": parent_run_id,
+            "POST_TRAINING_MODE": "inline",
         }
     )
     client = JobSubmissionClient(DEFAULT_DASHBOARD_URL)
@@ -381,16 +503,16 @@ def test_published_bundle_triggers_inline_post_training_inference(
 
     assert result["status"] == JobStatus.SUCCEEDED, result["logs"]
     summary = _result_from_logs(result["logs"])
-    assert summary == {
-        "status": "succeeded",
-        "parent_run_id": parent_run_id,
-        "rows": 4,
-        "columns": ["entity_id", "prediction", "score"],
-    }
+    assert summary["status"] == "succeeded"
+    assert summary["parent_run_id"] == parent_run_id
+    assert summary["rows"] == 4
+    assert summary["columns"] == ["entity_id", "prediction", "score"]
+    assert summary["bundle_id"].startswith("bundle-")
 
 
 def test_published_bundle_triggers_detached_post_training_ray_job(
     inference_assets: _Assets,
+    trained_bundle: BundleRef,
 ) -> None:
     output_name = "post-training-detached-output"
     action = PostTrainingInferenceAction(
@@ -409,11 +531,7 @@ def test_published_bundle_triggers_detached_post_training_ray_job(
     )
     job_id = submit_post_training_inference(
         action,
-        BundleRef(
-            canonical_uri=str(inference_assets.host_bundle),
-            bundle_id=inference_assets.bundle_id,
-            manifest_sha256=inference_assets.manifest_sha256,
-        ),
+        trained_bundle,
         parent_run_id="training-run-detached-it",
         dashboard_url=DEFAULT_DASHBOARD_URL,
     )
@@ -639,7 +757,14 @@ def test_mlflow_alias_is_frozen_before_ray_job_and_numeric_version_runs(
     )
 
     frozen_plan = resolve_inference(alias_request)
-    assert f"version={first_version}" in frozen_plan.model.source_provenance
+    assert frozen_plan.model.source_provenance.startswith(
+        f"registry:mlflow.v2:{model_name}:champion;"
+    )
+    source_fingerprint = frozen_plan.model.source_provenance.rsplit(
+        "source_fingerprint=", maxsplit=1
+    )[1]
+    assert len(source_fingerprint) == 64
+    assert all(character in "0123456789abcdef" for character in source_fingerprint)
     client.set_registered_model_alias(model_name, "champion", second_version)
     alias_job = submit_resolved_inference(
         frozen_plan,

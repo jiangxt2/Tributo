@@ -106,6 +106,7 @@ class TestBundleBatchPredictor:
             storage_profile="model-domain",
             unsafe=False,
             expected_manifest_sha256="a" * 64,
+            use_case="batch",
         )
         return predictor
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import patch
 
 import pytest
@@ -259,17 +260,22 @@ class TestRayMapBatchesExecutor:
         assert result.failure.phase == "execution"
         assert inputs.opened.cancel_calls == 1
 
-    def test_close_failure_preserves_both_receipts(self) -> None:
+    def test_close_failure_preserves_committed_success(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         inputs = _Inputs(_Dataset(), close_error=RuntimeError("cleanup detail"))
 
-        result = RayMapBatchesExecutor(inputs).execute(_plan(), _Sink())
+        with caplog.at_level(logging.WARNING, logger="tributo.inference.executor"):
+            result = RayMapBatchesExecutor(inputs).execute(_plan(), _Sink())
 
-        assert result.status == "failed"
-        assert result.failure is not None
-        assert result.failure.phase == "execution"
+        assert result.status == "succeeded"
+        assert result.failure is None
+        assert result.retryable is False
         assert result.ingestion_receipt == _receipt()
         assert result.sink_receipt is not None
         assert inputs.opened.close_calls == 1
+        assert "RuntimeError" in caplog.text
+        assert "cleanup detail" not in caplog.text
 
     def test_mismatched_sink_id_fails_before_data_access(self) -> None:
         sink = _Sink()

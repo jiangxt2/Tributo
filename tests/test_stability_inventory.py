@@ -118,6 +118,7 @@ STABILITY_MAP: dict[str, str] = {
     "tributo.integrations.flavors.xgboost_native": "alpha",
     "tributo.integrations.model_importers.artifact": "alpha",
     "tributo.integrations.model_importers.mlflow": "alpha",
+    "tributo.integrations.model_importers.registry": "alpha",
     "tributo.integrations.validators": "beta",
     "tributo.integrations.sources": "beta",
     "tributo.integrations.storage": "beta",

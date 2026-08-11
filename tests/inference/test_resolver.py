@@ -167,7 +167,9 @@ class TestInferenceResolver:
     def test_unsupported_flavor_fails_before_execution(self, tmp_path: Path) -> None:
         bundle = build_test_bundle(tmp_path, flavor_id="safetensors-v1")
 
-        with pytest.raises(UnsupportedArtifactFormat, match="serveable flavor matrix"):
+        with pytest.raises(
+            UnsupportedArtifactFormat, match="batch inference capability"
+        ):
             InferenceResolver().resolve(_request(bundle))
 
     def test_empty_signature_requires_explicit_unsafe(self, tmp_path: Path) -> None:

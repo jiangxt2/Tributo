@@ -131,3 +131,17 @@ def test_adapter_source_has_no_training_import() -> None:
     )
 
     assert not any(name.startswith("tributo.training") for name in imports)
+
+
+def test_adapter_does_not_import_private_contract_symbols() -> None:
+    path = Path(__file__).parents[2] / "src/tributo/inference/post_training.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    imported_contract_symbols = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "tributo.inference.contracts"
+        for alias in node.names
+    }
+
+    assert not any(name.startswith("_") for name in imported_contract_symbols)

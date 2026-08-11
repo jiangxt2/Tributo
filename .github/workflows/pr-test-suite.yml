@@ -28,6 +28,7 @@ jobs:
       trainer_bundle: ${{ github.event_name == 'merge_group' || steps.filter.outputs.trainer_bundle == 'true' }}
       docs: ${{ github.event_name == 'merge_group' || steps.filter.outputs.docs == 'true' }}
       data_ingestion: ${{ github.event_name == 'merge_group' || steps.filter.outputs.data_ingestion == 'true' }}
+      inference: ${{ github.event_name == 'merge_group' || steps.filter.outputs.inference == 'true' }}
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
       - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36
@@ -88,6 +89,23 @@ jobs:
               - "tests/integrations/Dockerfile.data-ingestion"
               - "tests/integrations/Dockerfile.data-ingestion.dockerignore"
               - "tests/integrations/docker-compose.data-ingestion.yml"
+              - "pyproject.toml"
+              - "uv.lock"
+              - ".github/workflows/pr-test-suite.yml"
+            inference:
+              - "src/tributo/inference/**"
+              - "src/tributo/data/**"
+              - "src/tributo/_common/**"
+              - "src/tributo/exporting/**"
+              - "src/tributo/integrations/flavors/**"
+              - "src/tributo/integrations/model_importers/**"
+              - "src/tributo/integrations/sinks/**"
+              - "tests/inference/**"
+              - "tests/integration/test_inference_ray_jobs.py"
+              - "tests/integration/jobs/post_training_inference_job.py"
+              - "tests/integrations/*inference*"
+              - "tests/support/mlflow_service.py"
+              - "scripts/run_inference_it.sh"
               - "pyproject.toml"
               - "uv.lock"
               - ".github/workflows/pr-test-suite.yml"
@@ -573,6 +591,39 @@ jobs:
           --file tests/integrations/docker-compose.data-ingestion.yml
           down --volumes --remove-orphans
 
+  inference-distributed:
+    name: Inference Distributed (Docker Ray + MLflow + MinIO)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: [paths-filter, lint]
+    if: needs.paths-filter.outputs.inference == 'true'
+    env:
+      COMPOSE_PROJECT_NAME: tributo-inference-${{ github.run_id }}-${{ github.run_attempt }}
+      TRIBUTO_INFERENCE_IMAGE_TAG: ${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+
+      - name: Run isolated version-locked inference integration tests
+        run: scripts/run_inference_it.sh
+
+      - name: Upload inference integration logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: inference-distributed-logs
+          path: /tmp/tributo-inference-${{ github.run_id }}-${{ github.run_attempt }}-*.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Defensively stop only this inference Compose project
+        if: always()
+        run: >-
+          docker compose
+          --project-name "$COMPOSE_PROJECT_NAME"
+          --env-file tests/integrations/inference-it-versions.conf
+          --file tests/integrations/docker-compose.inference.yml
+          down --volumes --remove-orphans
+
   build:
     name: Package Build & Smoke Test
     runs-on: ubuntu-latest
@@ -647,6 +698,7 @@ jobs:
       - ray-runtime-env
       - data-ingestion-conformance
       - data-ingestion-distributed
+      - inference-distributed
       - build
       - core-walking-skeleton
       - docs-build
@@ -667,6 +719,8 @@ jobs:
           DATA_INGESTION: ${{ needs.paths-filter.outputs.data_ingestion }}
           DATA_INGESTION_RESULT: ${{ needs.data-ingestion-conformance.result }}
           DATA_INGESTION_DISTRIBUTED_RESULT: ${{ needs.data-ingestion-distributed.result }}
+          INFERENCE: ${{ needs.paths-filter.outputs.inference }}
+          INFERENCE_DISTRIBUTED_RESULT: ${{ needs.inference-distributed.result }}
           BUILD_RESULT: ${{ needs.build.result }}
           WALKING_RESULT: ${{ needs.core-walking-skeleton.result }}
           DOCS: ${{ needs.paths-filter.outputs.docs }}
@@ -716,6 +770,12 @@ jobs:
           else
             require_skipped data-ingestion-conformance "$DATA_INGESTION_RESULT"
             require_skipped data-ingestion-distributed "$DATA_INGESTION_DISTRIBUTED_RESULT"
+          fi
+
+          if [ "$INFERENCE" = "true" ]; then
+            require_success inference-distributed "$INFERENCE_DISTRIBUTED_RESULT"
+          else
+            require_skipped inference-distributed "$INFERENCE_DISTRIBUTED_RESULT"
           fi
 
           if [ "$MODEL_EXPORT" = "true" ]; then

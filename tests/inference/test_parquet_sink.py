@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import patch
 
 import pytest
@@ -114,10 +115,20 @@ class TestParquetResultSink:
         assert dataset.calls[0][1]["filesystem"] is filesystem
         assert receipt.uri == "S3://bucket/results"
 
-    def test_write_error_is_sanitized(self) -> None:
-        dataset = _Dataset(RuntimeError("s3://key:secret@bucket/output"))
+    def test_write_error_is_sanitized(self, caplog: pytest.LogCaptureFixture) -> None:
+        dataset = _Dataset(
+            RuntimeError(
+                "permission denied at /Users/example/private/output for "
+                "s3://key:secret@bucket/output?token=hidden"
+            )
+        )
 
-        with pytest.raises(ResultMaterializationError) as error:
+        with (
+            caplog.at_level(
+                logging.WARNING, logger="tributo.integrations.sinks.parquet"
+            ),
+            pytest.raises(ResultMaterializationError) as error,
+        ):
             ParquetResultSink().write(
                 dataset,
                 ParquetResultSinkRequest(uri="/output"),
@@ -128,6 +139,12 @@ class TestParquetResultSink:
         assert error.value.source_error_type == "RuntimeError"
         assert "secret" not in str(error.value)
         assert error.value.__cause__ is None
+        assert "RuntimeError" in caplog.text
+        assert "permission denied" in caplog.text
+        assert "secret" not in caplog.text
+        assert "hidden" not in caplog.text
+        assert "/Users/example" not in caplog.text
+        assert "<local-path>" in caplog.text
 
     def test_unresolved_named_profile_cannot_fall_back_to_default_domain(self) -> None:
         class NamedProfiles:

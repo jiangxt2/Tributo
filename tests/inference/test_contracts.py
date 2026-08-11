@@ -11,6 +11,7 @@ from tributo.exporting.models import BundleRef
 from tributo.inference.contracts import (
     ArtifactModelReference,
     BundleModelReference,
+    FailureDiagnostic,
     InferenceRequest,
     InferenceResult,
     InputBindingSpec,
@@ -353,6 +354,64 @@ class TestInferenceResult:
 
         assert result.ingestion_receipt is not None
         assert result.ingestion_receipt.source_ref == result.source_ref_id
+
+    def test_success_cannot_be_retryable(self) -> None:
+        with pytest.raises(
+            ValidationError, match="succeeded inference cannot be retryable"
+        ):
+            InferenceResult(
+                run_id="run-1",
+                attempt_id="attempt-1",
+                submission_id="submission-1",
+                plan_digest="a" * 64,
+                bundle_id="bundle-1",
+                manifest_sha256="b" * 64,
+                role="inference",
+                flavor_id="onnx-runtime-v1",
+                source_ref_id="c" * 64,
+                ingestion_receipt=_ingestion_receipt(),
+                sink_receipt=ResultSinkReceipt(
+                    sink_id="parquet-v1",
+                    result_id="d" * 64,
+                    uri="/data/output",
+                ),
+                status="succeeded",
+                retryable=True,
+            )
+
+    @pytest.mark.parametrize(
+        ("payload", "message"),
+        [
+            ({"retryable": True}, "cancelled inference cannot be retryable"),
+            (
+                {
+                    "failure": FailureDiagnostic(
+                        phase="execution",
+                        code="inference_execution_failed",
+                        error_type="RuntimeError",
+                    )
+                },
+                "cancelled inference cannot carry a failure",
+            ),
+        ],
+    )
+    def test_cancelled_has_no_failure_or_retry_semantics(
+        self, payload: dict[str, object], message: str
+    ) -> None:
+        with pytest.raises(ValidationError, match=message):
+            InferenceResult(
+                run_id="run-1",
+                attempt_id="attempt-1",
+                submission_id="submission-1",
+                plan_digest="a" * 64,
+                bundle_id="bundle-1",
+                manifest_sha256="b" * 64,
+                role="inference",
+                flavor_id="onnx-runtime-v1",
+                source_ref_id="c" * 64,
+                status="cancelled",
+                **payload,
+            )
 
     def test_receipt_uri_rejects_signed_credentials(self) -> None:
         with pytest.raises(ValidationError, match="credential-free"):

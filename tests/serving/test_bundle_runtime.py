@@ -33,6 +33,7 @@ from tributo.exporting.bundle_reader import BundleReader
 from tributo.exporting.registries import FlavorRegistry
 from tributo.exporting.runtime import (
     DEFAULT_ROLE,
+    FLAVOR_SUPPORT_MATRIX,
     SECURITY_MODE_PICKLE,
     SECURITY_MODE_SAFE,
     SERVEABLE_FLAVOR_MATRIX,
@@ -142,6 +143,22 @@ def _loader(flavor: type[Any] = _EchoFlavor) -> BundleModelLoader:
     return BundleModelLoader(flavor_registry=registry)
 
 
+def _loader_for_model(model: BundleModel) -> BundleModelLoader:
+    class _ModelFlavor(_EchoFlavor):
+        def load(
+            self,
+            artifact: Any,
+            *,
+            role: str,
+            unsafe: bool = False,
+            architecture_id: str | None = None,
+        ) -> BundleModel:
+            del artifact, role, unsafe, architecture_id
+            return model
+
+    return _loader(_ModelFlavor)
+
+
 # ── Serveable flavor support matrix ───────────────────────────────────────────
 
 
@@ -192,6 +209,20 @@ class TestFlavorSupportMatrix:
             "torch-onnx-v1",
             "xgboost-onnx-v1",
         }
+
+    def test_capability_matrix_does_not_infer_execution_from_readability(
+        self,
+    ) -> None:
+        entries = {entry.flavor_id: entry for entry in FLAVOR_SUPPORT_MATRIX}
+
+        assert entries["onnx-runtime-v1"].exportable is True
+        assert entries["onnx-runtime-v1"].readable is True
+        assert entries["onnx-runtime-v1"].batch_inference_capable is True
+        assert entries["onnx-runtime-v1"].online_serveable is True
+        assert entries["safetensors-v1"].exportable is True
+        assert entries["safetensors-v1"].readable is True
+        assert entries["safetensors-v1"].batch_inference_capable is False
+        assert entries["safetensors-v1"].online_serveable is False
 
 
 # ── Role selection ─────────────────────────────────────────────────────────────
@@ -270,13 +301,17 @@ class TestFlavorRouting:
         class _SafetensorsFlavor(_EchoFlavor):
             flavor_id = "safetensors-v1"
 
-        with pytest.raises(UnsupportedArtifactFormat, match="not in the serveable"):
+        with pytest.raises(
+            UnsupportedArtifactFormat, match="online serving capability"
+        ):
             _loader(_SafetensorsFlavor).open(str(bundle), role="inference")
 
     def test_unregistered_flavor_fails_fast(self, tmp_path: Path) -> None:
         """无 loader 注册的 flavor：JobConfigurationError 列出可用项。"""
         bundle = build_test_bundle(tmp_path, flavor_id="torch-export-v1")
-        with pytest.raises(JobConfigurationError, match="no loader is registered"):
+        with pytest.raises(
+            UnsupportedArtifactFormat, match="online serving capability"
+        ):
             _loader().open(str(bundle), role="inference")
 
     def test_missing_dependency_fails_fast(self, tmp_path: Path) -> None:
@@ -335,6 +370,74 @@ class TestFlavorRouting:
             np.testing.assert_allclose(result["probabilities"], [[2.0, 3.0]])
         finally:
             runtime.close()
+
+
+class TestActualPredictionOutputValidation:
+    """Every prediction validates returned ndarray metadata and row identity."""
+
+    def test_output_dtype_is_validated_after_predict(self, tmp_path: Path) -> None:
+        bundle = build_test_bundle(tmp_path)
+
+        class _WrongDtype(_EchoModel):
+            def predict(self, inputs):
+                outputs = super().predict(inputs)
+                outputs["probabilities"] = outputs["probabilities"].astype(np.float64)
+                return outputs
+
+        runtime = _loader_for_model(_WrongDtype()).open(str(bundle))
+        with pytest.raises(ModelSchemaMismatchError, match="dtype"):
+            runtime.predict({"float_input": np.array([[1.0, 2.0]], dtype=np.float32)})
+        runtime.close()
+
+    def test_output_rank_is_validated_after_predict(self, tmp_path: Path) -> None:
+        bundle = build_test_bundle(tmp_path)
+
+        class _WrongRank(_EchoModel):
+            def predict(self, inputs):
+                outputs = super().predict(inputs)
+                outputs["probabilities"] = outputs["probabilities"].reshape(-1)
+                return outputs
+
+        runtime = _loader_for_model(_WrongRank()).open(str(bundle))
+        with pytest.raises(ModelSchemaMismatchError, match="rank"):
+            runtime.predict({"float_input": np.array([[1.0, 2.0]], dtype=np.float32)})
+        runtime.close()
+
+    def test_output_fixed_dimension_is_validated_after_predict(
+        self, tmp_path: Path
+    ) -> None:
+        bundle = build_test_bundle(tmp_path)
+
+        class _WrongShape(_EchoModel):
+            def predict(self, inputs):
+                rows = inputs["float_input"].shape[0]
+                return {
+                    "label": np.zeros(rows, dtype=np.int64),
+                    "probabilities": np.zeros((rows, 3), dtype=np.float32),
+                }
+
+        runtime = _loader_for_model(_WrongShape()).open(str(bundle))
+        with pytest.raises(ModelSchemaMismatchError, match="fixed dimension"):
+            runtime.predict({"float_input": np.array([[1.0, 2.0]], dtype=np.float32)})
+        runtime.close()
+
+    def test_output_row_count_must_match_input_batch(self, tmp_path: Path) -> None:
+        bundle = build_test_bundle(tmp_path)
+
+        class _WrongRows(_EchoModel):
+            def predict(self, inputs):
+                rows = inputs["float_input"].shape[0]
+                return {
+                    "label": np.zeros(max(0, rows - 1), dtype=np.int64),
+                    "probabilities": np.zeros((rows, 2), dtype=np.float32),
+                }
+
+        runtime = _loader_for_model(_WrongRows()).open(str(bundle))
+        with pytest.raises(ModelSchemaMismatchError, match="input batch"):
+            runtime.predict(
+                {"float_input": np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)}
+            )
+        runtime.close()
 
 
 class TestSecurityGate:
@@ -399,6 +502,10 @@ class TestSignatureValidation:
             dependencies=("onnxruntime", "numpy"),
             signature_required=True,
             security_mode=SECURITY_MODE_SAFE,
+            exportable=True,
+            readable=True,
+            batch_inference_capable=True,
+            online_serveable=True,
         )
         monkeypatch.setattr(runtime_module, "SERVEABLE_FLAVOR_MATRIX", (entry,))
         runtime_module._validate_matrix_registry(_loader()._flavors)

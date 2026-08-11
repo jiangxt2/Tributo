@@ -179,6 +179,26 @@ class TestResolvedRequestSubmission:
                 object(), env_vars={"TRIBUTO_SUBMISSION_ID": "override"}
             )
 
+    def test_oversized_frozen_plan_fails_before_ray_job_submission(self) -> None:
+        plan = _plan()
+        plan = plan.model_copy(
+            update={
+                "model": plan.model.model_copy(
+                    update={"source_provenance": "p" * 70_000}
+                )
+            }
+        )
+        client = MagicMock()
+
+        with patch(
+            "tributo.inference.job_runner._get_submission_client",
+            return_value=client,
+        ):
+            with pytest.raises(ValueError, match="65536-byte"):
+                submit_resolved_inference(plan)
+
+        client.submit_job.assert_not_called()
+
 
 class TestJobStatusAndRetry:
     def test_timeout_boundary_rechecks_terminal_status(self) -> None:

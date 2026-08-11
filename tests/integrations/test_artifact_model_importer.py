@@ -104,6 +104,35 @@ def test_same_bytes_with_different_provenance_get_distinct_bundle_identity(
     assert second_manifest.source_info.architecture_id == "architecture-b"
 
 
+def test_same_bytes_from_different_sources_get_distinct_bundle_identity(
+    tmp_path: Path,
+) -> None:
+    first_source = tmp_path / "source-a" / "weights.onnx"
+    second_source = tmp_path / "source-b" / "weights.onnx"
+    first_source.parent.mkdir()
+    second_source.parent.mkdir()
+    first_source.write_bytes(b"same-model")
+    second_source.write_bytes(b"same-model")
+    destination = tmp_path / "imports"
+
+    first = ArtifactModelImporter().import_model(_reference(first_source, destination))
+    second = ArtifactModelImporter().import_model(
+        _reference(second_source, destination)
+    )
+
+    assert first.bundle_id != second.bundle_id
+    first_fingerprint = (
+        BundleReader().read_manifest(first.canonical_uri).source_info.source_fingerprint
+    )
+    second_fingerprint = (
+        BundleReader()
+        .read_manifest(second.canonical_uri)
+        .source_info.source_fingerprint
+    )
+    assert first_fingerprint != second_fingerprint
+    assert str(first_source) not in first_fingerprint
+
+
 def test_s3_artifact_is_bounded_before_download_and_uses_source_profile(
     tmp_path: Path,
 ) -> None:

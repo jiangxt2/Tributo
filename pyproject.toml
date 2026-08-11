@@ -126,7 +126,7 @@ streaming-inference = [
     "ray[serve]",
 ]
 test-integration = [
-    "tributo[training]",
+    "tributo[registry,training]",
     "pytest>=7.0.0",
     "requests>=2.25.0",
 ]

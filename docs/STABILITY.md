@@ -127,7 +127,7 @@ from the legacy setup-only propagation rule.
 | `tributo.integrations.storage.*` | `beta` | Built-in storage backends |
 | `tributo.integrations.hooks.*` | `beta` | Built-in hooks (MLflow etc.) |
 | `tributo.integrations.flavors.xgboost_native` | `alpha` | Safe native JSON/UBJ XGBoost runtime flavor |
-| `tributo.integrations.model_importers.*` | `alpha` | Explicit MLflow and typed artifact-to-Bundle importers |
+| `tributo.integrations.model_importers.*` | `alpha` | Canonical ModelImporter protocol/registry plus explicit MLflow and typed artifact-to-Bundle implementations |
 | `tributo.integrations.sinks.parquet` | `alpha` | Parquet inference ResultSink adapter |
 
 ### Inference (tributo.inference.*)
@@ -140,7 +140,7 @@ from the legacy setup-only propagation rule.
 | `tributo.inference.job_runner` | `beta` | Inference job runner |
 | `tributo.inference.contracts` | `alpha` | Candidate request, result, binding, executor, and sink contracts |
 | `tributo.inference.api` | `alpha` | Bundle-aware resolve and execute entry points |
-| `tributo.inference.importers` | `alpha` | Explicit ModelImporter protocol and first-party registry |
+| `tributo.inference.importers` | `alpha` | Compatibility re-export; new code uses `tributo.integrations.model_importers` |
 | `tributo.inference.input_resolver` | `alpha` | Public IngestionGateway to RayDataHandle adapter |
 | `tributo.inference.resolver` | `alpha` | Fail-closed immutable inference-plan resolver |
 | `tributo.inference.bundle_predictor` | `alpha` | Named tensor binding Ray actor |

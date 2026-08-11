@@ -184,9 +184,7 @@ class TestRunInferenceFromJson:
         assert call_cfg.batch_size == 2048
 
     @patch("tributo.inference.pipeline.run_batch_inference")
-    def test_legacy_source_s3_credentials_do_not_silently_cross_domains(
-        self, mock_run, caplog
-    ):
+    def test_legacy_source_s3_credentials_remain_source_local(self, mock_run):
         from tributo.inference.pipeline import run_inference_from_json
 
         mock_run.return_value = {"status": "completed"}
@@ -205,17 +203,12 @@ class TestRunInferenceFromJson:
             }
         )
 
-        with caplog.at_level(logging.WARNING, logger="tributo.inference.pipeline"):
-            run_inference_from_json(path)
+        run_inference_from_json(path)
 
         call_cfg = mock_run.call_args.args[0]
         assert isinstance(call_cfg.source, ParquetSourceConfig)
         assert call_cfg.source.s3.access_key_id == "source-key"
         assert call_cfg.s3_config == {}
-        assert "source-only" in caplog.text
-        assert "model.storage_profile" in caplog.text
-        assert "source-key" not in caplog.text
-        assert "source-secret" not in caplog.text
 
     @patch("tributo.inference.pipeline.run_batch_inference")
     def test_legacy_s3_shape_preserves_uri(self, mock_run):
@@ -346,8 +339,57 @@ class TestRunInferenceFromJson:
     @patch("tributo.integrations.sinks.parquet.ParquetResultSink.write")
     @patch("tributo.inference.input_resolver.IngestionGatewayInputResolver.open")
     @patch("tributo.inference.input_resolver.IngestionGatewayInputResolver.describe")
+    def test_batch_pipeline_close_failure_preserves_committed_result(
+        self,
+        mock_describe,
+        mock_open,
+        mock_write,
+        mock_pool,
+        caplog: pytest.LogCaptureFixture,
+        tmp_path,
+    ):
+        from tributo.inference.pipeline import run_batch_inference
+
+        del mock_pool
+        dataset = MagicMock()
+        dataset.map_batches.return_value = dataset
+        mock_describe.return_value = object()
+        opened = _opened_input(dataset)
+        opened.close.side_effect = RuntimeError("cleanup detail")
+        mock_open.return_value = opened
+        mock_write.return_value = ResultSinkReceipt(
+            sink_id="parquet-v1",
+            result_id="a" * 64,
+            uri=str(tmp_path / "output"),
+        )
+
+        class Predictor:
+            pass
+
+        config = InferenceConfig(
+            source=ParquetSourceConfig(
+                path="data.parquet",
+                columns=["feature"],
+            ),
+            output_uri=str(tmp_path / "output"),
+            model_uri="model.onnx",
+        )
+
+        with caplog.at_level(logging.WARNING, logger="tributo.inference.pipeline"):
+            result = run_batch_inference(config, predictor_cls=Predictor)
+
+        assert result["status"] == "completed"
+        opened.close.assert_called_once_with()
+        opened.cancel.assert_not_called()
+        assert "RuntimeError" in caplog.text
+        assert "cleanup detail" not in caplog.text
+
+    @patch("ray.data.ActorPoolStrategy")
+    @patch("tributo.integrations.sinks.parquet.ParquetResultSink.write")
+    @patch("tributo.inference.input_resolver.IngestionGatewayInputResolver.open")
+    @patch("tributo.inference.input_resolver.IngestionGatewayInputResolver.describe")
     def test_canonical_source_credentials_do_not_flow_to_model_or_sink(
-        self, mock_describe, mock_open, mock_write, mock_pool, tmp_path
+        self, mock_describe, mock_open, mock_write, mock_pool, caplog
     ):
         from tributo.data.base import S3Config
         from tributo.inference.pipeline import run_batch_inference
@@ -360,7 +402,7 @@ class TestRunInferenceFromJson:
         mock_write.return_value = ResultSinkReceipt(
             sink_id="parquet-v1",
             result_id="a" * 64,
-            uri=str(tmp_path / "output"),
+            uri="s3://result/output",
         )
 
         class Predictor:
@@ -376,11 +418,12 @@ class TestRunInferenceFromJson:
         )
         config = InferenceConfig(
             source=source,
-            output_uri=str(tmp_path / "output"),
-            model_uri="model.onnx",
+            output_uri="s3://result/output",
+            model_uri="s3://model/model.onnx",
         )
 
-        run_batch_inference(config, predictor_cls=Predictor)
+        with caplog.at_level(logging.WARNING, logger="tributo.inference.pipeline"):
+            run_batch_inference(config, predictor_cls=Predictor)
 
         predictor_config = dataset.map_batches.call_args.kwargs["fn_constructor_args"][
             1
@@ -390,6 +433,11 @@ class TestRunInferenceFromJson:
         ingestion_request = mock_describe.call_args.args[0]
         assert ingestion_request.source == source
         assert ingestion_request.storage_profile is None
+        assert "source-only" in caplog.text
+        assert "model.storage_profile" in caplog.text
+        assert "output.storage_profile" in caplog.text
+        assert "source-key" not in caplog.text
+        assert "source-secret" not in caplog.text
 
     @patch("ray.data.ActorPoolStrategy")
     @patch("tributo.integrations.sinks.parquet.ParquetResultSink.write")
@@ -636,4 +684,46 @@ class TestUnsafeStrictParsing:
         )
         with pytest.raises(JobConfigurationError, match="Invalid inference config"):
             run_inference_from_json(path)
+        mock_run.assert_not_called()
+
+
+class TestStrictJsonEnvelope:
+    """Unknown JSON fields fail closed without echoing sensitive input."""
+
+    def _write_json(self, data: dict) -> str:
+        file = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
+        json.dump(data, file)
+        file.close()
+        return file.name
+
+    @pytest.mark.parametrize(
+        ("section", "field"),
+        [
+            (None, "unknown_top_level"),
+            ("model", "unknown_model_option"),
+            ("output", "unknown_output_option"),
+            ("ray", "unknown_ray_option"),
+        ],
+    )
+    @patch("tributo.inference.pipeline.run_batch_inference")
+    def test_unknown_fields_are_rejected_at_every_envelope_level(
+        self, mock_run, section: str | None, field: str
+    ) -> None:
+        from tributo.inference.pipeline import run_inference_from_json
+
+        secret = "must-not-leak"
+        payload = {
+            "data": {"uri": "input.parquet"},
+            "model": {"bundle_uri": "/models/bundle"},
+            "output": {"uri": "output"},
+            "ray": {},
+        }
+        target = payload if section is None else payload[section]
+        target[field] = secret
+        path = self._write_json(payload)
+
+        with pytest.raises(JobConfigurationError, match=field) as error:
+            run_inference_from_json(path)
+
+        assert secret not in str(error.value)
         mock_run.assert_not_called()

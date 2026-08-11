@@ -63,7 +63,18 @@ installed plugins and their declared capabilities.
 | HDFS bundle publication | Not implemented | Storage backend extension |
 | Ray Data batch inference | Beta | Actor-based model reuse |
 | Batch output to local/S3 Parquet | Implemented | Database sinks are separate |
-| ONNX Runtime flavor | Implemented | Other artifacts require matching loaders |
+
+Artifact capabilities are independent. "Readable" means `BundleReader` can
+verify and expose the artifact; it does not imply that Tributo can execute it.
+
+| Flavor | Exportable | Bundle readable | Batch inference | Online serving | Boundary |
+| --- | --- | --- | --- | --- | --- |
+| `onnx-runtime-v1` | Yes | Yes | Yes | Yes | Typed signature and safe ONNX Runtime loader |
+| `xgboost-native-v1` | Yes | Yes | Yes | Yes | JSON/UBJ only; canonical `float_input` binding |
+| `safetensors-v1` | Yes | Yes | No | No | Weights-only; no trusted architecture loader |
+| `torch-export-v1` | Yes | Yes | No | No | PT2 loader and version/device contract are pending |
+| `hf-onnx-v1` | Yes | Yes | No | No | Dedicated runtime compatibility gate is pending |
+| `onnx-int8-v1` | Yes | Yes | No | No | Quantized numerical compatibility gate is pending |
 
 ## Serving and streaming
 
