@@ -25,10 +25,11 @@ idempotently.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from contextlib import ExitStack
 from dataclasses import dataclass
-from typing import Any, ClassVar, Protocol, runtime_checkable
+from typing import Any, ClassVar, Literal, Protocol, runtime_checkable
 
 import numpy as np
 
@@ -80,6 +81,10 @@ class BundleReaderLike(Protocol):
     def read_manifest(
         self, manifest_or_bundle_uri: str, *, storage_profile: str | None = None
     ) -> ExportManifest: ...
+
+    def read_manifest_with_bytes(
+        self, manifest_or_bundle_uri: str, *, storage_profile: str | None = None
+    ) -> tuple[ExportManifest, bytes]: ...
 
     def open_artifact(
         self,
@@ -185,37 +190,36 @@ class BundleModelFlavor(Protocol):
 @PublicAPI(stability="beta")
 @dataclass(frozen=True)
 class FlavorSupportEntry:
-    """One row of the serveable flavor support matrix.
+    """One row of the model-artifact capability support matrix.
 
-    Every entry declares what is required to serve a flavor so that
-    consumers get a deterministic answer instead of a runtime surprise.
-    ``loader`` is the import path of the loader class (same format as
-    entry points), resolved lazily — the actual routing key is always
-    the registry. ``trainer_types`` and ``producer_ids`` document which
-    vertical slices select the primary artifact represented by the row;
-    ``verticals`` includes non-trainer consumers such as O1.
+    Export, Bundle readability, batch inference, and online serving are
+    independent declarations: no consumer may infer one capability from
+    another. ``loader`` is present only when an executable first-party flavor
+    is registered. ``trainer_types`` and ``producer_ids`` document which
+    vertical slices select the primary artifact represented by the row.
     """
 
     flavor_id: str
     artifact_role: str
-    loader: str
+    loader: str | None
     dependencies: tuple[str, ...]
     signature_required: bool
     security_mode: str
+    exportable: bool
+    readable: bool
+    batch_inference_capable: bool
+    online_serveable: bool
     verticals: tuple[str, ...] = ()
     trainer_types: tuple[str, ...] = ()
     producer_ids: tuple[str, ...] = ()
 
 
-#: Frozen serveable flavor support matrix (E3).  The selected primary
-#: artifact for O1, DNN, PU, and XGBoost is ONNX Runtime.  The trainer and
-#: producer columns make that decision explicit instead of relying on a
-#: comment or on the ``format`` field.
-#: Other flavor IDs produced by exporters (``safetensors-v1``,
-#: ``torch-export-v1``, ``xgboost-native-v1``, ``hf-onnx-v1``,
-#: ``onnx-int8-v1``) are explicitly unsupported until their loaders are
-#: registered here — they are never loaded by guessing.
-SERVEABLE_FLAVOR_MATRIX: tuple[FlavorSupportEntry, ...] = (
+#: Frozen artifact capability matrix. ONNX Runtime remains the selected
+#: primary artifact for O1, DNN, PU, and XGBoost. Native XGBoost is an
+#: additional explicit executable flavor. Other first-party export flavors
+#: are readable Bundle artifacts, but fail closed at executable gates until a
+#: matching loader is implemented.
+FLAVOR_SUPPORT_MATRIX: tuple[FlavorSupportEntry, ...] = (
     FlavorSupportEntry(
         flavor_id="onnx-runtime-v1",
         artifact_role="model",
@@ -223,10 +227,92 @@ SERVEABLE_FLAVOR_MATRIX: tuple[FlavorSupportEntry, ...] = (
         dependencies=("onnxruntime",),
         signature_required=True,
         security_mode=SECURITY_MODE_SAFE,
+        exportable=True,
+        readable=True,
+        batch_inference_capable=True,
+        online_serveable=True,
         verticals=("o1", "dnn", "pu", "xgboost"),
         trainer_types=("dnn", "pu", "xgboost"),
         producer_ids=("torch-onnx-v1", "xgboost-onnx-v1"),
     ),
+    FlavorSupportEntry(
+        flavor_id="xgboost-native-v1",
+        artifact_role="model",
+        loader=("tributo.integrations.flavors.xgboost_native:XGBoostNativeFlavor"),
+        dependencies=("xgboost",),
+        signature_required=True,
+        security_mode=SECURITY_MODE_SAFE,
+        exportable=True,
+        readable=True,
+        batch_inference_capable=True,
+        online_serveable=True,
+        verticals=("xgboost",),
+        trainer_types=("xgboost",),
+        producer_ids=("xgboost-native-v1",),
+    ),
+    FlavorSupportEntry(
+        flavor_id="safetensors-v1",
+        artifact_role="model",
+        loader=None,
+        dependencies=(),
+        signature_required=True,
+        security_mode=SECURITY_MODE_UNKNOWN,
+        exportable=True,
+        readable=True,
+        batch_inference_capable=False,
+        online_serveable=False,
+        verticals=("dnn", "pu"),
+        trainer_types=("dnn", "pu"),
+        producer_ids=("torch-safetensors-v1",),
+    ),
+    FlavorSupportEntry(
+        flavor_id="torch-export-v1",
+        artifact_role="model",
+        loader=None,
+        dependencies=(),
+        signature_required=True,
+        security_mode=SECURITY_MODE_UNKNOWN,
+        exportable=True,
+        readable=True,
+        batch_inference_capable=False,
+        online_serveable=False,
+        verticals=("dnn", "pu"),
+        trainer_types=("dnn", "pu"),
+        producer_ids=("torch-export-v1",),
+    ),
+    FlavorSupportEntry(
+        flavor_id="hf-onnx-v1",
+        artifact_role="model",
+        loader=None,
+        dependencies=(),
+        signature_required=True,
+        security_mode=SECURITY_MODE_UNKNOWN,
+        exportable=True,
+        readable=True,
+        batch_inference_capable=False,
+        online_serveable=False,
+        producer_ids=("hf-onnx-v1",),
+    ),
+    FlavorSupportEntry(
+        flavor_id="onnx-int8-v1",
+        artifact_role="model",
+        loader=None,
+        dependencies=(),
+        signature_required=True,
+        security_mode=SECURITY_MODE_UNKNOWN,
+        exportable=True,
+        readable=True,
+        batch_inference_capable=False,
+        online_serveable=False,
+        producer_ids=("onnx-quantizer-v1",),
+    ),
+)
+
+#: Backward-compatible executable subset. Capability decisions must consult
+#: ``FLAVOR_SUPPORT_MATRIX`` instead of assuming every readable artifact can
+#: execute.
+SERVEABLE_FLAVOR_MATRIX: tuple[FlavorSupportEntry, ...] = tuple(
+    entry for entry in FLAVOR_SUPPORT_MATRIX if entry.online_serveable
 )
 
 
@@ -261,6 +347,8 @@ class BundleModelLoader:
         role: str = DEFAULT_ROLE,
         storage_profile: str | None = None,
         unsafe: bool = False,
+        expected_manifest_sha256: str | None = None,
+        use_case: Literal["batch", "serving"] = "serving",
     ) -> "BundleModelRuntime":
         """Open *bundle_uri* and load the model for *role*.
 
@@ -271,6 +359,12 @@ class BundleModelLoader:
             storage_profile: Storage profile name for S3 credentials.
             unsafe: Permit flavors whose security mode is not ``safe``
                 and manifests without a typed signature.
+            expected_manifest_sha256: Optional immutable BundleRef digest.
+                Compared with the exact published manifest bytes before role,
+                flavor, dependency, or artifact loading.
+            use_case: Explicit executable capability required by the caller.
+                Batch actors pass ``"batch"``; online runtimes use the
+                default ``"serving"`` gate.
 
         Returns:
             A ``BundleModelRuntime`` holding the loaded model.
@@ -283,9 +377,21 @@ class BundleModelLoader:
             ModelLoadError: A required dependency is missing or the
                 model file could not be loaded.
         """
-        manifest = self._reader.read_manifest(
-            bundle_uri, storage_profile=storage_profile
-        )
+        if expected_manifest_sha256 is None:
+            manifest = self._reader.read_manifest(
+                bundle_uri, storage_profile=storage_profile
+            )
+        else:
+            manifest, manifest_bytes = self._reader.read_manifest_with_bytes(
+                bundle_uri, storage_profile=storage_profile
+            )
+            actual_manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+            if actual_manifest_sha256 != expected_manifest_sha256:
+                raise ModelLoadError(
+                    "Bundle manifest digest mismatch: expected "
+                    f"{expected_manifest_sha256[:16]}..., got "
+                    f"{actual_manifest_sha256[:16]}..."
+                )
 
         # Explicit role → artifact.
         target_name = manifest.roles.get(role)
@@ -295,6 +401,19 @@ class BundleModelLoader:
                 f"{sorted(manifest.roles)}"
             )
         artifact = _find_artifact(manifest, target_name)
+
+        entry = _matrix_entry(artifact.flavor_id)
+        supported = (
+            entry.batch_inference_capable
+            if use_case == "batch"
+            else entry.online_serveable
+        )
+        if not supported:
+            capability = "batch inference" if use_case == "batch" else "online serving"
+            raise UnsupportedArtifactFormat(
+                f"Flavor {artifact.flavor_id!r} is readable but does not declare "
+                f"{capability} capability"
+            )
 
         # flavor_id → loader (registry lookup is the single routing key).
         try:
@@ -306,12 +425,8 @@ class BundleModelLoader:
                 f"{self._flavors.list_all()}"
             ) from exc
 
-        # Serveable matrix gate — a registered flavor may still be
-        # explicitly unsupported for serving.  The matrix row also
-        # declares which artifact kind it serves (e.g. ``model``) —
-        # a report or auxiliary artifact must never reach a model
-        # loader, regardless of its flavor_id.
-        entry = _matrix_entry(artifact.flavor_id)
+        # The matrix row also declares which artifact kind it executes. A
+        # report or auxiliary artifact must never reach a model loader.
         if artifact.artifact_kind != entry.artifact_role:
             raise UnsupportedArtifactFormat(
                 f"Artifact {artifact.name!r} has kind {artifact.artifact_kind!r} "
@@ -509,10 +624,85 @@ class BundleModelRuntime:
             expected_dtypes=self._model.input_dtypes,
             expected_shapes=self._model.input_shapes,
         )
-        return self._model.predict(inputs)
+        outputs = self._model.predict(inputs)
+        _validate_prediction_outputs(inputs, outputs, self._model)
+        return outputs
 
 
 # ── Registry assembly ─────────────────────────────────────────────────────────
+
+
+def _validate_prediction_outputs(
+    inputs: dict[str, np.ndarray],
+    outputs: dict[str, np.ndarray],
+    model: BundleModel,
+) -> None:
+    """Validate actual model outputs at the shared runtime boundary."""
+    if not isinstance(outputs, dict):
+        raise ModelSchemaMismatchError("Model predict() must return a dictionary")
+
+    expected_names = tuple(model.output_names)
+    actual_names = tuple(outputs)
+    if actual_names != expected_names:
+        raise ModelSchemaMismatchError(
+            f"Model returned outputs {actual_names!r}, but declared {expected_names!r}"
+        )
+    if len(model.output_dtypes) != len(expected_names):
+        raise ModelSchemaMismatchError(
+            "Model output dtype metadata cardinality does not match output names"
+        )
+    if len(model.output_shapes) != len(expected_names):
+        raise ModelSchemaMismatchError(
+            "Model output shape metadata cardinality does not match output names"
+        )
+
+    input_rows = {int(array.shape[0]) for array in inputs.values() if array.ndim > 0}
+    if len(input_rows) > 1:
+        raise ValueError("Model inputs do not share one batch dimension")
+    batch_rows = next(iter(input_rows), None)
+
+    for name, expected_dtype, expected_shape in zip(
+        expected_names, model.output_dtypes, model.output_shapes
+    ):
+        output = outputs[name]
+        if not isinstance(output, np.ndarray):
+            raise ModelSchemaMismatchError(
+                f"Model output {name!r} must be a numpy.ndarray"
+            )
+        actual_dtype = np.dtype(output.dtype).name
+        if actual_dtype != expected_dtype:
+            raise ModelSchemaMismatchError(
+                f"Model output {name!r} has dtype {actual_dtype!r}, but "
+                f"declares {expected_dtype!r}"
+            )
+        actual_shape = tuple(int(dimension) for dimension in output.shape)
+        if len(actual_shape) != len(expected_shape):
+            raise ModelSchemaMismatchError(
+                f"Model output {name!r} has rank {len(actual_shape)}, but "
+                f"declares rank {len(expected_shape)}"
+            )
+        for axis, (actual_dimension, expected_dimension) in enumerate(
+            zip(actual_shape, expected_shape)
+        ):
+            if (
+                expected_dimension is not None
+                and actual_dimension != expected_dimension
+            ):
+                raise ModelSchemaMismatchError(
+                    f"Model output {name!r} has shape {actual_shape}, but "
+                    f"declares fixed dimension {expected_dimension} at axis {axis}"
+                )
+        if batch_rows is not None:
+            if not actual_shape:
+                raise ModelSchemaMismatchError(
+                    f"Model output {name!r} is scalar and cannot preserve "
+                    f"the input batch of {batch_rows} row(s)"
+                )
+            if actual_shape[0] != batch_rows:
+                raise ModelSchemaMismatchError(
+                    f"Model output {name!r} has {actual_shape[0]} row(s), but "
+                    f"the input batch has {batch_rows} row(s)"
+                )
 
 
 def _build_flavor_registry() -> FlavorRegistry:
@@ -523,8 +713,9 @@ def _build_flavor_registry() -> FlavorRegistry:
     skipped instead of tripping the registry's duplicate-is-conflict rule.
     """
     from tributo.integrations.flavors.onnx_runtime import ONNXRuntimeFlavor
+    from tributo.integrations.flavors.xgboost_native import XGBoostNativeFlavor
 
-    builtin_flavors = (ONNXRuntimeFlavor,)
+    builtin_flavors = (ONNXRuntimeFlavor, XGBoostNativeFlavor)
     registry = FlavorRegistry()
     for cls in builtin_flavors:
         registry.register(cls)
@@ -541,20 +732,24 @@ def _build_flavor_registry() -> FlavorRegistry:
 
 
 def _matrix_entry(flavor_id: str) -> FlavorSupportEntry:
-    for entry in SERVEABLE_FLAVOR_MATRIX:
+    for entry in FLAVOR_SUPPORT_MATRIX:
         if entry.flavor_id == flavor_id:
             return entry
-    known = [e.flavor_id for e in SERVEABLE_FLAVOR_MATRIX]
+    known = [e.flavor_id for e in FLAVOR_SUPPORT_MATRIX]
     raise UnsupportedArtifactFormat(
-        f"Flavor {flavor_id!r} is not in the serveable flavor support "
+        f"Flavor {flavor_id!r} is not in the flavor capability support "
         f"matrix. Supported flavors: {known}. Use a bundle whose primary "
-        "artifact is serveable, or register a loader in SERVEABLE_FLAVOR_MATRIX."
+        "artifact declares the required executable capability."
     )
 
 
 def _validate_matrix_registry(registry: FlavorRegistry) -> None:
     """Verify matrix metadata matches the registered built-in flavor classes."""
     for entry in SERVEABLE_FLAVOR_MATRIX:
+        if entry.loader is None:
+            raise JobConfigurationError(
+                f"Serveable matrix flavor {entry.flavor_id!r} has no loader"
+            )
         try:
             flavor_cls = registry.get(entry.flavor_id)
         except JobConfigurationError as exc:

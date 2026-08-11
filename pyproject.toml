@@ -126,7 +126,7 @@ streaming-inference = [
     "ray[serve]",
 ]
 test-integration = [
-    "tributo[training]",
+    "tributo[registry,training]",
     "pytest>=7.0.0",
     "requests>=2.25.0",
 ]
@@ -164,6 +164,7 @@ onnx-runtime-v1 = "tributo.integrations.validators.onnx_runtime:ONNXRuntimeValid
 
 [project.entry-points."tributo.model_flavors"]
 onnx-runtime-v1 = "tributo.integrations.flavors.onnx_runtime:ONNXRuntimeFlavor"
+xgboost-native-v1 = "tributo.integrations.flavors.xgboost_native:XGBoostNativeFlavor"
 
 [project.entry-points."tributo.model_factories"]
 

@@ -121,6 +121,50 @@ switches engines.
 ```{autofunction} tributo.inference.run_batch_inference
 ```
 
+The bundle-aware API is alpha. It accepts credential-free intent, pins a model
+Bundle and bounded-ingestion binding, and executes named tensor bindings through
+Ray Data.
+
+```{autoclass} tributo.inference.InferenceRequest
+:members:
+```
+
+```{autofunction} tributo.inference.run_inference
+```
+
+```{autofunction} tributo.inference.resolve_inference
+```
+
+```{autofunction} tributo.inference.submit_inference_request
+```
+
+```{autofunction} tributo.inference.submit_resolved_inference
+```
+
+```{autoclass} tributo.inference.post_training.PostTrainingInferenceAction
+:members:
+```
+
+```{autofunction} tributo.inference.post_training.submit_post_training_inference
+```
+
+First-party external model importers normalize external systems into verified
+Bundles before inference.
+
+```{autoclass} tributo.integrations.model_importers.ModelImporter
+```
+
+```{autoclass} tributo.integrations.model_importers.ModelImporterRegistry
+```
+
+```{autoclass} tributo.integrations.model_importers.ArtifactModelImporter
+:members:
+```
+
+```{autoclass} tributo.integrations.model_importers.MLflowModelImporter
+:members:
+```
+
 ## Embedding and serving API
 
 ```{autoclass} tributo.embeddings.ModelSpec

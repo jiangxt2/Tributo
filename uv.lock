@@ -4414,6 +4414,7 @@ test-integration = [
     { name = "boto3" },
     { name = "clickhouse-connect" },
     { name = "daft", extra = ["lance", "ray"] },
+    { name = "mlflow" },
     { name = "onnx" },
     { name = "onnxmltools" },
     { name = "onnxruntime" },
@@ -4521,8 +4522,8 @@ requires-dist = [
     { name = "tributo", extras = ["embeddings"], marker = "extra == 'streaming'" },
     { name = "tributo", extras = ["model-export"], marker = "extra == 'model-export-torch'" },
     { name = "tributo", extras = ["model-export-torch"], marker = "extra == 'graph'" },
+    { name = "tributo", extras = ["registry", "training"], marker = "extra == 'test-integration'" },
     { name = "tributo", extras = ["s3"], marker = "extra == 'model-export'" },
-    { name = "tributo", extras = ["training"], marker = "extra == 'test-integration'" },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.12.20250516" },
     { name = "xgboost", marker = "extra == 'training'", specifier = ">=2.1.0" },
 ]

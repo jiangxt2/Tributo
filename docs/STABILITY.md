@@ -24,6 +24,7 @@ Last updated: 2026-08-09.
 | `tributo.config` — `JobConfig` | `stable` | Primary user-facing config |
 | `tributo.job` — `TributoClient`, `RayJob` | `stable` | Primary user-facing API |
 | `tributo.exceptions` — core exceptions | `stable` | ``TributoError`` and 16 common subtypes |
+| `tributo.exceptions` — `ResultMaterializationError` | `alpha` | Credential-safe lazy inference action failure |
 | `tributo.exceptions` — Bundle/Plugin exceptions | `beta` | ``BundleExportError``, ``AliasConflict``, ``UnsupportedArtifactFormat``, ``PostPublishCallbackError``, ``PluginLoadIssue`` |
 | `tributo.exceptions` — Streaming exceptions | `beta` | ``StreamSourceError``, ``KafkaCommitError``, ``KafkaPoisonMessageError`` |
 | `tributo.exceptions` — `EngineNotAvailableError` | `alpha` | Candidate bounded-ingestion error |
@@ -125,6 +126,9 @@ from the legacy setup-only propagation rule.
 | `tributo.integrations.sources.*` | `beta` | Built-in source providers |
 | `tributo.integrations.storage.*` | `beta` | Built-in storage backends |
 | `tributo.integrations.hooks.*` | `beta` | Built-in hooks (MLflow etc.) |
+| `tributo.integrations.flavors.xgboost_native` | `alpha` | Safe native JSON/UBJ XGBoost runtime flavor |
+| `tributo.integrations.model_importers.*` | `alpha` | Canonical ModelImporter protocol/registry plus explicit MLflow and typed artifact-to-Bundle implementations |
+| `tributo.integrations.sinks.parquet` | `alpha` | Parquet inference ResultSink adapter |
 
 ### Inference (tributo.inference.*)
 
@@ -134,6 +138,14 @@ from the legacy setup-only propagation rule.
 | `tributo.inference.batch_predictor` | `beta` | Batch predictor implementation |
 | `tributo.inference.pipeline` | `beta` | Inference pipeline; data loading delegates the Ray Gateway adapter |
 | `tributo.inference.job_runner` | `beta` | Inference job runner |
+| `tributo.inference.contracts` | `alpha` | Candidate request, result, binding, executor, and sink contracts |
+| `tributo.inference.api` | `alpha` | Bundle-aware resolve and execute entry points |
+| `tributo.inference.importers` | `alpha` | Compatibility re-export; new code uses `tributo.integrations.model_importers` |
+| `tributo.inference.input_resolver` | `alpha` | Public IngestionGateway to RayDataHandle adapter |
+| `tributo.inference.resolver` | `alpha` | Fail-closed immutable inference-plan resolver |
+| `tributo.inference.bundle_predictor` | `alpha` | Named tensor binding Ray actor |
+| `tributo.inference.executor` | `alpha` | RayMapBatchesExecutor |
+| `tributo.inference.post_training` | `alpha` | Training-result entry adapter; no Training implementation dependency |
 
 ### Serving (tributo.serving.*)
 
@@ -210,6 +222,7 @@ from the legacy setup-only propagation rule.
 | Legacy flat data config | `CanonicalSourceInput` / `IngestionRequest` | v1.0.0 | Conversion-only adapter retained for its deprecation window; direct dispatch removed |
 | `TRIBUTO_DATA_BACKEND=legacy` | Default Provider/Gateway path | v1.0.0 | Selector is accepted with `FutureWarning` during the compatibility window; it no longer restores direct dispatch |
 | Third-party Provider `normalize()+open()` SPI | `plan()` + `EngineBinding` | v1.0.0 | Ray compatibility adapter only until the next major release; Gateway never falls back |
+| `InferenceConfig.s3_config` | Independent source/model/sink storage profiles | Inference architecture P0 | One compatibility window with `DeprecationWarning` |
 
 ## Unannotated Code
 

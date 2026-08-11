@@ -1,0 +1,124 @@
+x-inference-common: &inference-common
+  image: tributo-inference-it:${TRIBUTO_INFERENCE_IMAGE_TAG:-local}
+  build:
+    context: ../..
+    dockerfile: tests/integrations/Dockerfile.inference
+    args:
+      BASE_IMAGE: ${TRIBUTO_INFERENCE_RAY_IMAGE:?set by inference-it-versions.conf}
+      UV_IMAGE: ${TRIBUTO_INFERENCE_UV_IMAGE:?set by inference-it-versions.conf}
+  init: true
+  shm_size: 2gb
+  environment:
+    AWS_ACCESS_KEY_ID: minioadmin
+    AWS_SECRET_ACCESS_KEY: minioadmin123
+    AWS_DEFAULT_REGION: us-east-1
+    DEFAULT_DASHBOARD_URL: http://127.0.0.1:8265
+    RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO: "0"
+    TRIBUTO_DOCKER_INFERENCE_IT: "1"
+    TRIBUTO_MLFLOW_TRACKING_URI: http://mlflow:5000
+    TRIBUTO_MINIO_ENDPOINT: http://minio:9000
+    TRIBUTO_MINIO_ACCESS_KEY: minioadmin
+    TRIBUTO_MINIO_SECRET_KEY: minioadmin123
+    TRIBUTO_RAY_SHARED_WORKSPACE_HOST: /workspace
+    TRIBUTO_RAY_SHARED_WORKSPACE_CONTAINER: /workspace
+    TRIBUTO_EXPECTED_PYTHON_PREFIX: ${TRIBUTO_EXPECTED_PYTHON_PREFIX:?}
+    TRIBUTO_EXPECTED_UV_VERSION: ${TRIBUTO_EXPECTED_UV_VERSION:?}
+    TRIBUTO_EXPECTED_RAY_VERSION: ${TRIBUTO_EXPECTED_RAY_VERSION:?}
+    TRIBUTO_EXPECTED_MLFLOW_VERSION: ${TRIBUTO_EXPECTED_MLFLOW_VERSION:?}
+    TRIBUTO_EXPECTED_ONNX_VERSION: ${TRIBUTO_EXPECTED_ONNX_VERSION:?}
+    TRIBUTO_EXPECTED_ONNXRUNTIME_VERSION: ${TRIBUTO_EXPECTED_ONNXRUNTIME_VERSION:?}
+    TRIBUTO_EXPECTED_PYARROW_VERSION: ${TRIBUTO_EXPECTED_PYARROW_VERSION:?}
+    TRIBUTO_EXPECTED_XGBOOST_VERSION: ${TRIBUTO_EXPECTED_XGBOOST_VERSION:?}
+  volumes:
+    - inference-workspace:/workspace
+
+services:
+  workspace-init:
+    <<: *inference-common
+    user: root
+    command:
+      - sh
+      - -c
+      - mkdir -p /workspace/mlflow/artifacts && chown -R ray:users /workspace
+    restart: "no"
+
+  mlflow:
+    <<: *inference-common
+    command:
+      - mlflow
+      - server
+      - --host
+      - 0.0.0.0
+      - --port
+      - "5000"
+      - --backend-store-uri
+      - sqlite:////workspace/mlflow/mlflow.db
+      - --artifacts-destination
+      - file:///workspace/mlflow/artifacts
+      - --serve-artifacts
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=2).read()
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
+    depends_on:
+      workspace-init:
+        condition: service_completed_successfully
+
+  ray-head:
+    <<: *inference-common
+    command:
+      - ray
+      - start
+      - --head
+      - --port=6379
+      - --dashboard-host=0.0.0.0
+      - --num-cpus=0
+      - --block
+    healthcheck:
+      test: ["CMD-SHELL", "ray status --address=127.0.0.1:6379 >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
+    depends_on:
+      minio:
+        condition: service_started
+      mlflow:
+        condition: service_healthy
+      workspace-init:
+        condition: service_completed_successfully
+
+  ray-worker:
+    <<: *inference-common
+    command:
+      - ray
+      - start
+      - --address=ray-head:6379
+      - --num-cpus=4
+      - --block
+    depends_on:
+      ray-head:
+        condition: service_healthy
+
+  minio:
+    image: ${TRIBUTO_INFERENCE_MINIO_IMAGE:?set by inference-it-versions.conf}
+    command:
+      - server
+      - /data
+      - --console-address
+      - :9001
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    volumes:
+      - inference-minio-data:/data
+
+volumes:
+  inference-workspace:
+  inference-minio-data:

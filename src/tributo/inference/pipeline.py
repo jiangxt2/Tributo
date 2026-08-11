@@ -7,16 +7,22 @@ from __future__ import annotations
 
 import json
 import logging
+import warnings
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit, urlunsplit
 
 if TYPE_CHECKING:
-    from tributo.data.base import S3Config
     from tributo.inference.base import BasePredictor
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from tributo.data import source_projection
+from tributo.data import (
+    IngestionRequest,
+    SelectColumns,
+    TransformPipeline,
+    apply_source_projection,
+    source_projection,
+)
 from tributo.data.source_config import (
     CanonicalSourceInput,
     CsvSourceConfig,
@@ -25,30 +31,12 @@ from tributo.data.source_config import (
     ParquetSourceConfig,
     ProviderSourceConfig,
     RawSourceConfig,
-    apply_source_projection,
 )
 from tributo.exceptions import JobConfigurationError
+from tributo.inference._credential_safety import credential_paths
 from tributo.util.annotations import PublicAPI
 
 logger = logging.getLogger(__name__)
-
-
-def _build_s3_config(raw: dict[str, str]) -> "S3Config | None":
-    """Build S3Config from a raw dict, returning None if empty.
-
-    Centralises the duplicated S3Config construction previously spread
-    across data-load and data-write paths.
-    """
-    from tributo.data.base import S3Config
-
-    if not raw:
-        return None
-    return S3Config(
-        access_key_id=raw.get("access_key_id"),
-        secret_access_key=raw.get("secret_access_key"),
-        endpoint=raw.get("endpoint"),
-        region=raw.get("region"),
-    )
 
 
 @PublicAPI(stability="beta")
@@ -69,12 +57,18 @@ class InferenceConfig(BaseModel):
         bundle_uri: Published bundle URI — stable model entry point.
         model_role: Artifact role to serve from the bundle (default inference).
         unsafe_model: Permit bundles without typed signatures or unsafe flavors.
-        storage_profile: Storage profile name for S3 bundles.
+        storage_profile: Model-source storage profile for S3 bundles.
+        source_storage_profile: Profile used only by the input provider.
+        output_storage_profile: Profile used only by the result sink.
         feature_columns: List of feature column names needed for inference (column pruning).
         predictor_config: Passthrough dict for predictor-specific config.
     """
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(
+        frozen=True,
+        extra="forbid",
+        hide_input_in_errors=True,
+    )
 
     source: CanonicalSourceInput | None = None
     input_uri: str | None = Field(default=None, min_length=1)
@@ -84,6 +78,8 @@ class InferenceConfig(BaseModel):
     model_role: str = "inference"
     unsafe_model: bool = False
     storage_profile: str | None = None
+    source_storage_profile: str | None = None
+    output_storage_profile: str | None = None
 
     @model_validator(mode="after")
     def _check_model_entry(self) -> "InferenceConfig":
@@ -114,10 +110,19 @@ class InferenceConfig(BaseModel):
             conflicts = sorted(legacy_fields & self.model_fields_set)
             if "feature_columns" in conflicts and not self.feature_columns:
                 conflicts.remove("feature_columns")
+            if "s3_config" in conflicts and not self.s3_config:
+                conflicts.remove("s3_config")
             if conflicts:
+                migration = ""
+                if "feature_columns" in conflicts:
+                    migration = (
+                        "; move projection into the canonical source (built-in file "
+                        "sources use source.columns) or the shared Transform IR"
+                    )
                 raise ValueError(
                     "canonical source cannot be combined with legacy fields: "
                     + ", ".join(conflicts)
+                    + migration
                 )
         return self
 
@@ -153,11 +158,71 @@ class InferenceConfig(BaseModel):
         return self.predictor_config.get("prediction_column", "prediction")
 
 
+class _StrictJsonSection(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+
+class _JsonDataSection(_StrictJsonSection):
+    type: str | None = None
+    uri: str | None = None
+    input: str | None = None
+    format: str | None = None
+    feature_columns: list[str] | None = None
+    s3: dict[str, Any] | None = None
+    source: Any | None = None
+    storage_profile: str | None = None
+    clickhouse: dict[str, Any] | None = None
+    ch_host: str | None = None
+    ch_port: int | None = None
+    ch_database: str | None = None
+    ch_user: str | None = None
+    ch_password: str | None = None
+    ch_sql: str | None = None
+    ch_sql_params: dict[str, Any] | None = None
+
+
+class _JsonModelSection(_StrictJsonSection):
+    uri: str | None = None
+    path: str | None = None
+    bundle_uri: str | None = None
+    role: str = "inference"
+    unsafe: bool = False
+    storage_profile: str | None = None
+    return_probs: bool | None = None
+
+
+class _JsonOutputSection(_StrictJsonSection):
+    uri: str | None = None
+    path: str | None = None
+    prediction_column: str | None = None
+    compression: str = "zstd"
+    min_rows_per_file: int | None = None
+    storage_profile: str | None = None
+
+
+class _JsonRaySection(_StrictJsonSection):
+    concurrency: int = 4
+    batch_size: int = 4096
+    num_cpus_per_actor: float = 1.0
+    num_gpus_per_actor: float = 0.0
+
+
+class _JsonInferenceEnvelope(_StrictJsonSection):
+    data: _JsonDataSection = Field(default_factory=_JsonDataSection)
+    model: _JsonModelSection = Field(default_factory=_JsonModelSection)
+    output: _JsonOutputSection = Field(default_factory=_JsonOutputSection)
+    ray: _JsonRaySection = Field(default_factory=_JsonRaySection)
+    source: Any | None = None
+    source_storage_profile: str | None = None
+    output_storage_profile: str | None = None
+    s3_config: dict[str, str] | None = None
+
+
 def _credential_free_uri(uri: str) -> str:
     """Remove userinfo and query parameters from a display URI."""
     parsed = urlsplit(uri)
     if parsed.hostname is None:
-        return uri
+        return urlunsplit((parsed.scheme, "", parsed.path, "", ""))
     netloc = parsed.hostname
     if parsed.port is not None:
         netloc = f"{netloc}:{parsed.port}"
@@ -178,18 +243,44 @@ def _source_display_uri(source: CanonicalSourceInput) -> str:
     return f"{source.dialect}://{host}{port}/{database}"
 
 
-def _source_s3_config(source: CanonicalSourceInput) -> dict[str, str]:
-    """Return non-empty S3 settings carried by a canonical source."""
-    if isinstance(source, (ParquetSourceConfig, CsvSourceConfig)):
-        value = source.s3
-        return value.model_dump(exclude_none=True) if value is not None else {}
-    if isinstance(source, IcebergSourceConfig):
-        return dict(source.s3 or {})
+def _source_has_inline_s3_settings(source: CanonicalSourceInput) -> bool:
+    """Return whether a canonical source owns non-empty inline S3 settings."""
     if isinstance(source, ProviderSourceConfig):
-        value = source.options.get("s3")
-        if isinstance(value, dict):
-            return {key: item for key, item in value.items() if item is not None}
-    return {}
+        if urlsplit(source.uri).scheme.lower() != "s3":
+            return False
+        return bool(source.options.get("s3")) or bool(credential_paths(source.options))
+    s3 = getattr(source, "s3", None)
+    if isinstance(s3, BaseModel):
+        return bool(s3.model_dump(mode="python", exclude_none=True))
+    return bool(s3)
+
+
+def _warn_source_s3_domain_migration(
+    config: InferenceConfig, source: CanonicalSourceInput
+) -> None:
+    """Warn when old source-to-target S3 credential reuse could be expected."""
+    if config.s3_config or not _source_has_inline_s3_settings(source):
+        return
+
+    missing_profiles: list[str] = []
+    model_uri = config.bundle_uri or config.model_uri
+    if (
+        model_uri is not None
+        and urlsplit(model_uri).scheme.lower() == "s3"
+        and config.storage_profile is None
+    ):
+        missing_profiles.append("model.storage_profile")
+    if (
+        urlsplit(config.output_uri).scheme.lower() == "s3"
+        and config.output_storage_profile is None
+    ):
+        missing_profiles.append("output.storage_profile")
+    if missing_profiles:
+        logger.warning(
+            "Canonical source S3 settings are source-only and are not propagated "
+            "to model or result-sink domains; configure %s independently",
+            " and ".join(missing_profiles),
+        )
 
 
 def _legacy_source(config: InferenceConfig) -> CanonicalSourceInput:
@@ -228,17 +319,13 @@ def _legacy_source(config: InferenceConfig) -> CanonicalSourceInput:
         raise JobConfigurationError(
             f"Unknown legacy inference source type: {normalized.type!r}"
         )
-    result: CanonicalSourceInput = normalized
-    if config.feature_columns:
-        result = apply_source_projection(result, config.feature_columns)
-    return result
+    return normalized
 
 
 def _legacy_json_source(data_config: dict[str, Any]) -> CanonicalSourceInput:
     """Convert the historical JSON ``data`` object to a canonical source."""
     data_type = data_config.get("type")
     input_uri = data_config.get("uri") or data_config.get("input")
-    feature_columns = data_config.get("feature_columns") or []
     s3 = data_config.get("s3") or None
 
     if data_type is None:
@@ -301,10 +388,7 @@ def _legacy_json_source(data_config: dict[str, Any]) -> CanonicalSourceInput:
         raise JobConfigurationError(
             f"Unknown legacy inference source type: {normalized.type!r}"
         )
-    result: CanonicalSourceInput = normalized
-    if feature_columns:
-        result = apply_source_projection(result, feature_columns)
-    return result
+    return normalized
 
 
 @PublicAPI(stability="beta")
@@ -315,7 +399,7 @@ def run_batch_inference(
     """Execute the distributed batch inference pipeline.
 
     Data flow:
-    1. DataSourceProvider opens the canonical source with native projection;
+    1. IngestionGateway opens an explicit Ray request and returns a typed handle;
     2. map_batches + ActorPoolStrategy for distributed inference;
     3. write_parquet streams results back to S3.
 
@@ -331,21 +415,35 @@ def run_batch_inference(
     import ray.data
 
     from tributo.inference.batch_predictor import XGBoostONNXPredictor
-    from tributo.training.data_loader import load_ray_dataset_from_source
+    from tributo.inference.contracts import ParquetResultSinkRequest
+    from tributo.inference.input_resolver import IngestionGatewayInputResolver
+    from tributo.integrations.sinks import ParquetResultSink
 
     if predictor_cls is None:
         predictor_cls = XGBoostONNXPredictor
 
     source = _legacy_source(config)
+    _warn_source_s3_domain_migration(config, source)
     source_columns = source_projection(source)
 
-    # Build predictor_config: merge predictor-specific config + S3 config +
-    # feature_columns.  Source credentials are also used for the output sink
-    # when the legacy output configuration is absent.
+    # The legacy flat S3 field remains a one-window compatibility adapter.
+    # It is never inferred from a canonical Source and never enters the new
+    # InferenceRequest contract.
     predictor_config = {**config.predictor_config}
-    s3_config = config.s3_config or _source_s3_config(source)
-    if s3_config:
-        predictor_config["s3_config"] = s3_config
+    legacy_s3_config = config.s3_config
+    if legacy_s3_config:
+        warnings.warn(
+            "InferenceConfig.s3_config is deprecated; configure independent "
+            "source, model, and output storage profiles",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        logger.warning(
+            "Legacy flat s3_config is deprecated; migrate each credential "
+            "domain to its own storage profile"
+        )
+        if config.model_uri is not None:
+            predictor_config["s3_config"] = legacy_s3_config
     predictor_config["feature_names"] = config.feature_columns or source_columns
 
     # If feature_columns is not set, auto-read from the model entry
@@ -377,9 +475,22 @@ def run_batch_inference(
             "Auto-loaded feature_columns from model metadata: %s", feature_columns
         )
 
-    if feature_columns:
-        source = apply_source_projection(source, feature_columns)
-    ds = load_ray_dataset_from_source(source.model_dump(mode="python"))
+    transforms = TransformPipeline(
+        steps=(
+            (SelectColumns(columns=tuple(feature_columns)),) if feature_columns else ()
+        )
+    )
+    input_resolver = IngestionGatewayInputResolver()
+    input_selection = input_resolver.describe(
+        IngestionRequest(
+            source=source,
+            engine="ray",
+            storage_profile=config.source_storage_profile,
+            transforms=transforms,
+        )
+    )
+    opened_input = input_resolver.open(input_selection)
+    ds = opened_input.dataset
 
     # ── 2. Distributed inference (ActorPoolStrategy keeps models resident) ──
     model_ref = config.bundle_uri if config.bundle_uri is not None else config.model_uri
@@ -387,7 +498,7 @@ def run_batch_inference(
         "Starting inference: predictor=%s model=%s concurrency=%d batch_size=%d "
         "cpus_per_actor=%.1f gpus_per_actor=%.1f",
         predictor_cls.__name__,
-        model_ref,
+        _credential_free_uri(model_ref or "<unset>"),
         config.concurrency,
         config.batch_size,
         config.num_cpus_per_actor,
@@ -406,47 +517,84 @@ def run_batch_inference(
     else:
         constructor_args = (config.model_uri, predictor_config)
 
-    ds = ds.map_batches(
-        predictor_cls,
-        fn_constructor_args=constructor_args,
-        batch_size=config.batch_size,
-        compute=ray.data.ActorPoolStrategy(
-            min_size=config.concurrency,
-            max_size=config.concurrency,
-        ),
-        num_cpus=config.num_cpus_per_actor,
-        num_gpus=config.num_gpus_per_actor,
-    )
+    try:
+        ds = ds.map_batches(
+            predictor_cls,
+            fn_constructor_args=constructor_args,
+            batch_size=config.batch_size,
+            compute=ray.data.ActorPoolStrategy(
+                min_size=config.concurrency,
+                max_size=config.concurrency,
+            ),
+            num_cpus=config.num_cpus_per_actor,
+            num_gpus=config.num_gpus_per_actor,
+        )
 
-    # ── 3. Streaming write-back ──
-    logger.info("Writing predictions to %s", config.output_uri)
-    write_kwargs: dict[str, Any] = {"compression": config.output_compression}
-    if config.min_rows_per_file:
-        write_kwargs["min_rows_per_file"] = config.min_rows_per_file
-
-    if config.output_uri.startswith("s3://"):
-        import pyarrow.fs as pafs
-
-        from tributo.data._s3 import to_pyarrow_s3_kwargs
-
-        s3 = _build_s3_config(s3_config)
-        write_kwargs["filesystem"] = pafs.S3FileSystem(**to_pyarrow_s3_kwargs(s3))
-        output_path = config.output_uri.removeprefix("s3://")
-    else:
-        output_path = config.output_uri
-
-    ds.write_parquet(output_path, **write_kwargs)
+        # ── 3. Streaming write-back through the independent ResultSink ──
+        logger.info(
+            "Writing predictions to %s", _credential_free_uri(config.output_uri)
+        )
+        sink: ParquetResultSink
+        sink_profile = config.output_storage_profile
+        if sink_profile is None and legacy_s3_config:
+            sink_profile = "legacy-flat-s3-config"
+            sink = ParquetResultSink(
+                storage_resolver=_LegacyStorageProfileResolver(legacy_s3_config)
+            )
+        else:
+            sink = ParquetResultSink()
+        receipt = sink.write(
+            ds,
+            ParquetResultSinkRequest(
+                uri=config.output_uri,
+                storage_profile=sink_profile,
+                compression=config.output_compression,
+                min_rows_per_file=config.min_rows_per_file,
+            ),
+            run_id="legacy-inference",
+            plan_digest="0" * 64,
+        )
+    except Exception:
+        opened_input.cancel()
+        raise
+    try:
+        opened_input.close()
+    except Exception as exc:
+        logger.warning(
+            "Inference input close failed after result commit (%s); "
+            "preserving completed status",
+            type(exc).__name__,
+        )
 
     logger.info(
         "Batch inference complete: %s → %s",
         _source_display_uri(source),
-        config.output_uri,
+        _credential_free_uri(config.output_uri),
     )
     return {
         "input_path": _source_display_uri(source),
-        "output_path": config.output_uri,
+        "output_path": _credential_free_uri(config.output_uri),
         "status": "completed",
+        "rows_written": receipt.rows_written,
     }
+
+
+class _LegacyStorageProfileResolver:
+    """Bind the deprecated flat S3 mapping only inside the legacy adapter."""
+
+    def __init__(self, raw: dict[str, str]) -> None:
+        self._raw = dict(raw)
+
+    def resolve(self, profile: str | None):
+        from tributo._common.storage_profiles import StorageProfile
+
+        del profile
+        return StorageProfile(
+            endpoint=self._raw.get("endpoint"),
+            region=self._raw.get("region"),
+            access_key_id=self._raw.get("access_key_id"),
+            secret_access_key=self._raw.get("secret_access_key"),
+        )
 
 
 @PublicAPI(stability="beta")
@@ -489,18 +637,17 @@ def run_inference_from_json(config_path: str) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise JobConfigurationError("config root must be a mapping")
 
-    data_cfg = raw.get("data", {})
-    model_cfg = raw.get("model", {})
-    output_cfg = raw.get("output", {})
-    ray_cfg = raw.get("ray", {})
-    if not isinstance(data_cfg, dict):
-        raise JobConfigurationError("config.data must be a mapping")
-    if not isinstance(model_cfg, dict):
-        raise JobConfigurationError("config.model must be a mapping")
-    if not isinstance(output_cfg, dict):
-        raise JobConfigurationError("config.output must be a mapping")
-    if not isinstance(ray_cfg, dict):
-        raise JobConfigurationError("config.ray must be a mapping")
+    try:
+        envelope = _JsonInferenceEnvelope.model_validate(raw)
+    except ValidationError as exc:
+        raise JobConfigurationError(
+            f"Invalid inference config: {_validation_message(exc)}"
+        ) from None
+
+    data_cfg = envelope.data.model_dump(exclude_none=True)
+    model_cfg = envelope.model.model_dump(exclude_none=True)
+    output_cfg = envelope.output.model_dump(exclude_none=True)
+    ray_cfg = envelope.ray.model_dump(exclude_none=True)
 
     model_uri = model_cfg.get("uri") or model_cfg.get("path", "")
     bundle_uri = model_cfg.get("bundle_uri")
@@ -520,7 +667,7 @@ def run_inference_from_json(config_path: str) -> dict[str, Any]:
     if "prediction_column" in output_cfg:
         predictor_config["prediction_column"] = output_cfg["prediction_column"]
 
-    top_level_source = raw.get("source")
+    top_level_source = envelope.source
     nested_source = data_cfg.get("source")
     if top_level_source is not None and nested_source is not None:
         raise JobConfigurationError(
@@ -530,23 +677,45 @@ def run_inference_from_json(config_path: str) -> dict[str, Any]:
     source_payload = top_level_source if top_level_source is not None else nested_source
     source: CanonicalSourceInput
     if source_payload is not None:
-        extra_data_keys = set(data_cfg) - {"source"}
+        extra_data_keys = set(data_cfg) - {"source", "storage_profile"}
         if extra_data_keys:
+            migration = ""
+            if "feature_columns" in extra_data_keys:
+                migration = (
+                    "; move projection into the canonical source (built-in file "
+                    "sources use source.columns) or the shared Transform IR"
+                )
             raise JobConfigurationError(
                 "canonical source cannot be combined with legacy data fields: "
                 + ", ".join(sorted(extra_data_keys))
+                + migration
             )
         from pydantic import TypeAdapter
 
         try:
             source = TypeAdapter(CanonicalSourceInput).validate_python(source_payload)
         except ValidationError as e:
-            raise JobConfigurationError(f"Invalid inference config: {e}") from e
+            raise JobConfigurationError(
+                f"Invalid inference config: {_validation_message(e)}"
+            ) from None
     else:
         try:
-            source = _legacy_json_source(data_cfg)
+            source = _legacy_json_source(
+                {
+                    key: value
+                    for key, value in data_cfg.items()
+                    if key != "storage_profile"
+                }
+            )
+            source = apply_source_projection(
+                source,
+                data_cfg.get("feature_columns") or [],
+            )
         except (ValidationError, ValueError) as e:
-            raise JobConfigurationError(f"Invalid inference config: {e}") from e
+            detail = (
+                _validation_message(e) if isinstance(e, ValidationError) else str(e)
+            )
+            raise JobConfigurationError(f"Invalid inference config: {detail}") from None
 
     try:
         config = InferenceConfig(
@@ -559,6 +728,12 @@ def run_inference_from_json(config_path: str) -> dict[str, Any]:
             # is True, so the raw JSON value must reach the model field.
             unsafe_model=model_cfg.get("unsafe", False),
             storage_profile=model_cfg.get("storage_profile"),
+            source_storage_profile=data_cfg.get("storage_profile")
+            or envelope.source_storage_profile,
+            output_storage_profile=output_cfg.get("storage_profile")
+            or envelope.output_storage_profile,
+            s3_config=envelope.s3_config or {},
+            feature_columns=[],
             predictor_config=predictor_config,
             batch_size=ray_cfg.get("batch_size", 4096),
             concurrency=ray_cfg.get("concurrency", 4),
@@ -568,6 +743,17 @@ def run_inference_from_json(config_path: str) -> dict[str, Any]:
             min_rows_per_file=output_cfg.get("min_rows_per_file"),
         )
     except (ValidationError, ValueError) as e:
-        raise JobConfigurationError(f"Invalid inference config: {e}") from e
+        detail = _validation_message(e) if isinstance(e, ValidationError) else str(e)
+        raise JobConfigurationError(f"Invalid inference config: {detail}") from None
 
     return run_batch_inference(config)
+
+
+def _validation_message(error: ValidationError) -> str:
+    """Format Pydantic failures without echoing credential-bearing input."""
+    details = error.errors(
+        include_url=False,
+        include_context=False,
+        include_input=False,
+    )
+    return json.dumps(details, sort_keys=True, separators=(",", ":"))
