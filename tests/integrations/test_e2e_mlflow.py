@@ -9,7 +9,6 @@ from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 from uuid import uuid4
 
-import mlflow
 import pytest
 import requests
 from pydantic import BaseModel
@@ -39,6 +38,8 @@ from tributo.integrations.hooks.mlflow_hook import (
     MLflowHookOptions,
     MLflowPostPublishHook,
 )
+
+mlflow = pytest.importorskip("mlflow", reason="mlflow registry extra not installed")
 
 pytestmark = pytest.mark.integration
 
