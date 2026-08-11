@@ -40,7 +40,7 @@ class ArtifactImportOptions(BaseModel):
     artifact_name: str = Field(
         default="imported-model", pattern=r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$"
     )
-    variant: Literal["onnx", "ubj", "json"] | None = None
+    variant: Literal["onnx"] | None = None
     input_fields: tuple[SignatureField, ...] = Field(min_length=1)
     output_fields: tuple[SignatureField, ...] = Field(min_length=1)
     max_bytes: int = Field(default=_DEFAULT_MAX_BYTES, ge=1, le=_DEFAULT_MAX_BYTES)
@@ -122,7 +122,9 @@ class ArtifactModelImporter:
                     source_kind="external-artifact",
                     source_fingerprint=source_fingerprint,
                     framework=(
-                        "xgboost" if reference.format_id == "xgboost" else "onnx"
+                        "xgboost"
+                        if reference.flavor_id == "xgboost-native-v1"
+                        else "onnx"
                     ),
                     architecture_id=reference.architecture_id,
                 ),
@@ -144,11 +146,13 @@ def _validate_format(
         if options.variant not in (None, "onnx"):
             raise JobConfigurationError("ONNX artifacts require variant='onnx'")
         return "model.onnx", "onnx"
-    if pair == ("xgboost", "xgboost-native-v1"):
-        variant = options.variant or "ubj"
-        if variant not in {"ubj", "json"}:
+    if pair in {
+        ("ubj", "xgboost-native-v1"),
+        ("xgboost-json", "xgboost-native-v1"),
+    }:
+        if options.variant is not None:
             raise JobConfigurationError(
-                "XGBoost artifacts require variant='ubj' or variant='json'"
+                "Canonical XGBoost formats do not accept options.variant"
             )
         input_names = tuple(field.name for field in options.input_fields)
         if input_names != ("float_input",):
@@ -156,7 +160,8 @@ def _validate_format(
                 "xgboost-native-v1 requires exactly one input signature field "
                 "named 'float_input'"
             )
-        return f"model.{variant}", variant
+        extension = "ubj" if reference.format_id == "ubj" else "json"
+        return f"model.{extension}", None
     raise UnsupportedArtifactFormat(
         f"Artifact format/flavor pair {pair!r} is not supported by "
         f"{ArtifactModelImporter.provider_id!r}"

@@ -41,7 +41,7 @@ if TYPE_CHECKING:
 
 
 class _XGBoostNativeExporterBase:
-    """Shared writer; concrete subclasses freeze format and flavor identity."""
+    """Shared writer; concrete subclasses freeze one serialization format."""
 
     api_version: ClassVar[int] = 2
     priority: ClassVar[int] = 80
@@ -136,7 +136,7 @@ class XGBoostUBJExporter(_XGBoostNativeExporterBase):
 
     exporter_id: ClassVar[str] = "xgboost-ubj-v1"
     output_format: ClassVar[str] = "ubj"
-    output_flavor_id: ClassVar[str] = "xgboost-ubj-v1"
+    output_flavor_id: ClassVar[str] = "xgboost-native-v1"
     options_model: ClassVar[type[BaseModel]] = XGBoostUBJOptions
     _file_extension: ClassVar[str] = "ubj"
 
@@ -150,7 +150,7 @@ class XGBoostJSONExporter(_XGBoostNativeExporterBase):
 
     exporter_id: ClassVar[str] = "xgboost-json-v1"
     output_format: ClassVar[str] = "xgboost-json"
-    output_flavor_id: ClassVar[str] = "xgboost-json-v1"
+    output_flavor_id: ClassVar[str] = "xgboost-native-v1"
     options_model: ClassVar[type[BaseModel]] = XGBoostJSONOptions
     _file_extension: ClassVar[str] = "json"
 

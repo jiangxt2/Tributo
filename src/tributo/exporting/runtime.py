@@ -46,6 +46,7 @@ from tributo.exceptions import (
     UnsupportedArtifactFormat,
 )
 from tributo.exporting.bundle_reader import BundleReader
+from tributo.exporting.formats import validate_format_id
 from tributo.exporting.manifest import ExportManifest, SignatureField
 from tributo.exporting.models import LogicalArtifact, ResolvedArtifact
 from tributo.exporting.registries import FlavorRegistry
@@ -226,10 +227,11 @@ class FlavorSupportEntry:
 #: primary artifact for O1, DNN, PU, and XGBoost. Native XGBoost is an
 #: additional explicit executable flavor. Other first-party export flavors
 #: are readable Bundle artifacts, but fail closed at executable gates until
-#: a matching loader is implemented. Other flavor IDs produced by exporters
-#: (``safetensors-v1``, ``torch-export-v1``, ``xgboost-ubj-v1``,
-#: ``xgboost-json-v1``, ``hf-onnx-v1``, ``onnx-int8-v1``) are never loaded
-#: by guessing.
+#: a matching loader is implemented. XGBoost UBJ and JSON are two canonical
+#: serialization formats produced for the shared ``xgboost-native-v1``
+#: runtime flavor. Other flavor IDs produced by exporters
+#: (``safetensors-v1``, ``torch-export-v1``, ``hf-onnx-v1``,
+#: ``onnx-int8-v1``) are never loaded by guessing.
 FLAVOR_SUPPORT_MATRIX: tuple[FlavorSupportEntry, ...] = (
     FlavorSupportEntry(
         flavor_id="onnx-runtime-v1",
@@ -259,7 +261,7 @@ FLAVOR_SUPPORT_MATRIX: tuple[FlavorSupportEntry, ...] = (
         online_serveable=True,
         verticals=("xgboost",),
         trainer_types=("xgboost",),
-        producer_ids=("xgboost-native-v1",),
+        producer_ids=("xgboost-json-v1", "xgboost-ubj-v1"),
     ),
     FlavorSupportEntry(
         flavor_id="safetensors-v1",
@@ -457,6 +459,13 @@ class BundleModelLoader:
         # Signature gate: serveable roles need non-empty typed signatures.
         if entry.signature_required:
             _require_typed_signature(manifest, artifact, unsafe)
+
+        if artifact.format not in flavor_cls.supported_formats:
+            raise UnsupportedArtifactFormat(
+                f"Artifact {artifact.name!r} declares format {artifact.format!r}, "
+                f"but flavor {artifact.flavor_id!r} accepts only "
+                f"{flavor_cls.supported_formats!r}"
+            )
 
         # Load the model inside the artifact context; the runtime keeps
         # the context open (ExitStack) so temp files survive lazy-loaders.
@@ -788,6 +797,32 @@ def _validate_matrix_registry(registry: FlavorRegistry) -> None:
                 f"Serveable matrix signature_required for {entry.flavor_id!r} "
                 "does not match the registered flavor"
             )
+        if entry.batch_inference_capable != getattr(
+            flavor_cls, "batch_supported", None
+        ):
+            raise JobConfigurationError(
+                f"Serveable matrix batch capability for {entry.flavor_id!r} "
+                "does not match the registered flavor"
+            )
+        if entry.online_serveable != getattr(flavor_cls, "serveable", None):
+            raise JobConfigurationError(
+                f"Serveable matrix serving capability for {entry.flavor_id!r} "
+                "does not match the registered flavor"
+            )
+        supported_formats = getattr(flavor_cls, "supported_formats", ())
+        if not isinstance(supported_formats, tuple) or not supported_formats:
+            raise JobConfigurationError(
+                f"Serveable matrix flavor {entry.flavor_id!r} must declare a "
+                "non-empty supported_formats tuple"
+            )
+        try:
+            for format_id in supported_formats:
+                validate_format_id(format_id)
+        except ValueError as exc:
+            raise JobConfigurationError(
+                f"Serveable matrix flavor {entry.flavor_id!r} declares invalid "
+                "supported_formats"
+            ) from exc
         matrix_dependencies = set(entry.dependencies)
         flavor_dependencies = set(getattr(flavor_cls, "required_dependencies", ()))
         if not flavor_dependencies.issubset(matrix_dependencies):

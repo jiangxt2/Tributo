@@ -106,10 +106,10 @@ class TestV1GoldenFixture:
             load_bundle(ref)
 
     @pytest.mark.parametrize(
-        ("variant", "expected_format", "expected_flavor"),
+        ("variant", "expected_format"),
         (
-            ("ubj", "ubj", "xgboost-ubj-v1"),
-            ("json", "xgboost-json", "xgboost-json-v1"),
+            ("ubj", "ubj"),
+            ("json", "xgboost-json"),
         ),
     )
     def test_legacy_xgboost_artifact_normalises_without_digest_drift(
@@ -117,7 +117,6 @@ class TestV1GoldenFixture:
         tmp_path: Path,
         variant: str,
         expected_format: str,
-        expected_flavor: str,
     ) -> None:
         payload = json.loads(_FIXTURE.read_text(encoding="utf-8"))
         payload["artifacts"][0].update(
@@ -136,7 +135,7 @@ class TestV1GoldenFixture:
         artifact = manifest.artifacts[0]
 
         assert artifact.format == expected_format
-        assert artifact.flavor_id == expected_flavor
+        assert artifact.flavor_id == "xgboost-native-v1"
         assert manifest_path.read_bytes() == raw_bytes
         result = load_bundle(
             BundleRef(

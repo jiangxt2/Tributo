@@ -131,9 +131,12 @@ RegistryModelReference / ArtifactModelReference
 ```
 
 The first-party importers support MLflow numeric versions and Aliases, explicit
-ONNX artifacts, and explicit native XGBoost JSON/UBJ artifacts. Alias resolution
-is frozen to a numeric version before Ray Job submission. No registry SDK object
-or framework model object crosses into `ResolvedInference`.
+ONNX artifacts, and canonical native XGBoost `ubj`/`xgboost-json` artifacts.
+Both XGBoost formats route through the shared `xgboost-native-v1` flavor;
+legacy first-party format-plus-variant references normalize at the contract
+boundary. Alias resolution is frozen to a numeric version before Ray Job
+submission. No registry SDK object or framework model object crosses into
+`ResolvedInference`.
 
 **Compatibility entry**: `inference/pipeline.py` retains `InferenceConfig`, raw
 ONNX, and strict JSON parsing. Its read path now uses
@@ -247,7 +250,7 @@ TrainingLifecycle
      ├── ModelExporter.export(context, source, upstream, target)
      │     └── integrations/exporters/
      │           ├── xgboost_onnx.py        ← XGBoost → ONNX
-     │           ├── xgboost_native.py      ← distinct UBJ and JSON exporters
+     │           ├── xgboost_native.py      ← UBJ/JSON exporters, shared native flavor
      │           ├── torch_onnx.py          ← torch → ONNX
      │           ├── torch_export.py        ← torch.export
      │           ├── torch_safetensors.py   ← torch → safetensors
@@ -271,7 +274,9 @@ TrainingResult projection
    training_status, bundle_status, hook_status, execution_id)
 ```
 
-XGBoost defaults to ONNX opset 12 plus UBJ in the same Bundle. DNN and PU
+XGBoost defaults to ONNX opset 12 plus UBJ in the same Bundle. Its canonical
+UBJ and JSON exporters both declare the executable `xgboost-native-v1`
+flavor. DNN and PU
 default to ONNX opset 18. All three bind the `inference` role to
 `onnx-model`. An omitted destination fails before trainer setup; there is no
 implicit current-directory or temporary output.

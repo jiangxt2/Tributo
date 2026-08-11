@@ -8,6 +8,7 @@ live outside the contract module.
 
 from __future__ import annotations
 
+import warnings
 from typing import Annotated, Any, ClassVar, Literal, Protocol, Union, runtime_checkable
 from urllib.parse import urlsplit
 
@@ -98,6 +99,44 @@ class ArtifactModelReference(_FrozenContract):
     storage_profile: str | None = None
     import_storage_profile: str | None = None
     options: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalise_legacy_first_party_xgboost(cls, value: Any) -> Any:
+        """Map the former format-plus-variant contract to canonical formats."""
+        if not isinstance(value, dict):
+            return value
+        if (
+            value.get("provider_id") != "tributo.artifact"
+            or value.get("format_id") != "xgboost"
+            or value.get("flavor_id") != "xgboost-native-v1"
+        ):
+            return value
+        options = value.get("options", {})
+        if not isinstance(options, dict):
+            return value
+        variant = options.get("variant", "ubj")
+        if variant is None:
+            variant = "ubj"
+        replacements = {"ubj": "ubj", "json": "xgboost-json"}
+        if not isinstance(variant, str) or variant not in replacements:
+            raise ValueError(
+                "legacy first-party XGBoost options.variant must be 'ubj' or 'json'"
+            )
+        canonical_format = replacements[variant]
+        warnings.warn(
+            "ArtifactModelReference(format_id='xgboost', options.variant=...) is "
+            "deprecated; use format_id='ubj' or 'xgboost-json' with the shared "
+            "xgboost-native-v1 flavor",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        normalised = dict(value)
+        normalised["format_id"] = canonical_format
+        normalised_options = dict(options)
+        normalised_options.pop("variant", None)
+        normalised["options"] = normalised_options
+        return normalised
 
 
 ModelReference = Annotated[

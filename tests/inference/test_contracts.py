@@ -77,6 +77,56 @@ class TestBundleModelReference:
         }
 
 
+class TestArtifactModelReference:
+    @pytest.mark.parametrize(
+        ("variant", "expected_format"),
+        (("ubj", "ubj"), ("json", "xgboost-json")),
+    )
+    def test_first_party_legacy_xgboost_reference_is_normalised(
+        self, variant: str, expected_format: str
+    ) -> None:
+        with pytest.warns(DeprecationWarning, match="deprecated"):
+            reference = ArtifactModelReference(
+                provider_id="tributo.artifact",
+                uri="/models/model.xgb",
+                format_id="xgboost",
+                flavor_id="xgboost-native-v1",
+                import_bundle_uri="/bundles/imported",
+                options={"variant": variant, "input_fields": [], "custom": True},
+            )
+
+        assert reference.format_id == expected_format
+        assert reference.flavor_id == "xgboost-native-v1"
+        assert reference.options == {"input_fields": [], "custom": True}
+
+    def test_third_party_xgboost_contract_is_not_rewritten(self) -> None:
+        reference = ArtifactModelReference(
+            provider_id="external.store",
+            uri="/models/model.xgb",
+            format_id="xgboost",
+            flavor_id="xgboost-native-v1",
+            import_bundle_uri="/bundles/imported",
+            options={"variant": "json"},
+        )
+
+        assert reference.format_id == "xgboost"
+        assert reference.options == {"variant": "json"}
+
+    @pytest.mark.parametrize("variant", ("", "binary", 1, ["ubj"]))
+    def test_first_party_legacy_xgboost_rejects_unknown_variant(
+        self, variant: object
+    ) -> None:
+        with pytest.raises(ValidationError, match="must be 'ubj' or 'json'"):
+            ArtifactModelReference(
+                provider_id="tributo.artifact",
+                uri="/models/model.xgb",
+                format_id="xgboost",
+                flavor_id="xgboost-native-v1",
+                import_bundle_uri="/bundles/imported",
+                options={"variant": variant},
+            )
+
+
 class TestBindings:
     def test_projection_is_feature_then_passthrough_and_deduplicated(self) -> None:
         request = _request()

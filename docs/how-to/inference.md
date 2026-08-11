@@ -279,6 +279,12 @@ available:
   canonical `float_input` tensor; the importer rejects any other input field
   name before acquiring or publishing the artifact.
 
+  Use `format_id="ubj"` or `format_id="xgboost-json"` with the shared
+  `xgboost-native-v1` runtime flavor. The former first-party
+  `format_id="xgboost"` plus `options.variant` shape is accepted only as a
+  deprecated input and is normalized before import; third-party providers are
+  not rewritten.
+
 Both paths publish and verify a Tributo Bundle before Ray execution. They never
 put an MLflow PyFunc, XGBoost Booster, SDK client, or mutable alias in the
 resolved plan. Safetensors remains fail-closed without a trusted architecture
@@ -340,14 +346,13 @@ xgboost_model = ArtifactModelReference(
     provider_id="tributo.artifact",
     uri="s3://external-models/fraud.ubj",
     storage_profile="external-model-store",
-    format_id="xgboost",
+    format_id="ubj",
     flavor_id="xgboost-native-v1",
     architecture_id="xgboost",
     expected_sha256="0" * 64,
     import_bundle_uri="s3://models/tributo-imports",
     import_storage_profile="model-store",
     options={
-        "variant": "ubj",
         "input_fields": [
             {"name": "float_input", "dtype": "float32", "shape": ["batch", 12]}
         ],

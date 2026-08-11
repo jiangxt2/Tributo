@@ -619,14 +619,13 @@ def test_external_xgboost_artifact_is_normalized_before_ray_job(
         model=ArtifactModelReference(
             provider_id="tributo.artifact",
             uri=str(artifact),
-            format_id="xgboost",
+            format_id="ubj",
             flavor_id="xgboost-native-v1",
             architecture_id="xgboost",
             expected_sha256=digest,
             import_bundle_uri=f"s3://{minio_assets.bucket}/models/external-xgboost",
             import_storage_profile="model_domain",
             options={
-                "variant": "ubj",
                 "input_fields": [
                     {
                         "name": "float_input",

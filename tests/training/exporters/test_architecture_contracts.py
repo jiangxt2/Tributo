@@ -360,17 +360,27 @@ def test_capabilities_are_derived_from_plugin_descriptors() -> None:
     assert not capability.batch and not capability.serveable
 
 
-def test_capability_matrix_matches_runtime_serveable_matrix() -> None:
-    from tributo.exporting.runtime import SERVEABLE_FLAVOR_MATRIX
+def test_capability_matrix_matches_runtime_support_matrix() -> None:
+    from tributo.exporting.runtime import FLAVOR_SUPPORT_MATRIX
 
-    declared_serveable = {
-        entry.flavor_id
-        for entry in DEFAULT_CAPABILITY_REGISTRY.entries()
-        if entry.serveable
+    derived = {
+        entry.flavor_id: entry for entry in DEFAULT_CAPABILITY_REGISTRY.entries()
     }
-    runtime_serveable = {entry.flavor_id for entry in SERVEABLE_FLAVOR_MATRIX}
+    frozen = {entry.flavor_id: entry for entry in FLAVOR_SUPPORT_MATRIX}
 
-    assert declared_serveable == runtime_serveable
+    assert derived.keys() == frozen.keys()
+    for flavor_id, capability in derived.items():
+        matrix_entry = frozen[flavor_id]
+        assert capability.exportable == matrix_entry.exportable
+        assert capability.readable == matrix_entry.readable
+        assert capability.batch == matrix_entry.batch_inference_capable
+        assert capability.serveable == matrix_entry.online_serveable
+        assert set(capability.exporter_ids) == set(matrix_entry.producer_ids)
+
+    native = derived["xgboost-native-v1"]
+    assert native.exporter_ids == ("xgboost-json-v1", "xgboost-ubj-v1")
+    assert native.format_ids == ("ubj", "xgboost-json")
+    assert native.batch and native.serveable
 
 
 def test_operation_event_is_deterministic_committed_manifest_view() -> None:

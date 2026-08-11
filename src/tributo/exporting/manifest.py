@@ -308,9 +308,10 @@ def _read_manifest_v1(raw: dict[str, Any], canonical_bytes: bytes) -> ExportMani
 
     v1 artifacts lack ``artifact_kind`` — the reader defaults them to
     ``"model"`` for backward compatibility.  It also maps the former
-    XGBoost format-plus-variant representation to canonical format/flavor
-    identifiers.  Both adaptations affect only the parsed object; callers
-    still perform integrity checks against ``canonical_bytes`` unchanged.
+    XGBoost format-plus-variant representation to its canonical format while
+    preserving the shared native runtime flavor.  Both adaptations affect only
+    the parsed object; callers still perform integrity checks against
+    ``canonical_bytes`` unchanged.
     """
     del canonical_bytes
 
@@ -326,13 +327,10 @@ def _read_manifest_v1(raw: dict[str, Any], canonical_bytes: bytes) -> ExportMani
             and artifact.get("flavor_id") == "xgboost-native-v1"
         ):
             legacy_variant = artifact.get("variant") or "ubj"
-            replacements = {
-                "ubj": ("ubj", "xgboost-ubj-v1"),
-                "json": ("xgboost-json", "xgboost-json-v1"),
-            }
+            replacements = {"ubj": "ubj", "json": "xgboost-json"}
             replacement = replacements.get(legacy_variant)
             if replacement is not None:
-                normalised["format"], normalised["flavor_id"] = replacement
+                normalised["format"] = replacement
         return normalised
 
     # Normalise only the parsed in-memory view; never re-serialize it for the

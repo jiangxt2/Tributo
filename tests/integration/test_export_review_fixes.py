@@ -118,6 +118,9 @@ class TestMultiFormatExport:
             "binary": "ubj",
             "json": "xgboost-json",
         }
+        assert {artifact.flavor_id for artifact in manifest.artifacts} == {
+            "xgboost-native-v1"
+        }
         for artifact_name, suffix in (("binary", ".ubj"), ("json", ".json")):
             with reader.open_artifact(
                 result.canonical_uri,

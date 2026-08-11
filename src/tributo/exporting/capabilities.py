@@ -119,9 +119,9 @@ class CapabilityRegistry:
                 )
             )
 
-        # First-party flavors without a producing exporter (e.g. the
-        # xgboost-native-v1 loader from the upstream inference gate) still
-        # declare read/batch/serve capabilities; they are not exportable.
+        # Runtime-only flavors supplied by third-party or future plugins still
+        # declare read/batch/serve capabilities; they are not exportable until
+        # an exporter declares the same output_flavor_id.
         for flavor_id, flavor_cls in sorted(flavor_plugins.items()):
             if flavor_id in by_flavor:
                 continue
