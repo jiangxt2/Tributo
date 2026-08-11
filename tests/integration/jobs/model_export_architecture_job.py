@@ -1,16 +1,14 @@
-"""Ray Job for XGBoost → ONNX + UBJ + JSON Bundle → runtime."""
+"""Ray Job for the required Parquet → Trainer → Bundle → Batch → Serve path."""
 
 from __future__ import annotations
 
 import json
+import os
 import shutil
-import tempfile
+import sys
 import uuid
 from pathlib import Path
 from typing import Any
-
-import numpy as np
-import xgboost as xgb
 
 
 def _delete_bucket(client: Any, bucket: str) -> None:
@@ -25,118 +23,224 @@ def _delete_bucket(client: Any, bucket: str) -> None:
 
 
 def main() -> int:
-    """Train, export, read, and execute one immutable S3 bundle."""
+    """Run the complete model-export architecture on Docker-owned services."""
+    import importlib.metadata
+
+    import httpx
+    import mlflow
+    import ray
+    from ray import serve
+
     from tributo._common.storage import get_boto3_client
     from tributo.exporting.bundle_reader import BundleReader
-    from tributo.exporting.models import BundleOutputConfig, ExportTarget
-    from tributo.exporting.runtime import BundleModelLoader
-    from tributo.exporting.service import BundleExportService
-    from tributo.integrations.sources.ray_xgboost import RayXGBoostSourceProvider
+    from tributo.exporting.models import BundleOutputConfig, HookBinding
+    from tributo.inference.batch_predictor import XGBoostONNXPredictor
+    from tributo.serving.model_deployment import ONNXModel
+    from tributo.training.xgboost_trainer import XGBoostTrainerImpl
 
-    rng = np.random.default_rng(42)
-    features = rng.random((32, 4), dtype=np.float32)
-    labels = (features[:, 0] + features[:, 1] > 1.0).astype(np.int32)
-    matrix = xgb.DMatrix(
-        features,
-        label=labels,
-        feature_names=[f"f{index}" for index in range(features.shape[1])],
-    )
-    booster = xgb.train(
-        {"objective": "binary:logistic", "max_depth": 2, "seed": 42},
-        matrix,
-        num_boost_round=3,
-    )
-
-    root = Path(tempfile.mkdtemp(prefix="tributo-model-export-job-"))
+    execution_suffix = uuid.uuid4().hex
+    root = Path("/workspace") / f"model-export-{execution_suffix}"
+    root.mkdir(parents=True)
     bucket = f"tributo-model-export-job-{uuid.uuid4().hex[:12]}"
     client = get_boto3_client(path_style=True)
     client.create_bucket(Bucket=bucket)
+    mlflow_client = mlflow.MlflowClient()
+    model_versions_before = {
+        (version.name, version.version)
+        for version in mlflow_client.search_model_versions()
+    }
+    experiment_name = f"tributo-golden-path-{execution_suffix}"
+    serve_started = False
     try:
-        checkpoint = root / "checkpoint"
-        checkpoint.mkdir()
-        booster.save_model(str(checkpoint / "model.json"))
+        rows = [
+            {"feature_a": 0.0, "feature_b": 0.0, "label": 0},
+            {"feature_a": 0.0, "feature_b": 1.0, "label": 1},
+            {"feature_a": 1.0, "feature_b": 0.0, "label": 1},
+            {"feature_a": 1.0, "feature_b": 1.0, "label": 0},
+            {"feature_a": 0.2, "feature_b": 0.1, "label": 0},
+            {"feature_a": 0.1, "feature_b": 0.9, "label": 1},
+            {"feature_a": 0.8, "feature_b": 0.2, "label": 1},
+            {"feature_a": 0.9, "feature_b": 0.8, "label": 0},
+        ]
+        parquet_path = root / "parquet"
+        ray.data.from_items(rows).write_parquet(str(parquet_path))
+        dataset = ray.data.read_parquet(str(parquet_path))
+
+        source = {
+            "provider": "tributo.parquet",
+            "uri": str(parquet_path),
+            "options": {},
+        }
+        trainer = XGBoostTrainerImpl(
+            datasets={"train": dataset},
+            config={
+                "data": {
+                    "source": source,
+                    "label_col": "label",
+                    "feature_columns": ["feature_a", "feature_b"],
+                },
+                "model": {
+                    "objective": "binary:logistic",
+                    "max_depth": 2,
+                    "eta": 0.3,
+                },
+                "training": {
+                    "num_rounds": 3,
+                    "val_size": 0.0,
+                    "test_size": 0.0,
+                    "max_rows_per_worker": 16,
+                    "seed": 42,
+                },
+                "ray": {
+                    "num_workers": 1,
+                    "use_gpu": False,
+                    "storage_path": str(root / "ray-results"),
+                    "max_failures": 0,
+                },
+            },
+        )
 
         config = BundleOutputConfig(
             bundle_uri=f"s3://{bucket}/models",
             storage_profile="test",
-            request_id=f"ray-job-{uuid.uuid4().hex}",
-            targets=(
-                ExportTarget(
-                    name="onnx-model",
-                    format="onnx",
-                    options={"opset": 12},
+            hooks=(
+                HookBinding(
+                    hook_id="mlflow-log-artifacts-v1",
+                    required=True,
+                    options={
+                        "tracking_uri": mlflow.get_tracking_uri(),
+                        "experiment_name": experiment_name,
+                        "run_name": "golden-path",
+                    },
                 ),
-                ExportTarget(name="native-model", format="ubj"),
-                ExportTarget(name="json-model", format="xgboost-json"),
             ),
-            roles={"inference": "onnx-model"},
         )
-        provider = RayXGBoostSourceProvider()
-        service = BundleExportService()
-        with provider.open_source(str(checkpoint)) as source:
-            result = service.export_bundle(source=source, config=config)
-
-        event = service.last_operation_event
-        assert event is not None
-        assert event.bundle_id == result.bundle_id
-        assert event.manifest_sha256 == result.manifest_sha256
-
-        with provider.open_source(str(checkpoint)) as source:
-            retried = service.export_bundle(source=source, config=config)
-        retried_event = service.last_operation_event
-        assert retried.manifest_sha256 == result.manifest_sha256
-        assert retried_event is not None
-        assert retried_event.event_id == event.event_id
+        summary = trainer.run(bundle_config=config)
+        assert summary["training_status"] == "succeeded"
+        assert summary["bundle_status"] == "succeeded"
+        assert summary["hook_status"] == "succeeded"
 
         reader = BundleReader(cache_dir=root / "cache")
-        manifest = reader.read_manifest(result.canonical_uri, storage_profile="test")
+        manifest = reader.read_manifest(summary["bundle_uri"], storage_profile="test")
         assert manifest.roles == {"inference": "onnx-model"}
         formats = {artifact.name: artifact.format for artifact in manifest.artifacts}
         assert formats == {
-            "json-model": "xgboost-json",
-            "native-model": "ubj",
+            "native": "ubj",
             "onnx-model": "onnx",
         }
         assert all(artifact.artifact_kind == "model" for artifact in manifest.artifacts)
 
-        evaluation_matrix = xgb.DMatrix(
-            features[:2],
-            feature_names=[f"f{index}" for index in range(features.shape[1])],
+        prediction_dataset = ray.data.from_items(
+            [
+                {"feature_a": 0.0, "feature_b": 1.0},
+                {"feature_a": 1.0, "feature_b": 0.0},
+            ]
         )
-        expected = booster.predict(evaluation_matrix)
-        for artifact_name in ("native-model", "json-model"):
-            with reader.open_artifact(
-                result.canonical_uri,
-                artifact_name=artifact_name,
-                storage_profile="test",
-            ) as native_artifact:
-                loaded_booster = xgb.Booster()
-                loaded_booster.load_model(str(native_artifact.entrypoint_path))
-                actual = loaded_booster.predict(evaluation_matrix)
-                np.testing.assert_allclose(actual, expected)
+        prediction_rows = prediction_dataset.map_batches(
+            XGBoostONNXPredictor,
+            fn_constructor_kwargs={
+                "bundle_uri": summary["bundle_uri"],
+                "predictor_config": {"return_probs": False},
+                "storage_profile": "test",
+            },
+            batch_format="numpy",
+        ).take_all()
+        assert len(prediction_rows) == 2
 
-        with BundleModelLoader(bundle_reader=reader).open(
-            result.canonical_uri,
-            role="inference",
-            storage_profile="test",
-        ) as runtime:
-            input_name = runtime.model.input_names[0]
-            predictions = runtime.predict({input_name: features[:2]})
-            assert predictions
-            assert all(value.shape[0] == 2 for value in predictions.values())
+        serve.start(http_options={"host": "0.0.0.0", "port": 8000})
+        serve_started = True
+        deployment = serve.deployment(
+            name=f"tributo-golden-model-{execution_suffix[:8]}",
+            num_replicas=1,
+        )(ONNXModel)
+        serve.run(
+            deployment.bind(
+                bundle_uri=summary["bundle_uri"],
+                role="inference",
+                storage_profile="test",
+            ),
+            name=f"tributo-golden-{execution_suffix[:8]}",
+            route_prefix="/predict",
+        )
+        response = httpx.post(
+            "http://127.0.0.1:8000/predict",
+            json={
+                "inputs": [
+                    {
+                        "name": "float_input",
+                        "shape": [2, 2],
+                        "datatype": "float32",
+                        "data": [0.0, 1.0, 1.0, 0.0],
+                    }
+                ],
+                "return_probs": False,
+            },
+            timeout=30.0,
+        )
+        assert response.status_code == 200, response.text
+        http_payload = response.json()
+        assert len(http_payload["predictions"]) == 2
+        assert http_payload["bundle_id"] == manifest.bundle_id
+
+        experiment = mlflow_client.get_experiment_by_name(experiment_name)
+        assert experiment is not None
+        runs = mlflow_client.search_runs([experiment.experiment_id])
+        assert len(runs) == 1
+        assert runs[0].data.tags["tributo.bundle_uri"] == summary["bundle_uri"]
+        assert (
+            runs[0].data.tags["tributo.manifest_sha256"] == summary["manifest_sha256"]
+        )
+        model_versions_after = {
+            (version.name, version.version)
+            for version in mlflow_client.search_model_versions()
+        }
+        assert model_versions_after == model_versions_before
+
+        expected_versions = {
+            "boto3": "BOTO3_VERSION",
+            "botocore": "BOTOCORE_VERSION",
+            "ray": "RAY_VERSION",
+            "mlflow": "MLFLOW_VERSION",
+            "xgboost": "XGBOOST_VERSION",
+            "onnx": "ONNX_VERSION",
+            "onnxruntime": "ONNXRUNTIME_VERSION",
+            "onnxmltools": "ONNXMLTOOLS_VERSION",
+            "torch": "TORCH_VERSION",
+            "transformers": "TRANSFORMERS_VERSION",
+            "pyarrow": "PYARROW_VERSION",
+            "pandas": "PANDAS_VERSION",
+        }
+        observed_versions = {
+            package: importlib.metadata.version(package)
+            for package in expected_versions
+        }
+        for package, environment_key in expected_versions.items():
+            assert observed_versions[package] == os.environ[environment_key]
+        observed_python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+        assert observed_python_version == os.environ["PYTHON_VERSION"]
+
+        alive_nodes = [node for node in ray.nodes() if node["Alive"]]
+        assert len(alive_nodes) >= 2
 
         print(
             "RESULT: "
             + json.dumps(
                 {
-                    "status": result.status,
-                    "bundle_id": result.bundle_id,
-                    "manifest_sha256": result.manifest_sha256,
-                    "event_id": event.event_id,
+                    "status": summary["status"],
+                    "bundle_id": manifest.bundle_id,
+                    "execution_id": summary["execution_id"],
+                    "manifest_sha256": summary["manifest_sha256"],
                     "artifact_kinds": sorted(
                         {artifact.artifact_kind for artifact in manifest.artifacts}
                     ),
                     "formats": formats,
+                    "batch_rows": len(prediction_rows),
+                    "http_rows": len(http_payload["predictions"]),
+                    "mlflow_runs": len(runs),
+                    "model_versions_created": 0,
+                    "python_version": observed_python_version,
+                    "versions": observed_versions,
+                    "alive_nodes": len(alive_nodes),
                 },
                 sort_keys=True,
             ),
@@ -144,6 +248,13 @@ def main() -> int:
         )
         return 0
     finally:
+        if serve_started:
+            serve.shutdown()
+        experiment = mlflow_client.get_experiment_by_name(experiment_name)
+        if experiment is not None:
+            for run in mlflow_client.search_runs([experiment.experiment_id]):
+                mlflow_client.delete_run(run.info.run_id)
+            mlflow_client.delete_experiment(experiment.experiment_id)
         _delete_bucket(client, bucket)
         shutil.rmtree(root, ignore_errors=True)
 

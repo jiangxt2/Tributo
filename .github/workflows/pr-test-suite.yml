@@ -51,6 +51,10 @@ jobs:
               - "src/tributo/integrations/**"
               - "tests/training/exporters/**"
               - "tests/integration/test_export*"
+              - "tests/integration/test_walking_skeleton.py"
+              - "tests/integrations/component-versions.env"
+              - "tests/integrations/Dockerfile.data-ingestion"
+              - "tests/integrations/docker-compose.data-ingestion.yml"
               - "pyproject.toml"
             trainer_bundle:
               - "src/tributo/exporting/**"
@@ -484,7 +488,7 @@ jobs:
       TRIBUTO_POSTGRESQL_PASSWORD: tributo-test
     services:
       postgres:
-        image: postgres:17.6
+        image: postgres:17.6@sha256:00bc86618629af00d2937fdc5a5d63db3ff8450acf52f0636ec813c7f4902929
         env:
           POSTGRES_DB: tributo
           POSTGRES_USER: tributo
@@ -623,32 +627,55 @@ jobs:
   core-walking-skeleton:
     name: Core Walking Skeleton
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     needs: paths-filter
     if: needs.paths-filter.outputs.code == 'true'
     env:
+      COMPOSE_PROJECT_NAME: tributo-model-export-${{ github.run_id }}-${{ github.run_attempt }}
+      TRIBUTO_IT_ALLOW_LOCAL_BUILD: ${{ github.event_name == 'push' && '0' || '1' }}
+      TRIBUTO_IT_RUNTIME_REGISTRY: ghcr.io/jiangxt2/tributo-it-runtime
+      TRIBUTO_IT_RUNTIME_REGISTRY_WAIT_SECONDS: ${{ github.event_name == 'push' && '900' || '0' }}
       OMP_NUM_THREADS: "1"
       RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO: "0"
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
 
-      - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
+      - name: Run isolated reusable-runtime model-export gate
+        run: ./scripts/run_model_export_it.sh
+
+      - name: Upload model-export logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          python-version: "3.12"
+          name: model-export-services-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            /tmp/${{ env.COMPOSE_PROJECT_NAME }}/tests.log
+            /tmp/${{ env.COMPOSE_PROJECT_NAME }}/services.log
+            /tmp/${{ env.COMPOSE_PROJECT_NAME }}/image-prepare.log
+          if-no-files-found: warn
+          retention-days: 7
 
-      - name: Install locked integration and training dependencies
-        run: uv sync --extra dev --extra test-integration --extra training --locked
-
-      - name: Verify walking-skeleton dependencies
+      - name: Stop isolated model-export infrastructure
+        if: always()
+        env:
+          # The runner performs this exact-project cleanup itself. These
+          # placeholders let Compose parse a defensive second `down` only.
+          TRIBUTO_IT_MINIO_IMAGE: tributo-cleanup-placeholder:unused
+          TRIBUTO_IT_RUNTIME_IMAGE: tributo-cleanup-placeholder:unused
+          TRIBUTO_IT_SOURCE_ROOT: ${{ github.workspace }}
+          TRIBUTO_IT_TOOL_IMAGE: tributo-cleanup-placeholder:unused
         run: |
-          uv run --locked --no-sync python -c \
-            "import boto3, httpx, onnxmltools, onnxruntime, ray, xgboost"
-
-      - name: Run walking skeleton
-        run: |
-          uv run --locked --no-sync python -m pytest \
-            -m tributo_walking_skeleton tests/integration/test_walking_skeleton.py \
-            -v --tb=short --timeout=600
+          docker compose \
+            --env-file tests/integrations/component-versions.env \
+            --file tests/integrations/docker-compose.data-ingestion.yml \
+            --profile model-export \
+            down --volumes --remove-orphans --timeout 30
+          test -z "$(docker ps --all --quiet \
+            --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}")"
+          test -z "$(docker network ls --quiet \
+            --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}")"
+          test -z "$(docker volume ls --quiet \
+            --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}")"
 
   # Keep this aggregator independent from DCO.  DCO is a separate required
   # check, runs on pull_request/merge_group, and remains skipped on push/master.

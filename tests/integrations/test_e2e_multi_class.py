@@ -194,7 +194,7 @@ def main():
         config=config,
         callbacks=[cb],
     )
-    summary = trainer.run(output_path=onnx_path)
+    summary = trainer.run(output_path=onnx_path, legacy_export=True)
     logger.info("训练完成: %s", summary["status"])
 
     # ── 5. 验证 ──

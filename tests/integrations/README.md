@@ -1,7 +1,8 @@
 # Tributo Integration Tests
 
-> Most end-to-end scripts run inside a Docker Ray cluster. The MLflow Hook suite
-> is collected by pytest and runs against a real MLflow Tracking Server.
+Model-export integration tests run in an isolated Docker Compose project and
+submit work through the Ray Jobs API. They never reuse a host Ray runtime, an
+existing MLflow server, or a pre-existing container.
 
 ---
 
@@ -9,7 +10,10 @@
 
 | Test | File | Coverage | Prerequisites |
 |------|------|----------|---------------|
-| MLflow Hook | `test_e2e_mlflow.py` | Committed Bundle upload, replay deduplication, explicit run reuse, and failure semantics | MLflow + `registry` extra |
+| Model-export golden path | `../integration/test_walking_skeleton.py` | Ray Data Parquet → XGBoost → ONNX + UBJ S3 Bundle → BundleReader → batch inference → Ray Serve HTTP, plus MLflow provenance | Docker only; the runner creates all infrastructure |
+| First-party export conformance | `../training/exporters/test_first_party_conformance.py` | XGBoost, Torch, Hugging Face, quantizer, validator, and checkpoint-source contracts in the pinned Linux image | Docker only; executed by the model-export runner |
+| S3/MinIO contract | `../integration/test_export_s3.py`, `../integration/test_minio_compat.py` | Manifest-last publication, Lease/CAS, alias, GC, path-style access, and conditional writes against the run-owned MinIO service | Isolated model-export runner |
+| MLflow Hook | `test_e2e_mlflow.py` | Committed Bundle upload, replay deduplication, explicit run reuse, and failure semantics | Isolated model-export runner |
 | ClickHouse E2E | `test_e2e_clickhouse.py` | ClickHouse table → Daft OLAP Binding → explicit Daft-to-Ray adapter → XGBoost distributed training → MLflow → ONNX | Ray + Daft + `daft-olap-connectors` + ClickHouse + MLflow |
 | Dual-engine Docker | `test_data_ingestion_dual_engine.py` | Local Parquet, full ETL chain, typed handles, worker-version evidence | Docker Ray cluster + Daft |
 | File conformance | `../integration/test_data_ingestion_conformance.py` | Local/MinIO Parquet and CSV through Ray Data and Daft | Local Ray runtime + MinIO |
@@ -43,30 +47,83 @@ service logs remain under `/tmp/<compose-project>-*.log` after cleanup.
 
 ---
 
+## Model-Export Integration Gate
+
+Run the complete release-oriented gate from the repository root:
+
+```bash
+./scripts/run_model_export_it.sh
+```
+
+The script creates a unique project named
+`tributo-model-export-it-<timestamp>-<pid>` (or accepts a unique
+`tributo-model-export-*` project from CI), prepares the same content-addressed
+dependency runtime used by the ingestion gate, starts one Ray head, one
+independent Ray worker, MinIO, and MLflow, and stores traceable logs under
+`/tmp/<project-name>/`. The checkout is copied into a run-scoped source volume
+and mounted read-only; Compose neither builds nor implicitly pulls images.
+
+Compose readiness is transitive: the Ray head becomes healthy only after both
+the Ray control plane and MinIO health endpoint respond, while `up --wait`
+also waits for MLflow's own health check. Tests therefore never race a merely
+started object-storage container.
+
+An `EXIT` trap is installed before startup. On success, test failure, or
+interruption it runs project-scoped Compose cleanup with volumes and orphans,
+then checks that:
+
+- no container carrying that exact Compose project label remains.
+- no network or volume carrying that exact Compose project label remains.
+
+The runner also snapshots pre-existing container IDs, names, projects, and
+states. Any drift is reported as concurrent host activity for diagnosis, but
+does not override the project-scoped result: another integration-test project
+may legitimately restart or remove its own containers while this gate runs.
+
+The runner never calls `docker stop`, `docker restart`, `docker rm`, or a prune
+command against an unscoped target. It does not publish host ports or assign
+fixed container names.
+
+The default workflow invokes the same runner with a run-specific
+`COMPOSE_PROJECT_NAME`, uploads its test and service logs, and performs a
+defensive repeat of the same scoped `down --volumes --remove-orphans` operation
+under `if: always()`.
+
+## Pinned Component Contract
+
+`component-versions.env` is authoritative for the shared integration-test
+components used by the model-export and ingestion CI gates:
+
+| Component | Version |
+|-----------|---------|
+| Python | 3.12 |
+| Ray | 2.55.1 |
+| uv | 0.11.23 |
+| MinIO | RELEASE.2025-09-07T16-13-09Z |
+| PostgreSQL | 17.6 |
+| MLflow | 2.22.5 |
+| boto3 / botocore | 1.43.56 / 1.43.56 |
+| XGBoost | 3.3.0 |
+| ONNX / ONNX Runtime / onnxmltools | 1.22.0 / 1.28.0 / 1.16.0 |
+| Torch | 2.13.0 |
+| Transformers | 4.57.6 |
+| PyArrow / pandas | 19.0.1 / 2.3.3 |
+
+Ray, uv, the source-snapshot tool image, MinIO, and PostgreSQL image references
+also include immutable SHA-256 digests.
+`test_it_component_versions.py` ties all Python versions to `uv.lock` and
+fails if the Dockerfile or Compose file bypasses the version contract.
+
 ## MLflow Hook Suite
 
-The Hook suite validates the committed-bundle integration rather than automatic
-Model Registry or Stage behavior. Missing infrastructure is a test failure, not
-a reason to skip the suite.
+The Hook suite validates committed-Bundle provenance against the MLflow server
+created by the isolated model-export profile. It verifies Bundle URI, digest,
+tags, artifact upload, replay behavior, and required/optional failure semantics.
+It also asserts that no Model Version is created.
 
-Start and verify the existing local service:
-
-```bash
-docker start pista-mlflow-server
-curl --fail 'http://127.0.0.1:8050/api/2.0/mlflow/experiments/search?max_results=1'
-```
-
-Run the dedicated suites:
-
-```bash
-uv run --extra registry pytest tests/integrations/test_e2e_mlflow.py \
-  -m integration -vv
-uv run --extra registry pytest tests/registry/test_integration.py \
-  -m integration -vv
-```
-
-Set `MLFLOW_TRACKING_URI` to use another real server. The default is
-`http://127.0.0.1:8050`.
+The supported entry point is the complete runner above so cleanup remains
+automatic. Do not invoke the suite against a shared or pre-existing MLflow
+service.
 
 ---
 

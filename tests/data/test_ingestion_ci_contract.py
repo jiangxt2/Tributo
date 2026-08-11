@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+
+from tests.support.it_versions import load_it_component_versions
 
 _ROOT = Path(__file__).resolve().parents[2]
 _WORKFLOW = _ROOT / ".github" / "workflows" / "pr-test-suite.yml"
@@ -12,6 +15,7 @@ _PROFILE = _ROOT / "tests" / "integrations" / "runtime-profiles.json"
 _RUNNER = _ROOT / "tools" / "tributo_it.py"
 _SCRIPT = _ROOT / "scripts" / "run_data_ingestion_it.sh"
 _RUNTIME_WORKFLOW = _ROOT / ".github" / "workflows" / "it-runtime-image.yml"
+_MODEL_EXPORT_RUNNER = _ROOT / "scripts" / "run_model_export_it.sh"
 
 
 def test_distributed_ingestion_is_a_required_core_gate() -> None:
@@ -65,10 +69,28 @@ def test_distributed_ingestion_runs_from_the_project_import_root() -> None:
 
 def test_distributed_ingestion_image_uses_locked_project_dependencies() -> None:
     dockerfile = _DOCKERFILE.read_text(encoding="utf-8")
+    versions = load_it_component_versions()
+    profile = json.loads(_PROFILE.read_text(encoding="utf-8"))["profiles"][
+        "data-ingestion"
+    ]
 
-    assert "rayproject/ray:2.55.1-py312" in dockerfile
-    assert "ghcr.io/astral-sh/uv:0.11.23" in dockerfile
+    assert versions["RAY_IMAGE"].startswith(
+        f"rayproject/ray:{versions['RAY_VERSION']}-py312@sha256:"
+    )
+    assert versions["UV_IMAGE"].startswith(
+        f"ghcr.io/astral-sh/uv:{versions['UV_VERSION']}@sha256:"
+    )
+    assert profile["base_image"] == versions["RAY_IMAGE"]
+    assert profile["uv_image"] == versions["UV_IMAGE"]
+    assert profile["minio_image"] == versions["MINIO_IMAGE"]
+    assert profile["tool_image"] == versions["TOOL_IMAGE"]
+    assert "ARG BASE_IMAGE" in dockerfile
+    assert "FROM ${BASE_IMAGE}" in dockerfile
+    assert "ARG UV_IMAGE" in dockerfile
+    assert "FROM ${UV_IMAGE} AS uv" in dockerfile
+    assert "COPY --from=uv" in dockerfile
     assert "uv sync" in dockerfile
+    assert "--extra embeddings" in dockerfile
     assert "--extra data-daft" in dockerfile
     assert "--no-default-groups" in dockerfile
     assert "--no-install-project" in dockerfile
@@ -107,6 +129,7 @@ def test_integration_readme_has_only_lifecycle_owned_cluster_entries() -> None:
     )
 
     assert "./scripts/run_data_ingestion_it.sh" in readme
+    assert "./scripts/run_model_export_it.sh" in readme
     assert "rayDocker" not in readme
     assert "docker exec ray-head" not in readme
     assert "ray-worker-[1-3]" not in readme
@@ -125,3 +148,49 @@ def test_runtime_publish_workflow_is_trusted_and_immutable() -> None:
     assert "publish-runtime" in workflow
     assert "linux/amd64" in workflow
     assert ":latest" not in workflow
+
+
+def test_model_export_ci_executes_mlflow_contract_and_waits_for_minio() -> None:
+    workflow = _WORKFLOW.read_text(encoding="utf-8")
+    core_job = workflow.split("  core-walking-skeleton:", 1)[1].split(
+        "  core-gate:", 1
+    )[0]
+    trainer_bundle_filter = workflow.split("            trainer_bundle:", 1)[1].split(
+        "            docs:", 1
+    )[0]
+    compose = _COMPOSE.read_text(encoding="utf-8")
+
+    runner = _MODEL_EXPORT_RUNNER.read_text(encoding="utf-8")
+
+    assert "./scripts/run_model_export_it.sh" in core_job
+    assert "tests/integrations/test_e2e_mlflow.py" in runner
+    assert "tests/integrations/test_e2e_mlflow.py" not in trainer_bundle_filter
+    assert "tests/integration/test_walking_skeleton.py" not in trainer_bundle_filter
+    assert "tests/integrations/component-versions.env" not in trainer_bundle_filter
+    assert "http://minio:9000/minio/health/live" in compose
+
+
+def test_postgresql_ci_service_uses_the_pinned_component_image() -> None:
+    workflow = _WORKFLOW.read_text(encoding="utf-8")
+    versions = load_it_component_versions()
+
+    assert f"image: {versions['POSTGRES_IMAGE']}" in workflow
+
+
+def test_model_export_runner_is_isolated_and_cleans_its_own_project() -> None:
+    runner = _MODEL_EXPORT_RUNNER.read_text(encoding="utf-8")
+
+    assert "tributo-model-export-it-$(date +%Y%m%d%H%M%S)-$$" in runner
+    assert "prepare-runtime --profile data-ingestion" in runner
+    assert "--detach --no-build --pull never --wait" in runner
+    assert "BASELINE_CAPTURED=0" in runner
+    assert "COMPOSE_TOUCHED=0" in runner
+    assert 'if [[ "${COMPOSE_TOUCHED}" -eq 1 ]]' in runner
+    assert 'if [[ "${BASELINE_CAPTURED}" -eq 1 ]]' in runner
+    assert "Concurrent container change:" in runner
+    assert "Other Docker activity changed pre-existing containers" in runner
+    assert "trap cleanup EXIT" in runner
+    assert "down --volumes --remove-orphans" in runner
+    assert "label=com.docker.compose.project=${PROJECT_NAME}" in runner
+    assert "docker system prune" not in runner
+    assert "docker container prune" not in runner

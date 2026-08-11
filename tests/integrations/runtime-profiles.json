@@ -5,6 +5,12 @@
       "base_image": "rayproject/ray:2.55.1-py312@sha256:911245f2478ad2e9f67ac13978dc2a75bcae0498b9f188b10bba703324b78379",
       "dockerfile": "tests/integrations/Dockerfile.data-ingestion",
       "extras": [
+        "dev",
+        "test-integration",
+        "training",
+        "registry",
+        "model-export-torch",
+        "embeddings",
         "data-daft"
       ],
       "minio_image": "minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e",
