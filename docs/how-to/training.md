@@ -4,93 +4,118 @@ Run XGBoost, DNN, and PU training jobs through Ray Train. XGBoost supports
 multiple workers. The current DNN and PU implementations require exactly one
 worker; they use Ray Train for lifecycle and cluster execution, not DDP.
 
-## XGBoost Training
+## Default Bundle Publication
 
-### Configuration File
-
-Create a JSON config (`training.json`):
-
-```json
-{
-  "data": {
-    "type": "s3",
-    "uri": "s3://your-bucket/train/*.parquet",
-    "format": "parquet"
-  },
-  "model": {
-    "label_col": "label",
-    "xgb_params": {
-      "objective": "binary:logistic",
-      "eval_metric": ["logloss", "auc"],
-      "max_depth": 6,
-      "eta": 0.1,
-      "subsample": 0.8,
-      "colsample_bytree": 0.8
-    },
-    "num_rounds": 200,
-    "early_stopping_rounds": 20
-  },
-  "export": {
-    "onnx_output": "s3://your-bucket/models/xgboost_model.onnx"
-  }
-}
-```
-
-> **Note**: Tributo validates the in-memory Pydantic contract with a strict
-> schema. JSON is the built-in persisted format; deployment-specific parsers
-> may convert other formats to a mapping before validation.
-
-### Python API
+First-party XGBoost, DNN, and PU trainers publish an immutable Bundle by
+default. The caller must provide an explicit destination; Tributo never writes
+a default Bundle into the current directory or a temporary directory.
 
 ```python
-from tributo.training import build_trainer
-from tributo.data import IngestionRequest, ParquetSourceConfig, RayDataHandle, open_ingestion
+from tributo.exporting.models import BundleOutputConfig
 
-train_input = open_ingestion(IngestionRequest(
-    source=ParquetSourceConfig(path="s3://your-bucket/train/*.parquet"),
-    engine="ray",
-))
-val_input = open_ingestion(IngestionRequest(
-    source=ParquetSourceConfig(path="s3://your-bucket/val/*.parquet"),
-    engine="ray",
-))
+summary = trainer.run(
+    bundle_config=BundleOutputConfig(
+        bundle_uri="s3://your-bucket/models/fraud-detector",
+        storage_profile="production",
+    )
+)
+
+print(summary["training_status"])
+print(summary["bundle_status"])
+print(summary["hook_status"])
+print(summary["bundle_uri"])
+print(summary["execution_id"])
+```
+
+Omitting `targets` selects the trainer's standard artifacts:
+
+| Trainer | Default artifacts | Inference role |
+|---------|-------------------|----------------|
+| XGBoost | ONNX opset 12 and native UBJ in the same Bundle | `onnx-model` |
+| DNN | ONNX opset 18 | `onnx-model` |
+| PU | ONNX opset 18 | `onnx-model` |
+
+The returned mapping includes the stable `TrainingResult` fields
+`model_uri`, `bundle_uri`, `metrics`, `legacy_artifact_uri`,
+`training_status`, `bundle_status`, `hook_status`, and `execution_id`.
+Required Bundle or Hook failures are raised as typed errors and expose the
+same terminal contract as `error.training_result`.
+
+The old raw-artifact hooks are available only through
+`trainer.run(output_path=..., legacy_export=True)`. That opt-in emits a
+`DeprecationWarning` and must not be used for new integrations.
+
+## XGBoost Training
+
+The following example reads Parquet through the canonical ingestion gateway,
+trains XGBoost, and lets the first-party defaults publish ONNX and UBJ together:
+
+```python
+from tributo.data import (
+    IngestionRequest,
+    ParquetSourceConfig,
+    RayDataHandle,
+    open_ingestion,
+)
+from tributo.exporting.models import BundleOutputConfig
+from tributo.training.xgboost_trainer import XGBoostTrainerImpl
+
+train_input = open_ingestion(
+    IngestionRequest(
+        source=ParquetSourceConfig(path="s3://your-bucket/train/*.parquet"),
+        engine="ray",
+    )
+)
 assert isinstance(train_input.handle, RayDataHandle)
-assert isinstance(val_input.handle, RayDataHandle)
 
 try:
-    trainer = build_trainer(
-        ray_dataset=train_input.handle.dataset,
-        train_config=train_config,
-        val_dataset=val_input.handle.dataset,
-        num_workers=4,
-        use_gpu=False,
+    trainer = XGBoostTrainerImpl(
+        datasets={"train": train_input.handle.dataset},
+        config={
+            "data": {"label_col": "label"},
+            "model": {
+                "objective": "binary:logistic",
+                "max_depth": 6,
+                "eta": 0.1,
+            },
+            "training": {"num_rounds": 200, "val_size": 0.2},
+            "ray": {"num_workers": 4, "use_gpu": False},
+        },
     )
-    result = trainer.fit()
-    print(f"Model: {result.metrics['onnx_path']}")
+    summary = trainer.run(
+        bundle_config=BundleOutputConfig(
+            bundle_uri="s3://your-bucket/models/xgboost",
+            storage_profile="production",
+        )
+    )
+    print(summary["bundle_uri"])
 finally:
-    val_input.close()
     train_input.close()
 ```
 
-## DNN Training
+Tributo validates in-memory configuration with strict Pydantic contracts. JSON
+is the built-in persisted format; deployment-specific parsers may convert other
+formats to a mapping before validation.
+
+Dictionary/JSON trainer entry points use `output.bundle_uri` for the default
+Bundle lifecycle. The older `output.onnx_path`, `output.onnx_opset`, and
+`output.metrics_path` fields belong to the deprecated raw-artifact lifecycle;
+supplying `onnx_path` without `bundle_uri` selects that legacy path and emits a
+`DeprecationWarning`. Combining `bundle_uri` with explicitly configured legacy
+output fields is rejected; the two destinations are never interpreted as
+aliases for one another.
+
+## DNN and PU Training
+
+DNN and PU use the same Bundle call after their trainer has been constructed:
 
 ```python
-from tributo.training.dnn_trainer import run_dnn_training_with_config
+from tributo.exporting.models import BundleOutputConfig
 
-result = run_dnn_training_with_config(
-    {
-        "data": {"type": "parquet", "path": "/data/train.parquet"},
-        "features": [
-            {"name": "account_age", "type": "dense"},
-            {"name": "monthly_usage", "type": "dense"},
-        ],
-        "label_col": "label",
-        "training": {"epochs": 10, "batch_size": 256},
-        "ray": {"num_workers": 1},
-        "output": {"onnx_path": "/models/dnn"},
-    }
+summary = dnn_trainer.run(
+    bundle_config=BundleOutputConfig(bundle_uri="s3://your-bucket/models/dnn")
 )
-print(result["onnx_path"])
+print(summary["bundle_uri"])
 ```
 
 ```{note}
@@ -108,7 +133,7 @@ the required `ExportCheckpointV1` metadata and cannot be exported through
 E2 trainer implementation before using Bundle export.
 
 The legacy `export_model()` path remains available for existing checkpoints
-and is not affected by this contract requirement.
+only through the explicit `legacy_export=True` compatibility switch.
 
 ## S3 Authentication
 

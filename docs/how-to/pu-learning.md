@@ -13,30 +13,39 @@ Standard supervised learning treats unlabeled as negative, which produces biased
 ## Quick Start
 
 ```python
-from tributo.training.pu_trainer import run_pu_training_with_config
+from tributo.exporting.models import BundleOutputConfig
+from tributo.training.pu_trainer import PUTrainerImpl
 
-result = run_pu_training_with_config(
-    {
-        "data": {
-            "source": {
-                "provider": "tributo.parquet",
-                "uri": "s3://bucket/training-data/*.parquet",
-            }
-        },
-        "features": [
-            {"name": "account_age", "type": "dense"},
-            {"name": "monthly_usage", "type": "dense"},
-        ],
-        "label_col": "is_confirmed_positive",
-        "model": {"dnn_hidden_units": [128, 64, 32], "dnn_dropout": 0.3},
-        "pu": {"loss_type": "nnpu", "class_prior": 0.3},
-        "training": {"epochs": 50, "batch_size": 1024},
-        "ray": {"num_workers": 1},
-        "output": {"onnx_path": "/models/pu-fraud"},
-    }
+config = {
+    "data": {
+        "source": {
+            "provider": "tributo.parquet",
+            "uri": "s3://bucket/training-data/*.parquet",
+        }
+    },
+    "features": [
+        {"name": "account_age", "type": "dense"},
+        {"name": "monthly_usage", "type": "dense"},
+    ],
+    "label_col": "is_confirmed_positive",
+    "model": {"dnn_hidden_units": [128, 64, 32], "dnn_dropout": 0.3},
+    "pu": {"loss_type": "nnpu", "class_prior": 0.3},
+    "training": {"epochs": 50, "batch_size": 1024},
+    "ray": {"num_workers": 1},
+}
+trainer = PUTrainerImpl(datasets={}, config=config)
+result = trainer.run(
+    bundle_config=BundleOutputConfig(
+        bundle_uri="s3://bucket/models/pu-fraud",
+        storage_profile="production",
+    )
 )
-print(f"ONNX model: {result['onnx_path']}")
+print(f"Bundle: {result['bundle_uri']}")
 ```
+
+For dictionary/JSON entry points, configure the same destination as
+`output.bundle_uri`. `output.onnx_path` is retained only for the deprecated
+legacy raw-artifact export and is not a Bundle URI.
 
 ## Configuration
 
@@ -68,12 +77,12 @@ print(f"ONNX model: {result['onnx_path']}")
   },
   "ray": {
     "num_workers": 1
-  },
-  "output": {
-    "onnx_path": "/models/pu-fraud"
   }
 }
 ```
+
+Pass the validated configuration to `PUTrainerImpl` and provide the Bundle
+destination separately through `BundleOutputConfig`, as shown above.
 
 ```{note}
 PU training currently runs on a single worker. DDP multi-worker training is

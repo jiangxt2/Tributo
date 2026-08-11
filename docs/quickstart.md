@@ -53,13 +53,16 @@ uv run tributo submit \
 ```python
 # Or from Python
 from tributo.training import build_trainer
-from tributo.data import IngestionRequest, ParquetSourceConfig, RayDataHandle, open_ingestion
+from tributo.data import (
+    IngestionRequest,
+    ParquetSourceConfig,
+    RayDataHandle,
+    open_ingestion,
+)
 
 ingestion = open_ingestion(
     IngestionRequest(
-        source=ParquetSourceConfig(
-            path="s3://your-bucket/train/*.parquet"
-        ),
+        source=ParquetSourceConfig(path="s3://your-bucket/train/*.parquet"),
         engine="ray",
     )
 )

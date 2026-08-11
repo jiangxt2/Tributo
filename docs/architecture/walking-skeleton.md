@@ -1,161 +1,108 @@
 # Walking Skeleton
 
-The walking skeleton is the minimum end-to-end path that validates the core
-architecture contracts. It exercises every major subsystem boundary:
+The required walking skeleton is a real distributed integration gate for the
+model-export architecture:
 
-```
-ProviderSourceConfig(parquet) → XGBoostTrainer → Bundle → BundleReader → batch predict
-```
-
-This is the target canonical path for D1+D2. The current beta JSON shapes
-(`type/path/dialect`) remain readable through the compatibility normalizer;
-both shapes are normalized by the selected provider into the same
-credential-free `ResolvedSource` before planning. The `provider/uri` shape
-below is therefore a target canonical representation, not permission to
-silently break existing configs.
-
-## Why This Path
-
-| Reason | Detail |
-|--------|--------|
-| Touches all major subsystems | Data (D1+D2), Training (T1), Bundle Export (E1), Serving/Inference (E3) |
-| Uses the most mature Trainer | XGBoost is the only Trainer with a complete Bundle vertical slice |
-| Exercises the full Bundle lifecycle | Export → publish → read → serve |
-| Simple data source | Parquet avoids database/streaming dependencies |
-| Small enough for CI | Entire path completes in < 60 seconds on synthetic data |
-
-## Contract Boundaries Exercised
-
-| Step | Contract | What it validates |
-|------|----------|-------------------|
-| 1. `IngestionRequest(ProviderSourceConfig(...), engine="ray")` → `IngestionGateway.open()` | `DataSourceProvider` + `LogicalScanPlan` + `EngineBinding` | Provider resolution, strict validation, credential-free planning, explicit engine selection, typed handle and receipt |
-| 2. `XGBoostTrainer.run(source_config, ...)` | `TrainingLifecycle` + `CallbackDispatcher` | Trainer receives canonical `SourceConfig`, not legacy config dict |
-| 3. `BundleExportService.export(result)` | `ModelExporter` + `ExportSourceProvider` | Exporter ID resolution, required artifact status |
-| 4. `BundleReader.open(bundle_path)` | `ExportManifest` + `ManifestSignature` | Manifest v1 read, schema version check, digest verification |
-| 5. `BundleReader.load_model()` → `batch_predictor.predict(data)` | `ModelFlavor` + `ManifestSignature` | Model deserialization, input/output schema match |
-
-## Step-by-Step Design
-
-### Step 1: ProviderSourceConfig → IngestionGateway
-
-```python
-from pydantic import TypeAdapter
-
-from tributo.data import IngestionRequest, RayDataHandle, open_ingestion
-from tributo.data.source_config import CanonicalSourceInput
-
-config = TypeAdapter(CanonicalSourceInput).validate_json("""
-{
-  "provider": "tributo.parquet",
-  "uri": "file:///abs/path/synthetic_data/train.parquet",
-  "options": {}
-}
-""")
-result = open_ingestion(IngestionRequest(source=config, engine="ray"))
-try:
-    assert isinstance(result.handle, RayDataHandle)
-    dataset = result.handle.dataset
-finally:
-    result.close()
+```text
+isolated Docker Compose project
+  → Ray Jobs API
+  → Ray Data Parquet
+  → XGBoostTrainerImpl
+  → S3 Bundle (ONNX + UBJ)
+  → BundleReader
+  → Ray Data map_batches
+  → Ray Serve HTTP
 ```
 
-Expected: the Gateway resolves and normalizes the provider, builds a
-credential-free logical plan, selects the explicit Ray Binding, and returns a
-native typed handle plus `IngestionPlanReceipt`. `describe()` performs the same
-static control-plane validation without constructing an engine plan. Legacy
-`SourceInput`, DataConnector reads, and Ray loader APIs delegate this same
-Gateway; no legacy runtime backend remains. Compatibility input adapters stay
-until their deprecation window is satisfied.
+The same job records committed-Bundle provenance through the required MLflow
+Hook. It verifies that the Hook records the Bundle URI, manifest digest, tags,
+and artifacts without creating an MLflow Model Version.
 
-### Step 2: XGBoostTrainer with SourceConfig
+## Runtime Topology
 
-```python
-from tributo.training import XGBoostTrainer, TrainingConfig
+`tests/integrations/docker-compose.data-ingestion.yml` starts one Ray head, one
+independent Ray worker, MinIO, and MLflow under the `model-export` profile. The
+test submits `tests/integration/jobs/model_export_architecture_job.py` through
+the Ray Jobs HTTP API; it does not start a host-local Ray runtime or execute the
+job directly in the head container.
 
-trainer_config = TrainingConfig.model_validate_json("""
-{
-  "objective": "binary:logistic",
-  "num_rounds": 10,
-  "source": {...},
-  "export": {
-    "targets": [{"exporter": "xgboost-onnx-v1", "required": true}]
-  }
-}
-""")
-trainer = XGBoostTrainer(trainer_config)
-result = trainer.run()
+No service publishes a fixed host port and no service has a fixed container
+name. The Compose project name is unique per run, so the gate cannot attach to,
+restart, or remove an existing container.
+
+## Contracts Exercised
+
+| Boundary | Evidence |
+|----------|----------|
+| Version contract | The job checks Python, Ray, MLflow, boto3, botocore, XGBoost, ONNX, ONNX Runtime, onnxmltools, Torch, Transformers, PyArrow, and pandas against `component-versions.env`; image references are digest-pinned. |
+| Training lifecycle | A first-party XGBoost trainer receives an explicit Bundle URI, uses its default ONNX opset 12 and UBJ targets, and returns the stable `TrainingResult` fields. |
+| Bundle publication | Both required artifacts commit to MinIO in one immutable Bundle and expose `inference → onnx-model`. |
+| Integrity | `BundleReader` verifies the exact committed manifest bytes and artifact digests before materialization. |
+| Batch inference | The ONNX artifact is loaded through the Bundle role and used by Ray Data `map_batches`. |
+| Online inference | Ray Serve loads the same Bundle and returns predictions through HTTP. |
+| Provenance | The explicit required MLflow Hook records one run and zero Model Versions. |
+| Distributed execution | Ray reports both the head and the independent worker alive while the Ray Job runs. |
+
+The first-party conformance suite runs in the same pinned Linux image before
+the golden path. It covers the XGBoost ONNX/UBJ/JSON exporters, Torch
+ONNX/Safetensors/PT2 exporters, Hugging Face ONNX exporter, ONNX quantizer,
+Structure and ONNX Runtime validators, and Ray checkpoint source providers.
+
+## Authoritative Component Versions
+
+All model-export IT components are defined in
+`tests/integrations/component-versions.env`. Package values must match
+`uv.lock`; the Ray, uv, MinIO, and PostgreSQL images must also include a
+SHA-256 digest. The Ray Job compares its actual Python major/minor version with
+`PYTHON_VERSION`, while the static contract requires the same version tag in
+the pinned Ray image.
+`tests/integration/test_it_component_versions.py` fails when Docker build or
+Compose configuration bypasses that contract.
+
+The IT environment never installs a floating dependency and never inherits a
+host package version as test evidence.
+
+## CI Gate
+
+`.github/workflows/pr-test-suite.yml` runs the walking skeleton for relevant
+code changes. It creates a run-specific Compose project, executes the pinned
+component check and first-party conformance suites, submits the Ray Job, saves
+service logs, and always runs:
+
+```bash
+docker compose \
+  --env-file tests/integrations/component-versions.env \
+  --file tests/integrations/docker-compose.data-ingestion.yml \
+  --profile model-export \
+  down --volumes --remove-orphans
 ```
 
-Expected: `result` contains a `TrainingResult` with status. The callback
-dispatcher is initialized from `TrainingLifecycle`, not embedded in `BaseTrainer`.
+The cleanup command is scoped by the run-specific `COMPOSE_PROJECT_NAME`.
 
-### Step 3: Bundle → Export
+## Independent Full-Flow Verification
 
-```python
-from tributo.exporting import BundleExportService
+The release-oriented script is intentionally separate from the default CI
+workflow:
 
-service = BundleExportService()
-bundle_ref = service.export(result)
-assert bundle_ref.status == "SUCCESS"  # required artifact was produced
+```bash
+./scripts/run_model_export_it.sh
 ```
 
-Expected: `bundle_ref.status == "SUCCESS"` because ONNX was declared `required:
-true`. If export fails, status is `FAILED` (not silently `SUCCESS` with missing
-ONNX — the E0 fix).
+It performs prerequisites checks, snapshots the ID and state of every existing
+container, uses a unique Compose project and image tag, writes pytest and
+service logs to `/tmp/<project-name>/`, and installs an `EXIT` trap before any
+container is started. The trap always removes only that project's containers,
+volumes, network, and orphans. It then fails if an owned container remains or
+if any pre-existing container disappeared or changed state.
 
-### Step 4: BundleReader → Manifest → Signature
+## Deliberate Exclusions
 
-```python
-from tributo.exporting import BundleReader
-
-reader = BundleReader(bundle_ref.uri)
-manifest = reader.manifest
-assert manifest.schema_version == 1
-signature = manifest.signature
-assert "float_input" in signature.input_names
-assert "probability" in signature.output_names
-```
-
-Expected: `BundleReader` reads the manifest, verifies digest, and exposes
-`ManifestSignature` without needing the original training code.
-
-### Step 5: BundleReader → Model → Batch Predict
-
-```python
-model = reader.load_model()
-predictor = BatchPredictor(model, signature=manifest.signature)
-
-import numpy as np
-test_data = np.random.randn(10, 10).astype(np.float32)
-predictions = predictor.predict(test_data)
-assert predictions.shape == (10,)
-```
-
-Expected: `BatchPredictor` uses `ManifestSignature` to validate input shape and
-dtype. It does not infer the schema from the model file alone.
-
-## What Is NOT Covered
-
-| Excluded | Why |
-|----------|-----|
-| GPU training | All Ray clusters may not have GPUs; CPU-only path is the baseline |
-| S3/MinIO storage | Local filesystem exercises the same `Publisher` contract; S3 is an O1 fixture |
-| Streaming/Kafka | Separate protocol (`StreamSource`); not on the walking skeleton |
-| Multi-worker / DDP | Covered by T3 when Data-volume Go passes |
-| DNN / PU Trainers | Added in E2 after XGBoost vertical slice is complete |
-
-## When The Walking Skeleton Becomes CI
-
-O1 Core converts this design into a runnable integration test. The test:
-
-- Creates synthetic Parquet data in a temp directory.
-- Runs all 5 steps end-to-end.
-- Fails if any boundary contract is violated.
-- Runs on every PR that touches `data/`, `training/`, `exporting/`, or
-  `inference/`.
-
-Until O1, the walking skeleton is a **manual verification** performed after
-D1+D2 and E1 are both merged, as the combined checkpoint before D3/E2
-migration.
+| Excluded | Boundary |
+|----------|----------|
+| GPU training | The required gate is CPU-only. |
+| DNN/PU full training | Their Bundle vertical slices and exporter/source conformance are separate integration tests. |
+| Streaming | Streaming has a separate lifecycle and is not part of model-export publication. |
+| MLflow Model Version/Alias | This cycle provides Bundle provenance only. |
+| Cross-process Hook recovery | PostgreSQL, Outbox, and asynchronous workers require a separate scope amendment. |
 
 <!-- END -->

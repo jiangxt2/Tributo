@@ -112,12 +112,12 @@ A `DatasetRef` is a lightweight, credential-free record of what data was used:
 ```python
 @dataclass(frozen=True)
 class DatasetRef:
-    ref_id: str            # Versioned SHA-256 of all canonical result-affecting inputs
-    provider_id: str       # e.g. "tributo.parquet"
-    uri: str               # Canonical URI (s3://, file://, etc.)
+    ref_id: str  # Versioned SHA-256 of all canonical result-affecting inputs
+    provider_id: str  # e.g. "tributo.parquet"
+    uri: str  # Canonical URI (s3://, file://, etc.)
     schema_fingerprint: str  # SHA-256 of canonical Arrow schema JSON
     row_count: int | None  # None if not computed
-    provenance: str        # Free-form version/timestamp string (not parsed)
+    provenance: str  # Free-form version/timestamp string (not parsed)
 ```
 
 Rules:
@@ -311,6 +311,7 @@ class DataProviderError(TributoError):
     provider_id: str
     uri: str
     reason: str
+
 
 class ExportError(TributoError):
     exporter_id: str

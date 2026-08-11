@@ -225,22 +225,29 @@ not support claims until their external packages and infrastructure gates pass.
 
 ## Model Export Entry Points
 
-### 1. New Bundle Export (Primary)
+### First-Party Trainer Bundle Path
 
-**Entry**: `exporting/service.py::BundleExportService`
+**Entry**: `training/base.py::BaseTrainer.run`
 
 ```
-Trainer.fit() result
+XGBoostTrainerImpl / DNNTrainerImpl / PUTrainerImpl
   ↓
-BundleExportService.export(result)
+BaseTrainer.run(bundle_config=BundleOutputConfig(bundle_uri=...))
   ↓
-  1. SourceProvider.open_source(result)     ← resolves ExportSource
-  2. Planner.plan(source, targets)          ← builds export DAG
-  3. Executor.execute(plan)                 ← runs exporters
+TrainingLifecycle
+  ├── preflight explicit Bundle URI before setup
+  ├── fill trainer-owned default targets and inference role
+  ├── setup → training_loop → ExportCheckpointV1
+  ├── ExportSourceProvider.open_source(checkpoint)
+  │     └── Ray Checkpoint conversion stays inside as_directory()
+  └── BundleExportService.export_bundle(source, config)
+        ├── Hook preflight before planning or staging
+        ├── Planner.plan(source, targets)
+        ├── ExportManager.execute(plan)
      ├── ModelExporter.export(context, source, upstream, target)
      │     └── integrations/exporters/
      │           ├── xgboost_onnx.py        ← XGBoost → ONNX
-     │           ├── xgboost_native.py      ← XGBoost native JSON/UBJ
+     │           ├── xgboost_native.py      ← distinct UBJ and JSON exporters
      │           ├── torch_onnx.py          ← torch → ONNX
      │           ├── torch_export.py        ← torch.export
      │           ├── torch_safetensors.py   ← torch → safetensors
@@ -250,87 +257,95 @@ BundleExportService.export(result)
      └── ExportValidator.validate(artifact)
            └── integrations/validators/
                  └── onnx_runtime.py        ← ONNX Runtime inference check
-  4. Publisher.publish(bundle)              ← local / S3 commit
-  5. Re-read committed manifest
-     └── OperationEvent(bundle.published)      ← stable event_id / occurred_at
-  6. InlineHookDispatcher
-     ├── OperationStore.claim_delivery()     ← local lease + idempotency
-     ├── ArtifactAccessor                  ← committed bundle, never staging
-     └── PublicationHook adapter
-           └── MLflowPostPublishHook       ← optional integration boundary
-  7. OperationStore.complete_delivery()
-     └── HookReceipt                       ← succeeded / skipped / failed
+        ├── Publisher → BundleRepository commit
+        │     └── PublishedBundle(BundleResult + exact manifest bytes)
+        ├── OperationEvent(bundle.published)
+        │     └── derived from the exact bytes that won the commit
+        └── InlineHookDispatcher
+              ├── OperationStore claim/complete
+              ├── BundleArtifactAccessor (committed Bundle only)
+              └── MLflowPostPublishHook when explicitly configured
   ↓
-BundleRef (manifest_sha256, uri, status)
+TrainingResult projection
+  (model_uri, bundle_uri, metrics, legacy_artifact_uri,
+   training_status, bundle_status, hook_status, execution_id)
 ```
 
-Hook execution is synchronous in the current implementation.  `OperationEvent`
-is an in-process delivery contract derived from the committed manifest;
-`ExecutionRecord` and delivery records remain the persisted operation facts.
-An Outbox and asynchronous worker are a future execution policy, not a
-transparent replacement for `InlineHookDispatcher` and not a capability
-provided by this call chain today.
+XGBoost defaults to ONNX opset 12 plus UBJ in the same Bundle. DNN and PU
+default to ONNX opset 18. All three bind the `inference` role to
+`onnx-model`. An omitted destination fails before trainer setup; there is no
+implicit current-directory or temporary output.
+
+Hook execution is synchronous. `OperationEvent` is an in-process delivery
+contract derived from the exact committed manifest bytes; the service does not
+perform a second repository GET. `ExecutionRecord` and delivery records remain
+the persisted operation facts. Outbox and asynchronous Hook workers are not
+part of this call chain.
 
 Hook plugins are resolved only when listed in `BundleOutputConfig.hooks`.
-Plugin resolution and option validation happen before planning or staging.  A
+Plugin resolution and option validation happen before planning or staging. A
 required Hook failure raises `PostPublishCallbackError` with the committed
-`BundleResult` and receipts; it never rolls back the bundle commit.
+`BundleResult` and receipts; it never rolls back the Bundle commit. The same
+error exposes the terminal `TrainingResult` as `error.training_result`.
 
-### 2. Old Per-Trainer Export (Deprecated)
+### Bundle Consumption Path
+
+**Entry**: `exporting/bundle_reader.py::BundleReader`
+
+```
+BundleRef or direct immutable Bundle URI
+  ↓
+BundleRepositoryRouter
+  ├── optional storage-alias resolution → immutable BundleRef
+  └── repository.read_manifest() → ExportManifest + exact bytes
+        ├── verify BundleRef manifest_sha256 and bundle_id
+        └── resolve exactly one artifact by role or name
+              ↓
+        repository.materialize_artifact()
+              ├── descriptor equality and resource bounds
+              ├── digest verification
+              └── context-managed ResolvedArtifact
+```
+
+Runtime, inference, serving, and Hook artifact access propagate the parsed
+manifest together with its exact bytes. A supplied manifest without matching
+bytes is rejected, and an already verified snapshot is never paired with a
+second alias read.
+
+`BundleRef` and storage aliases provide an external identity anchor through
+the expected manifest digest and `bundle_id`. A direct immutable Bundle URI
+provides self-consistency checks only: the Reader still validates the schema,
+paths, sizes, and every artifact digest, but cannot detect replacement by a
+different internally consistent Manifest without an independently retained
+digest. Consumers that require replacement detection must retain a
+`BundleRef` or publication event rather than reconstructing a raw URI.
+
+### Deprecated Raw-Artifact Path
 
 **Entry**: `training/exporters/` (re-exports from `exporting`)
 
 ```
-Trainer.export_model()
+BaseTrainer.run(output_path=..., legacy_export=True)
   ↓
-training/exporters/
+export_artifacts() / export_model()
   ├── torch_onnx_exporter.py   ← old torch→ONNX (uses exporting internally)
   ├── safetensors.py           ← old safetensors export
   ├── torchscript.py           ← TorchScript export
   └── causal_report.py         ← Causal inference report
-  ↓
-training/onnx_exporter.py      ← legacy XGBoost ONNX (try/except swallows errors)
 ```
 
-**Key issue**: `training/onnx_exporter.py` catches exceptions and logs them
-without failing the task — the E0 fix target.
+The compatibility path is never selected by missing targets or an environment
+flag. It requires an explicit per-call switch and emits `DeprecationWarning`.
+New code must consume Bundle URI and role rather than `legacy_artifact_uri`.
 
-### 3. Trainer-Level Export Integration
-
-**XGBoost**: `training/xgboost_trainer.py`
-
-```
-run_training_from_json(config_path)
-  ↓
-build_trainer(config)
-  ↓
-XGBoostTrainerImpl.fit()
-  ├── export_artifacts()      ← new path → BundleExportService
-  └── export_model()           ← old path → training/onnx_exporter.py
-```
-
-**DNN**: `training/dnn_trainer.py`
-
-```
-DNNTrainer.fit()
-  └── export_model()           ← calls training/exporters/
-```
-
-**PU**: `training/pu_trainer.py`
-
-```
-PUTrainer.fit()
-  └── export_model()           ← calls training/exporters/
-```
-
-### 4. Plugin Exporters
+### Plugin Exporters
 
 **Discovery**: `plugin.py::discover_exporter_plugins()`
 
 ```
 importlib.metadata.entry_points(group="tributo.exporters")
   ↓
-ModelExporter validation (api_version==1, exporter_id matches entry-point name)
+ModelExporter validation (api_version==2, exporter_id matches entry-point name)
   ↓
 Registered in ExportRegistry (exporting/registries.py)
 ```
@@ -350,8 +365,10 @@ Plugin groups also discovered:
 | Existing downstream consumers still expect Ray Dataset values | Training / local runner / inference / embeddings | Their compatibility functions explicitly select Ray and delegate the same Gateway; native Daft consumption requires a later consumer capability change |
 | A Ray-only consumer intentionally selects a Daft-only source | Consumer boundary | `adapt_daft_result_to_ray()` calls Daft's public adapter and records conversion evidence; the Gateway never performs this conversion implicitly |
 | External model importers use explicit IDs and normalize to BundleRef | `inference/importers.py`, `integrations/model_importers/` | MLflow and typed ONNX/XGBoost artifacts pass Conformance and real-service IT |
-| Old XGBoost ONNX export swallows errors | `training/onnx_exporter.py` | E0 fix target |
-| SourceProvider (export) ≠ DataSourceProvider (data) | `exporting/protocols.py` vs `data/provider.py` | D1+D2 / E1 rename target |
+| Raw-artifact compatibility still exists | `BaseTrainer.run(..., legacy_export=True)` | Removal waits for the documented compatibility window and a separate E4 change |
+| ExportSourceProvider ≠ DataSourceProvider | `exporting/protocols.py` vs `data/provider.py` | The distinct names and ownership prevent model-checkpoint conversion from leaking into data ingestion |
+| Only ONNX has a first-party runtime flavor | `exporting/runtime.py` | UBJ, JSON, Safetensors, and PT2 are exportable/readable artifacts, not automatically batch- or serve-capable models |
+| Hook delivery is in-process | `exporting/dispatch.py` | A committed Bundle survives Hook failure, but cross-process retry/recovery needs the separately scoped Outbox design |
 | Transform pushdown optimization has no benchmark evidence; alpha Bindings classify current ETL as residual | `data/transform_compiler.py` | D4 remains NO-GO for pushdown claims |
 | HDFS, Hive, ClickHouse, and Doris have incomplete delivery evidence | Bindings and external packages | Keep them at adapted/unsupported status until their real-infrastructure gates pass |
 

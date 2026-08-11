@@ -125,17 +125,42 @@ Compat: training/exporters/__init__.py re-exports from exporting
 ```
 
 Exit gates before removing old exporters:
-- [ ] DNN, PU, XGBoost all produce valid Bundles through the new kernel
+- [x] DNN, PU, XGBoost all produce valid Bundles through the new kernel
   (verified by Bundle vertical slice test per trainer type).
-- [ ] `BundleReader` can load Bundles from all three trainer types.
-- [ ] Required artifact failure propagates correctly (E0 fix verified).
+- [x] `BundleReader` can load Bundles from all three trainer types.
+- [x] Required artifact failure propagates correctly (E0 fix verified).
 - [ ] Old exporter classes are accessible via compat re-exports for ≥ 2 minor
   versions or 6 months (whichever is longer).
 - [ ] `DeprecationWarning` is emitted when old exporter classes are imported.
 - [ ] Migration guide is published and linked from the warning message.
 
-Rollback: Set `TRIBUTO_EXPORT_BACKEND=legacy` to use old per-trainer exporters.
-The compat adapter wraps old exporter calls in the new `ModelExporter` protocol.
+First-party trainers now require an explicit Bundle destination and fill in
+their standard targets when `BundleOutputConfig.targets` is omitted. There is
+no process-wide export backend selector and no automatic fallback. A caller
+that still needs a raw artifact must opt in for that invocation with
+`legacy_export=True`; the call emits `DeprecationWarning` and returns the
+`legacy_artifact_uri` field in its `TrainingResult` projection.
+
+Bundle compatibility also requires the following rules:
+
+- `BundleRef.canonical_uri`, the manifest URI, and the published URI identify
+  the same immutable Bundle for local paths, `file://`, and S3.
+- Event and Hook identity is derived from the exact manifest bytes returned by
+  the winning repository commit; the service does not re-read a mutable path.
+- A caller-provided manifest is accepted only with its exact bytes, and a
+  supplied `BundleRef` is checked against both digest and `bundle_id`.
+- Ray checkpoint sources finish conversion inside `Checkpoint.as_directory()`;
+  success, consumer failure, repeated opens, and cleanup are conformance-tested.
+- Orphan GC rechecks the manifest after acquiring its lease and releases the
+  lease on every exit path.
+- Orphan GC must receive the exact Bundle store root used by Publisher. A
+  parent or nested prefix selects a different lease namespace and is not a
+  safe substitute for that root. A bucket-root scan emits an additional
+  warning because its deletion scope is unusually broad; the warning cannot
+  prove that an arbitrary nested prefix matches the Publisher configuration.
+- Real IT uses a unique Compose project, digest-pinned infrastructure, and an
+  unconditional project-scoped cleanup trap. Existing containers must keep
+  their original state.
 
 ### Manifest Schema (E1)
 
@@ -193,11 +218,13 @@ window after a selector stops choosing a distinct implementation:
 | Flag | Default | Effect |
 |------|---------|--------|
 | `TRIBUTO_DATA_BACKEND` | `provider` | Deprecated `legacy` value warns and enters the same Provider/Gateway path; retained for the compatibility window only |
-| `TRIBUTO_EXPORT_BACKEND` | `bundle` | `legacy` to use old per-trainer exporters |
-| `TRIBUTO_CONFIG_FORMAT` | `json` | Reserved; rejects non-JSON input regardless |
 
-Flags are read once at import time. Changing a flag at runtime has no effect
+Active flags are read once at import time. Changing a flag at runtime has no effect
 (by design — to prevent inconsistent state within a single process).
+
+`TRIBUTO_CONFIG_FORMAT` is a reserved name only; no environment selector is
+implemented. Persisted configuration entry points accept JSON and reject other
+formats directly, without consulting an environment variable.
 
 ## Compatibility Adapter Lifecycle
 

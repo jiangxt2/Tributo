@@ -16,7 +16,6 @@ This is the "API inventory check" gate.
 from __future__ import annotations
 
 import ast
-import importlib
 import os
 from typing import Optional
 
@@ -44,6 +43,7 @@ STABILITY_MAP: dict[str, str] = {
     "tributo.util.annotations": "stable",
     # Training — beta
     "tributo.training.base": "beta",
+    "tributo.training.results": "beta",
     "tributo.training.checkpoint": "beta",
     "tributo.training.config": "beta",
     "tributo.training.xgboost_trainer": "beta",
@@ -111,6 +111,7 @@ STABILITY_MAP: dict[str, str] = {
     "tributo.exporting.dispatch": "beta",
     "tributo.exporting.repository": "beta",
     "tributo.exporting.runtime": "beta",
+    "tributo.exporting.conftest": "beta",
     # Integrations — beta
     "tributo.integrations.algorithm_inputs": "alpha",
     "tributo.integrations.algorithm_inputs.ingestion": "alpha",
@@ -274,19 +275,9 @@ def _parse_file_ast(file_path: str) -> list[tuple[str, str]]:
 def _extract_public_api_symbols(module_name: str) -> list[tuple[str, str]]:
     """Return ``@PublicAPI`` symbol annotations for *module_name*.
 
-    Tries import first; falls back to AST-only source parsing for modules
-    that fail to import (e.g. due to missing optional dependencies).
+    Parse source directly so inventory collection never executes module import
+    side effects or turns import-time deprecation warnings into test failures.
     """
-    # Try import first
-    try:
-        mod = importlib.import_module(module_name)
-        source_file = getattr(mod, "__file__", None)
-        if source_file is not None:
-            return _parse_file_ast(source_file)
-    except ImportError:
-        pass
-
-    # Fallback: resolve source path from module name
     source_path = _resolve_source_path(module_name)
     if source_path is not None:
         return _parse_file_ast(source_path)
@@ -319,13 +310,27 @@ def _skip_reason(module_name: str) -> Optional[str]:
     """Return a skip reason, or ``None`` if the module should be tested."""
     if module_name.startswith("tributo.serving.proto"):
         return "generated protobuf code"
-    if ".conftest" in module_name:
-        return "test fixture"
-    if module_name.count(".") > 3:
-        top3 = ".".join(module_name.split(".")[:3])
-        if top3 not in STABILITY_MAP:
-            return "deep submodule without explicit entry"
     return None
+
+
+def _documented_stability_modules() -> set[str]:
+    """Extract exact module entries from the canonical Markdown inventory."""
+    docs_path = os.path.join(os.path.dirname(__file__), "..", "docs", "STABILITY.md")
+    with open(docs_path, encoding="utf-8") as stream:
+        text = stream.read()
+
+    import re
+
+    return set(re.findall(r"`(tributo\.[A-Za-z0-9_.*]+)`", text))
+
+
+def test_stability_map_is_documented() -> None:
+    """Every module-level stability declaration must appear in STABILITY.md."""
+    documented = _documented_stability_modules()
+    missing = sorted(set(STABILITY_MAP) - documented)
+    assert not missing, (
+        "STABILITY_MAP modules missing from docs/STABILITY.md: " + ", ".join(missing)
+    )
 
 
 def _discover_tributo_modules() -> list[str]:

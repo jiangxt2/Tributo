@@ -222,6 +222,21 @@ references rather than embedding it in a request.
 | `concurrency` | int | Number of parallel inference actors. Default: `4`. |
 | `num_cpus_per_actor` | float | CPUs per actor. Default: `1.0`. |
 
+## Identity Predictor Output Contract
+
+`IdentityPredictor` distinguishes probabilities from logits by the verified
+ONNX output name. Names containing `probab` are consumed as probabilities;
+names containing `logit`, and the exact name `output`, are treated as logits
+and receive a sigmoid transformation. Any other output name is rejected.
+
+`torch-onnx-v1` currently exports its single output with the name `output`.
+Consequently, a Torch model used with `IdentityPredictor` must return one
+binary logit per row from `forward()`. A model whose final layer already
+applies sigmoid or softmax does not satisfy this contract and would otherwise
+be transformed twice. Explicit output-semantics metadata is a future,
+triggered capability; until then, do not use probability-returning Torch
+models with this predictor.
+
 ## S3 Authentication
 
 Same three methods as [training](training.md#s3-authentication): IAM Role

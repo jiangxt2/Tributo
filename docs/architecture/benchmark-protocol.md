@@ -103,6 +103,7 @@ from tributo import JobConfig
 
 DATASET_PATH = "tests/benchmark/data/..."
 
+
 def measure():
     # Warm-up (discarded)
     ...
@@ -117,6 +118,7 @@ def measure():
         results.append((elapsed, rss_peak))
 
     return results
+
 
 if __name__ == "__main__":
     ray.init()

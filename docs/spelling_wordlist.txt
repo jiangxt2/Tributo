@@ -23,6 +23,7 @@ BayesOpt
 benchmarked
 bge
 boto
+botocore
 bundle
 BundleModelReference
 BundleRef
@@ -137,6 +138,8 @@ Lance
 labelled
 Lifecycle
 lifecycle
+logit
+logits
 lookalike
 Makefile
 macOS
@@ -172,6 +175,7 @@ ONNX
 onnx
 ONNXRuntime
 onnxruntime
+onnxmltools
 opset
 OutputBindingSpec
 Parquet
@@ -200,6 +204,7 @@ pu
 PublicAPI
 pushdown
 py
+pytest
 Pydantic
 pydantic
 PydanticGeneralMetadata
@@ -208,6 +213,7 @@ PyG
 PyPI
 pytest
 quantized
+quantizer
 Quickstart
 Ray
 RayDataHandle
@@ -235,7 +241,9 @@ SchemaContract
 SDK
 SemVer
 serveable
+sigmoid
 sklearn
+softmax
 SourceProvider
 Sphinx
 SQL
