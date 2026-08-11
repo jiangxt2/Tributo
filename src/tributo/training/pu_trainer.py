@@ -25,7 +25,7 @@ Usage::
         "pu": {"loss_type": "nnpu", "class_prior": 0.2},
         "training": {"epochs": 20},
         "ray": {"num_workers": 1},
-        "output": {"onnx_path": "/tmp/model_output"},
+        "output": {"bundle_uri": "/tmp/model_bundles"},
     })
 """
 
@@ -182,6 +182,7 @@ def pu_train_loop_per_worker(config: dict[str, Any]) -> None:
     """
     import json
     import logging
+    import shutil
     import tempfile
     from pathlib import Path
 
@@ -512,81 +513,85 @@ def pu_train_loop_per_worker(config: dict[str, Any]) -> None:
             from ray.train import Checkpoint
 
             checkpoint_dir = Path(tempfile.mkdtemp(prefix="pu_ckpt_"))
+            try:
+                torch.save(model.state_dict(), checkpoint_dir / "model.pt")
 
-            torch.save(model.state_dict(), checkpoint_dir / "model.pt")
-
-            preprocessor_state = {
-                "features": [f.__dict__ for f in features],
-                "label_encoders": {
-                    k: {
-                        str(kk): (
-                            int(vv) if isinstance(vv, (np.integer, np.int64)) else vv
-                        )
-                        for kk, vv in v.items()
-                    }
-                    for k, v in transformer.label_encoders.items()
-                },
-                "norm_params": transformer.norm_params,
-            }
-            (checkpoint_dir / "preprocessor.json").write_text(
-                json.dumps(preprocessor_state, ensure_ascii=False, default=str)
-            )
-
-            model_config = build_export_checkpoint_config(
-                [f.__dict__ for f in features],
-                model_cfg,
-                trainer_type="pu",
-                task_type="pu_classification",
-                framework_version=torch.__version__,
-                extra_metadata={
-                    "pu": {**pu_cfg, "class_prior": class_prior},
-                },
-            )
-            (checkpoint_dir / "model_config.json").write_text(
-                json.dumps(model_config, ensure_ascii=False, default=str)
-            )
-
-            if resume_enabled:
-                torch.save(optimizer.state_dict(), checkpoint_dir / "optimizer.pt")
-                (checkpoint_dir / "rng_state.json").write_text(
-                    json.dumps(capture_rng_state(), ensure_ascii=False)
+                preprocessor_state = {
+                    "features": [f.__dict__ for f in features],
+                    "label_encoders": {
+                        k: {
+                            str(kk): (
+                                int(vv)
+                                if isinstance(vv, (np.integer, np.int64))
+                                else vv
+                            )
+                            for kk, vv in v.items()
+                        }
+                        for k, v in transformer.label_encoders.items()
+                    },
+                    "norm_params": transformer.norm_params,
+                }
+                (checkpoint_dir / "preprocessor.json").write_text(
+                    json.dumps(preprocessor_state, ensure_ascii=False, default=str)
                 )
-                (checkpoint_dir / "training_state.json").write_text(
-                    json.dumps(
-                        {
-                            "best_val_loss": best_val_loss,
-                            "patience_counter": patience_counter,
-                        },
-                        ensure_ascii=False,
-                    )
-                )
-                envelope = write_resume_manifest(
-                    checkpoint_dir,
-                    resume_id=resume_cfg.resume_id,
+
+                model_config = build_export_checkpoint_config(
+                    [f.__dict__ for f in features],
+                    model_cfg,
                     trainer_type="pu",
-                    completed_step=epoch + 1,
-                    framework="pytorch",
+                    task_type="pu_classification",
                     framework_version=torch.__version__,
-                    payload_files=(
-                        "model.pt",
-                        "model_config.json",
-                        "optimizer.pt",
-                        "preprocessor.json",
-                        "rng_state.json",
-                        "training_state.json",
-                    ),
-                    payload_metadata={
-                        "model": "model.pt",
-                        "optimizer": "optimizer.pt",
-                        "preprocessing": "preprocessor.json",
-                        "rng": "rng_state.json",
-                        "early_stopping": "training_state.json",
+                    extra_metadata={
+                        "pu": {**pu_cfg, "class_prior": class_prior},
                     },
                 )
-                metrics["resume_id"] = envelope.resume_id
+                (checkpoint_dir / "model_config.json").write_text(
+                    json.dumps(model_config, ensure_ascii=False, default=str)
+                )
 
-            checkpoint = Checkpoint.from_directory(str(checkpoint_dir))
-            ray.train.report(metrics, checkpoint=checkpoint)
+                if resume_enabled:
+                    torch.save(optimizer.state_dict(), checkpoint_dir / "optimizer.pt")
+                    (checkpoint_dir / "rng_state.json").write_text(
+                        json.dumps(capture_rng_state(), ensure_ascii=False)
+                    )
+                    (checkpoint_dir / "training_state.json").write_text(
+                        json.dumps(
+                            {
+                                "best_val_loss": best_val_loss,
+                                "patience_counter": patience_counter,
+                            },
+                            ensure_ascii=False,
+                        )
+                    )
+                    envelope = write_resume_manifest(
+                        checkpoint_dir,
+                        resume_id=resume_cfg.resume_id,
+                        trainer_type="pu",
+                        completed_step=epoch + 1,
+                        framework="pytorch",
+                        framework_version=torch.__version__,
+                        payload_files=(
+                            "model.pt",
+                            "model_config.json",
+                            "optimizer.pt",
+                            "preprocessor.json",
+                            "rng_state.json",
+                            "training_state.json",
+                        ),
+                        payload_metadata={
+                            "model": "model.pt",
+                            "optimizer": "optimizer.pt",
+                            "preprocessing": "preprocessor.json",
+                            "rng": "rng_state.json",
+                            "early_stopping": "training_state.json",
+                        },
+                    )
+                    metrics["resume_id"] = envelope.resume_id
+
+                checkpoint = Checkpoint.from_directory(str(checkpoint_dir))
+                ray.train.report(metrics, checkpoint=checkpoint)
+            finally:
+                shutil.rmtree(checkpoint_dir, ignore_errors=True)
         else:
             ray.train.report(metrics)
 
@@ -786,6 +791,16 @@ class PUTrainerImpl(BaseTrainer):
     def _get_trainer_type() -> str:
         return "pu"
 
+    @staticmethod
+    def _default_bundle_targets() -> tuple[Any, ...]:
+        from tributo.exporting.models import ExportTarget
+
+        return (ExportTarget(name="onnx-model", format="onnx", options={"opset": 18}),)
+
+    @staticmethod
+    def _default_bundle_roles() -> dict[str, str]:
+        return {"inference": "onnx-model"}
+
 
 # ── Orchestration entry points ──
 
@@ -811,8 +826,19 @@ def run_pu_training_with_config(config: dict[str, Any]) -> dict[str, Any]:
         config=config,
         _validated_config=cfg,
     )
-    onnx_path = cfg.output.onnx_path or "model_output"
-    return trainer.run(output_path=onnx_path)
+    if cfg.output.bundle_uri:
+        return trainer.run(output_path=cfg.output.bundle_uri)
+    if cfg.output.onnx_path:
+        import warnings
+
+        warnings.warn(
+            "output.onnx_path selects the deprecated legacy export path; "
+            "configure output.bundle_uri for Bundle publication",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return trainer.run(output_path=cfg.output.onnx_path, legacy_export=True)
+    return trainer.run()
 
 
 @PublicAPI(stability="beta")

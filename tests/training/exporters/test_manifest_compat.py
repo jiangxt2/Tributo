@@ -8,6 +8,7 @@ optional fields with defaults are added to the schema.
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -104,9 +105,56 @@ class TestV1GoldenFixture:
         with pytest.raises(ValueError, match="integrity check failed"):
             load_bundle(ref)
 
+    @pytest.mark.parametrize(
+        ("variant", "expected_format"),
+        (
+            ("ubj", "ubj"),
+            ("json", "xgboost-json"),
+        ),
+    )
+    def test_legacy_xgboost_artifact_normalises_without_digest_drift(
+        self,
+        tmp_path: Path,
+        variant: str,
+        expected_format: str,
+    ) -> None:
+        payload = json.loads(_FIXTURE.read_text(encoding="utf-8"))
+        payload["artifacts"][0].update(
+            {
+                "format": "xgboost",
+                "flavor_id": "xgboost-native-v1",
+                "variant": variant,
+            }
+        )
+        raw_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        manifest_path = tmp_path / f"legacy-{variant}.json"
+        manifest_path.write_bytes(raw_bytes)
+        expected_sha256 = hashlib.sha256(raw_bytes).hexdigest()
+
+        manifest = BundleReader().read_manifest(str(manifest_path))
+        artifact = manifest.artifacts[0]
+
+        assert artifact.format == expected_format
+        assert artifact.flavor_id == "xgboost-native-v1"
+        assert manifest_path.read_bytes() == raw_bytes
+        result = load_bundle(
+            BundleRef(
+                canonical_uri=str(manifest_path),
+                bundle_id=payload["bundle_id"],
+                manifest_sha256=expected_sha256,
+            )
+        )
+        assert result["artifacts"][0]["format"] == expected_format
+
 
 class TestDigestSemantics:
     """manifest_sha256 vs bundle_digest behave differently by design."""
+
+    def test_manifest_rejects_naive_created_at(self) -> None:
+        payload = _make_manifest().model_dump()
+        payload["created_at"] = datetime(2026, 7, 30, 12, 0, 0)
+        with pytest.raises(ValueError, match="timezone offset"):
+            ExportManifest.model_validate(payload)
 
     def test_manifest_sha256_changes_with_new_fields(self) -> None:
         plain = _make_manifest(ManifestSignature(input_names=("f0",)))

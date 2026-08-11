@@ -20,6 +20,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from tributo.exporting.capabilities import (
+    ArtifactCapability,
+    CapabilityRegistry,
+    get_default_capability_registry,
+)
+from tributo.exporting.events import OperationEvent
 from tributo.exporting.models import (
     BundleOutputConfig,
     BundleRef,
@@ -27,6 +33,12 @@ from tributo.exporting.models import (
     ExportCheckpointV1,
     ExportSource,
     ExportTarget,
+)
+from tributo.exporting.repository import (
+    BundleAliasStore,
+    BundleRepository,
+    BundleRepositoryRouter,
+    ReaderResourceLimits,
 )
 from tributo.util.annotations import PublicAPI
 
@@ -137,11 +149,19 @@ def _get_tributo_version() -> str:
 
 
 __all__ = [
+    "ArtifactCapability",
+    "BundleAliasStore",
     "BundleRef",
+    "BundleRepository",
+    "BundleRepositoryRouter",
+    "CapabilityRegistry",
     "CheckpointField",
     "ExportCheckpointV1",
     "ExportSpec",
     "ExportTarget",
+    "OperationEvent",
+    "ReaderResourceLimits",
     "export",
+    "get_default_capability_registry",
     "load_bundle",
 ]

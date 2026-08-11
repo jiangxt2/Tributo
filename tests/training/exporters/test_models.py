@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -33,19 +34,59 @@ from tributo.exporting.models import (
 
 
 class TestExportTarget:
-    def test_minimal(self) -> None:
-        t = ExportTarget(name="native", format="xgboost")
+    @pytest.mark.parametrize("format_id", ("onnx", "ubj", "xgboost-json", "pt2"))
+    def test_formats_use_one_configuration_field(self, format_id: str) -> None:
+        t = ExportTarget(name="native", format=format_id)
         assert t.name == "native"
+        assert t.format == format_id
         assert t.required is True
         assert t.depends_on == ()
 
+    def test_legacy_xgboost_default_normalises_to_ubj(self) -> None:
+        with pytest.warns(DeprecationWarning, match="format='xgboost'"):
+            target = ExportTarget(name="native", format="xgboost")
+
+        assert target.format == "ubj"
+        assert target.exporter_id == "xgboost-ubj-v1"
+        assert target.options == {}
+
+    def test_legacy_xgboost_json_normalises_before_planning(self) -> None:
+        with pytest.warns(DeprecationWarning, match="xgboost-json"):
+            target = ExportTarget(
+                name="native",
+                format="xgboost",
+                exporter_id="xgboost-native-v1",
+                options={"fmt": "json"},
+            )
+
+        assert target.format == "xgboost-json"
+        assert target.exporter_id == "xgboost-json-v1"
+        assert target.options == {}
+
+    @pytest.mark.parametrize("legacy_format", ("binary", 1, ["ubj"]))
+    def test_legacy_xgboost_rejects_unknown_secondary_format(
+        self,
+        legacy_format: Any,
+    ) -> None:
+        with pytest.raises(ValidationError, match="must be 'ubj' or 'json'"):
+            ExportTarget(
+                name="native",
+                format="xgboost",
+                options={"fmt": legacy_format},
+            )
+
+    @pytest.mark.parametrize("format_id", ("ONNX", "xgboost_json", "-onnx"))
+    def test_rejects_noncanonical_format_id(self, format_id: str) -> None:
+        with pytest.raises(ValidationError, match="lowercase kebab-case"):
+            ExportTarget(name="native", format=format_id)
+
     def test_rejects_empty_name(self) -> None:
         with pytest.raises(ValidationError, match="name"):
-            ExportTarget(name="", format="xgboost")
+            ExportTarget(name="", format="ubj")
 
     def test_rejects_invalid_chars_in_name(self) -> None:
         with pytest.raises(ValidationError, match="name"):
-            ExportTarget(name="bad/name", format="xgboost")
+            ExportTarget(name="bad/name", format="ubj")
 
     def test_with_options(self) -> None:
         t = ExportTarget(name="fp32", format="onnx", options={"opset": 18})
@@ -92,6 +133,10 @@ class TestBundleOutputConfig:
         assert cfg.targets is None
         assert cfg.bundle_uri is None
 
+    def test_explicit_empty_targets_are_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="at least 1 item"):
+            BundleOutputConfig(bundle_uri="s3://bucket/models", targets=[])
+
     def test_bundle_mode_requires_uri(self) -> None:
         with pytest.raises(ValidationError, match="bundle_uri is required"):
             BundleOutputConfig(targets=[ExportTarget(name="a", format="onnx")])
@@ -115,7 +160,7 @@ class TestBundleOutputConfig:
                 bundle_uri="s3://bucket/model",
                 targets=[
                     ExportTarget(name="a", format="onnx"),
-                    ExportTarget(name="a", format="xgboost"),
+                    ExportTarget(name="a", format="ubj"),
                 ],
             )
 
@@ -177,14 +222,33 @@ class TestBundleOutputConfig:
             bundle_uri="file:///tmp/models",
             targets=[ExportTarget(name="a", format="onnx")],
         )
-        assert cfg.bundle_uri == "file:///tmp/models"
+        assert cfg.bundle_uri == f"file://{Path('/tmp/models').resolve()}"
 
     def test_bare_path_accepted(self) -> None:
         cfg = BundleOutputConfig(
             bundle_uri="/tmp/models",
             targets=[ExportTarget(name="a", format="onnx")],
         )
-        assert cfg.bundle_uri == "/tmp/models"
+        assert cfg.bundle_uri == str(Path("/tmp/models").resolve())
+
+    def test_bundle_uri_is_canonicalized_once(self, tmp_path: Path) -> None:
+        local = BundleOutputConfig(
+            bundle_uri=f"{tmp_path}/models/../models/",
+            targets=[ExportTarget(name="a", format="onnx")],
+        )
+        file_uri = BundleOutputConfig(
+            bundle_uri=f"file://{tmp_path}/models/../models/",
+            targets=[ExportTarget(name="a", format="onnx")],
+        )
+        s3 = BundleOutputConfig(
+            bundle_uri="s3://bucket/models/",
+            targets=[ExportTarget(name="a", format="onnx")],
+        )
+
+        expected_local = (tmp_path / "models").resolve()
+        assert local.bundle_uri == str(expected_local)
+        assert file_uri.bundle_uri == f"file://{expected_local}"
+        assert s3.bundle_uri == "s3://bucket/models"
 
     def test_rejects_root_file_uri(self) -> None:
         with pytest.raises(ValidationError, match="filesystem root"):

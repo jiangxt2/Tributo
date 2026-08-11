@@ -9,7 +9,6 @@ from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 from uuid import uuid4
 
-import mlflow
 import pytest
 import requests
 from pydantic import BaseModel
@@ -40,9 +39,11 @@ from tributo.integrations.hooks.mlflow_hook import (
     MLflowPostPublishHook,
 )
 
+mlflow = pytest.importorskip("mlflow", reason="mlflow registry extra not installed")
+
 pytestmark = pytest.mark.integration
 
-MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "http://127.0.0.1:8050")
+MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "http://mlflow:5000")
 
 
 @contextmanager
@@ -60,13 +61,16 @@ class _Options(BaseModel):
 
 
 class _Exporter:
-    api_version = 1
+    api_version = 2
     exporter_id = "mlflow-it-exporter-v1"
     priority = 100
     output_format = "native"
+    output_flavor_id = "test-native-v1"
+    source_kinds = ("mlflow_it",)
     options_model = _Options
     validator_bindings: tuple[ValidatorBinding, ...] = ()
     mutates_source = False
+    upstream_requirements: tuple[object, ...] = ()
 
     @classmethod
     def supports(cls, request: SupportRequest) -> SupportResult:
@@ -142,6 +146,11 @@ def client() -> mlflow.MlflowClient:
     return mlflow.MlflowClient(tracking_uri=MLFLOW_TRACKING_URI)
 
 
+def _model_versions(client: mlflow.MlflowClient) -> set[tuple[str, str]]:
+    """Return the server-wide immutable Model Version identity snapshot."""
+    return {(item.name, item.version) for item in client.search_model_versions()}
+
+
 @pytest.fixture
 def experiment(client: mlflow.MlflowClient) -> Iterator[str]:
     name = f"tributo-hook-it-{uuid4().hex}"
@@ -197,6 +206,7 @@ def _config(
 def test_real_bundle_upload_and_idempotent_replay(
     tmp_path: Path, experiment: str, client: mlflow.MlflowClient
 ) -> None:
+    model_versions_before = _model_versions(client)
     store = InMemoryOperationStore()
     service = _service(store)
     config = _config(
@@ -226,6 +236,7 @@ def test_real_bundle_upload_and_idempotent_replay(
     found = client.get_experiment_by_name(experiment)
     assert found is not None
     assert len(client.search_runs([found.experiment_id])) == 1
+    assert _model_versions(client) == model_versions_before
 
 
 def test_explicit_run_is_reused(

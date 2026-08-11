@@ -35,10 +35,14 @@ class ModelExporter(Protocol):
 
     Class variables declare metadata consumed by the registry and planner:
 
-    - ``api_version``: Set to 1 for the first-generation protocol.
+    - ``api_version``: Set to 2 for the current protocol. Version 2 adds
+      explicit output flavor, typed options, validator bindings, and
+      mutation/upstream declarations.
     - ``exporter_id``: Unique string (e.g. ``"xgboost-onnx-v1"``).
     - ``priority``: Higher = preferred when multiple candidates exist.
-    - ``output_format``: e.g. ``"onnx"``, ``"xgboost"``, ``"safetensors"``.
+    - ``output_format``: Canonical open format id such as ``"onnx"`` or
+      ``"ubj"``; one exporter class produces exactly one format.
+    - ``output_flavor_id``: Runtime/loader contract written to the artifact.
     - ``options_model``: Pydantic model for typed options.
     - ``validator_bindings``: Ordered validator chain.
     - ``mutates_source``: ``True`` if ``export()`` temporarily mutates
@@ -56,6 +60,7 @@ class ModelExporter(Protocol):
     exporter_id: ClassVar[str]
     priority: ClassVar[int]
     output_format: ClassVar[str]
+    output_flavor_id: ClassVar[str]
     # Source kinds this exporter consumes (values of ``ExportSource.source_kind``,
     # e.g. "xgboost_result", "dnn_result").  The registry uses this for
     # coarse filtering; transform exporters that consume an upstream

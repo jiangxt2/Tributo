@@ -56,10 +56,11 @@ class TorchExportExporter:
     superseding ``torch.jit.script`` and ``torch.jit.trace``.
     """
 
-    api_version: ClassVar[int] = 1
+    api_version: ClassVar[int] = 2
     exporter_id: ClassVar[str] = "torch-export-v1"
     priority: ClassVar[int] = 75
     output_format: ClassVar[str] = "pt2"
+    output_flavor_id: ClassVar[str] = "torch-export-v1"
     source_kinds: ClassVar[tuple[str, ...]] = ("dnn_result", "torch_module")
     options_model: ClassVar[type[BaseModel]] = TorchExportOptions
     validator_bindings: ClassVar[tuple[ValidatorBinding, ...]] = (
@@ -112,9 +113,9 @@ class TorchExportExporter:
             ep = torch.export.export(
                 model,
                 example_inputs,
-                dynamic_shapes=_build_dynamic_shapes(example_inputs)
-                if dynamic_shapes
-                else None,
+                dynamic_shapes=(
+                    _build_dynamic_shapes(example_inputs) if dynamic_shapes else None
+                ),
                 strict=strict,
             )
         except Exception as exc:
@@ -127,9 +128,11 @@ class TorchExportExporter:
                 ep = torch.export.export(
                     model,
                     example_inputs,
-                    dynamic_shapes=_build_dynamic_shapes(example_inputs)
-                    if dynamic_shapes
-                    else None,
+                    dynamic_shapes=(
+                        _build_dynamic_shapes(example_inputs)
+                        if dynamic_shapes
+                        else None
+                    ),
                     strict=False,
                 )
             else:
@@ -205,9 +208,11 @@ def _build_example_inputs(source: ExportSource, model: Any) -> tuple[Any, ...]:
         batch_size = 1
         input_shape = (
             batch_size,
-            first_param.shape[1]
-            if len(first_param.shape) > 1
-            else first_param.shape[0],
+            (
+                first_param.shape[1]
+                if len(first_param.shape) > 1
+                else first_param.shape[0]
+            ),
         )
         return (torch.randn(input_shape),)
     except (StopIteration, AttributeError):

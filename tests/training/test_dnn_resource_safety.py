@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -26,6 +27,22 @@ class TestDNNResourceConfig:
         assert cfg.resource.max_worker_materialization_bytes == 1024 * MIB
         assert cfg.resource.max_input_rows_per_worker is None
         assert cfg.ray.num_workers == 1
+
+    def test_bundle_destination_is_distinct_from_legacy_onnx_path(self):
+        from pydantic import ValidationError
+
+        from tributo.training.dnn_trainer import DNNTrainingConfig
+
+        with pytest.raises(ValidationError, match="cannot be combined"):
+            DNNTrainingConfig(
+                output={
+                    "bundle_uri": "s3://bucket/bundles",
+                    "onnx_path": "model.onnx",
+                }
+            )
+
+        cfg = DNNTrainingConfig(output={"bundle_uri": "s3://bucket/bundles"})
+        assert cfg.output.bundle_uri == "s3://bucket/bundles"
 
     def test_num_workers_gt_one_is_rejected_by_config(self) -> None:
         from pydantic import ValidationError
@@ -334,7 +351,7 @@ class TestDNNWorkerBudget:
         覆盖默认预算与共享预算的 happy path——train/val 共享预算、收集通过、
         训练循环执行、metrics 上报。mock ray.train，不依赖真实集群。
         """
-        pytest.importorskip("torch")
+        torch = pytest.importorskip("torch")
         from types import SimpleNamespace
 
         import numpy as np
@@ -361,11 +378,17 @@ class TestDNNWorkerBudget:
         )
 
         reported: dict[str, Any] = {}
+        checkpoint_dirs: list[Path] = []
 
         def fake_report(metrics, checkpoint=None):
             reported.update(metrics)
 
         monkeypatch.setattr(ray.train, "report", fake_report)
+        monkeypatch.setattr(
+            ray.train.Checkpoint,
+            "from_directory",
+            staticmethod(lambda path: checkpoint_dirs.append(Path(path)) or object()),
+        )
         monkeypatch.setattr(
             ray.train,
             "get_context",
@@ -404,6 +427,7 @@ class TestDNNWorkerBudget:
             }
         )
         assert reported["epoch"] == 1  # 训练完成且 metrics 已上报
+        assert checkpoint_dirs and all(not path.exists() for path in checkpoint_dirs)
 
         reported.clear()
         dnn_train_loop_per_worker(
@@ -423,5 +447,41 @@ class TestDNNWorkerBudget:
         assert reported["epoch"] == 1
         assert "train_loss" in reported
         assert "train_optimization_objective" in reported
+        assert all(not path.exists() for path in checkpoint_dirs)
         assert "train_observed_label_accuracy" in reported
         assert reported["train_acc"] == reported["train_observed_label_accuracy"]
+
+        import tempfile
+
+        created_dirs: list[Path] = []
+        original_mkdtemp = tempfile.mkdtemp
+
+        def tracked_mkdtemp(*args: Any, **kwargs: Any) -> str:
+            path = Path(original_mkdtemp(*args, **kwargs))
+            created_dirs.append(path)
+            return str(path)
+
+        def fail_checkpoint_write(*args: Any, **kwargs: Any) -> None:
+            del args, kwargs
+            raise OSError("checkpoint write failed")
+
+        monkeypatch.setattr(tempfile, "mkdtemp", tracked_mkdtemp)
+        monkeypatch.setattr(torch, "save", fail_checkpoint_write)
+
+        with pytest.raises(OSError, match="checkpoint write failed"):
+            dnn_train_loop_per_worker(
+                {
+                    "features": [
+                        {"name": "f0", "type": "dense"},
+                        {"name": "f1", "type": "dense"},
+                    ],
+                    "label_col": "label",
+                    "model": {"dnn_hidden_units": [8]},
+                    "loss": {"type": "bce"},
+                    "pu_learning": {},
+                    "training": {"epochs": 1, "batch_size": 8, "val_size": 0},
+                    "resource": {},
+                }
+            )
+
+        assert created_dirs and all(not path.exists() for path in created_dirs)

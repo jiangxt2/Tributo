@@ -9,18 +9,61 @@ and delegates ``run`` to this class.
 
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import logging
 import os
+import warnings
 from typing import Any
+
+from ray.exceptions import RayTaskError, TaskCancelledError
 
 from tributo.training.base import BaseTrainer
 from tributo.training.callbacks import CallbackDispatcher
+from tributo.training.results import (
+    BundleStatus,
+    TrainingHookStatus,
+    TrainingResult,
+    TrainingStatus,
+    aggregate_hook_status,
+)
 
 logger = logging.getLogger(__name__)
 
 # ── Source-provider plugin discovery (bundle export path) ────────────────
 
 _provider_plugins_cache: list[Any] | None = None
+
+
+def _is_cancellation(error: BaseException) -> bool:
+    """Recognize real local or Ray cancellation exceptions, including wrappers."""
+    pending: list[BaseException] = [error]
+    seen: set[int] = set()
+    cancellation_types = (
+        asyncio.CancelledError,
+        concurrent.futures.CancelledError,
+        TaskCancelledError,
+    )
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, cancellation_types):
+            return True
+        # Only explicit exception chaining represents wrapper intent. Implicit
+        # ``__context__`` merely records that a different exception was raised
+        # while handling another one and must not turn that new failure into a
+        # cancellation.
+        candidates: list[object] = [current.__cause__]
+        if isinstance(current, RayTaskError):
+            candidates.append(current.cause)
+        pending.extend(
+            candidate
+            for candidate in candidates
+            if isinstance(candidate, BaseException)
+        )
+    return False
 
 
 def _load_provider_plugins(registry: Any) -> None:
@@ -37,7 +80,7 @@ def _load_provider_plugins(registry: Any) -> None:
         _provider_plugins_cache = discover_source_provider_plugins()
 
     for cls in _provider_plugins_cache:
-        if cls.provider_id not in {p.provider_id for p in registry._by_id.values()}:
+        if cls.provider_id not in registry.list_all():
             registry.register(cls)
 
 
@@ -80,14 +123,15 @@ class TrainingLifecycle:
         output_path: str = "",
         *,
         bundle_config: Any | None = None,
+        legacy_export: bool = False,
     ) -> dict[str, Any]:
         """Run the ``setup → training_loop → export`` flow.
 
-        When *bundle_config* has non-empty ``targets``, export is routed
-        through ``BundleExportService`` (bundle mode); otherwise the legacy
-        ``export_artifacts``/``export_model`` hooks run.  Returns the
-        summary dict, containing at minimum ``{"status": "succeeded" |
-        "partial"}`` — a partial bundle is still a successful run.
+        First-party trainers require an explicit Bundle destination and use
+        their standard targets when none are supplied.  Their legacy
+        ``export_artifacts``/``export_model`` hooks run only when callers opt
+        in with ``legacy_export=True``.  Compatible third-party trainers that
+        do not declare Bundle defaults retain their existing lifecycle.
         """
         trainer = self._trainer
 
@@ -97,7 +141,17 @@ class TrainingLifecycle:
         # in both places so that contract keeps working.
         trainer._summary = summary
 
+        training_completed = False
+        bundle_attempted = False
+        committed_bundle: Any | None = None
+        terminal_result: TrainingResult | None = None
+
         try:
+            bundle_config = self._prepare_bundle_config(
+                output_path,
+                bundle_config,
+                legacy_export=legacy_export,
+            )
             # Required setup callbacks may abort before trainer setup.  They
             # remain inside the lifecycle error boundary so on_run_error can
             # close any external run that was created before the failure.
@@ -105,6 +159,7 @@ class TrainingLifecycle:
             logger.info("Starting %s training...", type(trainer).__name__)
             trainer.setup()
             checkpoint = trainer.training_loop()
+            training_completed = True
 
             self._dispatcher.on_training_end(trainer, checkpoint)
 
@@ -114,6 +169,7 @@ class TrainingLifecycle:
                 and bundle_config.targets is not None
                 and len(bundle_config.targets) > 0
             ):
+                bundle_attempted = True
                 # Bundle mode: post-publish actions run through the
                 # publication Hook dispatcher — legacy artifact-export
                 # callbacks are not fired (backward-compat contract).
@@ -125,15 +181,41 @@ class TrainingLifecycle:
                 if type(trainer)._export_bundle is not BaseTrainer._export_bundle:
                     trainer._export_bundle(checkpoint, bundle_config)
                 else:
-                    self._export_bundle(checkpoint, bundle_config, summary)
+                    committed_bundle = self._export_bundle(
+                        checkpoint, bundle_config, summary
+                    )
             else:
                 trainer._export_artifacts_default(checkpoint, output_path)
                 self._dispatcher.on_artifacts_exported(trainer, output_path)
 
+            terminal_result = self._build_success_result(
+                summary,
+                output_path=output_path,
+                bundle_attempted=bundle_attempted,
+                bundle_result=committed_bundle,
+            )
+            self._merge_result(summary, terminal_result)
             logger.info("%s training completed.", type(trainer).__name__)
             self._dispatcher.on_run_complete(trainer, summary)
 
-        except Exception as e:
+        except BaseException as e:
+            if not isinstance(e, Exception) and not _is_cancellation(e):
+                raise
+            training_result = self._build_error_result(
+                e,
+                summary,
+                training_completed=training_completed,
+                bundle_attempted=bundle_attempted,
+                committed_result=terminal_result,
+            )
+            self._merge_result(summary, training_result)
+            try:
+                vars(e)["training_result"] = training_result
+            except Exception:
+                e.add_note(
+                    "TrainingResult could not be attached to this exception type; "
+                    f"terminal state was {training_result.model_dump(mode='json')}"
+                )
             # Error callbacks may fail too, but the training exception remains
             # the primary error and is always re-raised unchanged.
             callback_error = self._dispatcher.on_run_error(trainer, e)
@@ -146,12 +228,178 @@ class TrainingLifecycle:
 
         return summary
 
+    def _prepare_bundle_config(
+        self,
+        output_path: str,
+        bundle_config: Any | None,
+        *,
+        legacy_export: bool,
+    ) -> Any | None:
+        """Apply first-party Bundle defaults before any training side effect."""
+        default_targets = self._trainer._default_bundle_targets()
+        if default_targets is None:
+            return bundle_config
+        if legacy_export:
+            warnings.warn(
+                "legacy_export=True is deprecated for first-party trainers; "
+                "configure a Bundle URI instead",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+            return None
+
+        from tributo.exporting.models import BundleOutputConfig
+
+        if bundle_config is None:
+            if not output_path:
+                raise ValueError(
+                    "First-party trainers require an explicit Bundle URI via "
+                    "bundle_config.bundle_uri or output_path"
+                )
+            return BundleOutputConfig(
+                bundle_uri=output_path,
+                targets=list(default_targets),
+                roles=self._trainer._default_bundle_roles(),
+            )
+        if not isinstance(bundle_config, BundleOutputConfig):
+            raise TypeError("bundle_config must be a BundleOutputConfig")
+        if bundle_config.targets is not None:
+            return bundle_config
+
+        data = bundle_config.model_dump()
+        if data.get("bundle_uri") is None and output_path:
+            data["bundle_uri"] = output_path
+        data["targets"] = [target.model_dump() for target in default_targets]
+        if not data.get("roles"):
+            data["roles"] = self._trainer._default_bundle_roles()
+        return BundleOutputConfig.model_validate(data)
+
+    @staticmethod
+    def _merge_result(summary: dict[str, Any], result: TrainingResult) -> None:
+        summary.update(result.model_dump(mode="json"))
+        summary["status"] = (
+            "partial"
+            if result.bundle_status == BundleStatus.PARTIAL
+            else result.training_status.value
+        )
+
+    @staticmethod
+    def _summary_metrics(summary: dict[str, Any]) -> dict[str, Any]:
+        metrics = summary.get("metrics")
+        return dict(metrics) if isinstance(metrics, dict) else {}
+
+    def _build_success_result(
+        self,
+        summary: dict[str, Any],
+        *,
+        output_path: str,
+        bundle_attempted: bool,
+        bundle_result: Any | None,
+    ) -> TrainingResult:
+        if bundle_attempted:
+            bundle_status = BundleStatus(
+                getattr(bundle_result, "status", summary.get("status", "succeeded"))
+            )
+            bundle_uri = getattr(
+                bundle_result, "canonical_uri", summary.get("canonical_uri")
+            )
+            execution_id = getattr(
+                bundle_result, "execution_id", summary.get("execution_id")
+            )
+            if bundle_uri is None or execution_id is None:
+                raise RuntimeError(
+                    "Bundle publication completed without the required canonical URI "
+                    "and execution ID"
+                )
+            receipts = getattr(bundle_result, "hook_receipts", ())
+            hook_status = aggregate_hook_status(receipts)
+            return TrainingResult(
+                model_uri=bundle_uri,
+                bundle_uri=bundle_uri,
+                metrics=self._summary_metrics(summary),
+                training_status=TrainingStatus.SUCCEEDED,
+                bundle_status=bundle_status,
+                hook_status=hook_status,
+                execution_id=execution_id,
+            )
+
+        legacy_uri = summary.get("onnx_path") or output_path or None
+        return TrainingResult(
+            model_uri=legacy_uri,
+            metrics=self._summary_metrics(summary),
+            legacy_artifact_uri=legacy_uri,
+            training_status=TrainingStatus.SUCCEEDED,
+            bundle_status=BundleStatus.NOT_STARTED,
+            hook_status=TrainingHookStatus.NOT_CONFIGURED,
+        )
+
+    def _build_error_result(
+        self,
+        error: BaseException,
+        summary: dict[str, Any],
+        *,
+        training_completed: bool,
+        bundle_attempted: bool,
+        committed_result: TrainingResult | None,
+    ) -> TrainingResult:
+        if committed_result is not None:
+            error.add_note(
+                "Training and Bundle publication had already reached a terminal "
+                "state before this callback failed"
+            )
+            return committed_result
+
+        bundle_result = getattr(error, "bundle_result", None)
+        if bundle_result is not None:
+            bundle_uri = getattr(bundle_result, "canonical_uri", None)
+            execution_id = getattr(bundle_result, "execution_id", None)
+            if bundle_uri is not None and execution_id is not None:
+                return TrainingResult(
+                    model_uri=bundle_uri,
+                    bundle_uri=bundle_uri,
+                    metrics=self._summary_metrics(summary),
+                    training_status=TrainingStatus.SUCCEEDED,
+                    bundle_status=BundleStatus(bundle_result.status),
+                    hook_status=aggregate_hook_status(
+                        getattr(error, "receipts", ())
+                        or getattr(bundle_result, "hook_receipts", ())
+                    ),
+                    execution_id=execution_id,
+                )
+            error.add_note(
+                "Bundle error metadata omitted canonical_uri or execution_id; "
+                "publication is reported as failed instead of replacing the "
+                "original exception with a result-validation error"
+            )
+
+        if training_completed and bundle_attempted:
+            execution = getattr(error, "execution_result", None)
+            return TrainingResult(
+                metrics=self._summary_metrics(summary),
+                training_status=TrainingStatus.SUCCEEDED,
+                bundle_status=BundleStatus.FAILED,
+                hook_status=TrainingHookStatus.NOT_CONFIGURED,
+                execution_id=getattr(execution, "execution_id", None),
+            )
+
+        status = (
+            TrainingStatus.CANCELLED
+            if _is_cancellation(error)
+            else TrainingStatus.FAILED
+        )
+        return TrainingResult(
+            metrics=self._summary_metrics(summary),
+            training_status=status,
+            bundle_status=BundleStatus.NOT_STARTED,
+            hook_status=TrainingHookStatus.NOT_CONFIGURED,
+        )
+
     def _export_bundle(
         self,
         checkpoint: Any,
         bundle_config: Any,
         summary: dict[str, Any],
-    ) -> None:
+    ) -> Any:
         """Route export through the new bundle pipeline.
 
         Resolves an ``ExportSourceProvider`` from the training checkpoint, creates
@@ -176,7 +424,6 @@ class TrainingLifecycle:
             result = service.export_bundle(
                 source=source,
                 config=bound_config,
-                provider=provider,
                 tributo_version=trainer._get_tributo_version(),
                 attempt_id=attempt_id,
             )
@@ -185,6 +432,7 @@ class TrainingLifecycle:
             {
                 "status": result.status,
                 "bundle_id": result.bundle_id,
+                "execution_id": result.execution_id,
                 "canonical_uri": result.canonical_uri,
                 "manifest_sha256": result.manifest_sha256,
                 "artifacts": [
@@ -201,3 +449,4 @@ class TrainingLifecycle:
                 ],
             }
         )
+        return result

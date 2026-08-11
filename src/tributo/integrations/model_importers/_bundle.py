@@ -166,6 +166,7 @@ def republish_verified_bundle(
                 source_bundle_uri,
                 artifact_name=artifact.name,
                 manifest=manifest,
+                manifest_bytes=manifest_bytes,
             ) as resolved:
                 for file in artifact.files:
                     source = resolved.path_for(file.relative_path)

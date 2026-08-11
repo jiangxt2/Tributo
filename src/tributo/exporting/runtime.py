@@ -46,6 +46,7 @@ from tributo.exceptions import (
     UnsupportedArtifactFormat,
 )
 from tributo.exporting.bundle_reader import BundleReader
+from tributo.exporting.formats import validate_format_id
 from tributo.exporting.manifest import ExportManifest, SignatureField
 from tributo.exporting.models import LogicalArtifact, ResolvedArtifact
 from tributo.exporting.registries import FlavorRegistry
@@ -94,6 +95,7 @@ class BundleReaderLike(Protocol):
         artifact_name: str | None = None,
         storage_profile: str | None = None,
         manifest: ExportManifest | None = None,
+        manifest_bytes: bytes | None = None,
     ) -> Any: ...
 
 
@@ -152,6 +154,10 @@ class BundleModelFlavor(Protocol):
 
     - ``api_version``: 1 for the first-generation protocol.
     - ``flavor_id``: Stable routing key (e.g. ``"onnx-runtime-v1"``).
+    - ``supported_formats``: Canonical artifact formats accepted by the
+      loader.  Capability discovery validates exporter/flavor agreement.
+    - ``batch_supported`` / ``serveable``: Explicit executable capabilities;
+      a format name alone never implies either one.
     - ``security_mode``: One of the ``SECURITY_MODE_*`` constants.
       Anything other than ``safe`` requires ``unsafe=True``.
     - ``signature_required``: ``True`` when the flavor needs a non-empty
@@ -162,6 +168,9 @@ class BundleModelFlavor(Protocol):
 
     api_version: ClassVar[int]
     flavor_id: ClassVar[str]
+    supported_formats: ClassVar[tuple[str, ...]]
+    batch_supported: ClassVar[bool]
+    serveable: ClassVar[bool]
     security_mode: ClassVar[str]
     signature_required: ClassVar[bool]
     required_dependencies: ClassVar[tuple[str, ...]]
@@ -217,8 +226,12 @@ class FlavorSupportEntry:
 #: Frozen artifact capability matrix. ONNX Runtime remains the selected
 #: primary artifact for O1, DNN, PU, and XGBoost. Native XGBoost is an
 #: additional explicit executable flavor. Other first-party export flavors
-#: are readable Bundle artifacts, but fail closed at executable gates until a
-#: matching loader is implemented.
+#: are readable Bundle artifacts, but fail closed at executable gates until
+#: a matching loader is implemented. XGBoost UBJ and JSON are two canonical
+#: serialization formats produced for the shared ``xgboost-native-v1``
+#: runtime flavor. Other flavor IDs produced by exporters
+#: (``safetensors-v1``, ``torch-export-v1``, ``hf-onnx-v1``,
+#: ``onnx-int8-v1``) are never loaded by guessing.
 FLAVOR_SUPPORT_MATRIX: tuple[FlavorSupportEntry, ...] = (
     FlavorSupportEntry(
         flavor_id="onnx-runtime-v1",
@@ -248,7 +261,7 @@ FLAVOR_SUPPORT_MATRIX: tuple[FlavorSupportEntry, ...] = (
         online_serveable=True,
         verticals=("xgboost",),
         trainer_types=("xgboost",),
-        producer_ids=("xgboost-native-v1",),
+        producer_ids=("xgboost-json-v1", "xgboost-ubj-v1"),
     ),
     FlavorSupportEntry(
         flavor_id="safetensors-v1",
@@ -377,14 +390,10 @@ class BundleModelLoader:
             ModelLoadError: A required dependency is missing or the
                 model file could not be loaded.
         """
-        if expected_manifest_sha256 is None:
-            manifest = self._reader.read_manifest(
-                bundle_uri, storage_profile=storage_profile
-            )
-        else:
-            manifest, manifest_bytes = self._reader.read_manifest_with_bytes(
-                bundle_uri, storage_profile=storage_profile
-            )
+        manifest, manifest_bytes = self._reader.read_manifest_with_bytes(
+            bundle_uri, storage_profile=storage_profile
+        )
+        if expected_manifest_sha256 is not None:
             actual_manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
             if actual_manifest_sha256 != expected_manifest_sha256:
                 raise ModelLoadError(
@@ -451,6 +460,13 @@ class BundleModelLoader:
         if entry.signature_required:
             _require_typed_signature(manifest, artifact, unsafe)
 
+        if artifact.format not in flavor_cls.supported_formats:
+            raise UnsupportedArtifactFormat(
+                f"Artifact {artifact.name!r} declares format {artifact.format!r}, "
+                f"but flavor {artifact.flavor_id!r} accepts only "
+                f"{flavor_cls.supported_formats!r}"
+            )
+
         # Load the model inside the artifact context; the runtime keeps
         # the context open (ExitStack) so temp files survive lazy-loaders.
         # Signature validation happens inside the try so a mismatch still
@@ -466,6 +482,7 @@ class BundleModelLoader:
                     # against a freshly re-read one would create a TOCTOU
                     # window (validation sees manifest A, loading sees B).
                     manifest=manifest,
+                    manifest_bytes=manifest_bytes,
                 )
             )
             flavor = flavor_cls()
@@ -484,6 +501,7 @@ class BundleModelLoader:
         return BundleModelRuntime(
             reader=self._reader,
             manifest=manifest,
+            manifest_bytes=manifest_bytes,
             artifact=artifact,
             resolved_artifact=resolved,
             model=model,
@@ -512,6 +530,7 @@ class BundleModelRuntime:
         *,
         reader: BundleReaderLike,
         manifest: ExportManifest,
+        manifest_bytes: bytes,
         artifact: LogicalArtifact,
         resolved_artifact: ResolvedArtifact,
         model: BundleModel,
@@ -521,6 +540,7 @@ class BundleModelRuntime:
     ) -> None:
         self._reader = reader
         self._manifest = manifest
+        self._manifest_bytes = manifest_bytes
         self._artifact = artifact
         self._resolved = resolved_artifact
         self._model = model
@@ -567,6 +587,11 @@ class BundleModelRuntime:
     def manifest(self) -> ExportManifest:
         """The verified bundle manifest."""
         return self._manifest
+
+    @property
+    def manifest_bytes(self) -> bytes:
+        """Exact committed manifest bytes verified while opening the bundle."""
+        return self._manifest_bytes
 
     @property
     def artifact(self) -> LogicalArtifact:
@@ -712,10 +737,9 @@ def _build_flavor_registry() -> FlavorRegistry:
     an entry-point exposing the same id (from an editable install) is
     skipped instead of tripping the registry's duplicate-is-conflict rule.
     """
-    from tributo.integrations.flavors.onnx_runtime import ONNXRuntimeFlavor
-    from tributo.integrations.flavors.xgboost_native import XGBoostNativeFlavor
+    from tributo._bootstrap import first_party_model_flavors
 
-    builtin_flavors = (ONNXRuntimeFlavor, XGBoostNativeFlavor)
+    builtin_flavors = first_party_model_flavors()
     registry = FlavorRegistry()
     for cls in builtin_flavors:
         registry.register(cls)
@@ -773,6 +797,32 @@ def _validate_matrix_registry(registry: FlavorRegistry) -> None:
                 f"Serveable matrix signature_required for {entry.flavor_id!r} "
                 "does not match the registered flavor"
             )
+        if entry.batch_inference_capable != getattr(
+            flavor_cls, "batch_supported", None
+        ):
+            raise JobConfigurationError(
+                f"Serveable matrix batch capability for {entry.flavor_id!r} "
+                "does not match the registered flavor"
+            )
+        if entry.online_serveable != getattr(flavor_cls, "serveable", None):
+            raise JobConfigurationError(
+                f"Serveable matrix serving capability for {entry.flavor_id!r} "
+                "does not match the registered flavor"
+            )
+        supported_formats = getattr(flavor_cls, "supported_formats", ())
+        if not isinstance(supported_formats, tuple) or not supported_formats:
+            raise JobConfigurationError(
+                f"Serveable matrix flavor {entry.flavor_id!r} must declare a "
+                "non-empty supported_formats tuple"
+            )
+        try:
+            for format_id in supported_formats:
+                validate_format_id(format_id)
+        except ValueError as exc:
+            raise JobConfigurationError(
+                f"Serveable matrix flavor {entry.flavor_id!r} declares invalid "
+                "supported_formats"
+            ) from exc
         matrix_dependencies = set(entry.dependencies)
         flavor_dependencies = set(getattr(flavor_cls, "required_dependencies", ()))
         if not flavor_dependencies.issubset(matrix_dependencies):

@@ -38,10 +38,11 @@ class _MinimalOptions(BaseModel):
 
 
 class _FakeONNXExporter:
-    api_version: ClassVar[int] = 1
+    api_version: ClassVar[int] = 2
     exporter_id: ClassVar[str] = "torch-onnx-v1"
     priority: ClassVar[int] = 10
     output_format: ClassVar[str] = "onnx"
+    output_flavor_id: ClassVar[str] = "onnx-runtime-v1"
     options_model: ClassVar[type[BaseModel]] = _MinimalOptions
     validator_bindings: ClassVar[tuple[ValidatorBinding, ...]] = ()
     mutates_source: ClassVar[bool] = False
@@ -67,10 +68,11 @@ class _FakeONNXExporter:
 
 
 class _FakeXGBoostONNXExporter:
-    api_version: ClassVar[int] = 1
+    api_version: ClassVar[int] = 2
     exporter_id: ClassVar[str] = "xgboost-onnx-v1"
     priority: ClassVar[int] = 10
     output_format: ClassVar[str] = "onnx"
+    output_flavor_id: ClassVar[str] = "onnx-runtime-v1"
     options_model: ClassVar[type[BaseModel]] = _MinimalOptions
     validator_bindings: ClassVar[tuple[ValidatorBinding, ...]] = ()
     mutates_source: ClassVar[bool] = True  # mutates feature_names
@@ -97,10 +99,11 @@ class _FakeXGBoostONNXExporter:
 
 
 class _FakeLowPriorityONNXExporter:
-    api_version: ClassVar[int] = 1
+    api_version: ClassVar[int] = 2
     exporter_id: ClassVar[str] = "legacy-onnx-v1"
     priority: ClassVar[int] = 5
     output_format: ClassVar[str] = "onnx"
+    output_flavor_id: ClassVar[str] = "onnx-runtime-v1"
     options_model: ClassVar[type[BaseModel]] = _MinimalOptions
     validator_bindings: ClassVar[tuple[ValidatorBinding, ...]] = ()
     mutates_source: ClassVar[bool] = False
@@ -114,10 +117,11 @@ class _FakeLowPriorityONNXExporter:
 
 
 class _FakeTiedPriorityONNXExporter:
-    api_version: ClassVar[int] = 1
+    api_version: ClassVar[int] = 2
     exporter_id: ClassVar[str] = "another-onnx-v1"
     priority: ClassVar[int] = 10  # same as torch-onnx-v1
     output_format: ClassVar[str] = "onnx"
+    output_flavor_id: ClassVar[str] = "onnx-runtime-v1"
     options_model: ClassVar[type[BaseModel]] = _MinimalOptions
     validator_bindings: ClassVar[tuple[ValidatorBinding, ...]] = ()
     mutates_source: ClassVar[bool] = False
@@ -161,6 +165,46 @@ class _FakeFactory:
 
 
 class TestExportRegistry:
+    def test_rejects_legacy_exporter_protocol_with_diagnostic(self) -> None:
+        class _LegacyExporter(_FakeONNXExporter):
+            api_version = 1
+            exporter_id = "legacy-protocol-v1"
+
+        registry = ExportRegistry()
+        registry.register(_LegacyExporter)
+
+        assert registry.list_all() == []
+        assert registry.diagnostics()[0].reason == (
+            "Unsupported ModelExporter api_version 1; expected 2"
+        )
+
+    def test_rejects_noncanonical_format_descriptor(self) -> None:
+        class _InvalidFormatExporter(_FakeONNXExporter):
+            exporter_id = "invalid-format-v1"
+            output_format = "custom_format"
+
+        registry = ExportRegistry()
+        registry.register(_InvalidFormatExporter)
+
+        assert registry.list_all() == []
+        assert "Invalid output_format" in registry.diagnostics()[0].reason
+
+    def test_rejects_missing_output_flavor_descriptor(self) -> None:
+        class _MissingFlavorExporter:
+            api_version = 2
+            exporter_id = "missing-flavor-v1"
+            priority = 1
+            output_format = "gguf"
+            options_model = _MinimalOptions
+            validator_bindings: tuple[ValidatorBinding, ...] = ()
+            mutates_source = False
+
+        registry = ExportRegistry()
+        registry.register(_MissingFlavorExporter)
+
+        assert registry.list_all() == []
+        assert "Invalid output_flavor_id" in registry.diagnostics()[0].reason
+
     def test_register_and_get(self) -> None:
         reg = ExportRegistry()
         reg.register(_FakeONNXExporter)

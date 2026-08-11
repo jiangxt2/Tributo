@@ -17,6 +17,22 @@ x-ray-common: &ray-common
     TRIBUTO_MINIO_SECRET_KEY: minioadmin123
     TRIBUTO_SOURCE_SNAPSHOT_PATH: /workspace/tributo-src
     XDG_CACHE_HOME: /workspace/tributo-work/cache
+    TRIBUTO_RAY_DASHBOARD_URL: http://127.0.0.1:8265
+    TRIBUTO_RAY_MINIO_ENDPOINT: http://minio:9000
+    MLFLOW_TRACKING_URI: http://mlflow:5000
+    PYTHON_VERSION: ${PYTHON_VERSION}
+    RAY_VERSION: ${RAY_VERSION}
+    MLFLOW_VERSION: ${MLFLOW_VERSION}
+    BOTO3_VERSION: ${BOTO3_VERSION}
+    BOTOCORE_VERSION: ${BOTOCORE_VERSION}
+    XGBOOST_VERSION: ${XGBOOST_VERSION}
+    ONNX_VERSION: ${ONNX_VERSION}
+    ONNXRUNTIME_VERSION: ${ONNXRUNTIME_VERSION}
+    ONNXMLTOOLS_VERSION: ${ONNXMLTOOLS_VERSION}
+    TORCH_VERSION: ${TORCH_VERSION}
+    TRANSFORMERS_VERSION: ${TRANSFORMERS_VERSION}
+    PYARROW_VERSION: ${PYARROW_VERSION}
+    PANDAS_VERSION: ${PANDAS_VERSION}
   volumes:
     - ingestion-source:/workspace/tributo-src:ro
     - ingestion-workspace:/workspace/tributo-work
@@ -72,7 +88,13 @@ services:
       - --num-cpus=1
       - --block
     healthcheck:
-      test: ["CMD-SHELL", "ray status --address=127.0.0.1:6379 >/dev/null 2>&1"]
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import urllib.request;
+          urllib.request.urlopen('http://minio:9000/minio/health/live', timeout=2).read()"
+          >/dev/null 2>&1 &&
+          ray status --address=127.0.0.1:6379 >/dev/null 2>&1
       interval: 5s
       timeout: 5s
       retries: 24
@@ -113,6 +135,49 @@ services:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin123
 
+  mlflow:
+    <<: *ray-common
+    profiles: ["model-export"]
+    command:
+      - mlflow
+      - server
+      - --backend-store-uri
+      - sqlite:////mlflow/mlflow.db
+      - --artifacts-destination
+      - /mlflow/artifacts
+      - --host
+      - 0.0.0.0
+      - --port
+      - "5000"
+    volumes:
+      - mlflow-data:/mlflow
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=2).read()"
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
+    depends_on:
+      mlflow-init:
+        condition: service_completed_successfully
+
+  mlflow-init:
+    <<: *ray-common
+    profiles: ["model-export"]
+    user: root
+    command:
+      - chown
+      - ray:users
+      - /mlflow
+    restart: "no"
+    volumes:
+      - mlflow-data:/mlflow
+
 volumes:
   ingestion-source:
   ingestion-workspace:
+  mlflow-data:

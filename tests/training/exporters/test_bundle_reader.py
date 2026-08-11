@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +14,7 @@ from tributo.exporting.bundle_reader import BundleReader, ReaderResourceLimits
 from tributo.exporting.manifest import ManifestSourceInfo
 from tributo.exporting.models import (
     ArtifactFile,
+    BundleRef,
     LogicalArtifact,
     ProducerInfo,
 )
@@ -104,7 +108,7 @@ class TestReadManifest:
     def test_read_manifest_from_root(self, tmp_path: Path) -> None:
         bundle_dir, manifest_sha256, _ = _create_test_bundle(tmp_path)
         reader = BundleReader()
-        manifest = reader.read_manifest(str(bundle_dir))
+        manifest, manifest_bytes = reader.read_manifest_with_bytes(str(bundle_dir))
         assert manifest.bundle_id == "reader-test-1"
         assert manifest.status == "succeeded"
         assert len(manifest.artifacts) == 1
@@ -119,6 +123,23 @@ class TestReadManifest:
         reader = BundleReader()
         with pytest.raises(FileNotFoundError):
             reader.read_manifest(str(tmp_path / "does-not-exist"))
+
+    def test_read_manifest_from_bundle_ref_verifies_identity(
+        self, tmp_path: Path
+    ) -> None:
+        bundle_dir, manifest_sha256, _ = _create_test_bundle(tmp_path)
+        reader = BundleReader()
+        ref = BundleRef(
+            canonical_uri=str(bundle_dir),
+            bundle_id="reader-test-1",
+            manifest_sha256=manifest_sha256,
+        )
+
+        assert reader.read_manifest(ref).bundle_id == "reader-test-1"
+
+        invalid_ref = ref.model_copy(update={"manifest_sha256": "f" * 64})
+        with pytest.raises(ValueError, match="Manifest digest mismatch"):
+            reader.read_manifest(invalid_ref)
 
 
 class TestOpenArtifact:
@@ -135,6 +156,30 @@ class TestOpenArtifact:
         reader = BundleReader()
         with reader.open_artifact(str(bundle_dir), artifact_name="fp32") as ra:
             assert ra.descriptor.name == "fp32"
+
+    def test_open_resolves_bundle_location_once(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        bundle_dir, _, _ = _create_test_bundle(tmp_path)
+        reader = BundleReader()
+        calls = 0
+        original = reader._repository_router.resolve_alias
+
+        def counting_resolve_alias(*args: Any, **kwargs: Any) -> BundleRef | None:
+            nonlocal calls
+            calls += 1
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(
+            reader._repository_router,
+            "resolve_alias",
+            counting_resolve_alias,
+        )
+
+        with reader.open_artifact(str(bundle_dir), role="inference"):
+            pass
+
+        assert calls == 1
 
     def test_open_missing_role_raises(self, tmp_path: Path) -> None:
         bundle_dir, _, _ = _create_test_bundle(tmp_path)
@@ -175,58 +220,173 @@ class TestOpenArtifact:
         """传入 manifest 时不重新读取（TOCTOU 防护：校验与加载同一快照）。"""
         bundle_dir, _, _ = _create_test_bundle(tmp_path)
         reader = BundleReader()
-        manifest = reader.read_manifest(str(bundle_dir))
+        manifest, manifest_bytes = reader.read_manifest_with_bytes(str(bundle_dir))
 
         calls = 0
-        original = reader.read_manifest
+        original = reader.read_manifest_with_bytes
 
         def counting_read_manifest(*args, **kwargs):
             nonlocal calls
             calls += 1
             return original(*args, **kwargs)
 
-        monkeypatch.setattr(reader, "read_manifest", counting_read_manifest)
+        monkeypatch.setattr(reader, "read_manifest_with_bytes", counting_read_manifest)
 
         with reader.open_artifact(
-            str(bundle_dir), role="inference", manifest=manifest
+            str(bundle_dir),
+            role="inference",
+            manifest=manifest,
+            manifest_bytes=manifest_bytes,
         ) as ra:
             assert ra.descriptor.name == "fp32"
         assert calls == 0, "passed manifest must skip re-reading from storage"
 
-    def test_s3_integrity_failure_cleans_temp_root(
+    def test_open_artifact_snapshot_does_not_resolve_alias_twice(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """S3 下载后完整性校验失败 → 临时根目录必须被清理，不泄漏。"""
+        bundle_dir, manifest_sha256, _ = _create_test_bundle(tmp_path)
+        reader = BundleReader()
+        manifest, manifest_bytes = reader.read_manifest_with_bytes(str(bundle_dir))
+        alias_path = bundle_dir.parent / "aliases" / "latest.json"
+        alias_path.parent.mkdir()
+        alias_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "bundle_id": manifest.bundle_id,
+                    "manifest_sha256": manifest_sha256,
+                    "canonical_uri": str(bundle_dir),
+                    "manifest_uri": str(bundle_dir / "manifest.json"),
+                    "created_at": manifest.created_at.isoformat(),
+                }
+            )
+        )
+
+        monkeypatch.setattr(
+            reader._repository_router,
+            "resolve_alias",
+            lambda *args, **kwargs: pytest.fail("alias was resolved twice"),
+        )
+
+        with reader.open_artifact(
+            str(alias_path),
+            role="inference",
+            manifest=manifest,
+            manifest_bytes=manifest_bytes,
+        ) as resolved:
+            assert resolved.entrypoint_path.read_bytes() == b"onnx-model-content-123"
+
+    def test_local_manifest_and_alias_reject_oversize_before_full_read(
+        self, tmp_path: Path
+    ) -> None:
+        bundle_dir, _, _ = _create_test_bundle(tmp_path)
+        manifest_path = bundle_dir / "manifest.json"
+        manifest_limit = manifest_path.stat().st_size - 1
+        reader = BundleReader(
+            limits=ReaderResourceLimits(max_manifest_bytes=manifest_limit)
+        )
+        with pytest.raises(ValueError, match="Manifest size"):
+            reader.read_manifest(str(bundle_dir))
+
+        alias_path = bundle_dir.parent / "aliases" / "oversized.json"
+        alias_path.parent.mkdir(exist_ok=True)
+        alias_path.write_bytes(b"x" * (manifest_limit + 1))
+        with pytest.raises(ValueError, match="Alias size"):
+            reader.read_manifest(str(alias_path))
+
+    def test_open_artifact_requires_exact_bytes_with_passed_manifest(
+        self, tmp_path: Path
+    ) -> None:
+        bundle_dir, _, _ = _create_test_bundle(tmp_path)
+        reader = BundleReader()
+        manifest, manifest_bytes = reader.read_manifest_with_bytes(str(bundle_dir))
+
+        with pytest.raises(ValueError, match="provided together"):
+            with reader.open_artifact(
+                str(bundle_dir), role="inference", manifest=manifest
+            ):
+                pass
+
+        mismatched_manifest_bytes = manifest.model_copy(
+            update={"bundle_id": "different-bundle"}
+        ).canonical_json()
+        with pytest.raises(ValueError, match="does not match"):
+            with reader.open_artifact(
+                str(bundle_dir),
+                role="inference",
+                manifest=manifest,
+                manifest_bytes=mismatched_manifest_bytes,
+            ):
+                pass
+
+    def test_open_artifact_validates_passed_bytes_against_bundle_ref(
+        self, tmp_path: Path
+    ) -> None:
+        bundle_dir, manifest_sha256, _ = _create_test_bundle(tmp_path)
+        reader = BundleReader()
+        manifest, manifest_bytes = reader.read_manifest_with_bytes(str(bundle_dir))
+        ref = BundleRef(
+            canonical_uri=str(bundle_dir),
+            bundle_id=manifest.bundle_id,
+            manifest_sha256="f" * 64,
+        )
+        assert manifest_sha256 != ref.manifest_sha256
+
+        with pytest.raises(ValueError, match="Manifest digest mismatch"):
+            with reader.open_artifact(
+                ref,
+                role="inference",
+                manifest=manifest,
+                manifest_bytes=manifest_bytes,
+            ):
+                pass
+
+    def test_s3_integrity_failure_repairs_cache_atomically(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A corrupt shared cache is quarantined and rebuilt from S3."""
         import tempfile
+
+        from tributo.integrations.storage import bundle_repository as storage_bundle
 
         bundle_dir, _, _ = _create_test_bundle(tmp_path)
         reader = BundleReader(cache_dir=tmp_path / "cache")
 
-        # 模拟"已下载"的 S3 临时目录：内容与 manifest 声明不符 → 校验失败
-        context_root = Path(tempfile.mkdtemp(prefix="tributo-bundle-artifact-"))
-        (context_root / "artifact").mkdir()
-        (context_root / "artifact" / "model.onnx").write_bytes(b"tampered-content")
-
-        manifest = reader.read_manifest(str(bundle_dir))
+        manifest = reader.read_manifest(str(bundle_dir)).model_copy(
+            update={"canonical_uri": "s3://bucket/prefix/x"}
+        )
         cache_root = reader._cache_dir / manifest.artifacts[0].tree_digest
         cache_root.mkdir(parents=True)
         (cache_root / "model.onnx").write_bytes(b"tampered-cache")
-        monkeypatch.setattr(reader, "read_manifest", lambda *a, **k: manifest)
+
+        artifact = manifest.artifacts[0]
+
+        class _FakeS3:
+            def head_object(self, **kwargs: Any) -> dict[str, int]:
+                del kwargs
+                return {"ContentLength": artifact.files[0].size_bytes}
+
+            def download_file(self, bucket: str, key: str, filename: str) -> None:
+                del bucket, key
+                Path(filename).write_bytes(b"onnx-model-content-123")
+
         monkeypatch.setattr(
-            reader, "_download_artifact_s3", lambda *a, **k: context_root
+            storage_bundle,
+            "_s3_client_from_profile",
+            lambda *args, **kwargs: _FakeS3(),
         )
 
-        try:
-            with pytest.raises(ValueError, match="expected"):
-                with reader.open_artifact("s3://bucket/prefix/x", artifact_name="fp32"):
-                    pytest.fail("must not yield on verification failure")
-        finally:
-            assert not context_root.exists(), (
-                "S3 temp root must be removed when verification fails"
-            )
-            assert not cache_root.exists(), (
-                "A failed integrity check must invalidate the shared digest cache"
-            )
+        before = set(Path(tempfile.gettempdir()).glob("tributo-bundle-artifact-*"))
+        with reader.open_artifact(
+            "s3://bucket/prefix/x",
+            artifact_name="fp32",
+            manifest=manifest,
+            manifest_bytes=manifest.canonical_json(),
+        ) as resolved:
+            assert resolved.entrypoint_path.read_bytes() == b"onnx-model-content-123"
+        after = set(Path(tempfile.gettempdir()).glob("tributo-bundle-artifact-*"))
+        assert after == before, "S3 temp root must be removed after materialization"
+        assert (cache_root / "model.onnx").read_bytes() == b"onnx-model-content-123"
 
     def test_s3_copytree_failure_cleans_temp_root(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -235,7 +395,7 @@ class TestOpenArtifact:
         import shutil
         import tempfile
 
-        from tributo.exporting import bundle_reader as br
+        from tributo.integrations.storage import bundle_repository as storage_bundle
 
         bundle_dir, _, _ = _create_test_bundle(tmp_path)
         reader = BundleReader(cache_dir=tmp_path / "cache")
@@ -253,21 +413,127 @@ class TestOpenArtifact:
 
             def download_file(self, bucket: str, key: str, filename: str) -> None:
                 del bucket, key
-                Path(filename).write_bytes(b"payload")
+                Path(filename).write_bytes(b"onnx-model-content-123")
 
         def _fail_copytree(*args: Any, **kwargs: Any) -> None:
             del args, kwargs
             raise RuntimeError("copy failed")
 
         before = set(Path(tempfile.gettempdir()).glob("tributo-bundle-artifact-*"))
-        monkeypatch.setattr(br, "_s3_client", lambda *a, **k: _FakeS3())
+        monkeypatch.setattr(
+            storage_bundle, "_s3_client_from_profile", lambda *a, **k: _FakeS3()
+        )
         monkeypatch.setattr(shutil, "copytree", _fail_copytree)
 
         with pytest.raises(RuntimeError, match="copy failed"):
-            reader._download_artifact_s3(manifest, artifact, None)
+            repository = reader._repository_router.repository_for(
+                manifest.canonical_uri
+            )
+            with repository.materialize_artifact(
+                manifest.canonical_uri,
+                manifest,
+                artifact,
+                storage_profile=None,
+                limits=reader._limits,
+                cache_dir=reader._cache_dir,
+            ):
+                pytest.fail("must not yield when cache copy fails")
 
         after = set(Path(tempfile.gettempdir()).glob("tributo-bundle-artifact-*"))
         assert after == before, "temp root must be cleaned when copytree fails"
+
+    def test_s3_consumer_failure_preserves_verified_cache(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A caller exception must not be mistaken for shared-cache corruption."""
+        from tributo.integrations.storage import bundle_repository as storage_bundle
+
+        bundle_dir, _, _ = _create_test_bundle(tmp_path)
+        reader = BundleReader(cache_dir=tmp_path / "cache")
+        manifest = reader.read_manifest(str(bundle_dir)).model_copy(
+            update={"canonical_uri": "s3://bucket/prefix/x"}
+        )
+        artifact = manifest.artifacts[0]
+        cache_root = reader._cache_dir / artifact.tree_digest
+        cache_root.mkdir(parents=True)
+        (cache_root / "model.onnx").write_bytes(b"onnx-model-content-123")
+        monkeypatch.setattr(
+            storage_bundle,
+            "_s3_client_from_profile",
+            lambda *args, **kwargs: object(),
+        )
+
+        with pytest.raises(RuntimeError, match="consumer failed"):
+            with reader.open_artifact(
+                "s3://bucket/prefix/x",
+                artifact_name="fp32",
+                manifest=manifest,
+                manifest_bytes=manifest.canonical_json(),
+            ):
+                raise RuntimeError("consumer failed")
+
+        assert (cache_root / "model.onnx").read_bytes() == (b"onnx-model-content-123")
+
+    def test_s3_failed_download_does_not_poison_concurrent_reader(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One transient download failure cannot delete another reader's cache."""
+        from tributo.integrations.storage import bundle_repository as storage_bundle
+
+        bundle_dir, _, _ = _create_test_bundle(tmp_path)
+        reader = BundleReader(cache_dir=tmp_path / "cache")
+        manifest = reader.read_manifest(str(bundle_dir)).model_copy(
+            update={"canonical_uri": "s3://bucket/prefix/x"}
+        )
+        artifact = manifest.artifacts[0]
+        first_started = threading.Event()
+        release_first = threading.Event()
+        call_lock = threading.Lock()
+        download_calls = 0
+
+        class _FlakyS3:
+            def head_object(self, **kwargs: Any) -> dict[str, int]:
+                del kwargs
+                return {"ContentLength": artifact.files[0].size_bytes}
+
+            def download_file(self, bucket: str, key: str, filename: str) -> None:
+                nonlocal download_calls
+                del bucket, key
+                with call_lock:
+                    download_calls += 1
+                    call_number = download_calls
+                if call_number == 1:
+                    first_started.set()
+                    assert release_first.wait(timeout=2)
+                    raise RuntimeError("transient download failure")
+                Path(filename).write_bytes(b"onnx-model-content-123")
+
+        monkeypatch.setattr(
+            storage_bundle,
+            "_s3_client_from_profile",
+            lambda *args, **kwargs: _FlakyS3(),
+        )
+
+        def read_artifact() -> bytes:
+            with reader.open_artifact(
+                manifest.canonical_uri,
+                artifact_name="fp32",
+                manifest=manifest,
+                manifest_bytes=manifest.canonical_json(),
+            ) as resolved:
+                return resolved.entrypoint_path.read_bytes()
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            failed = executor.submit(read_artifact)
+            assert first_started.wait(timeout=2)
+            succeeded = executor.submit(read_artifact)
+            release_first.set()
+            with pytest.raises(RuntimeError, match="transient download failure"):
+                failed.result(timeout=2)
+            assert succeeded.result(timeout=2) == b"onnx-model-content-123"
+
+        cache_root = reader._cache_dir / artifact.tree_digest
+        assert (cache_root / "model.onnx").read_bytes() == b"onnx-model-content-123"
 
 
 class TestResourceLimits:
@@ -313,3 +579,37 @@ class TestRoundTrip:
             assert ra.descriptor.name == "fp32"
             assert ra.descriptor.format == "onnx"
             assert ra.entrypoint_path.read_bytes() == b"onnx-model-content-123"
+
+    def test_moved_local_bundle_uses_requested_location(self, tmp_path: Path) -> None:
+        bundle_dir, _, _ = _create_test_bundle(tmp_path)
+        moved_bundle = tmp_path / "restored" / bundle_dir.name
+        moved_bundle.parent.mkdir()
+        bundle_dir.rename(moved_bundle)
+
+        with BundleReader().open_artifact(
+            str(moved_bundle), role="inference"
+        ) as resolved:
+            assert resolved.entrypoint_path.read_bytes() == b"onnx-model-content-123"
+
+    def test_facade_does_not_repeat_adapter_digest_verification(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from tributo.integrations.storage import bundle_repository as storage_bundle
+
+        bundle_dir, _, _ = _create_test_bundle(tmp_path)
+        original_verify = storage_bundle.verify_materialized_artifact
+        calls = 0
+
+        def counting_verify(*args: Any, **kwargs: Any) -> None:
+            nonlocal calls
+            calls += 1
+            original_verify(*args, **kwargs)
+
+        monkeypatch.setattr(
+            storage_bundle, "verify_materialized_artifact", counting_verify
+        )
+
+        with BundleReader().open_artifact(str(bundle_dir), role="inference"):
+            pass
+
+        assert calls == 1

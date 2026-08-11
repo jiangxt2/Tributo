@@ -34,6 +34,7 @@ from tributo.exporting.models import (
     SupportResult,
     ValidatorBinding,
 )
+from tributo.exporting.publisher import Publisher
 from tributo.exporting.registries import (
     ExportRegistry,
     FlavorRegistry,
@@ -41,6 +42,7 @@ from tributo.exporting.registries import (
 )
 from tributo.exporting.runtime import BundleModel, BundleModelLoader
 from tributo.exporting.service import BundleExportService, bundle_id_for_request
+from tributo.exporting.validators import StructureValidator
 
 # ── Fake components ───────────────────────────────────────────────────────────
 
@@ -54,10 +56,11 @@ class _MinOpts(BaseModel):
 class _TestExporter:
     """Exporter that writes a simple model file."""
 
-    api_version: int = 1
+    api_version: int = 2
     exporter_id: str = "test-exporter-v1"
     priority: int = 100
     output_format: str = "onnx"
+    output_flavor_id: str = "onnx-runtime-v1"
     options_model: type[BaseModel] = _MinOpts  # type: ignore[assignment]
     validator_bindings: tuple[ValidatorBinding, ...] = ()
     mutates_source: bool = False
@@ -87,10 +90,11 @@ class _TestExporter:
 class _FailingExporter:
     """Required exporter whose export() always fails."""
 
-    api_version: int = 1
+    api_version: int = 2
     exporter_id: str = "failing-exporter-v1"
     priority: int = 100
     output_format: str = "onnx"
+    output_flavor_id: str = "onnx-runtime-v1"
     options_model: type[BaseModel] = _MinOpts
     validator_bindings: tuple[ValidatorBinding, ...] = ()
     mutates_source: bool = False
@@ -170,10 +174,63 @@ class _RecordingDispatcher:
         return bundle_result
 
 
+class _FailingOperationStore:
+    def record_execution(self, record: object) -> None:
+        del record
+        raise OSError("database unavailable")
+
+
 # ── Tests ────────────────────────────────────────────────────────────────────
 
 
 class TestBundleExportService:
+    def test_digest_failure_preserves_committed_bundle_fact(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        def fail_digest(*args: object, **kwargs: object) -> str:
+            del args, kwargs
+            raise ValueError("digest failed")
+
+        monkeypatch.setattr(
+            "tributo.exporting.manifest.compute_bundle_digest", fail_digest
+        )
+        er, vr = _make_registries()
+        service = BundleExportService(export_registry=er, validator_registry=vr)
+
+        with pytest.raises(PostPublishCallbackError) as exc_info:
+            service.export_bundle(
+                source=_make_source(),
+                config=_make_config(tmp_path),
+            )
+
+        result = exc_info.value.bundle_result
+        assert result.status == "succeeded"
+        assert result.canonical_uri
+        assert result.execution_id
+        assert Path(result.manifest_uri).is_file()
+        assert service.last_operation_event is None
+
+    def test_record_failure_preserves_committed_bundle_fact(
+        self, tmp_path: Path
+    ) -> None:
+        er, vr = _make_registries()
+        service = BundleExportService(
+            export_registry=er,
+            validator_registry=vr,
+            operation_store=_FailingOperationStore(),
+        )
+
+        with pytest.raises(PostPublishCallbackError) as exc_info:
+            service.export_bundle(
+                source=_make_source(),
+                config=_make_config(tmp_path),
+            )
+
+        result = exc_info.value.bundle_result
+        assert result.status == "succeeded"
+        assert Path(result.manifest_uri).is_file()
+        assert service.last_operation_event is None
+
     def test_empty_hook_config_does_not_resolve_plugins(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
@@ -210,7 +267,7 @@ class TestBundleExportService:
         assert len(dispatcher.events) == 2
         assert dispatcher.events[0] == dispatcher.events[1]
 
-    def test_dispatcher_reuses_the_service_verified_manifest(
+    def test_dispatcher_uses_repository_commit_bytes_without_reread(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         original_read = BundleReader.read_manifest_with_bytes
@@ -246,52 +303,20 @@ class TestBundleExportService:
             hook_dispatcher=dispatcher,
         ).export_bundle(source=_make_source(), config=config)
 
-        assert reads == 1
+        assert reads == 0
         assert len(dispatcher.manifests) == 1
 
-    def test_naive_committed_timestamp_is_interpreted_as_utc(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        original_read = BundleReader.read_manifest_with_bytes
-
-        def read_naive_timestamp(
-            reader: BundleReader,
-            manifest_or_bundle_uri: str,
-            *,
-            storage_profile: str | None = None,
-        ) -> tuple[ExportManifest, bytes]:
-            manifest, raw = original_read(
-                reader,
-                manifest_or_bundle_uri,
-                storage_profile=storage_profile,
-            )
-            return (
-                manifest.model_copy(
-                    update={"created_at": manifest.created_at.replace(tzinfo=None)}
-                ),
-                raw,
-            )
-
-        monkeypatch.setattr(
-            BundleReader, "read_manifest_with_bytes", read_naive_timestamp
-        )
-        er, vr = _make_registries()
-        dispatcher = _RecordingDispatcher()
-        config = _make_config(tmp_path).model_copy(
-            update={
-                "request_id": "legacy-naive-created-at",
-                "hooks": (HookBinding(hook_id="test-hook-v1"),),
-            }
+    def test_naive_committed_timestamp_is_interpreted_as_utc(self) -> None:
+        event = OperationEvent.bundle_published(
+            manifest={
+                "bundle_id": "bundle-1",
+                "canonical_uri": "file:///bundle-1",
+                "created_at": "2025-01-01T00:00:00",
+                "source_info": {"source_kind": "pytorch_result"},
+            },
+            manifest_sha256="a" * 64,
         )
 
-        BundleExportService(
-            export_registry=er,
-            validator_registry=vr,
-            hook_dispatcher=dispatcher,
-        ).export_bundle(source=_make_source(), config=config)
-
-        event = dispatcher.events[0]
-        assert isinstance(event, OperationEvent)
         assert event.occurred_at.tzinfo is timezone.utc
 
     def test_hook_preflight_failure_happens_before_staging(
@@ -313,6 +338,18 @@ class TestBundleExportService:
         with pytest.raises(JobConfigurationError, match="invalid hook"):
             service.export_bundle(source=_make_source(), config=config)
         assert not (tmp_path / "bundles").exists()
+
+    def test_preserves_pre_registered_builtin_validator(self) -> None:
+        exporters = ExportRegistry()
+        validators = ValidatorRegistry()
+        validators.register(StructureValidator)
+
+        BundleExportService(
+            export_registry=exporters,
+            validator_registry=validators,
+        )
+
+        assert validators.get(StructureValidator.validator_id) is StructureValidator
 
     def test_run_id_is_stable_bundle_identity(self, tmp_path: Path) -> None:
         config = _make_config(tmp_path).model_copy(update={"run_id": "run-42"})
@@ -398,24 +435,16 @@ class TestBundleExportService:
     def test_manifest_integrity_failure_precedes_hook_receipts(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        original_read = BundleReader.read_manifest_with_bytes
+        original_publish = Publisher.publish
 
-        def read_with_changed_bytes(
-            reader: BundleReader,
-            manifest_or_bundle_uri: str,
-            *,
-            storage_profile: str | None = None,
-        ) -> tuple[ExportManifest, bytes]:
-            manifest, raw = original_read(
-                reader,
-                manifest_or_bundle_uri,
-                storage_profile=storage_profile,
-            )
-            return manifest, raw + b" "
+        def publish_with_changed_bytes(
+            publisher: Publisher, *args: object, **kwargs: object
+        ) -> PublishedBundle:
+            published = original_publish(publisher, *args, **kwargs)
+            published.manifest_bytes += b" "
+            return published
 
-        monkeypatch.setattr(
-            BundleReader, "read_manifest_with_bytes", read_with_changed_bytes
-        )
+        monkeypatch.setattr(Publisher, "publish", publish_with_changed_bytes)
         er, vr = _make_registries()
         dispatcher = _RecordingDispatcher()
         config = _make_config(tmp_path).model_copy(
@@ -432,6 +461,54 @@ class TestBundleExportService:
         assert exc_info.value.bundle_result.status == "succeeded"
         assert exc_info.value.receipts == ()
         assert dispatcher.events == []
+
+    def test_commit_derives_operation_event_without_persisting_it(
+        self, tmp_path: Path
+    ) -> None:
+        er, vr = _make_registries()
+        service = BundleExportService(export_registry=er, validator_registry=vr)
+
+        result = service.export_bundle(
+            source=_make_source(),
+            config=_make_config(tmp_path).model_copy(
+                update={"request_id": "event-run-1"}
+            ),
+        )
+
+        event = service.last_operation_event
+        assert event is not None
+        assert event.event_kind == "bundle.published"
+        assert event.bundle_id == result.bundle_id
+        assert event.canonical_uri.endswith(result.bundle_id)
+        assert event.manifest_sha256 == result.manifest_sha256
+        assert event.correlation_ids["request_id"] == "event-run-1"
+
+    def test_post_commit_uses_repository_manifest_bytes_without_reread(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Event derivation consumes the bytes that won the repository commit."""
+        from tributo.exporting.bundle_reader import BundleReader
+
+        def reject_reread(*args: object, **kwargs: object) -> None:
+            del args, kwargs
+            raise AssertionError("post-commit manifest must not be fetched again")
+
+        monkeypatch.setattr(BundleReader, "read_manifest", reject_reread)
+        monkeypatch.setattr(BundleReader, "read_manifest_with_bytes", reject_reread)
+        captured: list[PublishedBundle] = []
+        er, vr = _make_registries()
+        service = BundleExportService(export_registry=er, validator_registry=vr)
+
+        result = service.export_bundle(
+            source=_make_source(),
+            config=_make_config(tmp_path),
+            callback=captured.append,
+        )
+
+        assert len(captured) == 1
+        committed_bytes = Path(result.manifest_uri).read_bytes()
+        assert captured[0].manifest_bytes == committed_bytes
+        assert service.last_operation_event is not None
 
     def test_pre_e2_export_is_rejected_by_default_serving_gate(
         self, tmp_path: Path

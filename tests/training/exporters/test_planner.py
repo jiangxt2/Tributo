@@ -38,10 +38,11 @@ class _QuantizerOpts(BaseModel):
 
 
 class _ExporterONNX:
-    api_version: ClassVar[int] = 1
+    api_version: ClassVar[int] = 2
     exporter_id: ClassVar[str] = "torch-onnx-v1"
     priority: ClassVar[int] = 100
     output_format: ClassVar[str] = "onnx"
+    output_flavor_id: ClassVar[str] = "onnx-runtime-v1"
     options_model: ClassVar[type[BaseModel]] = _MinOpts
     validator_bindings: ClassVar[tuple[ValidatorBinding, ...]] = ()
     mutates_source: ClassVar[bool] = False
@@ -56,10 +57,11 @@ class _ExporterONNX:
 
 
 class _ExporterXGBoost:
-    api_version: ClassVar[int] = 1
-    exporter_id: ClassVar[str] = "xgboost-native-v1"
+    api_version: ClassVar[int] = 2
+    exporter_id: ClassVar[str] = "xgboost-ubj-v1"
     priority: ClassVar[int] = 100
-    output_format: ClassVar[str] = "xgboost"
+    output_format: ClassVar[str] = "ubj"
+    output_flavor_id: ClassVar[str] = "xgboost-ubj-v1"
     options_model: ClassVar[type[BaseModel]] = _MinOpts
     validator_bindings: ClassVar[tuple[ValidatorBinding, ...]] = ()
     mutates_source: ClassVar[bool] = False
@@ -74,10 +76,11 @@ class _ExporterXGBoost:
 
 
 class _ExporterONNXQuantizer:
-    api_version: ClassVar[int] = 1
+    api_version: ClassVar[int] = 2
     exporter_id: ClassVar[str] = "onnx-quantizer-v1"
     priority: ClassVar[int] = 90
     output_format: ClassVar[str] = "onnx"
+    output_flavor_id: ClassVar[str] = "onnx-int8-v1"
     options_model: ClassVar[type[BaseModel]] = _QuantizerOpts
     validator_bindings: ClassVar[tuple[ValidatorBinding, ...]] = ()
     mutates_source: ClassVar[bool] = False
@@ -136,7 +139,7 @@ class TestPlanSimple:
         cfg = BundleOutputConfig(
             bundle_uri="/tmp/bundle",
             targets=[
-                ExportTarget(name="native", format="xgboost"),
+                ExportTarget(name="native", format="ubj"),
                 ExportTarget(name="onnx", format="onnx"),
             ],
         )
@@ -157,7 +160,7 @@ class TestCycleDetection:
             bundle_uri="/tmp/bundle",
             targets=[
                 ExportTarget(name="a", format="onnx", depends_on=("b",)),
-                ExportTarget(name="b", format="xgboost", depends_on=("a",)),
+                ExportTarget(name="b", format="ubj", depends_on=("a",)),
             ],
         )
         with pytest.raises(JobConfigurationError, match="Cycle detected"):
@@ -180,7 +183,7 @@ class TestDependencyOrdering:
             bundle_uri="/tmp/bundle",
             targets=[
                 ExportTarget(name="step2", format="onnx", depends_on=("step1",)),
-                ExportTarget(name="step1", format="xgboost"),
+                ExportTarget(name="step1", format="ubj"),
             ],
         )
         plan = planner.plan(cfg, _make_source())
@@ -196,7 +199,7 @@ class TestDependencyOrdering:
             bundle_uri="/tmp/bundle",
             targets=[
                 ExportTarget(name="left", format="onnx"),
-                ExportTarget(name="right", format="xgboost"),
+                ExportTarget(name="right", format="ubj"),
                 ExportTarget(name="sink", format="onnx", depends_on=("left", "right")),
             ],
         )
@@ -214,7 +217,7 @@ class TestNoCandidate:
         planner = _make_planner()
         cfg = BundleOutputConfig(
             bundle_uri="/tmp/bundle",
-            targets=[ExportTarget(name="a", format="unknown_fmt")],
+            targets=[ExportTarget(name="a", format="unknown-format")],
         )
         with pytest.raises(JobConfigurationError, match="No candidates"):
             planner.plan(cfg, _make_source())

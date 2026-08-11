@@ -10,10 +10,12 @@ GC protection.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import uuid
 from collections.abc import Generator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -81,10 +83,15 @@ def s3_bucket(monkeypatch: pytest.MonkeyPatch) -> Generator[str, None, None]:
         client.delete_bucket(Bucket=bucket)
 
 
-def _logical_artifact(name: str = "fp32") -> LogicalArtifact:
+def _logical_artifact(
+    name: str = "fp32", payload: bytes = b"x" * 64
+) -> LogicalArtifact:
     files = (
         ArtifactFile(
-            relative_path="model.onnx", sha256="a" * 64, size_bytes=64, role="model"
+            relative_path="model.onnx",
+            sha256=hashlib.sha256(payload).hexdigest(),
+            size_bytes=len(payload),
+            role="model",
         ),
     )
     return LogicalArtifact(
@@ -105,14 +112,15 @@ def _publish(
     bundle_id: str | None = None,
     execution_id: str = "exec-1",
     alias: AliasConfig | None = None,
+    payload: bytes = b"x" * 64,
 ) -> Any:
     """Publish one artifact to ``s3://<bucket>/models`` via the real Publisher."""
-    artifact = _logical_artifact()
+    artifact = _logical_artifact(payload=payload)
     staging = tmp_path / f"staging-{uuid.uuid4().hex[:8]}"
     for af in artifact.files:
         fp = staging / "nodes" / artifact.name / "artifact" / af.relative_path
         fp.parent.mkdir(parents=True)
-        fp.write_bytes(b"x" * af.size_bytes)
+        fp.write_bytes(payload)
     ref = ArtifactRef(
         node_id="fp32",
         artifact_name="fp32",
@@ -202,6 +210,21 @@ class TestS3Publish:
         ]
         assert len(manifests) == 1
 
+    def test_idempotent_retry_rejects_missing_committed_artifact(
+        self, s3_bucket: str, tmp_path: Path
+    ) -> None:
+        """A surviving manifest must not hide loss of a committed object."""
+        bundle_id = f"bundle-{uuid.uuid4().hex[:32]}"
+        _publish(s3_bucket, tmp_path, bundle_id=bundle_id)
+        client = get_boto3_client(path_style=True)
+        client.delete_object(
+            Bucket=s3_bucket,
+            Key=f"models/{bundle_id}/artifacts/fp32/model.onnx",
+        )
+
+        with pytest.raises(RuntimeError, match="is missing"):
+            _publish(s3_bucket, tmp_path, bundle_id=bundle_id)
+
     def test_alias_cas_flow(self, s3_bucket: str, tmp_path: Path) -> None:
         """CAS: create-only, then digest-guarded update, then mismatch."""
         # 1. Create-only CAS (expected_sha None) on a fresh alias.
@@ -229,6 +252,85 @@ class TestS3Publish:
         assert third.result.alias_status == "failed"
         assert third.result.alias_failure is not None
         assert third.result.alias_failure.code == "CAS_MISMATCH"
+
+    def test_alias_v1_read_and_artifact_materialization(
+        self, s3_bucket: str, tmp_path: Path
+    ) -> None:
+        """A stored alias resolves to exact manifest bytes and a verified artifact."""
+        payload = b"verified-s3-artifact"
+        published = _publish(
+            s3_bucket,
+            tmp_path,
+            alias=AliasConfig(name="production", policy="newer"),
+            payload=payload,
+        )
+        assert published.result.alias_uri is not None
+
+        reader = BundleReader(cache_dir=tmp_path / "cache")
+        manifest, manifest_bytes = reader.read_manifest_with_bytes(
+            published.result.alias_uri, storage_profile="test"
+        )
+        assert manifest.bundle_id == published.result.bundle_id
+        with reader.open_artifact(
+            published.result.alias_uri,
+            artifact_name="fp32",
+            storage_profile="test",
+            manifest=manifest,
+            manifest_bytes=manifest_bytes,
+        ) as artifact:
+            assert artifact.entrypoint_path.read_bytes() == payload
+
+    def test_same_bundle_id_with_different_content_conflicts(
+        self, s3_bucket: str, tmp_path: Path
+    ) -> None:
+        """Immutable identity rejects a retry whose artifact bytes changed."""
+        bundle_id = f"bundle-{uuid.uuid4().hex[:32]}"
+        _publish(s3_bucket, tmp_path, bundle_id=bundle_id, payload=b"first")
+
+        with pytest.raises(RuntimeError, match="differs"):
+            _publish(s3_bucket, tmp_path, bundle_id=bundle_id, payload=b"second")
+
+    def test_concurrent_identical_publish_is_idempotent(
+        self, s3_bucket: str, tmp_path: Path
+    ) -> None:
+        """Concurrent commits of one stable identity converge on one manifest."""
+        bundle_id = f"bundle-{uuid.uuid4().hex[:32]}"
+
+        def publish_once(_: int) -> Any:
+            return _publish(s3_bucket, tmp_path, bundle_id=bundle_id)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(publish_once, range(2)))
+
+        assert results[0].result.manifest_sha256 == results[1].result.manifest_sha256
+
+    def test_manifest_failure_cleans_objects_created_by_attempt(
+        self,
+        s3_bucket: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A pre-commit failure leaves neither manifest nor attempt-owned files."""
+        from tributo.integrations.storage import bundle_repository as storage_bundle
+
+        bundle_id = f"bundle-{uuid.uuid4().hex[:32]}"
+        original_put = storage_bundle._s3_put_bytes
+
+        def fail_manifest(*args: Any, **kwargs: Any) -> Any:
+            key = kwargs.get("key", args[2] if len(args) > 2 else "")
+            if str(key).endswith("manifest.json"):
+                raise RuntimeError("injected manifest failure")
+            return original_put(*args, **kwargs)
+
+        monkeypatch.setattr(storage_bundle, "_s3_put_bytes", fail_manifest)
+        with pytest.raises(RuntimeError, match="injected manifest failure"):
+            _publish(s3_bucket, tmp_path, bundle_id=bundle_id)
+
+        client = get_boto3_client(path_style=True)
+        response = client.list_objects_v2(
+            Bucket=s3_bucket, Prefix=f"models/{bundle_id}/"
+        )
+        assert response.get("KeyCount", 0) == 0
 
 
 class TestS3GarbageCollection:

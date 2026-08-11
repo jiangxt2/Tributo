@@ -125,6 +125,7 @@ def _materialize_artifact(
         tree_digest=tree_digest,
         producer=draft.producer,
         derived_from=draft.derived_from,
+        artifact_kind=draft.artifact_kind,
     )
 
 
@@ -219,6 +220,7 @@ class ExportManager:
 
             execution_started = True
             start_ms = int(time.time() * 1000)
+            failure_category = "export"
 
             try:
                 # -- Setup staging --
@@ -241,6 +243,28 @@ class ExportManager:
 
                 # -- Run export --
                 draft = exporter.export(context, source, upstream, node)
+                if draft.name != node_id:
+                    raise SessionFatalError(
+                        f"Exporter {draft.producer.exporter_id!r} returned "
+                        f"artifact name {draft.name!r}; expected node name "
+                        f"{node_id!r}"
+                    )
+                if draft.format != node.target.format:
+                    raise SessionFatalError(
+                        f"Exporter {node.exporter_id!r} returned format "
+                        f"{draft.format!r}; expected {node.target.format!r}"
+                    )
+                if draft.flavor_id != exporter_cls.output_flavor_id:
+                    raise SessionFatalError(
+                        f"Exporter {node.exporter_id!r} returned flavor "
+                        f"{draft.flavor_id!r}; expected "
+                        f"{exporter_cls.output_flavor_id!r}"
+                    )
+                if draft.producer.exporter_id != node.exporter_id:
+                    raise SessionFatalError(
+                        f"Exporter {node.exporter_id!r} returned producer "
+                        f"{draft.producer.exporter_id!r}"
+                    )
 
                 # -- Stamp lineage: derived_from references the upstream
                 # artifacts actually consumed (resolved by dependency name).
@@ -271,6 +295,7 @@ class ExportManager:
                 resolved_artifacts[node_id] = ra
 
                 # -- Validator chain --
+                failure_category = "validation"
                 validation_results: list[ValidationResult] = []
                 for vb in node.validator_bindings:
                     try:
@@ -299,6 +324,7 @@ class ExportManager:
                             raise
 
                 # Attach validation results to artifact.
+                failure_category = "export"
                 validated = LogicalArtifact(
                     name=artifact.name,
                     format=artifact.format,
@@ -310,6 +336,7 @@ class ExportManager:
                     producer=artifact.producer,
                     derived_from=artifact.derived_from,
                     validation=tuple(validation_results),
+                    artifact_kind=artifact.artifact_kind,
                 )
                 # Replace ra with a new ResolvedArtifact holding the validated descriptor.
                 ra = ResolvedArtifact(validated, artifact_dir)
@@ -340,7 +367,7 @@ class ExportManager:
 
                 failure = FailureInfo(
                     code=type(exc).__name__,
-                    category="export",
+                    category=failure_category,
                     message=sanitize_error_message(str(exc))[:4096],
                     retryable=False,
                 )

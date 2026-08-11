@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -16,6 +17,7 @@ from tributo.training.xgboost_trainer import (
     TrainingParams,
     XGBoostDataConfig,
     XGBoostTrainingConfig,
+    _managed_resume_checkpoint,
     _merge_xgb_eval_results,
     _populate_xgb_eval_metrics,
 )
@@ -46,6 +48,22 @@ class TestParseS3Url:
     def test_empty_string_raises(self):
         with pytest.raises(ValueError, match="Invalid S3 URL"):
             parse_s3_url("")
+
+
+def test_managed_resume_checkpoint_cleans_directory_on_failure(tmp_path: Path) -> None:
+    checkpoint_dir = tmp_path / "resume-checkpoint"
+    checkpoint_dir.mkdir()
+    (checkpoint_dir / "model.json").write_text("model")
+    checkpoint = object()
+
+    with pytest.raises(OSError, match="report failed"):
+        with _managed_resume_checkpoint(
+            (checkpoint, "resume-1", checkpoint_dir)
+        ) as managed:
+            assert managed == (checkpoint, "resume-1")
+            raise OSError("report failed")
+
+    assert not checkpoint_dir.exists()
 
 
 class TestS3Config:
@@ -332,6 +350,20 @@ class TestXGBoostTrainingConfig:
         assert cfg.training.early_stopping_rounds == 10
         assert cfg.ray.use_gpu is True
         assert cfg.output.onnx_opset == 15
+
+    def test_bundle_destination_is_distinct_from_legacy_onnx_path(self):
+        from pydantic import ValidationError
+
+        from tributo.training.xgboost_trainer import OutputConfig
+
+        with pytest.raises(ValidationError, match="cannot be combined"):
+            OutputConfig(
+                bundle_uri="s3://bucket/xgboost-bundles",
+                onnx_path="model.onnx",
+            )
+
+        output = OutputConfig(bundle_uri="s3://bucket/xgboost-bundles")
+        assert output.bundle_uri == "s3://bucket/xgboost-bundles"
 
     def test_model_validate_from_dict(self):
         """model_validate 应接受原始字典（模拟 YAML 解析结果）。"""

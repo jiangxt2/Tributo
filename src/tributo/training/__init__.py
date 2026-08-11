@@ -25,6 +25,12 @@ from tributo.training.base import BaseTrainer, TrainerSpec
 from tributo.training.graph_trainer import BaseGraphTrainer
 from tributo.training.onnx_exporter import export_to_onnx
 from tributo.training.priors import estimate_class_prior
+from tributo.training.results import (
+    BundleStatus,
+    TrainingHookStatus,
+    TrainingResult,
+    TrainingStatus,
+)
 from tributo.training.tune_config import TuneSearchConfig
 from tributo.training.tune_space import (
     SearchSpaceSpec,
@@ -134,6 +140,10 @@ def __getattr__(name: str) -> Any:
 
 
 __all__ = [
+    "BundleStatus",
+    "TrainingHookStatus",
+    "TrainingResult",
+    "TrainingStatus",
     "AlgorithmSpec",
     "AlgorithmStatus",
     "BaseTrainer",

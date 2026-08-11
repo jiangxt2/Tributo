@@ -15,7 +15,7 @@ Usage::
             return ExportSource(source_kind="my_kind", model_object=...)
 
         def make_target(self):
-            return ExportTarget(name="test", format="my_format")
+            return ExportTarget(name="test", format="my-format")
 
         def make_context(self, tmp_path):
             return ExportContext(
@@ -58,13 +58,26 @@ class ExporterConformanceTest:
     - Protocol conformance (all required ClassVars present).
     - ``supports()`` returns correct results for valid/invalid sources.
     - ``export()`` produces a valid ``ArtifactDraft`` with existing files.
-    - ``mutates_source`` behaviour is consistent.
+    - ``mutates_source`` is declared explicitly. Framework-specific suites
+      remain responsible for proving that temporary mutations are restored.
     """
 
     exporter_cls: type[Any]
     make_source: Any
     make_target: Any
     make_context: Any
+
+    def make_support_request(self, source: ExportSource) -> SupportRequest:
+        """Build the matching support request; transforms may override it."""
+        return SupportRequest(
+            source_kind=source.source_kind,
+            source_metadata=source.metadata,
+        )
+
+    def make_upstream(self, tmp_path: Path) -> dict[str, Any]:
+        """Build upstream artifacts; root exporters use none."""
+        del tmp_path
+        return {}
 
     def test_classvar_declaration(self) -> None:
         """Verify all required ClassVars are present."""
@@ -73,6 +86,7 @@ class ExporterConformanceTest:
             "exporter_id",
             "priority",
             "output_format",
+            "output_flavor_id",
             "options_model",
             "validator_bindings",
             "mutates_source",
@@ -84,8 +98,8 @@ class ExporterConformanceTest:
             )
 
     def test_api_version(self) -> None:
-        """Verify api_version == 1."""
-        assert self.exporter_cls.api_version == 1
+        """Verify api_version == 2."""
+        assert self.exporter_cls.api_version == 2
 
     def test_exporter_id_format(self) -> None:
         """Verify exporter_id is a non-empty string."""
@@ -98,9 +112,16 @@ class ExporterConformanceTest:
         assert isinstance(self.exporter_cls.priority, int)
 
     def test_output_format_is_str(self) -> None:
-        """Verify output_format is a non-empty string."""
+        """Verify output_format is a canonical open format id."""
+        from tributo.exporting.formats import validate_format_id
+
         fmt = self.exporter_cls.output_format
-        assert isinstance(fmt, str) and fmt
+        assert validate_format_id(fmt) == fmt
+
+    def test_output_flavor_id_is_str(self) -> None:
+        """Verify output_flavor_id is a non-empty string."""
+        flavor_id = self.exporter_cls.output_flavor_id
+        assert isinstance(flavor_id, str) and flavor_id
 
     def test_options_model_is_pydantic(self) -> None:
         """Verify options_model is a pydantic BaseModel subclass."""
@@ -120,13 +141,14 @@ class ExporterConformanceTest:
         reqs = self.exporter_cls.upstream_requirements
         assert isinstance(reqs, tuple)
 
+    def test_mutates_source_is_bool(self) -> None:
+        """Verify the planner mutation declaration is unambiguous."""
+        assert isinstance(self.exporter_cls.mutates_source, bool)
+
     def test_supports_with_matching_source(self) -> None:
         """supports() returns supported=True for matching source_kind."""
         source = self.make_source()
-        request = SupportRequest(
-            source_kind=source.source_kind,
-            source_metadata=source.metadata,
-        )
+        request = self.make_support_request(source)
         result = self.exporter_cls.supports(request)
         assert result.supported, (
             f"supports() returned False for matching source: [{result.code}] {result.reason}"
@@ -150,18 +172,22 @@ class ExporterConformanceTest:
             pt = PlannedTarget(
                 target=target,
                 exporter_id=self.exporter_cls.exporter_id,
-                typed_options=self.exporter_cls.options_model().model_dump(),
+                typed_options=self.exporter_cls.options_model.model_validate(
+                    target.options
+                ).model_dump(),
                 validator_bindings=(),
                 implicit=False,
                 publish=True,
             )
 
             exporter = self.exporter_cls()
-            draft = exporter.export(context, source, {}, pt)
+            draft = exporter.export(context, source, self.make_upstream(tmp_path), pt)
 
             # Verify draft structure.
             assert draft.name == target.name
             assert draft.format == self.exporter_cls.output_format
+            assert draft.flavor_id == self.exporter_cls.output_flavor_id
+            assert draft.producer.exporter_id == self.exporter_cls.exporter_id
             assert len(draft.files) > 0
 
             # Verify all declared files exist.
@@ -231,12 +257,14 @@ class ValidatorConformanceTest:
     Subclasses must provide:
     - ``validator_cls``: The validator class under test.
     - ``make_source()``: Return an ExportSource.
-    - ``make_artifact()``: Return a ResolvedArtifact (valid).
+    - ``make_artifact(tmp_path)``: Return a valid ResolvedArtifact.
+    - ``make_invalid_artifact(tmp_path)``: Return an invalid ResolvedArtifact.
     """
 
     validator_cls: type[Any]
     make_source: Any
     make_artifact: Any
+    make_invalid_artifact: Any
 
     def test_classvar_declaration(self) -> None:
         """Verify all required ClassVars are present."""
@@ -248,15 +276,33 @@ class ValidatorConformanceTest:
         """Verify api_version == 1."""
         assert self.validator_cls.api_version == 1
 
-    def test_validate_returns_result(self) -> None:
-        """validate() returns a ValidationResult."""
+    def test_validate_accepts_valid_artifact(self, tmp_path: Path) -> None:
+        """A validator must pass the valid artifact supplied by the fixture."""
         validator = self.validator_cls()
         source = self.make_source()
-        artifact = self.make_artifact()
+        artifact = self.make_artifact(tmp_path / "valid")
         opts = self.validator_cls.options_model()
 
         from tributo.exporting.models import ValidationResult
 
         result = validator.validate(source, artifact, {}, opts)
         assert isinstance(result, ValidationResult)
-        assert result.status in ("passed", "failed", "advisory_failed")
+        assert result.status == "passed", (
+            "Validator rejected the conformance fixture's valid artifact: "
+            f"{result.failure}"
+        )
+
+    def test_validate_rejects_invalid_artifact(self, tmp_path: Path) -> None:
+        """A validator must fail the invalid artifact supplied by the fixture."""
+        validator = self.validator_cls()
+        source = self.make_source()
+        artifact = self.make_invalid_artifact(tmp_path / "invalid")
+        opts = self.validator_cls.options_model()
+
+        from tributo.exporting.models import ValidationResult
+
+        result = validator.validate(source, artifact, {}, opts)
+        assert isinstance(result, ValidationResult)
+        assert result.status == "failed", (
+            "Validator accepted the conformance fixture's invalid artifact"
+        )

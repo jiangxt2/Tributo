@@ -53,6 +53,35 @@ MERGE_CONFLICT_MARKER_PATTERN = re.compile(
     r"^(<<<<<<<|=======|>>>>>>>)(?:[ \t].*)?\r?$", re.MULTILINE
 )
 
+PUBLIC_ENV_CONTRACTS: dict[str, frozenset[str]] = {
+    "tests/integrations/component-versions.env": frozenset(
+        {
+            "PYTHON_VERSION",
+            "RAY_VERSION",
+            "RAY_IMAGE",
+            "UV_VERSION",
+            "UV_IMAGE",
+            "TOOL_IMAGE",
+            "MINIO_RELEASE",
+            "MINIO_IMAGE",
+            "POSTGRES_VERSION",
+            "POSTGRES_IMAGE",
+            "MLFLOW_VERSION",
+            "BOTO3_VERSION",
+            "BOTOCORE_VERSION",
+            "XGBOOST_VERSION",
+            "ONNX_VERSION",
+            "ONNXRUNTIME_VERSION",
+            "ONNXMLTOOLS_VERSION",
+            "TORCH_VERSION",
+            "TRANSFORMERS_VERSION",
+            "PYARROW_VERSION",
+            "PANDAS_VERSION",
+        }
+    )
+}
+PUBLIC_ENV_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$")
+
 # =============================================================================
 # Utilities
 # =============================================================================
@@ -864,6 +893,8 @@ def check_hygiene(root: str, changed_files: list[str]) -> list[str]:
     for f in changed_files:
         for pattern, desc in SUSPICIOUS:
             if re.search(pattern, f):
+                if _is_safe_public_env_contract(root, f):
+                    continue
                 issues.append(
                     f"FAIL: Suspicious file ({desc}) should not be committed: {f}"
                 )
@@ -890,6 +921,34 @@ def check_hygiene(root: str, changed_files: list[str]) -> list[str]:
             issues.append(f"WARN: Large file ({size / 1_000_000:.1f}MB): {f}")
 
     return issues
+
+
+def _is_safe_public_env_contract(root: str, relative_path: str) -> bool:
+    """Return whether a checked-in env contract contains only public pins."""
+    expected_keys = PUBLIC_ENV_CONTRACTS.get(relative_path)
+    if expected_keys is None:
+        return False
+
+    full_path = os.path.join(root, relative_path)
+    if not os.path.isfile(full_path):
+        return False
+
+    observed_keys: set[str] = set()
+    for raw_line in read_file(full_path).splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, separator, value = line.partition("=")
+        if (
+            separator != "="
+            or key not in expected_keys
+            or key in observed_keys
+            or PUBLIC_ENV_VALUE_PATTERN.fullmatch(value) is None
+        ):
+            return False
+        observed_keys.add(key)
+
+    return observed_keys == expected_keys
 
 
 # =============================================================================

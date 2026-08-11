@@ -1,7 +1,7 @@
 # API Stability Inventory
 
 Canonical stability classification for every Tributo module.
-Last updated: 2026-08-09.
+Last updated: 2026-08-11.
 
 ## Stability Levels
 
@@ -25,9 +25,10 @@ Last updated: 2026-08-09.
 | `tributo.job` — `TributoClient`, `RayJob` | `stable` | Primary user-facing API |
 | `tributo.exceptions` — core exceptions | `stable` | ``TributoError`` and 16 common subtypes |
 | `tributo.exceptions` — `ResultMaterializationError` | `alpha` | Credential-safe lazy inference action failure |
-| `tributo.exceptions` — Bundle/Plugin exceptions | `beta` | ``BundleExportError``, ``AliasConflict``, ``UnsupportedArtifactFormat``, ``PostPublishCallbackError``, ``PluginLoadIssue`` |
+| `tributo.exceptions` — Bundle/Plugin exceptions | `beta` | ``BundleExportError``, ``BundleCommitBusyError``, ``AliasConflict``, ``UnsupportedArtifactFormat``, ``PostPublishCallbackError``, ``PluginLoadIssue`` |
 | `tributo.exceptions` — Streaming exceptions | `beta` | ``StreamSourceError``, ``KafkaCommitError``, ``KafkaPoisonMessageError`` |
 | `tributo.exceptions` — `EngineNotAvailableError` | `alpha` | Candidate bounded-ingestion error |
+| `tributo.cli` | `beta` | Command-line interface |
 
 ### Training (tributo.training.*)
 
@@ -39,7 +40,8 @@ from the legacy setup-only propagation rule.
 | Module | Level | Notes |
 |--------|-------|-------|
 | `tributo.training.config` — `TrainingConfig` | `beta` | Unified training config |
-| `tributo.training.base` — `BaseTrainer`, `TrainerSpec` | `beta` | Trainer contract |
+| `tributo.training.base` — `BaseTrainer`, `TrainerSpec` | `beta` | First-party trainers default to an explicit-destination Bundle; raw artifacts require `legacy_export=True` |
+| `tributo.training.results` — `TrainingResult` and status enums | `beta` | Closed training, Bundle, Hook, URI, and execution identity result contract |
 | `tributo.training.checkpoint` | `beta` | Resume checkpoint contract |
 | `tributo.training.xgboost_trainer` | `beta` | Most mature Trainer |
 | `tributo.training.dnn_trainer` | `beta` | DNN Trainer |
@@ -59,6 +61,10 @@ from the legacy setup-only propagation rule.
 | `tributo.training.registry` | `beta` | Trainer registration API |
 | `tributo.training.job_submitter` | `beta` | Job submission helpers |
 | `tributo.training.local_runner` | `beta` | Local training runner |
+| `tributo.training.features` | `beta` | Feature declarations and transformations |
+| `tributo.training.losses` | `beta` | Training loss implementations |
+| `tributo.training.models` | `beta` | First-party model definitions |
+| `tributo.training.exporters.artifact_protocol` | `deprecated` | Legacy artifact protocol compatibility |
 
 ### Portable algorithm execution (tributo.algorithms.*)
 
@@ -93,40 +99,52 @@ from the legacy setup-only propagation rule.
 | `tributo.data.iceberg` | `beta` | Compatibility adapter; read delegates Gateway |
 | `tributo.data.parquet` | `alpha` | Compatibility adapter; read delegates Gateway |
 | `tributo.data.csv` | `beta` | Compatibility adapter; read delegates Gateway |
+| `tributo.data.provider_registry` | `beta` | Data source provider registry |
+| `tributo.data.refs` | `beta` | Data reference value objects |
 
 ### Exporting / Bundle (tributo.exporting.*)
 
 | Module | Level | Notes |
 |--------|-------|-------|
 | `tributo.exporting.service` — `BundleExportService` | `beta` | Primary export orchestration |
-| `tributo.exporting.models` — all public models | `beta` | Configuration and artifact models |
+| `tributo.exporting.models` — all public models | `beta` | Configuration, artifact, canonical Bundle reference, and exact publication result models |
 | `tributo.exporting.protocols` — all protocols | `beta` | Exporter/Validator/SourceProvider contracts |
 | `tributo.exporting.manifest` — `ExportManifest` | `beta` | Bundle manifest (schema v1) |
-| `tributo.exporting.bundle_reader` — `BundleReader` | `beta` | Bundle consumption |
+| `tributo.exporting.bundle_reader` — `BundleReader` | `beta` | Repository-routed Bundle consumption with exact manifest-byte and artifact verification |
 | `tributo.exporting.planner` | `beta` | Export plan builder |
 | `tributo.exporting.executor` | `beta` | Export executor |
 | `tributo.exporting.publisher` | `beta` | Bundle publisher |
 | `tributo.exporting.validators` | `beta` | Artifact validator runner |
 | `tributo.exporting.registries` | `beta` | Exporter/validator registries |
-| `tributo.exporting.options` | `beta` | Export option models |
+| `tributo.exporting.options` | `beta` | Compatibility re-exports; schemas are owned by integration exporters |
 | `tributo.exporting.records` | `beta` | Export record types; `PublicationAttempt` is read-only legacy compatibility and receives no new writes |
 | `tributo.exporting.gc` | `beta` | Bundle GC |
 | `tributo.exporting.events` | `beta` | Immutable publication event contract |
 | `tributo.exporting.hooks` | `beta` | Adapter and committed-artifact access contracts |
 | `tributo.exporting.dispatch` | `beta` | Inline Hook dispatch policy |
-| `tributo.exporting.conftest` | `developer` | Test fixtures |
+| `tributo.exporting.capabilities` | `beta` | Exporter/Flavor-derived capability declarations |
+| `tributo.exporting.repository` | `beta` | Bundle repository and alias store ports |
+| `tributo.exporting.runtime` | `beta` | Bundle model runtime and Flavor protocol |
+| `tributo.exporting.conftest` | `beta` | Public plugin conformance test kit |
 
 ### Integrations (tributo.integrations.*)
 
 | Module | Level | Notes |
 |--------|-------|-------|
 | `tributo.integrations.algorithm_inputs` | `alpha` | Production IngestionGateway bridge with invocation-scoped request refs and explicit Ray/Daft Worker adapters |
+| `tributo.integrations.algorithm_inputs.ingestion` | `alpha` | Ingestion input bridge |
 | `tributo.integrations.algorithm_runtimes.legacy_descriptors` | `developer` | Internal lightweight descriptors for the bounded Trainer compatibility bridge |
 | `tributo.integrations.algorithm_runtimes.legacy_trainer` | `developer` | Internal Worker-only execution adapter; not a native first-party runtime |
 | `tributo.integrations.exporters.*` | `beta` | Built-in exporter implementations |
+| `tributo.integrations.flavors` | `beta` | Built-in runtime flavor package |
+| `tributo.integrations.flavors.onnx_runtime` | `beta` | ONNX Runtime flavor implementation |
+| `tributo.integrations.validators` | `beta` | Built-in validator package |
 | `tributo.integrations.validators.*` | `beta` | Built-in validator implementations |
+| `tributo.integrations.sources` | `beta` | Built-in source provider package |
 | `tributo.integrations.sources.*` | `beta` | Built-in source providers |
+| `tributo.integrations.storage` | `beta` | Built-in storage adapter package |
 | `tributo.integrations.storage.*` | `beta` | Built-in storage backends |
+| `tributo.integrations.hooks` | `beta` | Built-in Hook package |
 | `tributo.integrations.hooks.*` | `beta` | Built-in hooks (MLflow etc.) |
 | `tributo.integrations.flavors.xgboost_native` | `alpha` | Safe native JSON/UBJ XGBoost runtime flavor |
 | `tributo.integrations.model_importers.*` | `alpha` | Canonical ModelImporter protocol/registry plus explicit MLflow and typed artifact-to-Bundle implementations |
@@ -162,6 +180,7 @@ from the legacy setup-only propagation rule.
 | `tributo.serving.composition` | `beta` | Composite model inference |
 | `tributo.serving.schema` | `beta` | Serving schema types |
 | `tributo.serving.proto.*` | `developer` | Generated protobuf code |
+| `tributo.serving.proto` | `developer` | Generated protobuf package |
 
 ### Embeddings (tributo.embeddings.*)
 
@@ -212,6 +231,7 @@ from the legacy setup-only propagation rule.
 |--------|-------|-------|
 | `tributo._common.storage_profiles` | `beta` | Storage profile resolution |
 | `tributo._common.dependencies` | `beta` | Unified dependency probing layer |
+| `tributo._common` | `developer` | Internal shared package |
 | All other `tributo._common.*` | `developer` | Internal shared utilities |
 
 ## Deprecation Schedule
@@ -220,6 +240,7 @@ from the legacy setup-only propagation rule.
 |---------|------------|-----------------|----------------|
 | `tributo.training.exporters.*` | `tributo.exporting.*` + `tributo.integrations.exporters.*` | v1.0.0 | ≥ 2 minor versions (E4) |
 | `tributo.training.onnx_exporter` | `tributo.exporting.service.BundleExportService` | v1.0.0 | ≥ 2 minor versions (E4) |
+| `BaseTrainer.run(..., legacy_export=True)` | Default Bundle publication with an explicit `BundleOutputConfig.bundle_uri` | v1.0.0 | ≥ 2 minor versions (E4); emits `DeprecationWarning` per invocation |
 | `tributo.exporting.protocols.SourceProvider` (name) | `ExportSourceProvider` (E1) | After E1 merge | 2 minor versions with DeprecationWarning |
 | Legacy flat data config | `CanonicalSourceInput` / `IngestionRequest` | v1.0.0 | Conversion-only adapter retained for its deprecation window; direct dispatch removed |
 | `TRIBUTO_DATA_BACKEND=legacy` | Default Provider/Gateway path | v1.0.0 | Selector is accepted with `FutureWarning` during the compatibility window; it no longer restores direct dispatch |

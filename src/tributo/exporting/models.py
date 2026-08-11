@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import warnings
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -23,6 +24,7 @@ from pydantic import (
     model_validator,
 )
 
+from tributo.exporting.formats import validate_format_id
 from tributo.util.annotations import DeveloperAPI, PublicAPI
 
 if TYPE_CHECKING:
@@ -138,19 +140,66 @@ class ExportTarget(BaseModel):
     options: dict[str, Any] = Field(default_factory=dict)
     validation: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalise_legacy_xgboost_target(cls, value: Any) -> Any:
+        """Map the former format-plus-option selector to one format id.
+
+        The compatibility rule runs before Planner candidate selection, so
+        every downstream component sees the same canonical contract.  An
+        explicitly selected third-party exporter is left untouched because
+        Tributo cannot reinterpret another plugin's private compatibility
+        surface.
+        """
+        if not isinstance(value, dict) or value.get("format") != "xgboost":
+            return value
+        exporter_id = value.get("exporter_id")
+        if exporter_id not in (None, "xgboost-native-v1"):
+            return value
+
+        options = dict(value.get("options") or {})
+        legacy_format = options.pop("fmt", "ubj")
+        replacements = {
+            "ubj": ("ubj", "xgboost-ubj-v1"),
+            "json": ("xgboost-json", "xgboost-json-v1"),
+        }
+        if not isinstance(legacy_format, str) or legacy_format not in replacements:
+            raise ValueError(
+                "legacy XGBoost target option 'fmt' must be 'ubj' or 'json'"
+            )
+
+        canonical_format, canonical_exporter = replacements[legacy_format]
+        normalised = dict(value)
+        normalised["format"] = canonical_format
+        normalised["exporter_id"] = canonical_exporter
+        normalised["options"] = options
+        warnings.warn(
+            "ExportTarget(format='xgboost', options={'fmt': ...}) is deprecated; "
+            f"use format={canonical_format!r} with no secondary format selector",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return normalised
+
     @field_validator("name")
     @classmethod
     def _check_name(cls, v: str) -> str:
         return _validate_safe_name(v, "target name")
+
+    @field_validator("format")
+    @classmethod
+    def _check_format(cls, v: str) -> str:
+        return validate_format_id(v)
 
 
 @PublicAPI(stability="beta")
 class BundleOutputConfig(BaseModel):
     """Top-level configuration for multi-format bundle export.
 
-    When ``targets`` is ``None`` the system operates in legacy single-path
-    mode.  When ``targets`` is non-empty the system operates in bundle mode
-    and ``bundle_uri`` is required.
+    First-party training lifecycles fill in their standard targets when
+    ``targets`` is ``None``. Direct ``BundleExportService`` callers must
+    provide targets explicitly. Whenever targets are present, ``bundle_uri``
+    is required.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -176,7 +225,9 @@ class BundleOutputConfig(BaseModel):
     roles: dict[str, str] = Field(default_factory=dict)
     hooks: tuple[HookBinding, ...] = ()
     targets: list[ExportTarget] | None = Field(
-        default=None, min_length=1, description="None = legacy mode"
+        default=None,
+        min_length=1,
+        description="None lets a first-party training lifecycle select defaults",
     )
 
     @model_validator(mode="after")
@@ -237,14 +288,15 @@ class BundleOutputConfig(BaseModel):
                 raise ValueError("s3:// URI must not contain credentials")
             if "?" in rest or "#" in rest:
                 raise ValueError("s3:// URI must not contain query or fragment")
-            return v
+            return v.rstrip("/")
         if v.startswith("file://"):
             path = v[7:]
             if not path or path == "/":
                 raise ValueError("file:// URI must not point to filesystem root")
             if not Path(v[7:]).is_absolute():
                 raise ValueError(f"file:// URI must be an absolute path, got {v!r}")
-            return v
+            resolved = Path(path).resolve()
+            return f"file://{resolved}"
         if v.startswith("/") or v.startswith("./") or v.startswith("../"):
             # Reject paths that resolve to filesystem root.
             from pathlib import Path as _Path
@@ -252,7 +304,7 @@ class BundleOutputConfig(BaseModel):
             resolved = _Path(v).resolve()
             if resolved == _Path("/"):
                 raise ValueError("bundle_uri must not point to filesystem root")
-            return v
+            return str(resolved)
         raise ValueError(
             f"bundle_uri must be s3://, file://, or a local path, got {v!r}"
         )
@@ -462,6 +514,11 @@ class ArtifactDraft(BaseModel):
     def _check_name(cls, v: str) -> str:
         return _validate_safe_name(v, "artifact name")
 
+    @field_validator("format")
+    @classmethod
+    def _check_format(cls, v: str) -> str:
+        return validate_format_id(v)
+
     @model_validator(mode="after")
     def _check_entrypoint(self) -> ArtifactDraft:
         paths = {f.relative_path for f in self.files}
@@ -498,6 +555,11 @@ class LogicalArtifact(BaseModel):
     @classmethod
     def _check_name(cls, v: str) -> str:
         return _validate_safe_name(v, "artifact name")
+
+    @field_validator("format")
+    @classmethod
+    def _check_format(cls, v: str) -> str:
+        return validate_format_id(v)
 
     @classmethod
     def compute_tree_digest(cls, files: tuple[ArtifactFile, ...]) -> str:
@@ -609,6 +671,7 @@ class BundleResult(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     bundle_id: str
+    execution_id: str | None = None
     canonical_uri: str
     manifest_uri: str
     manifest_sha256: str = Field(min_length=64, max_length=64)
@@ -651,10 +714,12 @@ class PublishedBundle:
     def __init__(
         self,
         result: BundleResult,
+        manifest_bytes: bytes,
         local_bundle_dir: Path,
         local_dir_ephemeral: bool = True,
     ) -> None:
         self.result = result
+        self.manifest_bytes = manifest_bytes
         self.local_bundle_dir = local_bundle_dir
         self.local_dir_ephemeral = local_dir_ephemeral
 
@@ -710,6 +775,11 @@ class UpstreamRequirement(BaseModel):
     name: str = Field(..., min_length=1)
     format: str = Field(..., min_length=1)
     options: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("format")
+    @classmethod
+    def _check_format(cls, v: str) -> str:
+        return validate_format_id(v)
 
 
 # ── Planning models ──────────────────────────────────────────────────────────

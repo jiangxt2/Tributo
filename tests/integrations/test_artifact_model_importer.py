@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 from tributo.exceptions import JobConfigurationError
 from tributo.exporting.bundle_reader import BundleReader
@@ -245,11 +246,10 @@ def test_xgboost_native_requires_canonical_input_name_before_acquisition(
         missing,
         tmp_path / "imports",
         expected_sha256=None,
-        format_id="xgboost",
+        format_id="ubj",
         flavor_id="xgboost-native-v1",
         architecture_id="xgboost",
         options={
-            "variant": "ubj",
             "input_fields": [
                 {"name": "features", "dtype": "float32", "shape": ["batch", 2]}
             ],
@@ -261,6 +261,92 @@ def test_xgboost_native_requires_canonical_input_name_before_acquisition(
 
     with pytest.raises(JobConfigurationError, match="named 'float_input'"):
         ArtifactModelImporter().import_model(reference)
+
+
+@pytest.mark.parametrize(
+    ("format_id", "suffix"),
+    (("ubj", ".ubj"), ("xgboost-json", ".json")),
+)
+def test_canonical_xgboost_formats_publish_shared_runtime_flavor(
+    tmp_path: Path, format_id: str, suffix: str
+) -> None:
+    source = tmp_path / f"model{suffix}"
+    source.write_bytes(b"xgboost-model")
+    reference = _reference(
+        source,
+        tmp_path / "imports",
+        format_id=format_id,
+        flavor_id="xgboost-native-v1",
+        architecture_id="xgboost",
+        options={
+            "input_fields": [
+                {"name": "float_input", "dtype": "float32", "shape": ["batch", 2]}
+            ],
+            "output_fields": [
+                {"name": "prediction", "dtype": "float32", "shape": ["batch", 1]}
+            ],
+        },
+    )
+
+    bundle_ref = ArtifactModelImporter().import_model(reference)
+    artifact = BundleReader().read_manifest(bundle_ref.canonical_uri).artifacts[0]
+
+    assert artifact.format == format_id
+    assert artifact.flavor_id == "xgboost-native-v1"
+    assert artifact.variant is None
+    assert artifact.entrypoint.endswith(suffix)
+
+
+@pytest.mark.parametrize(
+    ("format_id", "variant"),
+    (("ubj", "ubj"), ("xgboost-json", "json")),
+)
+def test_canonical_xgboost_formats_reject_legacy_variant_before_acquisition(
+    tmp_path: Path, format_id: str, variant: str
+) -> None:
+    missing = tmp_path / "missing-model"
+    reference = _reference(
+        missing,
+        tmp_path / "imports",
+        expected_sha256=None,
+        format_id=format_id,
+        flavor_id="xgboost-native-v1",
+        architecture_id="xgboost",
+        options={
+            "variant": variant,
+            "input_fields": [{"name": "float_input", "dtype": "float32"}],
+            "output_fields": [{"name": "prediction", "dtype": "float32"}],
+        },
+    )
+
+    with pytest.raises(ValidationError, match="variant"):
+        ArtifactModelImporter().import_model(reference)
+
+
+def test_legacy_xgboost_reference_is_published_canonically(tmp_path: Path) -> None:
+    source = tmp_path / "model.json"
+    source.write_bytes(b"xgboost-model")
+
+    with pytest.warns(DeprecationWarning, match="deprecated"):
+        reference = _reference(
+            source,
+            tmp_path / "imports",
+            format_id="xgboost",
+            flavor_id="xgboost-native-v1",
+            architecture_id="xgboost",
+            options={
+                "variant": "json",
+                "input_fields": [{"name": "float_input", "dtype": "float32"}],
+                "output_fields": [{"name": "prediction", "dtype": "float32"}],
+            },
+        )
+
+    bundle_ref = ArtifactModelImporter().import_model(reference)
+    artifact = BundleReader().read_manifest(bundle_ref.canonical_uri).artifacts[0]
+
+    assert artifact.format == "xgboost-json"
+    assert artifact.flavor_id == "xgboost-native-v1"
+    assert artifact.variant is None
 
 
 def test_default_registry_uses_exact_first_party_ids() -> None:

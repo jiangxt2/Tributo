@@ -152,6 +152,16 @@ class BundleExportError(TributoError):
 
 
 @PublicAPI(stability="beta")
+class BundleCommitBusyError(TributoError):
+    """A bundle commit is temporarily blocked by another active writer.
+
+    The immutable bundle may be retried with the same stable identity.
+    """
+
+    retryable = True
+
+
+@PublicAPI(stability="beta")
 class AliasConflict(TributoError):
     """Alias CAS update failed — concurrent modification detected."""
 
@@ -166,12 +176,12 @@ class UnsupportedArtifactFormat(TributoError):
 
 @PublicAPI(stability="beta")
 class PostPublishCallbackError(TributoError):
-    """Post-publish callback failed after the bundle was already published.
+    """A required post-publish action failed after the bundle was published.
 
-    The model is published — this error means the callback (e.g. MLflow)
-    failed, not the export itself.  Carries ``bundle_result``.  ``receipts``
-    is empty when a post-commit integrity check fails before any Hook delivery
-    can be claimed.
+    The model is published — this error means a secondary action such as
+    execution recording or an inline callback failed, not the export itself.
+    Carries ``bundle_result``. ``receipts`` is empty when no Hook delivery can
+    be claimed.
     """
 
     def __init__(

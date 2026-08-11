@@ -8,6 +8,7 @@ from pathlib import Path
 from types import ModuleType
 
 import numpy as np
+import pytest
 
 from tributo.exporting.models import (
     ArtifactFile,
@@ -50,22 +51,22 @@ class _DMatrix:
         self.feature_names = feature_names
 
 
-def _artifact(tmp_path: Path) -> ResolvedArtifact:
-    path = tmp_path / "model.ubj"
+def _artifact(tmp_path: Path, format_id: str = "ubj") -> ResolvedArtifact:
+    extension = "ubj" if format_id == "ubj" else "json"
+    path = tmp_path / f"model.{extension}"
     path.write_bytes(b"native-model")
     file = ArtifactFile(
-        relative_path="model.ubj",
+        relative_path=f"model.{extension}",
         sha256="a" * 64,
         size_bytes=path.stat().st_size,
         role="model",
     )
     descriptor = LogicalArtifact(
         name="model",
-        format="xgboost",
+        format=format_id,
         flavor_id="xgboost-native-v1",
-        variant="ubj",
         files=(file,),
-        entrypoint="model.ubj",
+        entrypoint=f"model.{extension}",
         tree_digest=LogicalArtifact.compute_tree_digest((file,)),
         producer=ProducerInfo(exporter_id="test"),
     )
@@ -79,11 +80,12 @@ def _fake_xgboost(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "xgboost", module)
 
 
-def test_binary_native_model_exposes_named_label_and_probability_outputs(
-    tmp_path: Path, monkeypatch
+@pytest.mark.parametrize("format_id", ("ubj", "xgboost-json"))
+def test_binary_native_formats_expose_named_label_and_probability_outputs(
+    tmp_path: Path, monkeypatch, format_id: str
 ) -> None:
     _fake_xgboost(monkeypatch)
-    model = XGBoostNativeFlavor().load(_artifact(tmp_path), role="inference")
+    model = XGBoostNativeFlavor().load(_artifact(tmp_path, format_id), role="inference")
 
     outputs = model.predict(
         {"float_input": np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)}

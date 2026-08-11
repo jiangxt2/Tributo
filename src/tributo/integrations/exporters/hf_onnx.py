@@ -20,6 +20,7 @@ from tributo._common.dependencies import (
     probe_dependency,
     require_dependency,
 )
+from tributo.exceptions import JobConfigurationError
 from tributo.exporting.models import (
     ArtifactDraft,
     DraftFile,
@@ -32,7 +33,7 @@ from tributo.exporting.models import (
     SupportResult,
     ValidatorBinding,
 )
-from tributo.exporting.options import HFONNXOptions
+from tributo.integrations.exporters.options import HFONNXOptions
 from tributo.util.annotations import PublicAPI
 
 logger = logging.getLogger(__name__)
@@ -46,10 +47,11 @@ class HuggingFaceONNXExporter:
     falling back to ``transformers.onnx`` + ``torch.onnx.export``.
     """
 
-    api_version: ClassVar[int] = 1
+    api_version: ClassVar[int] = 2
     exporter_id: ClassVar[str] = "hf-onnx-v1"
     priority: ClassVar[int] = 85
     output_format: ClassVar[str] = "onnx"
+    output_flavor_id: ClassVar[str] = "hf-onnx-v1"
     source_kinds: ClassVar[tuple[str, ...]] = (
         "hf_model",
         "huggingface_model",
@@ -58,7 +60,7 @@ class HuggingFaceONNXExporter:
     options_model: ClassVar[type[BaseModel]] = HFONNXOptions
     validator_bindings: ClassVar[tuple[ValidatorBinding, ...]] = (
         ValidatorBinding(validator_id="structure-v1", required=True),
-        ValidatorBinding(validator_id="onnx-runtime-v1", required=False),
+        ValidatorBinding(validator_id="onnx-runtime-v1", required=True),
     )
     mutates_source: ClassVar[bool] = False
     upstream_requirements: ClassVar[tuple[Any, ...]] = ()
@@ -98,10 +100,12 @@ class HuggingFaceONNXExporter:
         target: PlannedTarget,
     ) -> ArtifactDraft:
         """Export the HF model to ONNX."""
+        preprocessor = source.metadata.get(
+            "preprocessor", source.metadata.get("tokenizer")
+        )
         torch = require_dependency(TORCH)
 
         model = source.model_object
-        model_id: str = source.metadata.get("model_id", "")
         task: str | None = target.typed_options.get("task")
         opset: int | None = target.typed_options.get("opset")
 
@@ -117,7 +121,7 @@ class HuggingFaceONNXExporter:
         # which would fail for in-process sources with no model_id).
         _export_with_transformers_onnx(
             model,
-            model_id,
+            preprocessor,
             task or "default",
             opset,
             context.artifact_dir,
@@ -177,26 +181,32 @@ class HuggingFaceONNXExporter:
 
 def _export_with_transformers_onnx(
     model: Any,
-    model_id: str,
+    preprocessor: Any | None,
     task: str,
     opset: int,
     artifact_dir: Path,
 ) -> Path:
-    """Use ``transformers.onnx`` after the caller's dependency check."""
-    require_dependency(TRANSFORMERS)
-    from transformers.onnx import FeaturesManager, export
-
+    """Use Transformers ONNX for configured HF models, else Torch directly."""
     if hasattr(model, "config"):
+        require_dependency(TRANSFORMERS)
+        from transformers.onnx import FeaturesManager, export
+
+        if preprocessor is None:
+            raise JobConfigurationError(
+                "Transformers ONNX export requires a preprocessor in "
+                "source.metadata['preprocessor']; open the source with a "
+                "provider that supplies one"
+            )
         model_kind, model_onnx_config = FeaturesManager.check_supported_model_or_raise(
             model, feature=task
         )
     else:
-        # Fallback: direct torch.onnx.export with dummy inputs.
+        # The direct fallback does not use the Transformers ONNX module.
         return _export_torch_onnx_fallback(model, artifact_dir, opset)
 
     onnx_path = artifact_dir / "model.onnx"
     export(
-        preprocessor=None,
+        preprocessor=preprocessor,
         model=model,
         config=model_onnx_config(model.config),
         opset=opset,

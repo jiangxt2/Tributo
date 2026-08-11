@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, ClassVar, Mapping
 
+import pytest
 from pydantic import BaseModel
 
 from tributo.exporting.executor import ExportManager
@@ -39,10 +40,11 @@ class _MinOpts(BaseModel):
 class _WritingExporter:
     """Writes a real model.onnx file to artifact_dir, returns a valid draft."""
 
-    api_version: ClassVar[int] = 1
+    api_version: ClassVar[int] = 2
     exporter_id: ClassVar[str] = "fake-writer-v1"
     priority: ClassVar[int] = 100
     output_format: ClassVar[str] = "onnx"
+    output_flavor_id: ClassVar[str] = "onnx-runtime-v1"
     options_model: ClassVar[type[BaseModel]] = _MinOpts
     validator_bindings: ClassVar[tuple[ValidatorBinding, ...]] = ()
     mutates_source: ClassVar[bool] = False
@@ -74,10 +76,11 @@ class _WritingExporter:
 class _FailingExporter:
     """Always raises."""
 
-    api_version: ClassVar[int] = 1
+    api_version: ClassVar[int] = 2
     exporter_id: ClassVar[str] = "failing-v1"
     priority: ClassVar[int] = 10
     output_format: ClassVar[str] = "onnx"
+    output_flavor_id: ClassVar[str] = "onnx-runtime-v1"
     options_model: ClassVar[type[BaseModel]] = _MinOpts
     validator_bindings: ClassVar[tuple[ValidatorBinding, ...]] = ()
     mutates_source: ClassVar[bool] = False
@@ -93,10 +96,11 @@ class _FailingExporter:
 class _MultiFileExporter:
     """Writes multiple files — tests re-hash logic."""
 
-    api_version: ClassVar[int] = 1
+    api_version: ClassVar[int] = 2
     exporter_id: ClassVar[str] = "multi-file-v1"
     priority: ClassVar[int] = 10
     output_format: ClassVar[str] = "onnx"
+    output_flavor_id: ClassVar[str] = "hf-onnx-v1"
     options_model: ClassVar[type[BaseModel]] = _MinOpts
     validator_bindings: ClassVar[tuple[ValidatorBinding, ...]] = ()
     mutates_source: ClassVar[bool] = False
@@ -124,6 +128,7 @@ class _MultiFileExporter:
             ),
             entrypoint="model.onnx",
             producer=ProducerInfo(exporter_id=self.exporter_id),
+            artifact_kind="diagnostics",
         )
 
 
@@ -233,6 +238,62 @@ class TestSuccessfulExport:
         mgr = ExportManager(er, vr)
         result = mgr.execute(plan, _make_source(), tmp_path / "staging", "exec-1")
         assert result.status == "succeeded"
+        assert result.staged_artifacts["hf"].artifact_kind == "diagnostics"
+
+    @pytest.mark.parametrize("mismatch", ("format", "flavor", "producer"))
+    def test_exporter_descriptor_mismatch_is_session_fatal(
+        self,
+        tmp_path: Path,
+        mismatch: str,
+    ) -> None:
+        class _MismatchedExporter(_WritingExporter):
+            exporter_id = f"mismatched-{mismatch}-v1"
+
+            def export(
+                self,
+                context: ExportContext,
+                source: ExportSource,
+                upstream: Mapping[str, ResolvedArtifact],
+                target: Any,
+            ) -> ArtifactDraft:
+                draft = super().export(context, source, upstream, target)
+                if mismatch == "format":
+                    return draft.model_copy(update={"format": "ubj"})
+                if mismatch == "flavor":
+                    return draft.model_copy(update={"flavor_id": "wrong-flavor-v1"})
+                return draft.model_copy(
+                    update={
+                        "producer": draft.producer.model_copy(
+                            update={"exporter_id": "wrong-producer-v1"}
+                        )
+                    }
+                )
+
+        registry = ExportRegistry()
+        registry.register(_MismatchedExporter)
+        validators = ValidatorRegistry()
+        config = BundleOutputConfig(
+            bundle_uri=str(tmp_path / "bundle"),
+            targets=[
+                ExportTarget(
+                    name="model",
+                    format="onnx",
+                    exporter_id=_MismatchedExporter.exporter_id,
+                )
+            ],
+        )
+        plan = ExportPlanner(registry, validators).plan(config, _make_source())
+
+        result = ExportManager(registry, validators).execute(
+            plan,
+            _make_source(),
+            tmp_path / "staging",
+            "execution-1",
+        )
+
+        assert result.status == "failed"
+        assert result.node_results[0].failure is not None
+        assert result.node_results[0].failure.code == "SessionFatalError"
 
 
 class TestFailurePropagation:
@@ -310,10 +371,11 @@ class TestFailurePropagation:
         """
 
         class _IntegrityViolator:
-            api_version: ClassVar[int] = 1
+            api_version: ClassVar[int] = 2
             exporter_id: ClassVar[str] = "integrity-v1"
             priority: ClassVar[int] = 10
             output_format: ClassVar[str] = "onnx"
+            output_flavor_id: ClassVar[str] = "onnx-runtime-v1"
             options_model: ClassVar[type[BaseModel]] = _MinOpts
             validator_bindings: ClassVar[tuple[ValidatorBinding, ...]] = ()
             mutates_source: ClassVar[bool] = False
@@ -372,14 +434,57 @@ class TestFailurePropagation:
 
 
 class TestRehashVerification:
+    def test_artifact_name_must_match_node_name(self, tmp_path: Path) -> None:
+        """A plugin cannot redirect publication to another node directory."""
+
+        class _WrongNameExporter(_WritingExporter):
+            exporter_id: ClassVar[str] = "wrong-name-v1"
+
+            def export(
+                self,
+                context: ExportContext,
+                source: ExportSource,
+                upstream: Mapping[str, ResolvedArtifact],
+                target: Any,
+            ) -> ArtifactDraft:
+                draft = super().export(context, source, upstream, target)
+                return draft.model_copy(update={"name": "another-node"})
+
+        registry = ExportRegistry()
+        registry.register(_WrongNameExporter)
+        validators = ValidatorRegistry()
+        config = BundleOutputConfig(
+            bundle_uri="/tmp/bundle",
+            targets=[
+                ExportTarget(
+                    name="expected-node",
+                    format="onnx",
+                    exporter_id="wrong-name-v1",
+                )
+            ],
+        )
+        plan = ExportPlanner(registry, validators).plan(config, _make_source())
+
+        result = ExportManager(registry, validators).execute(
+            plan, _make_source(), tmp_path / "staging", "exec-1"
+        )
+
+        assert result.status == "failed"
+        node = result.node_results[0]
+        assert node.status == "failed"
+        assert node.failure is not None
+        assert node.failure.code == "SessionFatalError"
+        assert "expected node name 'expected-node'" in node.failure.message
+
     def test_undeclared_file_causes_failure(self, tmp_path: Path) -> None:
         """Exporter writes extra file not in draft — should fail."""
 
         class _UndeclaredWriter:
-            api_version: ClassVar[int] = 1
+            api_version: ClassVar[int] = 2
             exporter_id: ClassVar[str] = "undeclared-v1"
             priority: ClassVar[int] = 10
             output_format: ClassVar[str] = "onnx"
+            output_flavor_id: ClassVar[str] = "onnx-runtime-v1"
             options_model: ClassVar[type[BaseModel]] = _MinOpts
             validator_bindings: ClassVar[tuple[ValidatorBinding, ...]] = ()
             mutates_source: ClassVar[bool] = False
@@ -425,10 +530,11 @@ class TestRehashVerification:
         """Exporter declares file but doesn't write it."""
 
         class _MissingWriter:
-            api_version: ClassVar[int] = 1
+            api_version: ClassVar[int] = 2
             exporter_id: ClassVar[str] = "missing-v1"
             priority: ClassVar[int] = 10
             output_format: ClassVar[str] = "onnx"
+            output_flavor_id: ClassVar[str] = "onnx-runtime-v1"
             options_model: ClassVar[type[BaseModel]] = _MinOpts
             validator_bindings: ClassVar[tuple[ValidatorBinding, ...]] = ()
             mutates_source: ClassVar[bool] = False
@@ -472,10 +578,11 @@ class TestValidatorChain:
         """Exporter with required failing validator should fail."""
 
         class _ValidatedExporter:
-            api_version: ClassVar[int] = 1
+            api_version: ClassVar[int] = 2
             exporter_id: ClassVar[str] = "validated-v1"
             priority: ClassVar[int] = 10
             output_format: ClassVar[str] = "onnx"
+            output_flavor_id: ClassVar[str] = "onnx-runtime-v1"
             options_model: ClassVar[type[BaseModel]] = _MinOpts
             validator_bindings: ClassVar[tuple[ValidatorBinding, ...]] = (
                 ValidatorBinding(validator_id="fail-v1", required=True),
@@ -516,3 +623,6 @@ class TestValidatorChain:
         mgr = ExportManager(er2, vr2)
         result = mgr.execute(plan, _make_source(), tmp_path / "staging", "exec-1")
         assert result.status == "failed"
+        failure = result.node_results[0].failure
+        assert failure is not None
+        assert failure.category == "validation"

@@ -222,6 +222,21 @@ references rather than embedding it in a request.
 | `concurrency` | int | Number of parallel inference actors. Default: `4`. |
 | `num_cpus_per_actor` | float | CPUs per actor. Default: `1.0`. |
 
+## Identity Predictor Output Contract
+
+`IdentityPredictor` distinguishes probabilities from logits by the verified
+ONNX output name. Names containing `probab` are consumed as probabilities;
+names containing `logit`, and the exact name `output`, are treated as logits
+and receive a sigmoid transformation. Any other output name is rejected.
+
+`torch-onnx-v1` currently exports its single output with the name `output`.
+Consequently, a Torch model used with `IdentityPredictor` must return one
+binary logit per row from `forward()`. A model whose final layer already
+applies sigmoid or softmax does not satisfy this contract and would otherwise
+be transformed twice. Explicit output-semantics metadata is a future,
+triggered capability; until then, do not use probability-returning Torch
+models with this predictor.
+
 ## S3 Authentication
 
 Same three methods as [training](training.md#s3-authentication): IAM Role
@@ -263,6 +278,12 @@ available:
   records the acquired content digest. The native XGBoost flavor has one
   canonical `float_input` tensor; the importer rejects any other input field
   name before acquiring or publishing the artifact.
+
+  Use `format_id="ubj"` or `format_id="xgboost-json"` with the shared
+  `xgboost-native-v1` runtime flavor. The former first-party
+  `format_id="xgboost"` plus `options.variant` shape is accepted only as a
+  deprecated input and is normalized before import; third-party providers are
+  not rewritten.
 
 Both paths publish and verify a Tributo Bundle before Ray execution. They never
 put an MLflow PyFunc, XGBoost Booster, SDK client, or mutable alias in the
@@ -325,14 +346,13 @@ xgboost_model = ArtifactModelReference(
     provider_id="tributo.artifact",
     uri="s3://external-models/fraud.ubj",
     storage_profile="external-model-store",
-    format_id="xgboost",
+    format_id="ubj",
     flavor_id="xgboost-native-v1",
     architecture_id="xgboost",
     expected_sha256="0" * 64,
     import_bundle_uri="s3://models/tributo-imports",
     import_storage_profile="model-store",
     options={
-        "variant": "ubj",
         "input_fields": [
             {"name": "float_input", "dtype": "float32", "shape": ["batch", 12]}
         ],

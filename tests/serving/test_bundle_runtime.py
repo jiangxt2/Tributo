@@ -10,6 +10,7 @@ runtime's idempotent close contract (close-after-load, exception close).
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -69,6 +70,9 @@ class _EchoFlavor:
 
     api_version = 1
     flavor_id = "onnx-runtime-v1"
+    supported_formats = ("onnx",)
+    batch_supported = True
+    serveable = True
     security_mode = SECURITY_MODE_SAFE
     signature_required = True
     required_dependencies: tuple[str, ...] = ()
@@ -314,6 +318,16 @@ class TestFlavorRouting:
         ):
             _loader().open(str(bundle), role="inference")
 
+    def test_declared_format_must_be_supported_by_flavor(self, tmp_path: Path) -> None:
+        bundle = build_test_bundle(tmp_path)
+        manifest_path = bundle / "manifest.json"
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        payload["artifacts"][0]["format"] = "ubj"
+        manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+
+        with pytest.raises(UnsupportedArtifactFormat, match="accepts only"):
+            _loader().open(str(bundle), role="inference")
+
     def test_missing_dependency_fails_fast(self, tmp_path: Path) -> None:
         """声明了缺失依赖的 flavor：ModelLoadError + 安装提示。"""
         bundle = build_test_bundle(tmp_path)
@@ -510,6 +524,41 @@ class TestSignatureValidation:
         monkeypatch.setattr(runtime_module, "SERVEABLE_FLAVOR_MATRIX", (entry,))
         runtime_module._validate_matrix_registry(_loader()._flavors)
 
+    @pytest.mark.parametrize("supported_formats", ((), [], ("ONNX",)))
+    def test_matrix_rejects_invalid_supported_formats(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        supported_formats: object,
+    ) -> None:
+        """Serveable flavors fail during composition, before artifact loading."""
+        import tributo.exporting.runtime as runtime_module
+
+        class _InvalidFormatsFlavor(_EchoFlavor):
+            pass
+
+        _InvalidFormatsFlavor.supported_formats = supported_formats
+        entry = runtime_module.FlavorSupportEntry(
+            flavor_id=_InvalidFormatsFlavor.flavor_id,
+            artifact_role="model",
+            loader=(
+                f"{_InvalidFormatsFlavor.__module__}:"
+                f"{_InvalidFormatsFlavor.__qualname__}"
+            ),
+            dependencies=(),
+            signature_required=True,
+            security_mode=SECURITY_MODE_SAFE,
+            exportable=True,
+            readable=True,
+            batch_inference_capable=True,
+            online_serveable=True,
+        )
+        registry = FlavorRegistry()
+        registry.register(_InvalidFormatsFlavor)
+        monkeypatch.setattr(runtime_module, "SERVEABLE_FLAVOR_MATRIX", (entry,))
+
+        with pytest.raises(JobConfigurationError, match="supported_formats"):
+            runtime_module._validate_matrix_registry(registry)
+
     def test_signature_mismatch_fails_fast(self, tmp_path: Path) -> None:
         """manifest 签名与实际模型输入不一致 → ModelSchemaMismatchError。"""
         bundle = build_test_bundle(tmp_path)
@@ -667,15 +716,16 @@ class TestRuntimeLifecycle:
             def __init__(self) -> None:
                 self.exits: list[bool] = []
 
-            def read_manifest(
+            def read_manifest_with_bytes(
                 self, manifest_or_bundle_uri: str, *, storage_profile: str | None = None
-            ) -> Any:
+            ) -> tuple[Any, bytes]:
                 import json
 
                 from tributo.exporting.manifest import _read_manifest_v1
 
-                raw = json.loads((tmp_path / "bundle" / "manifest.json").read_text())
-                return _read_manifest_v1(raw, b"")
+                manifest_bytes = (tmp_path / "bundle" / "manifest.json").read_bytes()
+                raw = json.loads(manifest_bytes)
+                return _read_manifest_v1(raw, manifest_bytes), manifest_bytes
 
             def open_artifact(
                 self,
@@ -685,6 +735,7 @@ class TestRuntimeLifecycle:
                 artifact_name: str | None = None,
                 storage_profile: str | None = None,
                 manifest: Any = None,
+                manifest_bytes: bytes | None = None,
             ) -> Any:
                 from contextlib import contextmanager
 

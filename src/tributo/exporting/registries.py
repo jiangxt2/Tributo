@@ -19,6 +19,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from tributo.exceptions import JobConfigurationError
+from tributo.exporting.formats import validate_format_id
 from tributo.exporting.models import (
     ExportTarget,
     PlannedTarget,
@@ -59,8 +60,30 @@ class ExportRegistry:
 
     def register(self, exporter_cls: type[ModelExporter]) -> None:
         """Register *exporter_cls* by its ``exporter_id``."""
-        eid = exporter_cls.exporter_id
+        api_version = getattr(exporter_cls, "api_version", None)
+        entry_point_name = getattr(exporter_cls, "exporter_id", None) or getattr(
+            exporter_cls, "__name__", str(exporter_cls)
+        )
+        if api_version != 2:
+            logger.warning(
+                "Ignoring exporter %r with unsupported api_version %r; expected 2",
+                entry_point_name,
+                api_version,
+            )
+            self._diagnostics.append(
+                PluginLoadDiagnostic(
+                    group="tributo.exporters",
+                    entry_point_name=str(entry_point_name),
+                    reason=(
+                        "Unsupported ModelExporter api_version "
+                        f"{api_version!r}; expected 2"
+                    ),
+                )
+            )
+            return
+        eid = getattr(exporter_cls, "exporter_id", None)
         if not isinstance(eid, str) or not eid:
+            logger.warning("Ignoring exporter with invalid exporter_id %r", eid)
             self._diagnostics.append(
                 PluginLoadDiagnostic(
                     group="tributo.exporters",
@@ -68,6 +91,48 @@ class ExportRegistry:
                         exporter_cls, "__name__", str(exporter_cls)
                     ),
                     reason=f"Invalid exporter_id: {eid!r}",
+                )
+            )
+            return
+        output_format = getattr(exporter_cls, "output_format", None)
+        if not isinstance(output_format, str):
+            logger.warning(
+                "Ignoring exporter %r with invalid output_format %r",
+                eid,
+                output_format,
+            )
+            self._diagnostics.append(
+                PluginLoadDiagnostic(
+                    group="tributo.exporters",
+                    entry_point_name=eid,
+                    reason=f"Invalid output_format: {output_format!r}",
+                )
+            )
+            return
+        try:
+            validate_format_id(output_format)
+        except ValueError as exc:
+            logger.warning("Ignoring exporter %r: invalid output_format: %s", eid, exc)
+            self._diagnostics.append(
+                PluginLoadDiagnostic(
+                    group="tributo.exporters",
+                    entry_point_name=eid,
+                    reason=f"Invalid output_format: {exc}",
+                )
+            )
+            return
+        output_flavor_id = getattr(exporter_cls, "output_flavor_id", None)
+        if not isinstance(output_flavor_id, str) or not output_flavor_id:
+            logger.warning(
+                "Ignoring exporter %r with invalid output_flavor_id %r",
+                eid,
+                output_flavor_id,
+            )
+            self._diagnostics.append(
+                PluginLoadDiagnostic(
+                    group="tributo.exporters",
+                    entry_point_name=eid,
+                    reason=f"Invalid output_flavor_id: {output_flavor_id!r}",
                 )
             )
             return

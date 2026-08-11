@@ -1,10 +1,10 @@
 """Bundle export service — top-level lifecycle orchestration.
 
 ``BundleExportService`` wires together all export components:
-ExportSourceProvider → StagingArea → Planner → Manager → Publisher → callback.
+ExportSource → StagingArea → Planner → Manager → Publisher → callback.
 
-It is the single entry point for bundle-mode export, replacing the
-legacy ``BaseTrainer.export_model()`` path when ``output.targets`` is set.
+It is the single entry point for Bundle export. First-party training
+lifecycles supply their standard targets when the caller omits them.
 """
 
 from __future__ import annotations
@@ -17,7 +17,6 @@ import tempfile
 import uuid
 from collections.abc import Generator
 from contextlib import contextmanager
-from datetime import timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -41,19 +40,17 @@ from tributo.exporting.models import (
     ExportSource,
     PublishedBundle,
 )
-from tributo.exporting.planner import ExportPlanner
-from tributo.exporting.protocols import ExportSourceProvider
+from tributo.exporting.planner import ExportPlanner, is_implicit_node_id
 from tributo.exporting.publisher import Publisher
 from tributo.exporting.registries import (
     ExportRegistry,
-    SourceProviderRegistry,
     ValidatorRegistry,
 )
 from tributo.util.annotations import PublicAPI
 
 # Cache entry-point plugin classes across instances so every new
 # BundleExportService gets the full set, not just the first.
-_plugin_cache: dict[str, list[Any]] = {"exports": [], "providers": [], "validators": []}
+_plugin_cache: dict[str, list[Any]] = {"exports": [], "validators": []}
 _plugins_loaded = False
 
 logger = logging.getLogger(__name__)
@@ -94,7 +91,6 @@ class BundleExportService:
     def __init__(
         self,
         export_registry: ExportRegistry | None = None,
-        source_provider_registry: SourceProviderRegistry | None = None,
         validator_registry: ValidatorRegistry | None = None,
         storage_resolver: StorageProfileResolver | None = None,
         manifest_registry: ManifestSchemaRegistry | None = None,
@@ -102,7 +98,6 @@ class BundleExportService:
         hook_dispatcher: Any | None = None,
     ) -> None:
         self._exports = export_registry or ExportRegistry()
-        self._providers = source_provider_registry or SourceProviderRegistry()
         self._validators = validator_registry or ValidatorRegistry()
         self._storage_resolver = storage_resolver or StorageProfileResolver()
         self._manifest_registry = manifest_registry or ManifestSchemaRegistry()
@@ -112,6 +107,7 @@ class BundleExportService:
 
             hook_dispatcher = InlineHookDispatcher(operation_store)
         self._hook_dispatcher = hook_dispatcher
+        self._last_operation_event: OperationEvent | None = None
 
         # Register built-in schema readers.
         from tributo.exporting.manifest import _read_manifest_v1
@@ -124,20 +120,27 @@ class BundleExportService:
         # Register built-in validators.
         from tributo.exporting.validators import StructureValidator
 
-        try:
+        if StructureValidator.validator_id not in self._validators.list_all():
             self._validators.register(StructureValidator)
-        except Exception:
-            pass
 
         # Load entry-point plugins (cached across instances).
-        _load_entry_point_plugins(self._exports, self._providers, self._validators)
+        _load_entry_point_plugins(self._exports, self._validators)
+
+    @property
+    def last_operation_event(self) -> OperationEvent | None:
+        """Return the event derived by the most recent successful commit.
+
+        This is a last-wins diagnostic property. A service instance must not
+        use it to correlate concurrent calls; dispatchers consume the event
+        produced inside the current export call.
+        """
+        return self._last_operation_event
 
     def export_bundle(
         self,
         source: ExportSource,
         config: BundleOutputConfig,
         *,
-        provider: ExportSourceProvider | None = None,
         callback: Callable[[PublishedBundle], None] | None = None,
         raise_on_callback_error: bool = False,
         tributo_version: str = "0.0.0",
@@ -148,8 +151,6 @@ class BundleExportService:
         Args:
             source: Resolved ``ExportSource`` (from a provider).
             config: Validated ``BundleOutputConfig`` with non-empty targets.
-            provider: The ``ExportSourceProvider`` that produced *source*. Used to
-                populate ``ManifestSourceInfo``.
             callback: Optional ``on_bundle_complete`` hook, called after
                 publish but before staging cleanup.
             raise_on_callback_error: If ``True``, callback failures raise
@@ -168,6 +169,7 @@ class BundleExportService:
             raise JobConfigurationError(
                 "BundleExportService requires targets (bundle mode)"
             )
+        self._last_operation_event = None
 
         # Fail before planning or staging if a requested side effect is
         # unknown, disabled, unloadable, or has invalid options.  An empty
@@ -185,10 +187,7 @@ class BundleExportService:
 
         planner = ExportPlanner(self._exports, self._validators)
         manager = ExportManager(self._exports, self._validators)
-        publisher = Publisher(
-            storage_resolver=self._storage_resolver,
-            manifest_registry=self._manifest_registry,
-        )
+        publisher = Publisher(storage_resolver=self._storage_resolver)
 
         # Phase 1: Plan.
         plan = planner.plan(config, source)
@@ -243,13 +242,25 @@ class BundleExportService:
             # Phase 5: Compute bundle_digest and record execution.
             from tributo.exporting.manifest import compute_bundle_digest
 
-            bundle_digest = compute_bundle_digest(
-                artifacts=published.result.artifacts,
-                roles=published.result.roles,
-                exporter_options={
-                    nr.node_id: {} for nr in execution.node_results if nr.exporter_id
-                },
-            )
+            try:
+                bundle_digest = compute_bundle_digest(
+                    artifacts=published.result.artifacts,
+                    roles=published.result.roles,
+                    exporter_options={
+                        nr.node_id: {}
+                        for nr in execution.node_results
+                        if nr.exporter_id
+                    },
+                )
+            except Exception as exc:
+                logger.error(
+                    "Bundle digest computation failed after bundle publish (%s)",
+                    type(exc).__name__,
+                )
+                raise PostPublishCallbackError(
+                    "Bundle digest computation failed after bundle publish",
+                    bundle_result=published.result,
+                ) from exc
 
             # Write execution record (when OperationStore is available).
             if self._operation_store is not None:
@@ -273,7 +284,7 @@ class BundleExportService:
                             exporter_id=nr.exporter_id,
                             status=nr.status,
                             required=nr.required,
-                            implicit=nr.node_id.startswith("_implicit__"),
+                            implicit=is_implicit_node_id(nr.node_id),
                             artifact_ref=nr.artifact_ref,
                             failure=nr.failure,
                             duration_ms=nr.duration_ms,
@@ -283,44 +294,48 @@ class BundleExportService:
                     roles=published.result.roles,
                     tributo_version=tributo_version,
                 )
-                self._operation_store.record_execution(record)
-
-            # Phase 6: Build the event from the committed manifest, then run
-            # only explicitly configured adapters.  Re-reading canonical
-            # storage makes the original created_at the replay-stable time.
-            if prepared_hooks:
-                from tributo.exporting.bundle_reader import BundleReader
-
-                reader = BundleReader(
-                    storage_resolver=self._storage_resolver,
-                    manifest_registry=self._manifest_registry,
-                )
-                manifest, raw_manifest = reader.read_manifest_with_bytes(
-                    published.result.canonical_uri,
-                    storage_profile=config.storage_profile,
-                )
-                actual_sha256 = hashlib.sha256(raw_manifest).hexdigest()
-                if actual_sha256 != published.result.manifest_sha256:
-                    raise PostPublishCallbackError(
-                        "Cannot dispatch hooks because the committed manifest "
-                        "digest differs from BundleResult",
-                        bundle_result=published.result,
-                    )
-                occurred_at = manifest.created_at
-                if occurred_at.tzinfo is None or occurred_at.utcoffset() is None:
-                    occurred_at = occurred_at.replace(tzinfo=timezone.utc)
                 try:
-                    event = OperationEvent.bundle_published(
-                        occurred_at=occurred_at,
-                        bundle_id=published.result.bundle_id,
-                        canonical_uri=published.result.canonical_uri,
-                        manifest_sha256=published.result.manifest_sha256,
-                        source_kind=manifest.source_info.source_kind,
-                        correlation_ids={
-                            "run_id": run_id,
-                            "request_id": request_id,
-                            "execution_id": execution_id,
-                        },
+                    self._operation_store.record_execution(record)
+                except Exception as exc:
+                    logger.error(
+                        "Execution recording failed after bundle publish (%s)",
+                        type(exc).__name__,
+                    )
+                    raise PostPublishCallbackError(
+                        "Execution recording failed after bundle publish",
+                        bundle_result=published.result,
+                    ) from exc
+
+            # Phase 6: Derive the event from the exact manifest bytes that won
+            # the repository commit, then run only explicitly configured hooks.
+            raw_manifest = published.manifest_bytes
+            actual_sha256 = hashlib.sha256(raw_manifest).hexdigest()
+            if actual_sha256 != published.result.manifest_sha256:
+                raise PostPublishCallbackError(
+                    "Cannot derive the publication event because the committed "
+                    "manifest digest differs from BundleResult",
+                    bundle_result=published.result,
+                )
+            try:
+                manifest_dict = _build_manifest_dict(published)
+                event = OperationEvent.bundle_published(
+                    manifest=manifest_dict,
+                    manifest_sha256=published.result.manifest_sha256,
+                    correlation_ids={
+                        "run_id": run_id,
+                        "request_id": request_id,
+                        "execution_id": execution_id,
+                    },
+                )
+                self._last_operation_event = event
+                if prepared_hooks:
+                    schema_version = manifest_dict.get("schema_version", 1)
+                    if not isinstance(schema_version, int):
+                        raise ValueError("manifest schema_version must be an integer")
+                    manifest = self._manifest_registry.read(
+                        schema_version,
+                        manifest_dict,
+                        raw_manifest,
                     )
                     artifacts = BundleArtifactAccessor(
                         event,
@@ -330,12 +345,13 @@ class BundleExportService:
                         manifest=manifest,
                         manifest_bytes=raw_manifest,
                     )
-                except ValueError as exc:
-                    raise PostPublishCallbackError(
-                        "Cannot dispatch hooks because the committed manifest "
-                        "cannot form a valid publication event",
-                        bundle_result=published.result,
-                    ) from exc
+            except (TypeError, ValueError) as exc:
+                raise PostPublishCallbackError(
+                    "Cannot dispatch hooks because the committed manifest "
+                    "cannot form a valid publication event",
+                    bundle_result=published.result,
+                ) from exc
+            if prepared_hooks:
                 published.result = self._hook_dispatcher.dispatch(
                     event=event,
                     bundle_result=published.result,
@@ -366,47 +382,54 @@ class BundleExportService:
 
 def _load_entry_point_plugins(
     exports: ExportRegistry,
-    providers: SourceProviderRegistry,
     validators: ValidatorRegistry,
 ) -> None:
-    """Discover and register exporter/source-provider/validator plugins."""
+    """Register first-party components and discover extension plugins."""
     global _plugins_loaded
+
+    from tributo._bootstrap import first_party_export_plugins
+
+    builtin_exporters, builtin_validators = first_party_export_plugins()
+    for exporter_cls in builtin_exporters:
+        if not exports.contains(exporter_cls.exporter_id):
+            exports.register(exporter_cls)
+    registered_validators = set(validators.list_all())
+    for validator_cls in builtin_validators:
+        if validator_cls.validator_id not in registered_validators:
+            validators.register(validator_cls)
+            registered_validators.add(validator_cls.validator_id)
 
     if not _plugins_loaded:
         from tributo.plugin import (
             discover_exporter_plugins,
-            discover_source_provider_plugins,
             discover_validator_plugins,
         )
 
         # Collect discovery failures into registry diagnostics so they are
         # queryable via ``registry.diagnostics()``, not just logged.
         export_diags: list[Any] = []
-        provider_diags: list[Any] = []
         validator_diags: list[Any] = []
         _plugin_cache["exports"] = discover_exporter_plugins(diagnostics=export_diags)
-        _plugin_cache["providers"] = discover_source_provider_plugins(
-            diagnostics=provider_diags
-        )
         _plugin_cache["validators"] = discover_validator_plugins(
             diagnostics=validator_diags
         )
         _plugin_cache["export_diags"] = export_diags
-        _plugin_cache["provider_diags"] = provider_diags
         _plugin_cache["validator_diags"] = validator_diags
         _plugins_loaded = True
 
     # Register cached classes + diagnostics into this instance's registries.
-    for cls in _plugin_cache["exports"]:
-        exports.register(cls)
+    builtin_exporters_by_id = {cls.exporter_id: cls for cls in builtin_exporters}
+    for exporter_cls in _plugin_cache["exports"]:
+        if builtin_exporters_by_id.get(exporter_cls.exporter_id) is exporter_cls:
+            continue
+        exports.register(exporter_cls)
     for d in _plugin_cache["export_diags"]:
         exports.record_diagnostic(d)
-    for cls in _plugin_cache["providers"]:
-        providers.register(cls)
-    for d in _plugin_cache["provider_diags"]:
-        providers.record_diagnostic(d)
-    for cls in _plugin_cache["validators"]:
-        validators.register(cls)
+    builtin_validators_by_id = {cls.validator_id: cls for cls in builtin_validators}
+    for validator_cls in _plugin_cache["validators"]:
+        if builtin_validators_by_id.get(validator_cls.validator_id) is validator_cls:
+            continue
+        validators.register(validator_cls)
     for d in _plugin_cache["validator_diags"]:
         validators.record_diagnostic(d)
 
@@ -443,41 +466,16 @@ def _make_execution_id(request_id: str) -> str:
 
 
 def _build_manifest_dict(
-    result: BundleResult,
-    storage_profile: str | None = None,
-    resolver: StorageProfileResolver | None = None,
+    published: PublishedBundle,
 ) -> dict[str, Any]:
-    """Build a JSON-serialisable manifest dict from a BundleResult.
+    """Build a JSON-serialisable view of the exact committed manifest.
 
-    Works for both local and S3 manifest URIs — reads from the S3 manifest
-    when the URI starts with ``s3://``, otherwise reads from the local path.
+    The repository returns the bytes that won the commit.  Consuming them here
+    avoids a post-commit network read and preserves the original manifest on
+    idempotent retries whose freshly assembled advisory fields may differ.
 
     Args:
-        result: The published bundle result.
-        storage_profile: S3 storage profile for the manifest read; the
-            profile's endpoint / credentials / path-style addressing are
-            used instead of the default boto3 chain (required for
-            S3-compatible stores like MinIO).
-        resolver: Profile resolver (defaults to ``StorageProfileResolver``).
+        published: Transient publication handle containing committed bytes.
     """
-    manifest_uri = result.manifest_uri
-    if manifest_uri.startswith("s3://"):
-        from tributo._common.storage import get_boto3_client, parse_s3_url
-
-        profile = (resolver or StorageProfileResolver()).resolve(storage_profile)
-        client = get_boto3_client(
-            endpoint=profile.endpoint,
-            access_key_id=profile.access_key_id,
-            secret_access_key=profile.secret_access_key,
-            region=profile.region,
-            use_ssl=profile.use_ssl,
-            path_style=profile.path_style,
-            profile_name=profile.profile_name,
-        )
-        bucket, key = parse_s3_url(manifest_uri)
-        resp = client.get_object(Bucket=bucket, Key=key)
-        raw: bytes = resp["Body"].read()
-        data: dict[str, Any] = json.loads(raw.decode("utf-8"))
-        return data
-    local_data: dict[str, Any] = json.loads(Path(manifest_uri).read_bytes())
-    return local_data
+    data: dict[str, Any] = json.loads(published.manifest_bytes.decode("utf-8"))
+    return data

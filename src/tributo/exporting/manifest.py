@@ -238,6 +238,14 @@ class ExportManifest(BaseModel):
     roles: dict[str, str] = Field(default_factory=dict)
     execution: ManifestExecution
 
+    @field_validator("created_at")
+    @classmethod
+    def _require_timezone_aware_created_at(cls, value: datetime) -> datetime:
+        """Reject ambiguous timestamps before a bundle can be committed."""
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("created_at must include a timezone offset")
+        return value
+
     def canonical_json(self) -> bytes:
         """Encode to canonical JSON for digest computation.
 
@@ -299,18 +307,38 @@ def _read_manifest_v1(raw: dict[str, Any], canonical_bytes: bytes) -> ExportMani
     """Parse and validate a v1 manifest.
 
     v1 artifacts lack ``artifact_kind`` — the reader defaults them to
-    ``"model"`` for backward compatibility.
+    ``"model"`` for backward compatibility.  It also maps the former
+    XGBoost format-plus-variant representation to its canonical format while
+    preserving the shared native runtime flavor.  Both adaptations affect only
+    the parsed object; callers still perform integrity checks against
+    ``canonical_bytes`` unchanged.
     """
-    # Normalise v1 artifacts: inject artifact_kind="model" if missing.
+    del canonical_bytes
+
+    def normalise_artifact(artifact: Any) -> Any:
+        if not isinstance(artifact, dict):
+            return artifact
+        normalised = {
+            **artifact,
+            "artifact_kind": artifact.get("artifact_kind", "model"),
+        }
+        if (
+            artifact.get("format") == "xgboost"
+            and artifact.get("flavor_id") == "xgboost-native-v1"
+        ):
+            legacy_variant = artifact.get("variant") or "ubj"
+            replacements = {"ubj": "ubj", "json": "xgboost-json"}
+            replacement = replacements.get(legacy_variant)
+            if replacement is not None:
+                normalised["format"] = replacement
+        return normalised
+
+    # Normalise only the parsed in-memory view; never re-serialize it for the
+    # manifest digest or mutate the persisted v1 payload.
     raw = dict(raw)
     artifacts = raw.get("artifacts", ())
     if artifacts:
-        raw["artifacts"] = tuple(
-            {**a, "artifact_kind": a.get("artifact_kind", "model")}
-            if isinstance(a, dict)
-            else a
-            for a in artifacts
-        )
+        raw["artifacts"] = tuple(normalise_artifact(a) for a in artifacts)
     manifest = ExportManifest(**raw)
     return manifest
 

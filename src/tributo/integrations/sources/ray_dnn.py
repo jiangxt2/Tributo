@@ -74,12 +74,28 @@ def _open_torch_source(
     trainer_type: str,
 ) -> Generator[ExportSource, None, None]:
     """Open a DNN-family checkpoint after validating its export contract."""
-    import torch
-
     opts = _RayDnnSourceOptions.model_validate(
         config.model_dump() if config is not None else {}
     )
-    ckpt_dir = _resolve_checkpoint_dir(result)
+    with _checkpoint_directory(result) as ckpt_dir:
+        yield _build_torch_source(
+            ckpt_dir,
+            opts,
+            source_kind=source_kind,
+            trainer_type=trainer_type,
+        )
+
+
+def _build_torch_source(
+    ckpt_dir: Path,
+    opts: _RayDnnSourceOptions,
+    *,
+    source_kind: str,
+    trainer_type: str,
+) -> ExportSource:
+    """Build a Torch export source while the checkpoint directory is alive."""
+    import torch
+
     model_config_data, contract = _read_model_config(ckpt_dir, trainer_type)
     if (
         opts.architecture_id is not None
@@ -138,7 +154,7 @@ def _open_torch_source(
     state_bytes = model_pt_path.read_bytes()
     fingerprint = hashlib.sha256(state_bytes).hexdigest()[:16]
 
-    yield ExportSource(
+    return ExportSource(
         source_kind=source_kind,
         model_object=model,
         architecture_id=contract.architecture_id,
@@ -188,28 +204,37 @@ def _features_from_config(config: dict[str, Any]) -> list[Any]:
     return columns
 
 
-def _resolve_checkpoint_dir(result: Any) -> Path:
-    """Resolve a Ray result/checkpoint or local path to a directory."""
+@contextmanager
+def _checkpoint_directory(result: Any) -> Generator[Path, None, None]:
+    """Yield a checkpoint directory and clean remote materialization on exit."""
     if hasattr(result, "checkpoint"):
         checkpoint = result.checkpoint
-    elif hasattr(result, "to_directory"):
-        checkpoint = result
     elif isinstance(result, (str, Path)):
         checkpoint = Path(result)
+    elif hasattr(result, "as_directory"):
+        checkpoint = result
     else:
         raise TypeError(f"Expected Ray Result, Checkpoint, or path, got {type(result)}")
 
     if checkpoint is None:
         raise ValueError("Training result has no checkpoint")
     if isinstance(checkpoint, (str, Path)):
-        checkpoint_dir = Path(checkpoint)
-    else:
-        checkpoint_dir = Path(checkpoint.to_directory())
-    if not checkpoint_dir.is_dir():
-        raise NotADirectoryError(
-            f"Checkpoint path is not a directory: {checkpoint_dir}"
-        )
-    return checkpoint_dir
+        checkpoint_dir = Path(checkpoint).resolve()
+        if not checkpoint_dir.is_dir():
+            raise NotADirectoryError(
+                f"Checkpoint path is not a directory: {checkpoint_dir}"
+            )
+        yield checkpoint_dir
+        return
+    if not hasattr(checkpoint, "as_directory"):
+        raise TypeError("Ray Checkpoint must provide as_directory()")
+    with checkpoint.as_directory() as directory:
+        checkpoint_dir = Path(directory)
+        if not checkpoint_dir.is_dir():
+            raise NotADirectoryError(
+                f"Checkpoint path is not a directory: {checkpoint_dir}"
+            )
+        yield checkpoint_dir
 
 
 def _read_model_config(
