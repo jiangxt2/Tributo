@@ -1167,7 +1167,7 @@ def algo_list(
             param_hint="--problem-type",
         ) from e
 
-    specs = catalog.list_specs(
+    records = catalog.list_records(
         problem_family=pf,
         problem_type=pt,
         modality=modality,
@@ -1177,30 +1177,48 @@ def algo_list(
     )
 
     if json_output:
-        result = snapshot_json_objects(build_algorithm_support_snapshot(specs))
+        result = snapshot_json_objects(build_algorithm_support_snapshot(records))
         click.echo(json.dumps(result, indent=2))
     else:
-        if not specs:
+        if not records:
             click.echo("No algorithms found.")
             return
-        header = f"{'NAME':<20} {'FAMILY':<25} {'MODALITY':<12} {'GPU REQ':<8} {'STATUS':<10}"
+        header = (
+            f"{'NAME':<20} {'FAMILY':<25} {'MODALITY':<12} {'GPU REQ':<8} "
+            f"{'STATUS':<10} {'STABILITY':<9} {'AVAILABLE':<10} {'COMPAT':<8} "
+            f"{'TESTED':<7} {'SUPPORTED':<9}"
+        )
         click.echo(header)
         click.echo("-" * len(header))
-        for spec in specs:
-            name = spec.name
+        for record in records:
+            spec = record.spec
+            name = record.name
             families = sorted(
                 {
                     pf.value
                     for pf in ProblemFamily
-                    if any(pt in spec.problem_types for pt in PROBLEM_FAMILY_MAP[pf])
+                    if spec is not None
+                    and any(pt in spec.problem_types for pt in PROBLEM_FAMILY_MAP[pf])
                 }
             )
             family_str = ", ".join(families) if families else "-"
-            modality_str = ", ".join(spec.data_modality) if spec.data_modality else "-"
+            modality_str = (
+                ", ".join(spec.data_modality) if spec and spec.data_modality else "-"
+            )
+            gpu_required = (
+                "-"
+                if spec is None
+                else ("Y" if spec.resource_hints.gpu_required else "N")
+            )
+            status = spec.status.value if spec is not None else "-"
             click.echo(
-                f"{name:<20} {family_str:<25} {modality_str:<12} "
-                f"{'Y' if spec.resource_hints.gpu_required else 'N':<8} "
-                f"{spec.status.value:<10}"
+                f"{name:<20} {family_str:<25} "
+                f"{modality_str:<12} {gpu_required:<8} {status:<10} "
+                f"{record.stability:<9} "
+                f"{'Y' if record.available else 'N':<10} "
+                f"{'Y' if record.compatibility_only else 'N':<8} "
+                f"{'Y' if record.tested else 'N':<7} "
+                f"{'Y' if record.supported else 'N':<9}"
             )
 
 
@@ -1212,12 +1230,24 @@ def algo_info(name: str):
 
     catalog = get_algorithm_catalog()
     try:
-        spec = catalog.get_spec(name)
+        record = catalog.get_record(name)
     except TributoError as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
-    click.echo(f"Name:           {spec.name}")
+    spec = record.spec
+    click.echo(f"Name:           {record.name}")
+    click.echo(f"Available:      {record.available}")
+    click.echo(f"Compatibility:  {record.compatibility_only}")
+    click.echo(f"Tested:         {record.tested}")
+    click.echo(f"Supported:      {record.supported}")
+    click.echo(f"Stability:      {record.stability}")
+    click.echo(f"Implementations: {list(record.implementation_ids) or '-'}")
+    click.echo(f"Topologies:     {list(record.runtime_topologies) or '-'}")
+    click.echo(f"Input Views:    {list(record.input_views) or '-'}")
+    click.echo(f"Limitations:    {list(record.limitations) or '-'}")
+    if spec is None:
+        return
     click.echo(f"Version:        {spec.version}")
     click.echo(f"Status:         {spec.status.value}")
     click.echo(f"Problem Types:  {[pt.value for pt in spec.problem_types] or '-'}")

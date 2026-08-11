@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass
+from typing import Any, Protocol
 
 from tributo.exceptions import JobConfigurationError
 from tributo.training.algorithm_spec import (
@@ -21,9 +22,32 @@ from tributo.training.algorithm_spec import (
     ProblemFamily,
     ProblemType,
 )
+from tributo.util.annotations import DeveloperAPI, PublicAPI
 
-if TYPE_CHECKING:
-    from tributo._common.registry import Registry
+
+class _CatalogRegistry(Protocol):
+    def snapshot(self) -> Mapping[str, AlgorithmSpec]: ...
+
+    def get(self, key: str) -> AlgorithmSpec: ...
+
+
+@DeveloperAPI
+@dataclass(frozen=True)
+class AlgorithmCatalogRecord:
+    """Read-only availability and support projection for one algorithm."""
+
+    name: str
+    spec: AlgorithmSpec | None
+    implementation_ids: tuple[str, ...]
+    runtime_topologies: tuple[str, ...]
+    input_views: tuple[str, ...]
+    stability: str
+    available: bool
+    compatibility_only: bool
+    tested: bool
+    supported: bool
+    native_migration_complete: bool
+    limitations: tuple[str, ...]
 
 
 # ---------------------------------------------------------------------------
@@ -31,6 +55,7 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
+@PublicAPI(stability="beta")
 class AlgorithmCatalog:
     """Stateless read-only view over the trainer Registry.
 
@@ -39,7 +64,7 @@ class AlgorithmCatalog:
     invalidation.
     """
 
-    def __init__(self, registry: Registry[str, AlgorithmSpec]) -> None:
+    def __init__(self, registry: _CatalogRegistry) -> None:
         self._registry = registry
 
     # -- query ---------------------------------------------------------------
@@ -140,6 +165,125 @@ class AlgorithmCatalog:
             results.append(spec)
         return tuple(results)
 
+    def list_records(
+        self,
+        *,
+        problem_type: ProblemType | None = None,
+        problem_family: ProblemFamily | None = None,
+        modality: str | None = None,
+        tag: str | None = None,
+        extras_group: str | None = None,
+        include_deprecated: bool = False,
+    ) -> tuple[AlgorithmCatalogRecord, ...]:
+        """Return support-aware records from one immutable Registry projection."""
+        record_snapshot = getattr(self._registry, "record_snapshot", None)
+        if callable(record_snapshot):
+            source = record_snapshot()
+            records = tuple(
+                AlgorithmCatalogRecord(
+                    name=entry.name,
+                    spec=entry.spec,
+                    implementation_ids=tuple(
+                        registration.implementation.implementation_id
+                        for registration in entry.registrations
+                    ),
+                    runtime_topologies=tuple(
+                        sorted(
+                            {
+                                registration.runtime.topology.value
+                                for registration in entry.registrations
+                            }
+                        )
+                    ),
+                    input_views=tuple(
+                        sorted(
+                            {
+                                view
+                                for registration in entry.registrations
+                                for view in registration.implementation.input_compatibility.accepted_input_views
+                            }
+                        )
+                    ),
+                    stability=entry.stability,
+                    available=entry.available,
+                    compatibility_only=entry.compatibility_only,
+                    tested=entry.tested,
+                    supported=entry.supported,
+                    native_migration_complete=entry.native_migration_complete,
+                    limitations=entry.limitations,
+                )
+                for entry in source
+            )
+        else:
+            # Preserve the Beta constructor's generic Registry compatibility.
+            # Without a unified record snapshot, this path cannot prove that an
+            # executable portable descriptor exists.
+            records = tuple(
+                AlgorithmCatalogRecord(
+                    name=spec.name,
+                    spec=spec,
+                    implementation_ids=(),
+                    runtime_topologies=(),
+                    input_views=(),
+                    stability="beta",
+                    available=False,
+                    compatibility_only=True,
+                    tested=False,
+                    supported=False,
+                    native_migration_complete=False,
+                    limitations=(
+                        "Generic Beta Registry entry has no executable portable descriptor.",
+                    ),
+                )
+                for spec in self._registry.snapshot().values()
+            )
+        filtered: list[AlgorithmCatalogRecord] = []
+        for record in records:
+            spec = record.spec
+            if spec is None:
+                if any(
+                    value is not None
+                    for value in (
+                        problem_type,
+                        problem_family,
+                        modality,
+                        tag,
+                        extras_group,
+                    )
+                ):
+                    continue
+                filtered.append(record)
+                continue
+            if problem_type is not None and problem_type not in spec.problem_types:
+                continue
+            if problem_family is not None and not any(
+                item in PROBLEM_FAMILY_MAP[problem_family]
+                for item in spec.problem_types
+            ):
+                continue
+            if modality is not None and modality not in spec.data_modality:
+                continue
+            if tag is not None and tag not in spec.tags:
+                continue
+            if extras_group is not None and spec.extras_group != extras_group:
+                continue
+            if not include_deprecated and spec.status is AlgorithmStatus.DEPRECATED:
+                continue
+            filtered.append(record)
+        return tuple(sorted(filtered, key=lambda item: item.name))
+
+    def get_record(self, name: str) -> AlgorithmCatalogRecord:
+        """Return one support-aware record without hydrating implementation code."""
+        records = {
+            record.name: record for record in self.list_records(include_deprecated=True)
+        }
+        try:
+            return records[name]
+        except KeyError as exc:
+            raise JobConfigurationError(
+                f"Unknown algorithm: {name!r}. Available: {sorted(records)}"
+            ) from exc
+
     def get_spec(self, name: str) -> AlgorithmSpec:
         """Return the ``AlgorithmSpec`` for *name*.
 
@@ -148,11 +292,11 @@ class AlgorithmCatalog:
         snapshot = self._registry.snapshot()
         resolved = self._validate_integrity(snapshot)
 
-        spec = snapshot.get(name)
-        if spec is None:
+        if name not in snapshot:
             raise JobConfigurationError(
                 f"Unknown algorithm: {name!r}. Available: {sorted(snapshot.keys())}"
             )
+        spec = self._registry.get(name)
         if spec.status == AlgorithmStatus.DEPRECATED:
             replacement = resolved[name]
             warnings.warn(
@@ -272,6 +416,7 @@ class AlgorithmCatalog:
 # ---------------------------------------------------------------------------
 
 
+@PublicAPI(stability="beta")
 def get_algorithm_catalog() -> AlgorithmCatalog:
     """Create a stateless view over the shared trainer Registry.
 
@@ -282,3 +427,6 @@ def get_algorithm_catalog() -> AlgorithmCatalog:
     from tributo.training.registry import _registry
 
     return AlgorithmCatalog(_registry)
+
+
+__all__ = ["AlgorithmCatalog", "AlgorithmCatalogRecord", "get_algorithm_catalog"]

@@ -45,8 +45,29 @@ class _EntryPoint:
         return self.loaded
 
 
+class _TrainerEntryPoint:
+    def __init__(self, name: str, value: str, loaded: Any) -> None:
+        self.name = name
+        self.value = value
+        self.loaded = loaded
+        self.load_calls = 0
+
+    def load(self) -> Any:
+        self.load_calls += 1
+        if isinstance(self.loaded, Exception):
+            raise self.loaded
+        return self.loaded
+
+
 def _set_entry_points(monkeypatch: pytest.MonkeyPatch, *eps: _EntryPoint) -> None:
     monkeypatch.setattr(plugin, "_iter_entry_points", lambda group: iter(eps))
+
+
+def _set_trainer_entry_points(
+    monkeypatch: pytest.MonkeyPatch,
+    *eps: _TrainerEntryPoint,
+) -> None:
+    monkeypatch.setattr(plugin, "_iter_trainer_entry_points", lambda: iter(eps))
 
 
 def test_resolves_only_exact_requested_hook(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -167,3 +188,118 @@ def test_mlflow_integration_selection_requires_explicit_opt_in() -> None:
     assert not pytest_config._mlflow_integration_requested(
         ["-m", "not (integration or slow)"]
     )
+
+
+def test_trainer_descriptor_discovery_keeps_old_plugins_compatibility_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tributo.integrations.algorithm_runtimes.legacy_descriptors import (
+        DNN_DESCRIPTOR,
+    )
+
+    descriptor_ep = _TrainerEntryPoint(
+        "dnn",
+        "package.descriptors:DNN_DESCRIPTOR",
+        DNN_DESCRIPTOR,
+    )
+    legacy_ep = _TrainerEntryPoint(
+        "legacy",
+        "package.legacy_trainer",
+        RuntimeError("must not load"),
+    )
+    _set_trainer_entry_points(monkeypatch, descriptor_ep, legacy_ep)
+    diagnostics = []
+    compatibility = []
+
+    descriptors = plugin.discover_trainer_descriptors(
+        diagnostics=diagnostics,
+        compatibility_entry_points=compatibility,
+    )
+
+    assert descriptors == [DNN_DESCRIPTOR]
+    assert compatibility == [legacy_ep]
+    assert descriptor_ep.load_calls == 1
+    assert legacy_ep.load_calls == 0
+    assert diagnostics[0].entry_point_name == "legacy"
+    assert "compatibility-only" in diagnostics[0].reason
+
+
+def test_trainer_descriptor_import_failure_is_diagnostic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failing = _TrainerEntryPoint(
+        "broken",
+        "package.descriptors:BROKEN",
+        ImportError("optional-secret-path"),
+    )
+    _set_trainer_entry_points(monkeypatch, failing)
+    diagnostics = []
+
+    assert plugin.discover_trainer_descriptors(diagnostics=diagnostics) == []
+    assert diagnostics[0].entry_point_name == "broken"
+    assert diagnostics[0].error_type == "ImportError"
+    assert "optional-secret-path" not in diagnostics[0].reason
+
+
+def test_trainer_descriptor_identity_mismatch_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tributo.integrations.algorithm_runtimes.legacy_descriptors import (
+        DNN_DESCRIPTOR,
+    )
+
+    mismatched = _TrainerEntryPoint(
+        "different-name",
+        "package.descriptors:DNN_DESCRIPTOR",
+        DNN_DESCRIPTOR,
+    )
+    _set_trainer_entry_points(monkeypatch, mismatched)
+    diagnostics = []
+
+    with pytest.raises(JobConfigurationError, match="descriptor identity 'dnn'"):
+        plugin.discover_trainer_descriptors(diagnostics=diagnostics)
+
+    assert diagnostics[0].entry_point_name == "different-name"
+    assert "identity" in diagnostics[0].reason
+
+
+def test_entry_points_are_sorted_by_distribution_name_and_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entries = [
+        _TrainerEntryPoint("same", "package:z", object()),
+        _TrainerEntryPoint("beta", "package:b", object()),
+        _TrainerEntryPoint("same", "package:a", object()),
+        _TrainerEntryPoint("alpha", "package:c", object()),
+    ]
+    distribution_names = ("zeta", "alpha", "zeta", "zeta")
+    for entry, distribution_name in zip(
+        entries,
+        distribution_names,
+        strict=True,
+    ):
+        entry.dist = type("Distribution", (), {"name": distribution_name})()
+    monkeypatch.setattr(plugin, "entry_points", lambda **_kwargs: entries)
+
+    ordered = list(plugin._iter_trainer_entry_points())
+
+    assert [(item.dist.name, item.name, item.value) for item in ordered] == [
+        ("alpha", "beta", "package:b"),
+        ("zeta", "alpha", "package:c"),
+        ("zeta", "same", "package:a"),
+        ("zeta", "same", "package:z"),
+    ]
+
+
+def test_non_trainer_entry_points_keep_name_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entries = [
+        _TrainerEntryPoint("zeta", "package:z", object()),
+        _TrainerEntryPoint("alpha", "package:a", object()),
+    ]
+    monkeypatch.setattr(plugin, "entry_points", lambda **_kwargs: entries)
+
+    ordered = list(plugin._iter_entry_points("tributo.exporters"))
+
+    assert [item.name for item in ordered] == ["alpha", "zeta"]

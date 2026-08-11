@@ -138,8 +138,9 @@ tributo = "tributo.cli:main"
 parquet = "tributo.data.parquet:ParquetDataConnector"
 
 [project.entry-points."tributo.trainers"]
-xgboost = "tributo.training.xgboost_trainer"
-pu = "tributo.training.pu_trainer"
+dnn = "tributo.integrations.algorithm_runtimes.legacy_descriptors:DNN_DESCRIPTOR"
+pu = "tributo.integrations.algorithm_runtimes.legacy_descriptors:PU_DESCRIPTOR"
+xgboost = "tributo.integrations.algorithm_runtimes.legacy_descriptors:XGBOOST_DESCRIPTOR"
 
 [project.entry-points."tributo.models"]
 bge_small_zh = "tributo.embeddings.registry"

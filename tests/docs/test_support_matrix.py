@@ -54,6 +54,8 @@ def test_render_is_idempotent_and_preserves_manual_content() -> None:
     assert rendered_once.startswith("# Before\n\nManual before.")
     assert rendered_once.endswith("\n\nManual after.\n")
     assert render_generated_region(snapshot) in rendered_once
+    assert "| Algorithm | Lifecycle | Stability | Availability |" in rendered_once
+    assert "<code>beta</code>" in rendered_once
 
 
 @pytest.mark.parametrize(

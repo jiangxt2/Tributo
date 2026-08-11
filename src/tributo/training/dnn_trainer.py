@@ -15,12 +15,9 @@ from pydantic import Field, model_validator
 
 from tributo._common.config import StrictConfigModel
 from tributo.exceptions import JobConfigurationError, JobExecutionError
-from tributo.training.algorithm_spec import (
-    AlgorithmSpec,
-    Capability,
-    DataLoadingMode,
-    ProblemType,
-    ResourceHints,
+from tributo.integrations.algorithm_runtimes.legacy_descriptors import (
+    DNN_DESCRIPTOR,
+    build_legacy_spec,
 )
 from tributo.training.base import BaseTrainer
 from tributo.training.checkpoint import ResumeConfig
@@ -29,7 +26,6 @@ from tributo.training.features.column_types import (
     SparseFeat,
     features_from_dicts,
 )
-from tributo.training.registry import register
 from tributo.training.resource import (
     DEFAULT_BATCH_SIZE,
     BoundedCollector,
@@ -1377,16 +1373,11 @@ def run_dnn_training_from_json(config_path: str) -> dict[str, Any]:
 
 # ── Built-in registration ──
 
-register(
-    AlgorithmSpec(
-        name="dnn",
-        trainer_cls=DNNTrainerImpl,
-        problem_types=(ProblemType.BINARY_CLASSIFICATION,),
-        data_modality=("tabular",),
-        extras_group="identity",
-        capabilities=(Capability.TUNABLE, Capability.EXPORTABLE),
-        data_loading=DataLoadingMode.CANONICAL_DRIVER,
-        resource_hints=ResourceHints(gpu_required=False),
-        config_model=DNNTrainingConfig,
-    )
+_trainer_spec = build_legacy_spec(
+    DNN_DESCRIPTOR,
+    trainer_cls=DNNTrainerImpl,
+    config_model=DNNTrainingConfig,
 )
+
+# Exported for the explicit Beta compatibility API.
+trainer_spec = _trainer_spec

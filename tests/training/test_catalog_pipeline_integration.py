@@ -83,7 +83,7 @@ class TestIntegrityGate:
             cat.validate_integrity()
 
     def test_shared_registry_is_valid_on_import(self) -> None:
-        """The shared registry passes integrity as loaded by __init__.py."""
+        """The lazily bootstrapped shared Registry passes integrity checks."""
         cat = get_algorithm_catalog()
         cat.validate_integrity()  # must not raise
 
@@ -107,7 +107,7 @@ class TestSnapshotFreshness:
             cat = get_algorithm_catalog()
             assert name in cat.list(problem_type=ProblemType.CLUSTERING)
         finally:
-            _registry._store.pop(name, None)
+            _registry.unregister(name)
 
     def test_catalog_list_calls_snapshot_each_time(self) -> None:
         """Each list() call gets a fresh snapshot."""
@@ -121,7 +121,7 @@ class TestSnapshotFreshness:
             names_after = cat.list()
             assert name in names_after
         finally:
-            _registry._store.pop(name, None)
+            _registry.unregister(name)
 
 
 # ---------------------------------------------------------------------------
@@ -219,7 +219,7 @@ class TestDataLoadingRouting:
                 spec, {"anything": "goes"}, datasets_supplied=False
             )
         finally:
-            _registry._store.pop(name, None)
+            _registry.unregister(name)
 
 
 # ---------------------------------------------------------------------------

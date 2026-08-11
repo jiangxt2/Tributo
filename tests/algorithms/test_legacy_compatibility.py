@@ -24,7 +24,7 @@ def test_legacy_pipeline_rejects_portable_registration() -> None:
         with pytest.raises(JobConfigurationError, match="portable execution path"):
             Pipeline([PipelineStep(name="portable", algorithm=name)]).run({})
     finally:
-        _registry._store.pop(name, None)
+        _registry.unregister(name)
 
 
 def test_legacy_pipeline_identifies_incomplete_legacy_spec() -> None:
@@ -34,4 +34,4 @@ def test_legacy_pipeline_identifies_incomplete_legacy_spec() -> None:
         with pytest.raises(JobConfigurationError, match="missing.*trainer_cls"):
             Pipeline([PipelineStep(name="incomplete", algorithm=name)]).run({})
     finally:
-        _registry._store.pop(name, None)
+        _registry.unregister(name)

@@ -120,6 +120,8 @@ from the legacy setup-only propagation rule.
 | Module | Level | Notes |
 |--------|-------|-------|
 | `tributo.integrations.algorithm_inputs` | `alpha` | Production IngestionGateway bridge with invocation-scoped request refs and explicit Ray/Daft Worker adapters |
+| `tributo.integrations.algorithm_runtimes.legacy_descriptors` | `developer` | Internal lightweight descriptors for the bounded Trainer compatibility bridge |
+| `tributo.integrations.algorithm_runtimes.legacy_trainer` | `developer` | Internal Worker-only execution adapter; not a native first-party runtime |
 | `tributo.integrations.exporters.*` | `beta` | Built-in exporter implementations |
 | `tributo.integrations.validators.*` | `beta` | Built-in validator implementations |
 | `tributo.integrations.sources.*` | `beta` | Built-in source providers |

@@ -6,6 +6,7 @@ import json
 import os
 import pickle
 import sys
+from dataclasses import replace
 from typing import Any, cast
 
 import ray
@@ -17,6 +18,7 @@ from tributo.algorithms.api import (
     BackendInputCompatibility,
     EnvironmentSpec,
     ExecutionMode,
+    ImplementationDescriptor,
     InputBinding,
     QualifiedReference,
     RuntimeBinding,
@@ -67,6 +69,24 @@ from tributo.integrations.algorithm_runtimes.ray_task import RayTaskRuntime
 from tributo.training.algorithm_spec import AlgorithmSpec, ProblemType
 
 _USER_MODULE = "tests.support.portable_algorithms"
+_LEGACY_TRAINER_MODULE = "tests.support.legacy_trainers"
+_LEGACY_INPUT_ADAPTER = QualifiedReference.parse(
+    f"{_LEGACY_TRAINER_MODULE}:prepare_materialized_input"
+)
+
+
+class _LegacyFakeInputResolver(FakeInputResolver):
+    """Allow the fixture adapter while preserving Fake resolver semantics."""
+
+    def describe(self, binding, context):
+        descriptor = super().describe(binding, context)
+        return replace(
+            descriptor,
+            compatible_worker_input_adapter_refs=(
+                *descriptor.compatible_worker_input_adapter_refs,
+                str(_LEGACY_INPUT_ADAPTER),
+            ),
+        )
 
 
 def _fake_input_compatibility(
@@ -292,7 +312,12 @@ def _dispatcher(
         )
         input_adapter = IngestionInputRuntimeAdapter()
     else:
-        resolver = FakeInputResolver()
+        resolver = (
+            _LegacyFakeInputResolver()
+            if registration.implementation.execution_mode
+            is ExecutionMode.LEGACY_TRAINER
+            else FakeInputResolver()
+        )
         input_adapter = FakeInputRuntimeAdapter()
     runtime = RayTaskRuntime()
     return AlgorithmDispatcher(
@@ -440,6 +465,70 @@ def _run_distributed_sklearn() -> dict[str, Any]:
         "actual_ray": result.actual_versions["ray"],
         "driver_imported_user_module": driver_imported_user_module,
         "driver_imported_sklearn": driver_imported_sklearn,
+    }
+
+
+def _run_legacy_trainer_adapter() -> dict[str, Any]:
+    compatibility = BackendInputCompatibility(
+        accepted_input_views=("materialized_tabular",),
+        accepted_ingestion_engines=("tributo.fake_tabular",),
+        required_input_capabilities=("materializable",),
+        supported_explicit_adapters=(_LEGACY_INPUT_ADAPTER,),
+        distribution_policy=(RuntimeTopology.SINGLE_WORKER,),
+    )
+    registration = AlgorithmRegistration(
+        spec=_spec(
+            "jobs.legacy_trainer",
+            ("fit",),
+            ExecutionMode.LEGACY_TRAINER,
+        ),
+        implementation=ImplementationDescriptor(
+            implementation_id="jobs.legacy_trainer",
+            version="1.0.0",
+            execution_mode=ExecutionMode.LEGACY_TRAINER,
+            implementation_ref=QualifiedReference.parse(
+                f"{_LEGACY_TRAINER_MODULE}:ProbeLegacyTrainer"
+            ),
+            executable_factory_ref=QualifiedReference.parse(
+                "tributo.integrations.algorithm_runtimes.legacy_trainer:create_executable"
+            ),
+            operations=(AlgorithmOperation.FIT,),
+            input_compatibility=compatibility,
+            allowed_config_keys=("metric", "require_ray_dataset"),
+        ),
+        environment=EnvironmentSpec(
+            environment_id="jobs.legacy_trainer",
+            dependencies=("ray==2.55.1",),
+        ),
+        runtime=RuntimeBinding(
+            runtime_id="tributo.ray_task",
+            worker_input_adapter_ref=_LEGACY_INPUT_ADAPTER,
+            num_cpus=0,
+            max_retries=0,
+        ),
+        is_default=True,
+    )
+    close_calls: list[str] = []
+    result = _dispatcher(registration).execute(
+        _request(
+            "jobs.legacy_trainer",
+            AlgorithmOperation.FIT,
+            {"metric": 0.125, "require_ray_dataset": True},
+        ),
+        _context(close_calls),
+    )
+    if result.execution.status != "succeeded":
+        raise AssertionError(f"legacy Trainer adapter failed: {result.execution}")
+    return {
+        "channel": "legacy_trainer",
+        "loss": result.execution.metrics["loss"],
+        "checkpoint_available": result.execution.outputs["checkpoint_available"],
+        "delivery_performed": result.execution.outputs["delivery_performed"],
+        "artifact_count": len(result.execution.artifacts),
+        "actual_ray": result.actual_versions["ray"],
+        "worker_id": result.worker_metadata["worker_id"],
+        "close_calls": close_calls,
+        "driver_imported_legacy_trainer": _LEGACY_TRAINER_MODULE in sys.modules,
     }
 
 
@@ -594,6 +683,7 @@ def main() -> int:
     """Execute the requested channel and emit one machine-readable result."""
     channel = os.environ["PORTABLE_CHANNEL"]
     sys.modules.pop(_USER_MODULE, None)
+    sys.modules.pop(_LEGACY_TRAINER_MODULE, None)
     ray.init()
     try:
         if channel == "sklearn":
@@ -604,6 +694,8 @@ def main() -> int:
             result = _run_function(fail=True)
         elif channel == "distributed_sklearn":
             result = _run_distributed_sklearn()
+        elif channel == "legacy_trainer":
+            result = _run_legacy_trainer_adapter()
         elif channel == "distributed_function":
             result = _run_function(production_input=True, data_parallel=True)
         elif channel == "ingestion_sklearn":

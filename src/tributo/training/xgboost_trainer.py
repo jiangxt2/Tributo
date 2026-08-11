@@ -14,17 +14,13 @@ from pydantic import AliasChoices, ConfigDict, Field, model_validator
 from tributo._common.config import StrictConfigModel
 from tributo.data.base import S3Config
 from tributo.exceptions import JobConfigurationError
-from tributo.integrations.broker import CancellationChecker
-from tributo.training.algorithm_spec import (
-    AlgorithmSpec,
-    Capability,
-    DataLoadingMode,
-    ProblemType,
-    ResourceHints,
+from tributo.integrations.algorithm_runtimes.legacy_descriptors import (
+    XGBOOST_DESCRIPTOR,
+    build_legacy_spec,
 )
+from tributo.integrations.broker import CancellationChecker
 from tributo.training.base import BaseTrainer
 from tributo.training.checkpoint import ResumeConfig
-from tributo.training.registry import register
 from tributo.training.resource import (
     DEFAULT_BATCH_SIZE,
     BoundedCollector,
@@ -1088,28 +1084,13 @@ def run_training_with_config(config: dict[str, Any]) -> dict[str, Any]:
 
 # Built-in registration
 
-_trainer_spec = AlgorithmSpec(
-    name="xgboost",
+_trainer_spec = build_legacy_spec(
+    XGBOOST_DESCRIPTOR,
     trainer_cls=XGBoostTrainerImpl,
-    problem_types=(
-        ProblemType.BINARY_CLASSIFICATION,
-        ProblemType.MULTI_CLASS_CLASSIFICATION,
-        ProblemType.REGRESSION,
-    ),
-    data_modality=("tabular",),
-    extras_group="training",
-    capabilities=(
-        Capability.TUNABLE,
-        Capability.EXPORTABLE,
-        Capability.DISTRIBUTED,
-    ),
-    data_loading=DataLoadingMode.CANONICAL_DRIVER,
-    resource_hints=ResourceHints(gpu_required=False),
     config_model=XGBoostTrainingConfig,
 )
-register(_trainer_spec)
 
-# Exported for entry_points discovery (see tributo.plugin)
+# Exported for the explicit Beta compatibility API.
 trainer_spec = _trainer_spec
 
 
