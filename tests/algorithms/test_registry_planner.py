@@ -357,6 +357,77 @@ def test_registry_rejects_conflicting_algorithm_facts() -> None:
         registry.register(second)
 
 
+def test_batch_registration_rolls_back_every_entry_on_conflict() -> None:
+    first = function_registration()
+    conflicting = replace(
+        function_registration(
+            "tests.support.portable_algorithms:failing_training_fragment"
+        ),
+        implementation=replace(
+            function_registration().implementation,
+            implementation_id="tests.conflicting",
+        ),
+        spec=replace(first.spec, version="2.0.0"),
+    )
+    registry = AlgorithmRegistrationRegistry()
+
+    with pytest.raises(AlgorithmResolutionError, match="conflicting specs"):
+        registry.register_many((first, conflicting))
+
+    assert registry.snapshot() == ()
+    assert registry.spec_snapshot() == {}
+
+
+def test_batch_registration_rejects_ambiguous_defaults_atomically() -> None:
+    first = replace(function_registration(), is_default=False)
+    second = replace(
+        function_registration(
+            "tests.support.portable_algorithms:failing_training_fragment"
+        ),
+        implementation=replace(
+            function_registration().implementation,
+            implementation_id="tests.second",
+        ),
+        is_default=False,
+    )
+    registry = AlgorithmRegistrationRegistry()
+
+    with pytest.raises(AlgorithmResolutionError, match="ambiguous implementations"):
+        registry.register_many((first, second))
+
+    assert registry.snapshot() == ()
+
+
+def test_batch_registration_publishes_one_deterministic_snapshot() -> None:
+    first = function_registration()
+    second = sklearn_registration()
+    registry = AlgorithmRegistrationRegistry()
+
+    registry.register_many((second, first))
+
+    assert [item.spec.name for item in registry.snapshot()] == [
+        "external_function",
+        "external_sklearn",
+    ]
+    assert list(registry.spec_snapshot()) == [
+        "external_function",
+        "external_sklearn",
+    ]
+
+
+def test_executable_and_compatibility_facts_share_one_conflict_boundary() -> None:
+    registration = function_registration()
+    registry = AlgorithmRegistrationRegistry()
+    registry.register_compatibility(registration.spec)
+
+    with pytest.raises(AlgorithmResolutionError, match="compatibility-only"):
+        registry.register_many((registration,))
+
+    registrations, compatibility = registry.catalog_snapshot()
+    assert registrations == ()
+    assert compatibility == {registration.spec.name: registration.spec}
+
+
 def test_deprecated_registration_warns_but_remains_resolvable() -> None:
     registration = function_registration()
     deprecated = replace(

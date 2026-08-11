@@ -24,26 +24,42 @@ class TestAlgoList:
     def test_list_default(self, runner) -> None:
         result = runner.invoke(main, ["algo", "list"])
         assert result.exit_code == 0
-        # Should list at least xgboost (registered at import)
+        # Should list at least the bootstrapped first-party XGBoost descriptor.
         assert "xgboost" in result.output
         assert "dnn" in result.output
+        assert "MODALITY" in result.output
+        assert "GPU REQ" in result.output
+        assert "STATUS" in result.output
+        assert "STABILITY" in result.output
+        assert "AVAILABLE" in result.output
+        assert "TESTED" in result.output
+        assert "SUPPORTED" in result.output
 
     def test_list_json_output(self, runner) -> None:
         result = runner.invoke(main, ["algo", "list", "--json"])
         assert result.exit_code == 0
-        parsed = json.loads(result.output)
+        parsed = json.loads(result.stdout)
         assert isinstance(parsed, list)
         names = [item["name"] for item in parsed]
         assert "xgboost" in names
         by_name = {item["name"]: item for item in parsed}
         assert by_name["xgboost"]["execution_kind"] == "train"
-        assert by_name["xgboost"]["supported_tasks"] == ["train"]
+        assert by_name["xgboost"]["supported_tasks"] == ["fit"]
         assert by_name["xgboost"]["capabilities"] == [
             "tunable",
             "exportable",
             "distributed",
         ]
         assert by_name["xgboost"]["data_loading"] == "canonical_driver"
+        assert by_name["xgboost"]["stability"] == "beta"
+        assert by_name["xgboost"]["available"] is True
+        assert by_name["xgboost"]["compatibility_only"] is False
+        assert by_name["xgboost"]["tested"] is False
+        assert by_name["xgboost"]["supported"] is False
+        assert by_name["xgboost"]["native_migration_complete"] is False
+        assert by_name["xgboost"]["implementation_ids"] == [
+            "tributo.xgboost.legacy_trainer"
+        ]
 
         if "dnn" in by_name:
             assert "distributed" not in by_name["dnn"]["capabilities"]
@@ -87,6 +103,8 @@ class TestAlgoInfo:
         assert "Execution Kind" in result.output
         assert "Capabilities" in result.output
         assert "distributed" in result.output
+        assert "Stability:      beta" in result.output
+        assert "Implementations: ['tributo.xgboost.legacy_trainer']" in result.output
 
     def test_info_unknown_algorithm(self, runner) -> None:
         result = runner.invoke(main, ["algo", "info", "nonexistent_algo_xyz"])
@@ -103,7 +121,7 @@ class TestAlgoConfigSchema:
     def test_schema_for_xgboost(self, runner) -> None:
         result = runner.invoke(main, ["algo", "config-schema", "xgboost"])
         assert result.exit_code == 0
-        schema = json.loads(result.output)
+        schema = json.loads(result.stdout)
         assert "properties" in schema
 
     def test_schema_no_config_model_exits_1(self, runner) -> None:
@@ -120,7 +138,7 @@ class TestAlgoConfigSchema:
             assert result.exit_code == 1
             assert "Error" in result.output
         finally:
-            _registry._store.pop(name, None)
+            _registry.unregister(name)
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +229,7 @@ class TestAlgoValidate:
             )
             assert result.exit_code == 2
         finally:
-            _registry._store.pop(name, None)
+            _registry.unregister(name)
 
     def test_invalid_json_config(self, runner, tmp_path) -> None:
         config_file = tmp_path / "bad.json"

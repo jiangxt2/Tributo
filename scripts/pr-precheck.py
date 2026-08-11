@@ -893,6 +893,66 @@ def check_hygiene(root: str, changed_files: list[str]) -> list[str]:
 
 
 # =============================================================================
+# Layer 4.5: Legacy Projection API Callers
+# =============================================================================
+
+# Projection APIs that product paths (Catalog, CLI, support matrix) migrated
+# away from. A leftover caller in an unchanged file is invisible to every
+# changed-file-based check and only surfaces in CI suites that run the full
+# test surface; scanning callers here turns that silent divergence into a
+# pre-push warning.
+_LEGACY_PROJECTION_CALLS: tuple[tuple[str, str], ...] = (
+    ("list_specs", "list_records"),
+)
+
+_PROJECTION_MODULE_HINTS = (
+    "training/catalog.py",
+    "training/support_snapshot.py",
+    "algorithms/core/registry.py",
+    "training/registry.py",
+    "cli.py",
+)
+
+
+def check_legacy_projection_callers(root: str, changed_files: list[str]) -> list[str]:
+    """Warn when a changed projection module leaves legacy API callers behind.
+
+    Reports every call site of a legacy projection API under ``src``,
+    ``tests``, and ``tools``. Definition sites and same-file internal uses
+    are excluded; the remaining callers are migration debt or deliberate
+    legacy-API coverage and must be judged by the author.
+    """
+    if not any(
+        any(hint in f for hint in _PROJECTION_MODULE_HINTS) for f in changed_files
+    ):
+        return []
+    issues = []
+    for api, replacement in _LEGACY_PROJECTION_CALLS:
+        for base in ("src", "tests", "tools"):
+            for dirpath, _, filenames in os.walk(os.path.join(root, base)):
+                for filename in filenames:
+                    if not filename.endswith(".py"):
+                        continue
+                    path = os.path.join(dirpath, filename)
+                    rel = os.path.relpath(path, root)
+                    content = read_file(path)
+                    if not re.search(rf"\.{api}\(", content):
+                        continue
+                    defines_api = re.search(rf"def {api}\(", content) is not None
+                    for lineno, line in enumerate(content.splitlines(), 1):
+                        stripped = line.strip()
+                        if re.search(rf"\.{api}\(", line) and "def " not in stripped:
+                            if defines_api:
+                                continue
+                            issues.append(
+                                f"WARN: {rel}:{lineno}: legacy projection API "
+                                f"{api!r} still has a caller; migrate it to "
+                                f"{replacement!r}"
+                            )
+    return issues
+
+
+# =============================================================================
 # Layer 5: Run Changed Tests
 # =============================================================================
 
@@ -1182,6 +1242,14 @@ def main():
     for issue in l4:
         print(f"  {issue}")
     print(f"  {'PASS' if not l4 else 'ISSUES'} — {len(l4)} issue(s)\n")
+
+    # Layer 4.5
+    print("=== Layer 4.5: Legacy Projection API Callers ===")
+    l45 = check_legacy_projection_callers(root, changed_files)
+    all_issues.extend(l45)
+    for issue in l45:
+        print(f"  {issue}")
+    print(f"  {'PASS' if not l45 else 'WARNINGS'} — {len(l45)} issue(s)\n")
 
     # Layer 5
     if args.skip_tests:

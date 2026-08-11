@@ -38,12 +38,9 @@ from pydantic import Field, model_validator
 
 from tributo._common.config import StrictConfigModel
 from tributo.exceptions import JobConfigurationError
-from tributo.training.algorithm_spec import (
-    AlgorithmSpec,
-    Capability,
-    DataLoadingMode,
-    ProblemType,
-    ResourceHints,
+from tributo.integrations.algorithm_runtimes.legacy_descriptors import (
+    PU_DESCRIPTOR,
+    build_legacy_spec,
 )
 from tributo.training.base import BaseTrainer
 from tributo.training.checkpoint import ResumeConfig
@@ -62,7 +59,6 @@ from tributo.training.dnn_trainer import (
     validate_finite_training_metrics,
     warn_if_ignored_class_prior_method,
 )
-from tributo.training.registry import register
 from tributo.training.resource import (
     DEFAULT_BATCH_SIZE,
     ResourceBudget,
@@ -850,18 +846,11 @@ def run_pu_training_from_json(config_path: str) -> dict[str, Any]:
 
 # ── Built-in registration ──
 
-_trainer_spec = AlgorithmSpec(
-    name="pu",
+_trainer_spec = build_legacy_spec(
+    PU_DESCRIPTOR,
     trainer_cls=PUTrainerImpl,
-    problem_types=(ProblemType.PU_LEARNING,),
-    data_modality=("tabular",),
-    extras_group="identity",
-    capabilities=(Capability.TUNABLE, Capability.EXPORTABLE),
-    data_loading=DataLoadingMode.CANONICAL_TRAINER,
-    resource_hints=ResourceHints(gpu_required=False),
     config_model=PUTrainingConfig,
 )
-register(_trainer_spec)
 
-# Exported for entry_points discovery (see tributo.plugin)
+# Exported for the explicit Beta compatibility API.
 trainer_spec = _trainer_spec

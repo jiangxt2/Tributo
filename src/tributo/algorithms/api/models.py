@@ -124,6 +124,7 @@ class ExecutionMode(str, Enum):
 
     MANAGED_ESTIMATOR = "managed_estimator"
     CUSTOM_RAY_FUNCTION = "custom_ray_function"
+    LEGACY_TRAINER = "legacy_trainer"
 
 
 @PublicAPI(stability="alpha")
@@ -580,10 +581,11 @@ class AlgorithmRegistration:
         if (
             self.runtime.topology is RuntimeTopology.FRAMEWORK_MANAGED
             and self.implementation.execution_mode
-            is not ExecutionMode.MANAGED_ESTIMATOR
+            not in {ExecutionMode.MANAGED_ESTIMATOR, ExecutionMode.LEGACY_TRAINER}
         ):
             raise AlgorithmConfigurationError(
-                "framework_managed topology is supported only for managed estimators"
+                "framework_managed topology is supported only for managed estimators "
+                "and the bounded legacy Trainer adapter"
             )
         if (
             self.runtime.topology is RuntimeTopology.DATA_PARALLEL

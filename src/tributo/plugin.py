@@ -5,11 +5,12 @@ declared in ``pyproject.toml`` under the ``[project.entry-points]`` table.
 
 Discovery groups:
     ``tributo.trainers``
-        Each entry point must point to a module with a ``trainer_spec``
-        attribute of type ``TrainerSpec``.  Example::
+        New entries expose a lightweight ``LegacyTrainerDescriptor`` through
+        an explicit attribute. Module-only entries with a ``trainer_spec``
+        remain available only through the Beta compatibility API. Example::
 
             [project.entry-points."tributo.trainers"]
-            my_algo = "my_package.trainer"
+            my_algo = "my_package.descriptors:MY_ALGO_DESCRIPTOR"
 
     ``tributo.connectors``
         Each entry point must point to a ``DataConnector`` subclass.
@@ -84,46 +85,78 @@ def _get_enabled_plugins() -> set[str] | None:
     return {name.strip() for name in raw.split(",") if name.strip()}
 
 
-def discover_trainer_plugins() -> list[Any]:
-    """Discover third-party trainers registered via entry_points.
+def discover_trainer_descriptors(
+    diagnostics: list[PluginLoadDiagnostic] | None = None,
+    compatibility_entry_points: list[Any] | None = None,
+) -> list[Any]:
+    """Collect lightweight Trainer descriptors without importing old plugins.
 
-    Each entry point is expected to point to a module whose top-level
-    ``trainer_spec`` attribute is a :class:`TrainerSpec` instance.
+    Entry points with an explicit attribute may expose a
+    ``LegacyTrainerDescriptor``. Module-only legacy entry points are retained
+    as compatibility-only metadata and are loaded only if the Beta
+    ``get_trainer`` API explicitly requests them.
     """
-    from tributo.training.base import TrainerSpec
+    from tributo.integrations.algorithm_runtimes.legacy_descriptors import (
+        LegacyTrainerDescriptor,
+    )
 
     enabled = _get_enabled_plugins()
-    specs: list[Any] = []
-
-    for ep in _iter_entry_points("tributo.trainers"):
+    descriptors: list[Any] = []
+    for ep in _iter_trainer_entry_points():
         if enabled is not None and ep.name not in enabled:
             logger.debug("Skipping trainer plugin %r (not in TRIBUTO_PLUGINS)", ep.name)
             continue
+        if ":" not in ep.value:
+            if compatibility_entry_points is not None:
+                compatibility_entry_points.append(ep)
+            _record_diagnostic(
+                diagnostics,
+                "tributo.trainers",
+                ep.name,
+                "compatibility-only: entry point does not expose a lightweight descriptor",
+            )
+            continue
         try:
-            mod = ep.load()
-        except Exception:
+            descriptor = ep.load()
+        except Exception as exc:
             logger.warning(
-                "Failed to load trainer plugin %r (%s)",
+                "Failed to load trainer descriptor %r (%s)",
                 ep.name,
                 ep.value,
                 exc_info=True,
             )
-            continue
-
-        spec = getattr(mod, "trainer_spec", None)
-        if not isinstance(spec, TrainerSpec):
-            logger.warning(
-                "Trainer plugin %r does not export a TrainerSpec instance as "
-                "%r.trainer_spec (got %r); skipping.",
+            _record_diagnostic(
+                diagnostics,
+                "tributo.trainers",
                 ep.name,
-                ep.value,
-                type(spec).__name__,
+                "Failed to load lightweight trainer descriptor",
+                error_type=type(exc).__name__,
             )
             continue
-        specs.append(spec)
-        logger.info("Discovered trainer plugin %r (%s)", ep.name, ep.value)
-
-    return specs
+        if not isinstance(descriptor, LegacyTrainerDescriptor):
+            if compatibility_entry_points is not None:
+                compatibility_entry_points.append(ep)
+            _record_diagnostic(
+                diagnostics,
+                "tributo.trainers",
+                ep.name,
+                "compatibility-only: entry point does not export a LegacyTrainerDescriptor",
+                error_type=type(descriptor).__name__,
+            )
+            continue
+        if descriptor.name != ep.name:
+            _record_diagnostic(
+                diagnostics,
+                "tributo.trainers",
+                ep.name,
+                "descriptor algorithm identity does not match the entry-point name",
+            )
+            raise JobConfigurationError(
+                f"Trainer entry point {ep.name!r} exposes descriptor identity "
+                f"{descriptor.name!r}"
+            )
+        descriptors.append(descriptor)
+    return descriptors
 
 
 def discover_connector_plugins() -> list[type[Any]]:
@@ -220,13 +253,36 @@ def discover_model_plugins() -> list[Any]:
     return specs
 
 
-def _iter_entry_points(group: str) -> Any:
-    """Iterate over entry points for *group*, sorted by name.
+def _entry_point_distribution_name(entry_point: Any) -> str:
+    distribution = getattr(entry_point, "dist", None)
+    if distribution is None:
+        return ""
+    name = getattr(distribution, "name", None)
+    if isinstance(name, str):
+        return name.casefold()
+    metadata = getattr(distribution, "metadata", None)
+    if metadata is not None:
+        candidate = metadata.get("Name", "")
+        if isinstance(candidate, str):
+            return candidate.casefold()
+    return ""
 
-    Deterministic order makes plugin loading (and any resulting
-    candidate ordering) reproducible across runs.
-    """
-    eps = sorted(entry_points(group=group), key=lambda ep: ep.name)
+
+def _iter_entry_points(group: str) -> Any:
+    """Iterate over entry points using the established name ordering."""
+    yield from sorted(entry_points(group=group), key=lambda ep: ep.name)
+
+
+def _iter_trainer_entry_points() -> Any:
+    """Iterate over Trainer entries in deterministic discovery order."""
+    eps = sorted(
+        entry_points(group="tributo.trainers"),
+        key=lambda ep: (
+            _entry_point_distribution_name(ep),
+            ep.name,
+            ep.value,
+        ),
+    )
     yield from eps
 
 

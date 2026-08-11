@@ -49,7 +49,7 @@ def test_documentation_python_examples_compile() -> None:
 
 
 def test_support_matrix_and_cli_share_registry_snapshot() -> None:
-    snapshot = build_algorithm_support_snapshot(get_algorithm_catalog().list_specs())
+    snapshot = build_algorithm_support_snapshot(get_algorithm_catalog().list_records())
     result = CliRunner().invoke(main, ["algo", "list", "--json"])
 
     assert result.exit_code == 0

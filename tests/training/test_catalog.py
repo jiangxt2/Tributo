@@ -74,6 +74,15 @@ def _catalog(**specs: AlgorithmSpec) -> AlgorithmCatalog:
 
 
 class TestCatalogList:
+    def test_generic_registry_records_are_beta_compatibility_only(self) -> None:
+        record = _catalog(example=_spec("example")).get_record("example")
+
+        assert record.stability == "beta"
+        assert record.available is False
+        assert record.compatibility_only is True
+        assert record.implementation_ids == ()
+        assert "no executable portable descriptor" in " ".join(record.limitations)
+
     def test_list_specs_reads_one_registry_snapshot(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -443,8 +452,40 @@ class TestGetAlgorithmCatalog:
     def test_includes_registered_trainers(self) -> None:
         cat = get_algorithm_catalog()
         names = cat.list()
-        # xgboost, dnn, pu are registered by __init__.py
+        # First-party descriptors are published by the unified Registry bootstrap.
         assert "xgboost" in names
+
+    def test_unified_records_expose_execution_and_support_state(self) -> None:
+        record = get_algorithm_catalog().get_record("xgboost")
+
+        assert record.available is True
+        assert record.compatibility_only is False
+        assert record.tested is False
+        assert record.supported is False
+        assert record.native_migration_complete is False
+        assert record.implementation_ids == ("tributo.xgboost.legacy_trainer",)
+        assert record.runtime_topologies == ("framework_managed",)
+        assert record.input_views == ("ray_data",)
+        assert record.stability == "beta"
+
+    def test_explicit_compatibility_access_reuses_hydrated_spec(self) -> None:
+        catalog = get_algorithm_catalog()
+
+        assert catalog.get_spec("xgboost") is catalog.get_spec("xgboost")
+
+    def test_programmatic_beta_registration_is_compatibility_only(self) -> None:
+        from tributo.training.registry import _registry
+
+        name = "tests.compatibility-only"
+        _registry.register(name, _spec(name))
+        try:
+            record = get_algorithm_catalog().get_record(name)
+            assert record.available is False
+            assert record.compatibility_only is True
+            assert record.implementation_ids == ()
+            assert record.supported is False
+        finally:
+            _registry.unregister(name)
 
 
 # ---------------------------------------------------------------------------

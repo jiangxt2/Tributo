@@ -54,7 +54,7 @@ def _result_from_logs(logs: str) -> dict[str, Any]:
     raise AssertionError(f"RESULT line not found in Ray Job logs:\n{logs}")
 
 
-@pytest.mark.parametrize("channel", ["sklearn", "function"])
+@pytest.mark.parametrize("channel", ["sklearn", "function", "legacy_trainer"])
 def test_portable_channel_executes_in_real_ray_job(
     job_client: JobSubmissionClient,
     channel: str,
@@ -82,12 +82,20 @@ def test_portable_channel_executes_in_real_ray_job(
         assert len(result["artifact_sha256"]) == 64
         assert result["actual_sklearn"]
         assert result["close_calls"] == ["closed", "closed", "closed"]
-    else:
+    elif channel == "function":
         assert result["positive_rate"] == 0.5
         assert result["threshold"] == 0.8
         assert result["worker_id"]
         assert result["artifact_kinds"] == ["report", "checkpoint"]
         assert result["close_calls"] == ["closed"]
+    else:
+        assert result["loss"] == 0.125
+        assert result["checkpoint_available"] is True
+        assert result["delivery_performed"] is False
+        assert result["artifact_count"] == 0
+        assert result["worker_id"]
+        assert result["close_calls"] == ["closed"]
+        assert result["driver_imported_legacy_trainer"] is False
 
 
 def test_user_failure_is_normalized_in_real_ray_job(
