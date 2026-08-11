@@ -70,131 +70,57 @@ Set `MLFLOW_TRACKING_URI` to use another real server. The default is
 
 ---
 
-## Distributed Test Environment
+## Required Data Ingestion Gate
 
-### Start Docker Cluster
-
-```bash
-cd rayDocker && ./ray-cluster.sh up
-```
-
-Wait for all services to be healthy (~30s), then verify:
+Run the complete Data Ingestion Docker gate from the repository root:
 
 ```bash
-docker ps --format "table {{.Names}}\t{{.Status}}"
+./scripts/run_data_ingestion_it.sh
 ```
 
-Expected containers:
+This is the only supported lifecycle entry for
+`test_data_ingestion_dual_engine.py`. It computes a dependency-only runtime
+key from the runtime profile, Dockerfile, `pyproject.toml`, `uv.lock`, version
+contract, and Docker platform. A matching
+`tributo-it-runtime:data-ingestion-<runtime-key>` image is validated and reused;
+when missing, exactly one process builds it through a profile/key/platform/
+daemon-scoped file lock and a single `docker buildx build --load` output.
 
-| Container | Ports | Role |
-|-----------|-------|------|
-| `ray-head` | 8265 / 6380 / 10001 | Ray Head (GCS + Dashboard) |
-| `ray-worker-[1-3]` | — | Distributed training workers |
-| `clickhouse` | 8123 (HTTP) / 9123 (Native) | OLAP database |
-| `redis` | 6379 | Redis Stream message queue |
-| `minio` | 9000 (S3) / 9001 (Console) | S3-compatible storage |
-| `mlflow-server` | 5001 | MLflow experiment tracking |
+Compose never builds or implicitly pulls an image. The runner explicitly
+prepares digest-pinned infrastructure images, copies the checkout once through
+`source-init` into a run-scoped source volume, and mounts that snapshot read-only
+on the Ray head and worker. The snapshot also projects deterministic
+`importlib.metadata` and entry-point metadata from `pyproject.toml`, so Tributo
+remains source-delivered without installing it into the dependency runtime.
+Test data, caches, and temporary files use a separate writable volume. The suite
+records the long-running container IDs and source digest, reuses that same
+cluster for all test groups, and then removes only its unique Compose project's
+containers, network, and volumes.
 
-### Test Directory Mapping
-
-`rayDocker/docker-compose.yml` mounts the project root to `/app` inside containers.
-Test files are available at `/opt/tributo/tests/integrations/` inside the container.
-
----
-
-## Running Distributed Tests
-
-The remaining end-to-end scripts are executed from the host machine via
-`docker exec ray-head`.
-
-### Individual Tests
+The stable runtime and third-party images remain available for later runs.
+Before preparation and after scoped cleanup, the runner compares Docker image
+IDs and fails if the run added a dangling or `<none>` image; it never invokes a
+global prune or deletes an unattributed image. Runtime retention can be audited
+without deletion:
 
 ```bash
-# ClickHouse integration test
-docker exec ray-head python /opt/tributo/tests/integrations/test_e2e_clickhouse.py
-
-# Redis Stream full-pipeline test
-docker exec ray-head python /opt/tributo/tests/integrations/test_e2e_redis_stream.py
-
-# Required Docker-cluster ingestion slice
-docker exec ray-head env TRIBUTO_DOCKER_RAY_TEST=1 \
-  python -m tests.integrations.test_data_ingestion_dual_engine
+python3 tools/tributo_it.py runtime-gc-dry-run --profile data-ingestion
 ```
 
-The ClickHouse and multi-class scripts require the independently installed
-`daft-olap-connectors` distribution. They use an explicit conversion adapter;
-the Gateway itself never changes the selected engine or disguises a Daft
-DataFrame as a Ray Dataset.
+For a source-only change, the runtime key remains unchanged and the existing
+runtime is reused. Set `TRIBUTO_IT_RUNTIME_REGISTRY` to an immutable GHCR
+repository to prefer a published runtime before the local Buildx fallback.
 
 The PR workflow runs two required ingestion gates. The semantic gate executes
 the file, table-format, and PostgreSQL Conformance files with locked `data`,
-`data-daft`, and `postgresql` extras. The distributed gate builds the isolated
-`Dockerfile.data-ingestion` image, starts one Ray head, one Ray worker, and
-MinIO with `docker-compose.data-ingestion.yml`, initializes the shared volume
-for the unprivileged `ray` user, then runs this module with the Daft Ray runner
-and mandatory Driver/Worker version evidence. Both jobs feed `core-gate`;
-infrastructure absence is a failure rather than a passing skip.
+`data-daft`, and `postgresql` extras. The distributed gate obtains one
+content-addressed runtime, starts one Ray head, one Ray worker, and MinIO with
+`docker-compose.data-ingestion.yml`, freezes the checked-out source in a
+run-scoped read-only volume, then runs this module with the Daft Ray runner and
+mandatory Driver/Worker version and snapshot evidence. Both jobs feed
+`core-gate`; infrastructure absence is a failure rather than a passing skip.
 
-### Batch Run
-
-```bash
-docker exec ray-head bash -c '
-  for t in /opt/tributo/tests/integrations/test_e2e_*.py; do
-    if [ "$(basename "$t")" = "test_e2e_mlflow.py" ]; then
-      continue
-    fi
-    echo "=== Running $t ==="
-    python "$t" && echo "PASS" || echo "FAIL"
-  done
-'
-```
-
-The batch loop excludes `test_e2e_mlflow.py` because that module is a pytest
-suite and must be run with the fail-fast command above.
-
-### Expected Output
-
-```
-# test_e2e_clickhouse.py
-ClickHouse connected ✅
-MLflow connected ✅
-ClickHouse table tributo_e2e_clickhouse_test: 2000 rows written
-Ray cluster ready: ...
-Training complete: succeeded
-ONNX model: 22659 bytes
-✅ ClickHouse E2E test passed
-
-# test_e2e_redis_stream.py
-Redis connected ✅
-ClickHouse connected ✅
-Task published: message_id=...
-Ray Job submitted: ...
-Event type sequence: ['PHASE', 'PHASE', 'PHASE', 'METRICS', ..., 'COMPLETED']
-COMPLETED event validation passed ✅
-✅ Redis Stream E2E test passed
-```
-
----
-
-## Test Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                         Docker Network                                  │
-│                                                                         │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐ │
-│  │ ray-head │  │ worker-1 │  │ worker-2 │  │ worker-3 │  │  minio   │ │
-│  │ 8265     │  │ 3C 4G    │  │ 3C 4G    │  │ 3C 4G    │  │ 9000 S3  │ │
-│  └──────────┘  └──────────┘  └──────────┘  └──────────┘  └──────────┘ │
-│                                                                         │
-│  ┌──────────┐  ┌──────────┐  ┌──────────────┐  ┌────────────────────┐ │
-│  │  redis   │  │clickhouse│  │ mlflow-server│  │    Host machine    │ │
-│  │ 6379     │  │ 8123     │  │ 5001         │  │ docker exec trigger│ │
-│  └──────────┘  └──────────┘  └──────────────┘  └────────────────────┘ │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-### Redis Stream Message Format (Protocol v2.0)
+## Redis Stream Message Format (Protocol v2.0)
 
 **Training Task** (downstream → Tributo):
 
@@ -219,38 +145,8 @@ Each stream entry contains exactly two fields: `{job_id, payload}`.
 
 ## Troubleshooting
 
-### Container startup failure
-
-```bash
-# View all logs
-docker compose -f rayDocker/docker-compose.yml logs
-
-# View specific service
-docker compose -f rayDocker/docker-compose.yml logs clickhouse
-
-# Rebuild cluster
-cd rayDocker && ./ray-cluster.sh down && ./ray-cluster.sh up
-```
-
-### Redis connection refused
-
-```bash
-docker exec ray-head redis-cli -h redis ping
-# Should return PONG
-```
-
-### ClickHouse connection refused
-
-```bash
-docker exec ray-head bash -c "
-  python3 -c \"
-import clickhouse_connect
-c = clickhouse_connect.get_client(host='clickhouse', port=8123, username='reader', password='tributo123', database='analytics')
-print(c.command('SELECT 1'))
-  \"
-"
-```
-
-### Ray Dashboard
-
-Visit http://localhost:8265 to monitor training job status.
+The Data Ingestion runner prints every lifecycle command and preserves the test
+and service logs under `/tmp/tributo-it-logs/<compose-project>-*.log`. Do not
+start, rebuild, or clean its Compose file manually: rerun the lifecycle-owned
+entry after inspecting those logs. A failed run still performs exact-project
+cleanup and reports any remaining labelled resource or new dangling image.

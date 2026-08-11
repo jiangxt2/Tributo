@@ -1,8 +1,8 @@
 """Local-Parquet dual-engine integration test for the Docker Ray cluster.
 
 Run inside ``ray-head`` with ``TRIBUTO_DOCKER_RAY_TEST=1``. The test path is
-under the cluster's shared ``/workspace`` mount so Ray and Daft workers see the
-same Parquet file.
+under the cluster's shared writable work mount so Ray and Daft workers see the
+same Parquet file, while every node imports from one read-only source snapshot.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ import pyarrow as pa
 import pyarrow.fs as pafs
 import pyarrow.parquet as pq
 import ray
+from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
 try:
     import pytest
@@ -75,6 +76,31 @@ def _configure_cluster() -> None:
             "Docker ingestion gate requires a Ray head and at least one worker"
         )
     daft.set_runner_ray(address="auto", noop_if_initialized=True)
+    _assert_source_snapshot_identity(alive_nodes)
+
+
+def _assert_source_snapshot_identity(alive_nodes: list[dict[str, object]]) -> None:
+    snapshot_root = Path(os.environ["TRIBUTO_SOURCE_SNAPSHOT_PATH"])
+    expected = (snapshot_root / ".tributo-source-ready").read_text().strip()
+    assert len(expected) == 64
+
+    @ray.remote(num_cpus=0)
+    def read_snapshot_digest() -> str:
+        root = Path(os.environ["TRIBUTO_SOURCE_SNAPSHOT_PATH"])
+        return (root / ".tributo-source-ready").read_text().strip()
+
+    futures = {
+        str(node["NodeID"]): read_snapshot_digest.options(
+            scheduling_strategy=NodeAffinitySchedulingStrategy(
+                node_id=str(node["NodeID"]), soft=False
+            )
+        ).remote()
+        for node in alive_nodes
+    }
+    observed = {node_id: ray.get(future) for node_id, future in futures.items()}
+    assert observed
+    assert set(observed.values()) == {expected}
+    print(f"source snapshot {expected} verified by Ray jobs on {len(observed)} nodes")
 
 
 def _pipeline() -> TransformPipeline:
@@ -269,7 +295,7 @@ def _assert_empty_isin_conformance(source: ParquetSourceConfig) -> None:
 
 
 def test_local_parquet_conformance_on_ray_cluster() -> None:
-    shared_dir = Path("/workspace/tributo-ingestion-tests")
+    shared_dir = Path("/workspace/tributo-work/tributo-ingestion-tests")
     shared_dir.mkdir(parents=True, exist_ok=True)
     parquet_path = shared_dir / f"{uuid.uuid4().hex}.parquet"
     empty_path = shared_dir / f"{uuid.uuid4().hex}.parquet"
