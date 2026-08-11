@@ -30,6 +30,7 @@ def main() -> int:
     import mlflow
     import ray
     from ray import serve
+    from ray.data import DataContext
 
     from tributo._common.storage import get_boto3_client
     from tributo.exporting.bundle_reader import BundleReader
@@ -38,8 +39,10 @@ def main() -> int:
     from tributo.serving.model_deployment import ONNXModel
     from tributo.training.xgboost_trainer import XGBoostTrainerImpl
 
+    DataContext.get_current().enable_progress_bars = False
+
     execution_suffix = uuid.uuid4().hex
-    root = Path("/workspace") / f"model-export-{execution_suffix}"
+    root = Path("/workspace/tributo-work") / f"model-export-{execution_suffix}"
     root.mkdir(parents=True)
     bucket = f"tributo-model-export-job-{uuid.uuid4().hex[:12]}"
     client = get_boto3_client(path_style=True)
@@ -51,6 +54,7 @@ def main() -> int:
     }
     experiment_name = f"tributo-golden-path-{execution_suffix}"
     serve_started = False
+    result_payload: dict[str, Any] | None = None
     try:
         rows = [
             {"feature_a": 0.0, "feature_b": 0.0, "label": 0},
@@ -222,31 +226,23 @@ def main() -> int:
         alive_nodes = [node for node in ray.nodes() if node["Alive"]]
         assert len(alive_nodes) >= 2
 
-        print(
-            "RESULT: "
-            + json.dumps(
-                {
-                    "status": summary["status"],
-                    "bundle_id": manifest.bundle_id,
-                    "execution_id": summary["execution_id"],
-                    "manifest_sha256": summary["manifest_sha256"],
-                    "artifact_kinds": sorted(
-                        {artifact.artifact_kind for artifact in manifest.artifacts}
-                    ),
-                    "formats": formats,
-                    "batch_rows": len(prediction_rows),
-                    "http_rows": len(http_payload["predictions"]),
-                    "mlflow_runs": len(runs),
-                    "model_versions_created": 0,
-                    "python_version": observed_python_version,
-                    "versions": observed_versions,
-                    "alive_nodes": len(alive_nodes),
-                },
-                sort_keys=True,
+        result_payload = {
+            "status": summary["status"],
+            "bundle_id": manifest.bundle_id,
+            "execution_id": summary["execution_id"],
+            "manifest_sha256": summary["manifest_sha256"],
+            "artifact_kinds": sorted(
+                {artifact.artifact_kind for artifact in manifest.artifacts}
             ),
-            flush=True,
-        )
-        return 0
+            "formats": formats,
+            "batch_rows": len(prediction_rows),
+            "http_rows": len(http_payload["predictions"]),
+            "mlflow_runs": len(runs),
+            "model_versions_created": 0,
+            "python_version": observed_python_version,
+            "versions": observed_versions,
+            "alive_nodes": len(alive_nodes),
+        }
     finally:
         if serve_started:
             serve.shutdown()
@@ -257,6 +253,10 @@ def main() -> int:
             mlflow_client.delete_experiment(experiment.experiment_id)
         _delete_bucket(client, bucket)
         shutil.rmtree(root, ignore_errors=True)
+
+    assert result_payload is not None
+    print("RESULT: " + json.dumps(result_payload, sort_keys=True), flush=True)
+    return 0
 
 
 if __name__ == "__main__":

@@ -5,6 +5,37 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 COMPOSE_FILE="${PROJECT_ROOT}/tests/integrations/docker-compose.data-ingestion.yml"
 VERSIONS_FILE="${PROJECT_ROOT}/tests/integrations/component-versions.env"
+SUITE="full"
+
+usage() {
+  echo "Usage: $0 [--suite ci|full]" >&2
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --suite)
+      [[ $# -ge 2 ]] || {
+        usage
+        exit 2
+      }
+      SUITE="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage
+      exit 2
+      ;;
+  esac
+done
+if [[ "${SUITE}" != "ci" && "${SUITE}" != "full" ]]; then
+  usage
+  exit 2
+fi
+
 PROJECT_NAME="${COMPOSE_PROJECT_NAME:-tributo-model-export-it-$(date +%Y%m%d%H%M%S)-$$}"
 if [[ ! "${PROJECT_NAME}" =~ ^tributo-model-export(-it)?-[a-zA-Z0-9][a-zA-Z0-9_-]*$ ]]; then
   echo "COMPOSE_PROJECT_NAME must be a unique tributo-model-export-* identifier" >&2
@@ -92,6 +123,7 @@ cleanup() {
   fi
 
   echo "Model-export IT project: ${PROJECT_NAME}"
+  echo "Model-export IT suite: ${SUITE}"
   echo "Test log: ${TEST_LOG}"
   echo "Service log: ${SERVICE_LOG}"
   if [[ "${test_status}" -eq 0 && "${cleanup_status}" -eq 0 ]]; then
@@ -156,23 +188,40 @@ compose --profile model-export exec -T \
   ray-head \
   python -m pytest \
   tests/integration/test_it_component_versions.py \
-  -o addopts= -vv --tb=short 2>&1 | tee "${TEST_LOG}"
+  -o addopts= \
+  -o cache_dir=/workspace/tributo-work/cache/pytest-model-export \
+  -vv --tb=short 2>&1 | tee "${TEST_LOG}"
 
 compose --profile model-export exec -T \
   --env TRIBUTO_DOCKER_MODEL_EXPORT_IT=1 \
   ray-head \
   python -m pytest \
   tests/training/exporters/test_first_party_conformance.py \
-  tests/training/exporters/test_trainer_bundle_contract.py \
   tests/integrations/test_e2e_mlflow.py \
   tests/integration/test_walking_skeleton.py \
-  -o addopts= -m integration -vv --tb=short --timeout=900 2>&1 | tee -a "${TEST_LOG}"
+  -o addopts= \
+  -o cache_dir=/workspace/tributo-work/cache/pytest-model-export \
+  -m integration -vv --tb=short --timeout=900 2>&1 | tee -a "${TEST_LOG}"
 
-compose --profile model-export exec -T \
-  --env TRIBUTO_DOCKER_MODEL_EXPORT_IT=1 \
-  ray-head \
-  python -m pytest \
-  tests/integration/test_export_s3.py \
-  tests/integration/test_minio_compat.py \
-  -o addopts= -m "s3_contract or minio_compat" \
-  -vv --tb=short --timeout=900 2>&1 | tee -a "${TEST_LOG}"
+if [[ "${SUITE}" == "full" ]]; then
+  compose --profile model-export exec -T \
+    --env TRIBUTO_DOCKER_MODEL_EXPORT_IT=1 \
+    ray-head \
+    python -m pytest \
+    tests/training/exporters/test_trainer_bundle_contract.py \
+    -o addopts= \
+    -o cache_dir=/workspace/tributo-work/cache/pytest-model-export \
+    -m integration -vv --tb=short --timeout=900 \
+    2>&1 | tee -a "${TEST_LOG}"
+
+  compose --profile model-export exec -T \
+    --env TRIBUTO_DOCKER_MODEL_EXPORT_IT=1 \
+    ray-head \
+    python -m pytest \
+    tests/integration/test_export_s3.py \
+    tests/integration/test_minio_compat.py \
+    -o addopts= \
+    -o cache_dir=/workspace/tributo-work/cache/pytest-model-export \
+    -m "s3_contract or minio_compat" \
+    -vv --tb=short --timeout=900 2>&1 | tee -a "${TEST_LOG}"
+fi

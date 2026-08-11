@@ -49,11 +49,23 @@ service logs remain under `/tmp/<compose-project>-*.log` after cleanup.
 
 ## Model-Export Integration Gate
 
-Run the complete release-oriented gate from the repository root:
+Run the required CI subset from the repository root:
 
 ```bash
-./scripts/run_model_export_it.sh
+./scripts/run_model_export_it.sh --suite ci
 ```
+
+It covers the pinned component contract, first-party conformance, real MLflow
+Hook contract, and distributed walking skeleton. Run the release-oriented
+superset explicitly when the trainer Bundle and full S3/MinIO contracts are
+also required:
+
+```bash
+./scripts/run_model_export_it.sh --suite full
+```
+
+Calling the runner without `--suite` remains equivalent to `--suite full` for
+backward compatibility; CI always names its suite explicitly.
 
 The script creates a unique project named
 `tributo-model-export-it-<timestamp>-<pid>` (or accepts a unique

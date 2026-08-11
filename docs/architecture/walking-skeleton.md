@@ -67,7 +67,14 @@ host package version as test evidence.
 `.github/workflows/pr-test-suite.yml` runs the walking skeleton for relevant
 code changes. It creates a run-specific Compose project, executes the pinned
 component check and first-party conformance suites, submits the Ray Job, saves
-service logs, and always runs:
+service logs, and invokes the explicit CI suite:
+
+```bash
+./scripts/run_model_export_it.sh --suite ci
+```
+
+The CI suite includes the component-version contract, first-party conformance,
+real MLflow Hook contract, and distributed walking skeleton. It always runs:
 
 ```bash
 docker compose \
@@ -81,19 +88,22 @@ The cleanup command is scoped by the run-specific `COMPOSE_PROJECT_NAME`.
 
 ## Independent Full-Flow Verification
 
-The release-oriented script is intentionally separate from the default CI
-workflow:
+The same lifecycle-owned runner exposes a release-oriented full suite that is
+intentionally not selected by the default CI workflow:
 
 ```bash
-./scripts/run_model_export_it.sh
+./scripts/run_model_export_it.sh --suite full
 ```
 
 It performs prerequisites checks, snapshots the ID and state of every existing
-container, uses a unique Compose project and image tag, writes pytest and
-service logs to `/tmp/<project-name>/`, and installs an `EXIT` trap before any
-container is started. The trap always removes only that project's containers,
-volumes, network, and orphans. It then fails if an owned container remains or
-if any pre-existing container disappeared or changed state.
+container, uses a unique Compose project and the validated content-addressed
+data-ingestion runtime image, writes pytest and service logs to
+`/tmp/<project-name>/`, and installs an `EXIT` trap before any container is
+started. In addition to the CI suite, full mode runs the trainer Bundle contract
+and complete S3/MinIO contract suites. The trap always removes only that
+project's containers, volumes, network, and orphans. It then fails if an owned
+container remains or reports if concurrent host activity changed a pre-existing
+container.
 
 ## Deliberate Exclusions
 

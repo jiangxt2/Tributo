@@ -161,9 +161,23 @@ def test_model_export_ci_executes_mlflow_contract_and_waits_for_minio() -> None:
     compose = _COMPOSE.read_text(encoding="utf-8")
 
     runner = _MODEL_EXPORT_RUNNER.read_text(encoding="utf-8")
+    full_condition = 'if [[ "${SUITE}" == "full" ]]; then'
+    common_block, separator, full_tail = runner.partition(full_condition)
+    assert separator
+    full_block, separator, _ = full_tail.partition("\nfi")
+    assert separator
 
-    assert "./scripts/run_model_export_it.sh" in core_job
+    assert "./scripts/run_model_export_it.sh --suite ci" in core_job
     assert "tests/integrations/test_e2e_mlflow.py" in runner
+    for full_only_path in (
+        "tests/training/exporters/test_trainer_bundle_contract.py",
+        "tests/integration/test_export_s3.py",
+        "tests/integration/test_minio_compat.py",
+    ):
+        assert full_only_path not in common_block
+        assert full_block.count(full_only_path) == 1
+        assert runner.count(full_only_path) == 1
+    assert '-m "s3_contract or minio_compat"' in full_block
     assert "tests/integrations/test_e2e_mlflow.py" not in trainer_bundle_filter
     assert "tests/integration/test_walking_skeleton.py" not in trainer_bundle_filter
     assert "tests/integrations/component-versions.env" not in trainer_bundle_filter
@@ -183,6 +197,7 @@ def test_model_export_runner_is_isolated_and_cleans_its_own_project() -> None:
     assert "tributo-model-export-it-$(date +%Y%m%d%H%M%S)-$$" in runner
     assert "prepare-runtime --profile data-ingestion" in runner
     assert "--detach --no-build --pull never --wait" in runner
+    assert "cache_dir=/workspace/tributo-work/cache/pytest-model-export" in runner
     assert "BASELINE_CAPTURED=0" in runner
     assert "COMPOSE_TOUCHED=0" in runner
     assert 'if [[ "${COMPOSE_TOUCHED}" -eq 1 ]]' in runner

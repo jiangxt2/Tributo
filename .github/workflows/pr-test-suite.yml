@@ -640,8 +640,8 @@ jobs:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
 
-      - name: Run isolated reusable-runtime model-export gate
-        run: ./scripts/run_model_export_it.sh
+      - name: Run isolated reusable-runtime model-export CI suite
+        run: ./scripts/run_model_export_it.sh --suite ci
 
       - name: Upload model-export logs
         if: always()
