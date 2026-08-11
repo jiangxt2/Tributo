@@ -18,6 +18,7 @@ from tools.check_docs import (
     validate_navigation,
     validate_python_examples,
     validate_support_matrix,
+    validate_system_landscape_svg,
 )
 from tributo.util.annotations import DeveloperAPI, PublicAPI
 
@@ -158,6 +159,111 @@ def test_python_example_validation_supports_explicit_pseudocode(
         encoding="utf-8",
     )
     assert validate_python_examples(docs_root) == []
+
+
+def test_repository_system_landscape_svg_matches_contract() -> None:
+    path = REPOSITORY_ROOT / "docs" / "images" / "tributo-system-landscape.svg"
+    assert validate_system_landscape_svg(path) == []
+
+
+def test_system_landscape_svg_validation_rejects_unsafe_and_inaccessible_svg(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "landscape.svg"
+    path.write_text(
+        """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"
+  role="img" aria-labelledby="title">
+  <title id="title">\u67b6\u6784</title>
+  <desc id="description">Description</desc>
+  <style>
+    @import "https://example.com/theme.css";
+    .unsafe { fill: url(https://example.com/fill.svg); }
+    @media (max-width: 9px) { .narrow { display: block; } }
+  </style>
+  <g class="desktop"><rect class="boundary"/></g>
+  <g class="narrow"/>
+  <foreignObject/>
+  <script>javascript:alert(1)</script>
+  <image href="https://example.com/external.png"/>
+</svg>
+""",
+        encoding="utf-8",
+    )
+
+    errors = validate_system_landscape_svg(path)
+
+    assert any("CJK characters" in error for error in errors)
+    assert any("CSS @import" in error for error in errors)
+    assert any("SVG CSS resource" in error for error in errors)
+    assert any("desc id must appear in aria-labelledby" in error for error in errors)
+    assert any("forbidden SVG element foreignObject" in error for error in errors)
+    assert any("forbidden SVG element script" in error for error in errors)
+    assert any("internal fragments" in error for error in errors)
+    assert any(
+        "narrow layout must show the framework boundary" in error for error in errors
+    )
+    assert any("forced-colors theme" in error for error in errors)
+
+
+def test_system_landscape_svg_validation_rejects_malformed_xml(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "landscape.svg"
+    path.write_text("<svg>", encoding="utf-8")
+
+    assert any(
+        "malformed SVG XML" in error for error in validate_system_landscape_svg(path)
+    )
+
+
+def test_system_landscape_svg_validation_accepts_nested_media_query_variants(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "landscape.svg"
+    path.write_text(
+        """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"
+  role="img" aria-labelledby="title description">
+  <title id="title">Landscape</title>
+  <desc id="description">Description</desc>
+  <defs>
+    <style>
+      @MeDiA(max-width : 9px) { .narrow { display: block; } }
+      @MEDIA ( forced-colors : ACTIVE ) { text { fill: CanvasText; } }
+    </style>
+  </defs>
+  <g class="desktop"><rect class="boundary"/></g>
+  <g class="narrow"><rect class="boundary"/></g>
+</svg>
+""",
+        encoding="utf-8",
+    )
+
+    assert validate_system_landscape_svg(path) == []
+
+
+def test_system_landscape_svg_validation_ignores_media_queries_in_comments(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "landscape.svg"
+    path.write_text(
+        """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"
+  role="img" aria-labelledby="title description">
+  <title id="title">Landscape</title>
+  <desc id="description">Description</desc>
+  <style>
+    /* @media (max-width: 9px) and @media (forced-colors: active) */
+  </style>
+  <g class="desktop"><rect class="boundary"/></g>
+  <g class="narrow"><rect class="boundary"/></g>
+</svg>
+""",
+        encoding="utf-8",
+    )
+
+    errors = validate_system_landscape_svg(path)
+
+    assert any("narrow-screen media query" in error for error in errors)
+    assert any("forced-colors theme" in error for error in errors)
 
 
 def test_static_support_matrix_validation_rejects_duplicate_markers(

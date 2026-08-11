@@ -1,0 +1,303 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="736" height="860" viewBox="0 0 736 860" role="img" aria-labelledby="title description">
+  <title id="title">Tributo system landscape on Ray</title>
+  <desc id="description">Users submit training, embedding, inference, serving, and streaming workloads through Tributo. Tributo owns portable framework contracts and delegates distributed execution to Ray 2.55.1. Data systems, bundle stores, MLflow, and Kafka remain external systems. Platform control-plane capabilities are outside the Tributo boundary.</desc>
+  <style>
+    :root {
+      --canvas: #ffffff;
+      --text: #172033;
+      --muted: #536078;
+      --border: #9aa6b8;
+      --entry: #e9f1ff;
+      --workload: #fff3e4;
+      --ingestion: #e8f6ed;
+      --algorithm: #f3eaf6;
+      --bundle: #efecfb;
+      --runtime: #e6f4f2;
+      --external: #f2f4f7;
+      --excluded: #fff2ed;
+      --excluded-stroke: #c2410c;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --canvas: #0f141c;
+        --text: #f5f7fb;
+        --muted: #bcc4d1;
+        --border: #576273;
+        --entry: #1b2a40;
+        --workload: #35291f;
+        --ingestion: #1d3027;
+        --algorithm: #302633;
+        --bundle: #29273a;
+        --runtime: #1d302f;
+        --external: #262a31;
+        --excluded: #31231f;
+        --excluded-stroke: #fb923c;
+      }
+    }
+    @media (prefers-contrast: more) {
+      :root {
+        --canvas: #ffffff;
+        --text: #000000;
+        --muted: #000000;
+        --border: #000000;
+        --entry: #ffffff;
+        --workload: #ffffff;
+        --ingestion: #ffffff;
+        --algorithm: #ffffff;
+        --bundle: #ffffff;
+        --runtime: #ffffff;
+        --external: #ffffff;
+        --excluded: #ffffff;
+        --excluded-stroke: #000000;
+      }
+    }
+    @media (prefers-color-scheme: dark) and (prefers-contrast: more) {
+      :root {
+        --canvas: #000000;
+        --text: #ffffff;
+        --muted: #ffffff;
+        --border: #ffffff;
+        --entry: #000000;
+        --workload: #000000;
+        --ingestion: #000000;
+        --algorithm: #000000;
+        --bundle: #000000;
+        --runtime: #000000;
+        --external: #000000;
+        --excluded: #000000;
+        --excluded-stroke: #ffffff;
+      }
+    }
+    @media (forced-colors: active) {
+      :root {
+        --canvas: Canvas;
+        --text: CanvasText;
+        --muted: CanvasText;
+        --border: CanvasText;
+        --entry: Canvas;
+        --workload: Canvas;
+        --ingestion: Canvas;
+        --algorithm: Canvas;
+        --bundle: Canvas;
+        --runtime: Canvas;
+        --external: Canvas;
+        --excluded: Canvas;
+        --excluded-stroke: CanvasText;
+      }
+    }
+    text {
+      fill: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 16px;
+      font-weight: 400;
+    }
+    .canvas { fill: var(--canvas); }
+    .strong { font-weight: 600; }
+    .node-title { font-size: 15px; }
+    .small { fill: var(--muted); font-size: 14px; }
+    .tiny { fill: var(--muted); font-size: 13px; }
+    .excluded-label { font-size: 13px; }
+    .boundary { fill: none; stroke: var(--border); stroke-width: 1.5; }
+    .group { fill: none; stroke: var(--border); stroke-width: 1.1; }
+    .node { stroke: var(--border); stroke-width: 1; }
+    .entry { fill: var(--entry); }
+    .workload { fill: var(--workload); }
+    .ingestion { fill: var(--ingestion); }
+    .algorithm { fill: var(--algorithm); }
+    .bundle { fill: var(--bundle); }
+    .runtime { fill: var(--runtime); }
+    .external { fill: var(--external); }
+    .excluded {
+      fill: var(--excluded);
+      stroke: var(--excluded-stroke);
+      stroke-width: 1.2;
+      stroke-dasharray: 6 5;
+    }
+    .flow {
+      fill: none;
+      stroke: var(--text);
+      stroke-width: 1.5;
+      marker-end: url(#arrow);
+    }
+    .divider { stroke: var(--border); stroke-width: 1; }
+    .narrow { display: none; }
+    .narrow text { font-size: 28px; }
+    .narrow .strong { font-size: 28px; }
+    .narrow .small { font-size: 28px; }
+    @media (max-width: 480px) {
+      .desktop { display: none; }
+      .narrow { display: block; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--text)"/>
+    </marker>
+  </defs>
+
+  <rect class="canvas" width="736" height="860"/>
+  <g class="desktop">
+  <rect class="boundary" x="118" y="14" width="606" height="624" rx="10"/>
+  <text class="small" x="134" y="36">TRIBUTO FRAMEWORK BOUNDARY</text>
+
+  <text class="strong" x="10" y="72">Users</text>
+  <text class="small" x="10" y="96">Data scientists</text>
+  <text class="small" x="10" y="117">ML engineers</text>
+  <text class="small" x="10" y="138">Applications</text>
+  <path class="flow" d="M 103 103 H 138"/>
+
+  <rect class="node entry" x="138" y="50" width="566" height="70" rx="8"/>
+  <text class="strong" x="156" y="75">Interaction and submission</text>
+  <text x="156" y="101">CLI</text>
+  <line class="divider" x1="204" y1="87" x2="204" y2="106"/>
+  <text x="220" y="101">Python API</text>
+  <line class="divider" x1="321" y1="87" x2="321" y2="106"/>
+  <text x="337" y="101">Strict JSON</text>
+  <line class="divider" x1="440" y1="87" x2="440" y2="106"/>
+  <text x="456" y="101">TributoClient to Ray Jobs</text>
+
+  <path class="flow" d="M 421 120 V 146"/>
+  <rect class="node workload" x="138" y="148" width="566" height="174" rx="8"/>
+  <text class="strong" x="156" y="174">Scenario workloads</text>
+  <text x="156" y="204">Train / Tune</text>
+  <text class="tiny" x="156" y="225">legacy Beta</text>
+  <text class="tiny" x="156" y="243">portable Alpha</text>
+  <line class="divider" x1="326" y1="190" x2="326" y2="244"/>
+  <text x="344" y="204">Embedding</text>
+  <text class="tiny" x="344" y="225">batch + online</text>
+  <line class="divider" x1="516" y1="190" x2="516" y2="244"/>
+  <text x="534" y="204">Batch inference</text>
+  <text class="tiny" x="534" y="225">resolved plan</text>
+  <text class="tiny" x="534" y="243">Ray actors</text>
+  <line class="divider" x1="156" y1="256" x2="686" y2="256"/>
+  <text x="156" y="286">Online serving</text>
+  <text class="tiny" x="156" y="307">HTTP + gRPC + SSE</text>
+  <line class="divider" x1="421" y1="268" x2="421" y2="310"/>
+  <text x="440" y="286">Streaming input</text>
+  <text class="tiny" x="440" y="307">Kafka StreamSource Alpha</text>
+
+  <path class="flow" d="M 421 322 V 348"/>
+  <rect class="group" x="138" y="350" width="566" height="192" rx="8"/>
+  <text class="strong" x="156" y="376">Tributo portable contract layer</text>
+
+  <rect class="node ingestion" x="152" y="394" width="166" height="110" rx="8"/>
+  <text class="strong node-title" x="168" y="420">Ingestion Gateway</text>
+  <text class="small" x="168" y="445">Canonical request</text>
+  <text class="small" x="168" y="466">Logical scan plan</text>
+  <text class="small" x="168" y="487">Engine binding</text>
+
+  <rect class="node algorithm" x="332" y="394" width="176" height="110" rx="8"/>
+  <text class="strong node-title" x="348" y="420">Portable Algorithms</text>
+  <text class="small" x="348" y="445">Registry to planner</text>
+  <text class="small" x="348" y="466">Dispatcher to runtime</text>
+  <text class="small" x="348" y="487">Worker + legacy</text>
+
+  <rect class="node bundle" x="522" y="394" width="168" height="110" rx="8"/>
+  <text class="strong node-title" x="538" y="420">Bundle + Inference</text>
+  <text class="small" x="538" y="445">Export / publish / read</text>
+  <text class="small" x="538" y="466">Resolved model plan</text>
+  <text class="small" x="538" y="487">Executor / DataSink</text>
+
+  <text class="tiny" x="156" y="515">Extension SPIs: providers + bindings + runtimes + importers</text>
+  <text class="tiny" x="156" y="532">Exporters + validators + flavors + sinks + hooks</text>
+
+  <path class="flow" d="M 421 542 V 566"/>
+  <rect class="node runtime" x="138" y="568" width="566" height="52" rx="8"/>
+  <text class="strong" x="156" y="600">Ray 2.55.1</text>
+  <text x="258" y="600">Jobs</text>
+  <text x="324" y="600">Data</text>
+  <text x="390" y="600">Train</text>
+  <text x="463" y="600">Tune</text>
+  <text x="532" y="600">Serve</text>
+  <text x="592" y="600">Tasks / Actors</text>
+
+  <rect class="excluded" x="4" y="350" width="110" height="286" rx="8"/>
+  <text class="strong" x="18" y="379">Out of</text>
+  <text class="strong" x="18" y="399">scope</text>
+  <text class="small excluded-label" x="18" y="433">Kubernetes</text>
+  <text class="small excluded-label" x="18" y="453">control plane</text>
+  <text class="small excluded-label" x="18" y="487">Multi-tenancy</text>
+  <text class="small excluded-label" x="18" y="507">Quota / RBAC</text>
+  <text class="small excluded-label" x="18" y="541">Approval</text>
+  <text class="small excluded-label" x="18" y="561">Canary</text>
+  <text class="small excluded-label" x="18" y="605">Centralized</text>
+  <text class="small excluded-label" x="18" y="625">Web UI</text>
+
+  <text class="strong" x="132" y="730">External systems</text>
+  <rect class="node external" x="132" y="744" width="132" height="86" rx="8"/>
+  <text class="strong" x="148" y="773">Data systems</text>
+  <text class="tiny" x="148" y="797">Files + S3</text>
+  <text class="tiny" x="148" y="816">Lance + SQL</text>
+
+  <rect class="node external" x="274" y="744" width="140" height="86" rx="8"/>
+  <text class="strong" x="290" y="773">Bundle stores</text>
+  <text class="tiny" x="290" y="797">Local + file://</text>
+  <text class="tiny" x="290" y="816">S3 manifest last</text>
+
+  <rect class="node external" x="424" y="744" width="154" height="86" rx="8"/>
+  <text class="strong" x="440" y="773">MLflow</text>
+  <text class="tiny" x="440" y="797">Import + tracking</text>
+  <text class="tiny" x="440" y="816">Optional hook</text>
+
+  <rect class="node external" x="588" y="744" width="136" height="86" rx="8"/>
+  <text class="strong" x="604" y="773">Kafka</text>
+  <text class="tiny" x="604" y="797">StreamSource</text>
+  <text class="tiny" x="604" y="816">No service loop</text>
+  </g>
+  <g class="narrow">
+    <rect class="node entry" x="30" y="12" width="676" height="64" rx="8"/>
+    <text class="strong" x="48" y="49">Users</text>
+    <text x="160" y="49">Teams and applications</text>
+
+    <path class="flow" d="M 368 76 V 88"/>
+
+    <rect class="boundary" x="20" y="90" width="696" height="594" rx="10"/>
+    <text class="small" x="38" y="122">TRIBUTO FRAMEWORK BOUNDARY</text>
+
+    <rect class="node entry" x="38" y="134" width="660" height="86" rx="8"/>
+    <text class="strong" x="56" y="171">Submit</text>
+    <text x="170" y="171">CLI · Python API · Strict JSON</text>
+    <text x="170" y="204">TributoClient → Ray Jobs</text>
+
+    <path class="flow" d="M 368 220 V 232"/>
+
+    <rect class="node workload" x="38" y="234" width="660" height="152" rx="8"/>
+    <text class="strong" x="56" y="271">Scenario workloads</text>
+    <text x="56" y="304">Train / Tune · Embedding</text>
+    <text x="56" y="337">Batch inference · Online serving</text>
+    <text x="56" y="370">Kafka input Alpha · no service loop</text>
+
+    <path class="flow" d="M 368 386 V 398"/>
+
+    <rect class="node ingestion" x="38" y="400" width="660" height="54" rx="8"/>
+    <text class="strong" x="56" y="437">Ingestion</text>
+    <text x="220" y="437">request · plan · binding</text>
+
+    <rect class="node algorithm" x="38" y="460" width="660" height="54" rx="8"/>
+    <text class="strong" x="56" y="497">Algorithms</text>
+    <text x="220" y="497">portable · registry · legacy</text>
+
+    <rect class="node bundle" x="38" y="520" width="660" height="54" rx="8"/>
+    <text class="strong" x="56" y="557">Model bundles</text>
+    <text x="270" y="557">export · publish · infer</text>
+
+    <path class="flow" d="M 368 574 V 586"/>
+
+    <rect class="node runtime" x="38" y="588" width="660" height="86" rx="8"/>
+    <text class="strong" x="56" y="625">Ray 2.55.1</text>
+    <text x="230" y="625">Jobs · Data · Train · Tune</text>
+    <text x="230" y="658">Serve · Tasks / Actors</text>
+
+    <rect class="node external" x="30" y="696" width="330" height="152" rx="8"/>
+    <text class="strong" x="48" y="733">External systems</text>
+    <text x="48" y="766">Data systems</text>
+    <text x="48" y="799">Bundle stores</text>
+    <text x="48" y="832">MLflow · Kafka</text>
+
+    <rect class="node excluded" x="376" y="696" width="330" height="152" rx="8"/>
+    <text class="strong" x="394" y="733">Out of scope</text>
+    <text x="394" y="766">K8s · tenancy</text>
+    <text x="394" y="799">Quota · RBAC</text>
+    <text x="394" y="832">Approval · canary/UI</text>
+  </g>
+</svg>

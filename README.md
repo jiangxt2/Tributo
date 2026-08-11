@@ -101,28 +101,19 @@ print(client.get_status(job_id))
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    CLI / Python API                      │
-│              tributo submit / embed / serve              │
-├──────────┬──────────┬───────────┬───────────────────────┤
-│ training │embeddings│ serving   │ inference              │
-│ XGBoost  │ BGE ONNX │ ONNX HTTP │ XGBoost+ONNX batch    │
-│ PU Learn │ Daft ETL │ gRPC      │ Ray Data              │
-│ DNN      │          │ streaming │                       │
-│ Ray Train│ Ray Data │ Ray Serve │ Ray Data              │
-├──────────┴──────────┴───────────┴───────────────────────┤
-│ IngestionGateway → Provider/Plan → Ray Data / Daft       │
-│ Files / Iceberg / Lance / SQL + typed ETL and receipts   │
-├─────────────────────────────────────────────────────────┤
-│              _common (runtime_env / io / logging)         │
-├─────────────────────────────────────────────────────────┤
-│                 Ray Cluster (2.55.1)                      │
-└─────────────────────────────────────────────────────────┘
-```
+<p align="center">
+  <a href="docs/architecture/system-landscape.md">
+    <img
+      src="docs/images/tributo-system-landscape.svg"
+      alt="Tributo system landscape showing the framework boundary, Ray runtime, external systems, and platform non-goals."
+      width="736"
+    >
+  </a>
+</p>
 
 For a detailed map of current capabilities, planned work, and API stability
-guarantees, see the [Architecture Documentation](docs/architecture/) and
+guarantees, see the [System Landscape](docs/architecture/system-landscape.md),
+[Architecture Documentation](docs/architecture/), and
 [API Stability Inventory](docs/STABILITY.md).
 
 ---

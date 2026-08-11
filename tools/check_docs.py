@@ -6,6 +6,7 @@ import argparse
 import importlib
 import re
 import sys
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,20 @@ _PYTHON_BLOCK_PATTERN = re.compile(
 _TOCTREE_PATTERN = re.compile(
     r"^```\{toctree\}\s*\n(?P<body>.*?)^```\s*$",
     re.MULTILINE | re.DOTALL,
+)
+_CJK_PATTERN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+_CSS_URL_PATTERN = re.compile(
+    r"url\(\s*['\"]?(?P<target>[^)'\"\s]+)['\"]?\s*\)",
+    re.IGNORECASE,
+)
+_CSS_COMMENT_PATTERN = re.compile(r"/\*.*?\*/", re.DOTALL)
+_NARROW_MEDIA_PATTERN = re.compile(
+    r"@media\s*\(\s*max-width\s*:",
+    re.IGNORECASE,
+)
+_FORCED_COLORS_MEDIA_PATTERN = re.compile(
+    r"@media\s*\(\s*forced-colors\s*:\s*active\s*\)",
+    re.IGNORECASE,
 )
 
 _RAY_STYLE_ROOT_TARGETS = (
@@ -322,6 +337,108 @@ def validate_python_examples(docs_root: Path) -> list[str]:
     return errors
 
 
+def _xml_local_name(name: str) -> str:
+    """Return an XML name without its namespace."""
+    return name.rsplit("}", 1)[-1]
+
+
+def validate_system_landscape_svg(path: Path) -> list[str]:
+    """Validate the portable and accessible System Landscape SVG contract."""
+    if not path.is_file():
+        return [f"{path}: System Landscape SVG is missing"]
+
+    text = path.read_text(encoding="utf-8")
+    errors: list[str] = []
+    if _CJK_PATTERN.search(text):
+        errors.append(f"{path}: SVG must not contain CJK characters")
+    if "<!DOCTYPE" in text.upper():
+        errors.append(f"{path}: SVG must not contain a DOCTYPE declaration")
+        return errors
+    if "<?xml-stylesheet" in text.lower():
+        errors.append(f"{path}: SVG must not load an external stylesheet")
+    if re.search(r"@import\b", text, re.IGNORECASE):
+        errors.append(f"{path}: SVG must not use CSS @import")
+    if re.search(r"javascript\s*:", text, re.IGNORECASE):
+        errors.append(f"{path}: SVG must not contain javascript URLs")
+    for match in _CSS_URL_PATTERN.finditer(text):
+        target = match.group("target")
+        if not target.startswith("#"):
+            errors.append(f"{path}: SVG CSS resource must be an internal fragment")
+
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError as exc:
+        errors.append(f"{path}: malformed SVG XML: {exc}")
+        return errors
+
+    if _xml_local_name(root.tag) != "svg":
+        errors.append(f"{path}: root element must be svg")
+        return errors
+    if not root.get("viewBox"):
+        errors.append(f"{path}: root svg must define viewBox")
+    if root.get("role") != "img":
+        errors.append(f"{path}: root svg must set role=img")
+
+    labelled_ids = set(root.get("aria-labelledby", "").split())
+    for element_name in ("title", "desc"):
+        elements = [
+            child for child in root if _xml_local_name(child.tag) == element_name
+        ]
+        if len(elements) != 1:
+            errors.append(f"{path}: root svg must contain exactly one {element_name}")
+            continue
+        element = elements[0]
+        element_id = element.get("id")
+        if not element_id or element_id not in labelled_ids:
+            errors.append(f"{path}: {element_name} id must appear in aria-labelledby")
+        if not "".join(element.itertext()).strip():
+            errors.append(f"{path}: {element_name} must not be empty")
+
+    layout_groups: dict[str, ET.Element] = {}
+    for element in root.iter():
+        local_name = _xml_local_name(element.tag)
+        if local_name in {"foreignObject", "script"}:
+            errors.append(f"{path}: forbidden SVG element {local_name}")
+        for attribute_name, value in element.attrib.items():
+            if _xml_local_name(attribute_name) not in {"href", "src"}:
+                continue
+            if value and not value.startswith("#"):
+                errors.append(
+                    f"{path}: SVG resource references must use internal fragments"
+                )
+        if local_name == "g":
+            for class_name in element.get("class", "").split():
+                if class_name in {"desktop", "narrow"}:
+                    layout_groups[class_name] = element
+
+    for layout_name in ("desktop", "narrow"):
+        layout = layout_groups.get(layout_name)
+        if layout is None:
+            errors.append(f"{path}: missing {layout_name} layout group")
+            continue
+        has_boundary = any(
+            _xml_local_name(element.tag) == "rect"
+            and "boundary" in element.get("class", "").split()
+            for element in layout.iter()
+        )
+        if not has_boundary:
+            errors.append(
+                f"{path}: {layout_name} layout must show the framework boundary"
+            )
+
+    style_text = "\n".join(
+        "".join(element.itertext())
+        for element in root.iter()
+        if _xml_local_name(element.tag) == "style"
+    )
+    style_text = _CSS_COMMENT_PATTERN.sub("", style_text)
+    if not _NARROW_MEDIA_PATTERN.search(style_text):
+        errors.append(f"{path}: SVG must define a narrow-screen media query")
+    if not _FORCED_COLORS_MEDIA_PATTERN.search(style_text):
+        errors.append(f"{path}: SVG must define a forced-colors theme")
+    return errors
+
+
 def validate_support_matrix(path: Path, *, compare_snapshot: bool) -> list[str]:
     """Validate generated markers and optionally compare real Registry facts."""
     from tools.generate_algorithm_support_matrix import (
@@ -351,6 +468,11 @@ def run_checks(docs_root: Path, *, static_only: bool) -> list[str]:
         )
     )
     errors.extend(validate_python_examples(docs_root))
+    errors.extend(
+        validate_system_landscape_svg(
+            docs_root / "images" / "tributo-system-landscape.svg"
+        )
+    )
     errors.extend(
         validate_support_matrix(
             docs_root / "reference" / "support-matrix.md",
