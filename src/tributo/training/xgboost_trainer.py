@@ -330,18 +330,34 @@ class XGBoostTrainerImpl(BaseTrainer):
                 cfg.training.early_stopping_rounds
             )
 
-        trainer = build_trainer(
+        storage_path = self.run_config.get("storage_path")
+        if storage_path is None:
+            storage_path = cfg.ray.storage_path
+        elif not isinstance(storage_path, str) or not storage_path:
+            raise JobConfigurationError(
+                "run_config 'storage_path' must be a non-empty string or None"
+            )
+        run_name = self.run_config.get("name")
+        if run_name is None:
+            run_name = "tributo-xgboost"
+        elif not isinstance(run_name, str) or not run_name:
+            raise JobConfigurationError(
+                "run_config 'name' must be a non-empty string or None"
+            )
+
+        trainer = _build_trainer(
             ray_dataset=self.datasets["train"],
             train_config=train_loop_config,
             val_dataset=val_ds,
             test_dataset=test_ds,
             num_workers=cfg.ray.num_workers,
             use_gpu=cfg.ray.use_gpu,
-            storage_path=cfg.ray.storage_path,
+            storage_path=storage_path,
             max_failures=cfg.ray.max_failures,
             resume_from_checkpoint=load_initial_checkpoint(
                 cfg.ray.resume.checkpoint_path
             ),
+            run_name=run_name,
         )
 
         logger.info("Starting XGBoost training...")
@@ -945,8 +961,7 @@ def train_loop_per_worker(config: dict[str, Any]) -> None:
 # ── Trainer construction ──
 
 
-@PublicAPI(stability="beta")
-def build_trainer(
+def _build_trainer(
     ray_dataset: "ray.data.Dataset",
     train_config: dict[str, Any],
     *,
@@ -957,8 +972,9 @@ def build_trainer(
     storage_path: str | None = None,
     max_failures: int = 0,
     resume_from_checkpoint: Any | None = None,
+    run_name: str,
 ) -> "XGBoostTrainer":
-    """Build a Ray XGBoostTrainer instance.
+    """Build a Ray XGBoostTrainer with an explicit internal run identity.
 
     Args:
         ray_dataset: Training dataset.
@@ -1038,12 +1054,55 @@ def build_trainer(
         ),
         datasets=datasets,  # type: ignore[arg-type]
         run_config=RunConfig(
-            name="tributo-xgboost",
+            name=run_name,
             storage_path=storage,
             failure_config=FailureConfig(max_failures=max_failures),
             checkpoint_config=checkpoint_config(resume_config),
         ),
         resume_from_checkpoint=resume_from_checkpoint,
+    )
+
+
+@PublicAPI(stability="beta")
+def build_trainer(
+    ray_dataset: "ray.data.Dataset",
+    train_config: dict[str, Any],
+    *,
+    val_dataset: "ray.data.Dataset | None" = None,
+    test_dataset: "ray.data.Dataset | None" = None,
+    num_workers: int = 4,
+    use_gpu: bool = False,
+    storage_path: str | None = None,
+    max_failures: int = 0,
+    resume_from_checkpoint: Any | None = None,
+) -> "XGBoostTrainer":
+    """Build a Ray XGBoostTrainer instance with its stable public defaults.
+
+    Args:
+        ray_dataset: Training dataset.
+        train_config: Config dictionary passed to ``train_loop_per_worker``.
+        val_dataset: Validation dataset, enabling early stopping when provided.
+        test_dataset: Test dataset, enabling worker-side evaluation when provided.
+        num_workers: Number of training workers.
+        use_gpu: Whether to use GPU.
+        storage_path: Ray Train persistent storage path.
+        max_failures: Number of automatic retries on worker failure.
+        resume_from_checkpoint: Optional initial Ray checkpoint to restore.
+
+    Returns:
+        An unstarted XGBoostTrainer; call ``.fit()`` to begin training.
+    """
+    return _build_trainer(
+        ray_dataset=ray_dataset,
+        train_config=train_config,
+        val_dataset=val_dataset,
+        test_dataset=test_dataset,
+        num_workers=num_workers,
+        use_gpu=use_gpu,
+        storage_path=storage_path,
+        max_failures=max_failures,
+        resume_from_checkpoint=resume_from_checkpoint,
+        run_name="tributo-xgboost",
     )
 
 

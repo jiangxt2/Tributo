@@ -485,3 +485,106 @@ class TestDNNWorkerBudget:
             )
 
         assert created_dirs and all(not path.exists() for path in created_dirs)
+
+
+class TestDNNTrainerRunConfig:
+    """DNN forwards only the existing Ray Train identity overrides."""
+
+    @pytest.mark.parametrize(
+        ("run_config", "expected_storage", "expected_name"),
+        [
+            (None, "/configured-storage", "tributo-dnn"),
+            (
+                {"name": None, "storage_path": None},
+                "/configured-storage",
+                "tributo-dnn",
+            ),
+            (
+                {"name": "tune-dnn-trial-001", "storage_path": "/trial-storage"},
+                "/trial-storage",
+                "tune-dnn-trial-001",
+            ),
+        ],
+    )
+    def test_training_loop_applies_narrow_run_config_overrides(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        run_config: dict[str, Any] | None,
+        expected_storage: str,
+        expected_name: str,
+    ) -> None:
+        import sys
+        from types import SimpleNamespace
+
+        import ray
+
+        import tributo.training.checkpoint as checkpoint_module
+        from tributo.training.dnn_trainer import DNNTrainerImpl
+
+        captured: dict[str, Any] = {}
+        resume_checkpoint = object()
+
+        class FakeTorchTrainer:
+            def __init__(self, **kwargs: Any) -> None:
+                captured.update(kwargs)
+
+            def fit(self) -> Any:
+                return SimpleNamespace(metrics={})
+
+        monkeypatch.setattr(ray, "is_initialized", lambda: True)
+        monkeypatch.setitem(
+            sys.modules,
+            "ray.train.torch",
+            SimpleNamespace(TorchTrainer=FakeTorchTrainer),
+        )
+        monkeypatch.setattr(
+            checkpoint_module,
+            "load_initial_checkpoint",
+            lambda path: resume_checkpoint if path == "/persisted-checkpoint" else None,
+        )
+        trainer = DNNTrainerImpl(
+            datasets={},
+            config={
+                "features": [],
+                "ray": {
+                    "storage_path": "/configured-storage",
+                    "resume": {"checkpoint_path": "/persisted-checkpoint"},
+                },
+            },
+            run_config=run_config,
+        )
+
+        trainer.training_loop()
+
+        inner_run_config = captured["run_config"]
+        assert inner_run_config.storage_path == expected_storage
+        assert inner_run_config.name == expected_name
+        assert captured["resume_from_checkpoint"] is resume_checkpoint
+        assert captured["train_loop_config"]["resume"]["checkpoint_path"] == (
+            "/persisted-checkpoint"
+        )
+
+    @pytest.mark.parametrize(
+        "run_config",
+        (
+            {"name": ""},
+            {"name": 1},
+            {"storage_path": ""},
+            {"storage_path": 1},
+        ),
+    )
+    def test_training_loop_rejects_invalid_run_config_override(
+        self,
+        run_config: dict[str, Any],
+    ) -> None:
+        from tributo.exceptions import JobConfigurationError
+        from tributo.training.dnn_trainer import DNNTrainerImpl
+
+        trainer = DNNTrainerImpl(
+            datasets={},
+            config={"features": []},
+            run_config=run_config,
+        )
+
+        with pytest.raises(JobConfigurationError, match="run_config"):
+            trainer.training_loop()

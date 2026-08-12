@@ -232,6 +232,12 @@ uv run tributo serve streaming status
 ### Hyperparameter Tuning (Ray Tune)
 
 Random search / BayesOpt with FIFO / ASHA / HyperBand schedulers.
+Tune trials execute setup and fit only: they report the configured metric and
+checkpoint without publishing production Bundles. After selecting parameters,
+run the Trainer explicitly to publish the single production Bundle.
+Ray owns experiment and checkpoint state below the Tune output root's
+`trials/` namespace; Tributo does not remove that recovery state. Treat the
+Tune output root as Ray-managed storage, not as a production Bundle destination.
 
 ```bash
 uv run tributo tune run \

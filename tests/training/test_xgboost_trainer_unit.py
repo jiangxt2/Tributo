@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import inspect
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -183,6 +186,108 @@ class TestSetupFeatureSelection:
         finally:
             xgboost_evaluator.filter_invalid_labels = original_filter
             xgboost_evaluator.split_dataset = original_split
+
+
+class TestXGBoostTrainerRunConfig:
+    """Inner Ray Train identity remains defaulted or explicitly isolated."""
+
+    @pytest.mark.parametrize(
+        ("run_config", "expected_storage", "expected_name"),
+        [
+            (None, "/configured-storage", "tributo-xgboost"),
+            (
+                {"name": None, "storage_path": None},
+                "/configured-storage",
+                "tributo-xgboost",
+            ),
+            (
+                {"name": "tune-xgb-trial-001", "storage_path": "/trial-storage"},
+                "/trial-storage",
+                "tune-xgb-trial-001",
+            ),
+        ],
+    )
+    def test_training_loop_applies_narrow_run_config_overrides(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        run_config: dict[str, Any] | None,
+        expected_storage: str,
+        expected_name: str,
+    ) -> None:
+        import tributo.training.checkpoint as checkpoint_module
+        import tributo.training.xgboost_trainer as xgboost_module
+        from tributo.training.xgboost_trainer import XGBoostTrainerImpl
+
+        captured: dict[str, Any] = {}
+        resume_checkpoint = object()
+        ray_trainer = SimpleNamespace(
+            run_config=SimpleNamespace(name="tributo-xgboost"),
+            fit=lambda: SimpleNamespace(metrics={}),
+        )
+
+        def fake_build_trainer(**kwargs: Any) -> Any:
+            captured.update(kwargs)
+            ray_trainer.run_config.name = kwargs["run_name"]
+            return ray_trainer
+
+        monkeypatch.setattr(xgboost_module, "_build_trainer", fake_build_trainer)
+        monkeypatch.setattr(
+            checkpoint_module,
+            "load_initial_checkpoint",
+            lambda path: resume_checkpoint if path == "/persisted-checkpoint" else None,
+        )
+        trainer = XGBoostTrainerImpl(
+            datasets={"train": object()},
+            config={
+                "training": {"val_size": 0, "test_size": 0},
+                "ray": {
+                    "num_workers": 1,
+                    "storage_path": "/configured-storage",
+                    "resume": {"checkpoint_path": "/persisted-checkpoint"},
+                },
+            },
+            run_config=run_config,
+        )
+
+        trainer.training_loop()
+
+        assert captured["storage_path"] == expected_storage
+        assert captured["resume_from_checkpoint"] is resume_checkpoint
+        assert captured["train_config"]["resume"]["checkpoint_path"] == (
+            "/persisted-checkpoint"
+        )
+        assert ray_trainer.run_config.name == expected_name
+
+    def test_public_builder_does_not_expose_tune_run_name(self) -> None:
+        from tributo.training.xgboost_trainer import build_trainer
+
+        assert "run_name" not in inspect.signature(build_trainer).parameters
+        assert "_run_name" not in inspect.signature(build_trainer).parameters
+
+    @pytest.mark.parametrize(
+        "run_config",
+        (
+            {"name": ""},
+            {"name": 1},
+            {"storage_path": ""},
+            {"storage_path": 1},
+        ),
+    )
+    def test_training_loop_rejects_invalid_run_config_override(
+        self,
+        run_config: dict[str, Any],
+    ) -> None:
+        from tributo.exceptions import JobConfigurationError
+        from tributo.training.xgboost_trainer import XGBoostTrainerImpl
+
+        trainer = XGBoostTrainerImpl(
+            datasets={"train": object()},
+            config={"training": {"val_size": 0, "test_size": 0}},
+            run_config=run_config,
+        )
+
+        with pytest.raises(JobConfigurationError, match="run_config"):
+            trainer.training_loop()
 
 
 class TestModelConfig:
