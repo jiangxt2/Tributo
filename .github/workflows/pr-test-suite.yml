@@ -522,16 +522,25 @@ jobs:
   data-ingestion-distributed:
     name: Data Ingestion Distributed (Docker Ray + MinIO)
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 80
     needs: [paths-filter, lint]
     if: needs.paths-filter.outputs.data_ingestion == 'true'
+    permissions:
+      contents: read
+      packages: read
     env:
       COMPOSE_PROJECT_NAME: tributo-ingestion-${{ github.run_id }}-${{ github.run_attempt }}
       TRIBUTO_IT_ALLOW_LOCAL_BUILD: ${{ github.event_name == 'push' && '0' || '1' }}
       TRIBUTO_IT_RUNTIME_REGISTRY: ghcr.io/jiangxt2/tributo-it-runtime
-      TRIBUTO_IT_RUNTIME_REGISTRY_WAIT_SECONDS: ${{ github.event_name == 'push' && '900' || '0' }}
+      TRIBUTO_IT_RUNTIME_REGISTRY_WAIT_SECONDS: ${{ github.event_name == 'push' && '2100' || '0' }}
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+
+      - name: Authenticate to GHCR for the published runtime
+        if: github.event_name == 'push'
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
       - name: Run isolated reusable-runtime ingestion gate
         run: ./scripts/run_data_ingestion_it.sh
@@ -627,18 +636,27 @@ jobs:
   core-walking-skeleton:
     name: Core Walking Skeleton
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 65
     needs: paths-filter
     if: needs.paths-filter.outputs.code == 'true'
+    permissions:
+      contents: read
+      packages: read
     env:
       COMPOSE_PROJECT_NAME: tributo-model-export-${{ github.run_id }}-${{ github.run_attempt }}
       TRIBUTO_IT_ALLOW_LOCAL_BUILD: ${{ github.event_name == 'push' && '0' || '1' }}
       TRIBUTO_IT_RUNTIME_REGISTRY: ghcr.io/jiangxt2/tributo-it-runtime
-      TRIBUTO_IT_RUNTIME_REGISTRY_WAIT_SECONDS: ${{ github.event_name == 'push' && '900' || '0' }}
+      TRIBUTO_IT_RUNTIME_REGISTRY_WAIT_SECONDS: ${{ github.event_name == 'push' && '2100' || '0' }}
       OMP_NUM_THREADS: "1"
       RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO: "0"
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+
+      - name: Authenticate to GHCR for the published runtime
+        if: github.event_name == 'push'
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
       - name: Run isolated reusable-runtime model-export CI suite
         run: ./scripts/run_model_export_it.sh --suite ci

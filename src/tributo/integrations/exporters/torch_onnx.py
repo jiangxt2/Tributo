@@ -103,6 +103,43 @@ class TorchONNXExporter:
         model = source.model_object
         if not isinstance(model, torch.nn.Module):
             raise TypeError(f"Expected torch.nn.Module, got {type(model).__name__}")
+        if (
+            source.source_kind in ("dnn_result", "pu_result")
+            and not source.preprocessing_state
+        ):
+            raise ValueError(
+                f"{source.source_kind} requires non-empty preprocessing_state "
+                "for Bundle publication"
+            )
+        if (
+            source.source_kind in ("dnn_result", "pu_result")
+            and not source.model_config_data
+        ):
+            raise ValueError(
+                f"{source.source_kind} requires non-empty model_config_data "
+                "for Bundle publication"
+            )
+
+        model_config_json = (
+            _serialize_json_artifact(
+                source.model_config_data,
+                artifact_name="model_config.json",
+                source_kind=source.source_kind,
+            )
+            if source.model_config_data
+            else None
+        )
+        preprocessor_json: str | None = None
+        if source.source_kind in ("dnn_result", "pu_result"):
+            _validate_preprocessing_state(
+                source.preprocessing_state,
+                source_kind=source.source_kind,
+            )
+            preprocessor_json = _serialize_json_artifact(
+                source.preprocessing_state,
+                artifact_name="preprocessor.json",
+                source_kind=source.source_kind,
+            )
 
         # Save training state for restoration (mutates_source=False guarantee).
         was_training = model.training
@@ -185,13 +222,22 @@ class TorchONNXExporter:
                     )
 
             # Save model config for reconstruction.
-            if source.model_config_data:
+            if model_config_json is not None:
                 config_path = context.artifact_dir / "model_config.json"
-                config_path.write_text(
-                    json.dumps(source.model_config_data, indent=2, ensure_ascii=False)
-                )
+                config_path.write_text(model_config_json)
                 files.append(
                     DraftFile(relative_path="model_config.json", role="config")
+                )
+
+            if source.source_kind in ("dnn_result", "pu_result"):
+                assert preprocessor_json is not None
+                preprocessor_path = context.artifact_dir / "preprocessor.json"
+                preprocessor_path.write_text(preprocessor_json)
+                files.append(
+                    DraftFile(
+                        relative_path="preprocessor.json",
+                        role="preprocessor",
+                    )
                 )
 
             return ArtifactDraft(
@@ -272,6 +318,61 @@ class TorchONNXExporter:
             )
             torch.onnx.export(model, model_input, str(output_path), **export_kwargs)
         return output_path
+
+
+def _validate_preprocessing_state(
+    state: Mapping[str, Any], *, source_kind: str
+) -> None:
+    """Validate the FeatureTransformer state required by DNN/PU consumers."""
+    required_types: dict[str, type[Any]] = {
+        "features": list,
+        "label_encoders": dict,
+        "norm_params": dict,
+    }
+    missing = [key for key in required_types if key not in state]
+    if missing:
+        raise ValueError(
+            f"{source_kind} preprocessing_state is missing required key(s): {missing}"
+        )
+    for key, expected_type in required_types.items():
+        value = state[key]
+        if not isinstance(value, expected_type):
+            raise ValueError(
+                f"{source_kind} preprocessing_state[{key!r}] must be "
+                f"{expected_type.__name__}, got {type(value).__name__}"
+            )
+    features = state["features"]
+    if not features:
+        raise ValueError(
+            f"{source_kind} preprocessing_state['features'] must not be empty"
+        )
+    if any(
+        not isinstance(feature, dict)
+        or not isinstance(feature.get("name"), str)
+        or not feature["name"]
+        for feature in features
+    ):
+        raise ValueError(
+            f"{source_kind} preprocessing_state['features'] must contain named "
+            "feature objects"
+        )
+
+
+def _serialize_json_artifact(
+    value: Mapping[str, Any], *, artifact_name: str, source_kind: str
+) -> str:
+    """Serialize one metadata artifact without coercion or non-finite values."""
+    try:
+        return json.dumps(
+            value,
+            indent=2,
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"{source_kind} {artifact_name} must contain only finite JSON values: {exc}"
+        ) from exc
 
 
 def _resolve_input_names(source: ExportSource) -> list[str]:

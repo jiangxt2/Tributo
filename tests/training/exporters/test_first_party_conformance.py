@@ -129,6 +129,149 @@ class TestTorchONNXConformance(_TorchFixture, ExporterConformanceTest):
     exporter_cls = TorchONNXExporter
     target_options = {"opset": 18, "dynamo": False}
 
+    def test_dnn_export_requires_preprocessing_state(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class _FakeModule:
+            pass
+
+        source = ExportSource(
+            source_kind="dnn_result",
+            model_object=_FakeModule(),
+        )
+        target = self.make_target()
+        planned = SimpleNamespace(
+            target=target,
+            typed_options={"opset": 18, "dynamo": False},
+        )
+        monkeypatch.setattr(
+            "tributo.integrations.exporters.torch_onnx.require_dependency",
+            lambda _dependency: SimpleNamespace(nn=SimpleNamespace(Module=_FakeModule)),
+        )
+
+        with pytest.raises(ValueError, match="requires non-empty preprocessing_state"):
+            TorchONNXExporter().export(self.make_context(tmp_path), source, {}, planned)
+
+    def test_dnn_export_requires_model_config_data(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class _FakeModule:
+            pass
+
+        source = ExportSource(
+            source_kind="dnn_result",
+            model_object=_FakeModule(),
+            preprocessing_state={
+                "features": [{"name": "age"}],
+                "label_encoders": {},
+                "norm_params": {},
+            },
+        )
+        planned = SimpleNamespace(
+            target=self.make_target(),
+            typed_options={"opset": 18, "dynamo": False},
+        )
+        monkeypatch.setattr(
+            "tributo.integrations.exporters.torch_onnx.require_dependency",
+            lambda _dependency: SimpleNamespace(nn=SimpleNamespace(Module=_FakeModule)),
+        )
+
+        with pytest.raises(ValueError, match="requires non-empty model_config_data"):
+            TorchONNXExporter().export(self.make_context(tmp_path), source, {}, planned)
+
+    @pytest.mark.parametrize(
+        "preprocessing_state, expected_message",
+        (
+            (
+                {"features": [{"name": "age"}], "label_encoders": {}},
+                "missing required key",
+            ),
+            (
+                {"features": [], "label_encoders": {}, "norm_params": {}},
+                "features.*must not be empty",
+            ),
+            (
+                {
+                    "features": [{"dimension": 1}],
+                    "label_encoders": {},
+                    "norm_params": {},
+                },
+                "named feature objects",
+            ),
+        ),
+    )
+    def test_dnn_export_rejects_malformed_preprocessing_state(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        preprocessing_state: dict[str, Any],
+        expected_message: str,
+    ) -> None:
+        class _FakeModule:
+            pass
+
+        source = ExportSource(
+            source_kind="dnn_result",
+            model_object=_FakeModule(),
+            model_config_data={"features": [{"name": "age"}]},
+            preprocessing_state=preprocessing_state,
+        )
+        planned = SimpleNamespace(
+            target=self.make_target(),
+            typed_options={"opset": 18, "dynamo": False},
+        )
+        monkeypatch.setattr(
+            "tributo.integrations.exporters.torch_onnx.require_dependency",
+            lambda _dependency: SimpleNamespace(nn=SimpleNamespace(Module=_FakeModule)),
+        )
+
+        with pytest.raises(ValueError, match=expected_message):
+            TorchONNXExporter().export(self.make_context(tmp_path), source, {}, planned)
+
+    @pytest.mark.parametrize(
+        ("field", "expected_artifact"),
+        (
+            ("model_config_data", "model_config.json"),
+            ("preprocessing_state", "preprocessor.json"),
+        ),
+    )
+    def test_dnn_export_rejects_non_finite_json_artifacts(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        field: str,
+        expected_artifact: str,
+    ) -> None:
+        class _FakeModule:
+            pass
+
+        values: dict[str, Any] = {
+            "model_config_data": {"features": [{"name": "age"}]},
+            "preprocessing_state": {
+                "features": [{"name": "age"}],
+                "label_encoders": {},
+                "norm_params": {},
+            },
+        }
+        values[field] = {**values[field], "invalid": float("nan")}
+        source = ExportSource(
+            source_kind="dnn_result",
+            model_object=_FakeModule(),
+            model_config_data=values["model_config_data"],
+            preprocessing_state=values["preprocessing_state"],
+        )
+        planned = SimpleNamespace(
+            target=self.make_target(),
+            typed_options={"opset": 18, "dynamo": False},
+        )
+        monkeypatch.setattr(
+            "tributo.integrations.exporters.torch_onnx.require_dependency",
+            lambda _dependency: SimpleNamespace(nn=SimpleNamespace(Module=_FakeModule)),
+        )
+
+        with pytest.raises(ValueError, match=f"{expected_artifact}.*finite JSON"):
+            TorchONNXExporter().export(self.make_context(tmp_path), source, {}, planned)
+
     def test_dynamo_export_receives_effective_opset(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

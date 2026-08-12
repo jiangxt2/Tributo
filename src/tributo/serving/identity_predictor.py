@@ -132,8 +132,9 @@ class IdentityPredictor:
         Auxiliary files are located by artifact role inside the verified
         bundle: ``preprocessor.json`` (role ``preprocessor``) and
         ``model_config.json`` (role ``config``, carrying the ``features``
-        list).  Files that are not present are tolerated, matching the
-        legacy path's behaviour.
+        list). First-party DNN/PU bundles require both files and matching
+        feature semantics; generic ONNX bundles retain the legacy optional
+        auxiliary-file behaviour.
         """
         from tributo.exporting.runtime import BundleModelLoader
 
@@ -146,6 +147,8 @@ class IdentityPredictor:
 
         self.transformer = None
         self.features: list[SparseFeat | DenseFeat] = []
+        self._bundle_preprocessor_loaded = False
+        self._bundle_feature_config_loaded = False
 
         # Auxiliary-file parsing must not leak the model runtime: any
         # failure below (bad JSON, invalid preprocessor) closes it
@@ -169,6 +172,7 @@ class IdentityPredictor:
                 ):
                     continue  # already handled via the model artifact
                 self._load_aux_artifact(bundle_uri, aux_role, storage_profile)
+            self._validate_bundle_preprocessing_contract()
         except BaseException:
             self._runtime.close()
             raise
@@ -201,6 +205,7 @@ class IdentityPredictor:
                 self.transformer = FeatureTransformer.load(
                     resolved.path_for(file_entry.relative_path)
                 )
+                self._bundle_preprocessor_loaded = True
                 logger.info("Loaded preprocessor from %s", file_entry.relative_path)
             elif file_entry.role == "config":
                 config = json.loads(
@@ -211,9 +216,51 @@ class IdentityPredictor:
                 )
                 if isinstance(features_cfg, list) and features_cfg:
                     self.features = self._parse_features(features_cfg)
+                    self._bundle_feature_config_loaded = True
                     logger.info(
                         "Loaded feature config from %s", file_entry.relative_path
                     )
+
+    def _validate_bundle_preprocessing_contract(self) -> None:
+        """Fail closed when a first-party DNN/PU Bundle is incomplete."""
+        source_kind = self._runtime.manifest.source_info.source_kind
+        if source_kind not in {"dnn_result", "pu_result"}:
+            return
+        if not self._bundle_preprocessor_loaded or self.transformer is None:
+            raise ValueError(
+                f"{source_kind} Bundle requires a file with role 'preprocessor'"
+            )
+        if not self._bundle_feature_config_loaded or not self.features:
+            raise ValueError(
+                f"{source_kind} Bundle requires feature configuration in a file "
+                "with role 'config'"
+            )
+        if self.transformer.features != self.features:
+            raise ValueError(
+                f"{source_kind} Bundle preprocessing features do not match its "
+                "model feature configuration"
+            )
+
+        signature_fields = self._runtime.manifest.input_signature.input_fields
+        signature_names = tuple(field.name for field in signature_fields)
+        feature_names = tuple(feature.name for feature in self.features)
+        if signature_names != feature_names:
+            raise ValueError(
+                f"{source_kind} Bundle preprocessing features {feature_names!r} do "
+                f"not match Manifest input signature {signature_names!r}"
+            )
+        for feature, field in zip(self.features, signature_fields, strict=True):
+            expected_dtype = "int64" if isinstance(feature, SparseFeat) else "float32"
+            expected_shape: tuple[int | str, ...] = ("batch",)
+            if isinstance(feature, DenseFeat) and feature.dimension > 1:
+                expected_shape += (feature.dimension,)
+            if field.dtype != expected_dtype or field.shape != expected_shape:
+                raise ValueError(
+                    f"{source_kind} Bundle feature {feature.name!r} expects "
+                    f"dtype={expected_dtype!r}, shape={expected_shape!r}, but its "
+                    f"Manifest signature declares dtype={field.dtype!r}, "
+                    f"shape={field.shape!r}"
+                )
 
     def close(self) -> None:
         """Release bundle resources (idempotent).

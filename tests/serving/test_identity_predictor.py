@@ -134,6 +134,229 @@ def test_bundle_without_aux_files_tolerated(tmp_path: Path):
     assert predictor.features == []
 
 
+@pytest.mark.parametrize("source_kind", ("dnn_result", "pu_result"))
+def test_first_party_torch_bundle_requires_preprocessor(
+    tmp_path: Path,
+    source_kind: str,
+):
+    from tests.serving.bundle_fixtures import build_test_bundle, make_dummy_onnx
+
+    onnx_path = make_dummy_onnx(tmp_path)
+    bundle = build_test_bundle(
+        tmp_path,
+        onnx_path=onnx_path,
+        source_kind=source_kind,
+        extra_files={
+            "model_config.json": (
+                "config",
+                json.dumps(
+                    {
+                        "features": [
+                            {
+                                "name": "float_input",
+                                "dimension": 2,
+                                "norm": "none",
+                            }
+                        ]
+                    }
+                ).encode("utf-8"),
+            )
+        },
+    )
+
+    with pytest.raises(ValueError, match="requires a file with role 'preprocessor'"):
+        IdentityPredictor(bundle_uri=str(bundle))
+
+
+@pytest.mark.parametrize("source_kind", ("dnn_result", "pu_result"))
+def test_first_party_torch_bundle_requires_feature_config(
+    tmp_path: Path,
+    source_kind: str,
+):
+    from tests.serving.bundle_fixtures import build_test_bundle, make_dummy_onnx
+
+    feature_config = [{"name": "float_input", "dimension": 2, "norm": "none"}]
+    onnx_path = make_dummy_onnx(tmp_path)
+    bundle = build_test_bundle(
+        tmp_path,
+        onnx_path=onnx_path,
+        source_kind=source_kind,
+        extra_files={
+            "preprocessor.json": (
+                "preprocessor",
+                json.dumps(
+                    {
+                        "features": feature_config,
+                        "label_encoders": {},
+                        "norm_params": {},
+                    }
+                ).encode("utf-8"),
+            )
+        },
+    )
+
+    with pytest.raises(ValueError, match="requires feature configuration"):
+        IdentityPredictor(bundle_uri=str(bundle))
+
+
+@pytest.mark.parametrize("source_kind", ("dnn_result", "pu_result"))
+def test_first_party_torch_bundle_loads_matching_preprocessor(
+    tmp_path: Path,
+    source_kind: str,
+):
+    from tests.serving.bundle_fixtures import build_test_bundle, make_dummy_onnx
+
+    feature_config = [{"name": "float_input", "dimension": 2, "norm": "none"}]
+    onnx_path = make_dummy_onnx(tmp_path)
+    bundle = build_test_bundle(
+        tmp_path,
+        onnx_path=onnx_path,
+        source_kind=source_kind,
+        input_field_shape=("batch", 2),
+        output_field_shapes={
+            "label": ("batch",),
+            "probabilities": ("batch", 2),
+        },
+        extra_files={
+            "model_config.json": (
+                "config",
+                json.dumps({"features": feature_config}).encode("utf-8"),
+            ),
+            "preprocessor.json": (
+                "preprocessor",
+                json.dumps(
+                    {
+                        "features": feature_config,
+                        "label_encoders": {},
+                        "norm_params": {},
+                    }
+                ).encode("utf-8"),
+            ),
+        },
+    )
+
+    predictor = IdentityPredictor(bundle_uri=str(bundle))
+    try:
+        result = predictor.predict({"float_input": [0.25, 0.75]})
+    finally:
+        predictor.close()
+
+    assert 0.0 <= result["probability"] <= 1.0
+
+
+def test_first_party_torch_bundle_rejects_feature_semantic_mismatch(
+    tmp_path: Path,
+):
+    from tests.serving.bundle_fixtures import build_test_bundle, make_dummy_onnx
+
+    onnx_path = make_dummy_onnx(tmp_path)
+    bundle = build_test_bundle(
+        tmp_path,
+        onnx_path=onnx_path,
+        source_kind="dnn_result",
+        extra_files={
+            "model_config.json": (
+                "config",
+                json.dumps(
+                    {
+                        "features": [
+                            {
+                                "name": "float_input",
+                                "dimension": 2,
+                                "norm": "none",
+                            }
+                        ]
+                    }
+                ).encode("utf-8"),
+            ),
+            "preprocessor.json": (
+                "preprocessor",
+                json.dumps(
+                    {
+                        "features": [
+                            {"name": "float_input", "dimension": 1, "norm": "none"}
+                        ],
+                        "label_encoders": {},
+                        "norm_params": {},
+                    }
+                ).encode("utf-8"),
+            ),
+        },
+    )
+
+    with pytest.raises(ValueError, match="do not match its model feature"):
+        IdentityPredictor(bundle_uri=str(bundle))
+
+
+def test_first_party_torch_bundle_rejects_manifest_schema_mismatch(
+    tmp_path: Path,
+):
+    from tests.serving.bundle_fixtures import build_test_bundle, make_dummy_onnx
+
+    feature_config = [{"name": "float_input", "dimension": 1, "norm": "none"}]
+    onnx_path = make_dummy_onnx(tmp_path)
+    bundle = build_test_bundle(
+        tmp_path,
+        onnx_path=onnx_path,
+        source_kind="dnn_result",
+        input_field_shape=("batch", 2),
+        extra_files={
+            "model_config.json": (
+                "config",
+                json.dumps({"features": feature_config}).encode("utf-8"),
+            ),
+            "preprocessor.json": (
+                "preprocessor",
+                json.dumps(
+                    {
+                        "features": feature_config,
+                        "label_encoders": {},
+                        "norm_params": {},
+                    }
+                ).encode("utf-8"),
+            ),
+        },
+    )
+
+    with pytest.raises(ValueError, match="Manifest signature declares"):
+        IdentityPredictor(bundle_uri=str(bundle))
+
+
+def test_first_party_torch_bundle_rejects_preprocessor_digest_mismatch(
+    tmp_path: Path,
+):
+    from tests.serving.bundle_fixtures import build_test_bundle, make_dummy_onnx
+
+    feature_config = [{"name": "float_input", "dimension": 2, "norm": "none"}]
+    onnx_path = make_dummy_onnx(tmp_path)
+    bundle = build_test_bundle(
+        tmp_path,
+        onnx_path=onnx_path,
+        source_kind="dnn_result",
+        extra_files={
+            "model_config.json": (
+                "config",
+                json.dumps({"features": feature_config}).encode("utf-8"),
+            ),
+            "preprocessor.json": (
+                "preprocessor",
+                json.dumps(
+                    {
+                        "features": feature_config,
+                        "label_encoders": {},
+                        "norm_params": {},
+                    }
+                ).encode("utf-8"),
+            ),
+        },
+    )
+    preprocessor_path = bundle / "artifacts" / "model" / "preprocessor.json"
+    preprocessor_path.write_bytes(b" " * len(preprocessor_path.read_bytes()))
+
+    with pytest.raises(ValueError, match="SHA-256 mismatch"):
+        IdentityPredictor(bundle_uri=str(bundle))
+
+
 def test_legacy_model_path_still_works(tmp_path: Path):
     """legacy 裸模型路径保持兼容。"""
     from tests.serving.bundle_fixtures import make_dummy_onnx

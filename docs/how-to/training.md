@@ -35,6 +35,12 @@ Omitting `targets` selects the trainer's standard artifacts:
 | DNN | ONNX opset 18 | `onnx-model` |
 | PU | ONNX opset 18 | `onnx-model` |
 
+DNN and PU ONNX artifacts also contain the checkpoint's
+`preprocessor.json`, recorded with the Bundle file role `preprocessor` and
+covered by the artifact digest. `IdentityPredictor` requires that state and
+checks it against the model feature configuration and Manifest input
+signature before accepting raw-feature requests.
+
 The returned mapping includes the stable `TrainingResult` fields
 `model_uri`, `bundle_uri`, `metrics`, `legacy_artifact_uri`,
 `training_status`, `bundle_status`, `hook_status`, and `execution_id`.

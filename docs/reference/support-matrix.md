@@ -79,6 +79,12 @@ verify and expose the artifact; it does not imply that Tributo can execute it.
 | `hf-onnx-v1` | Yes | Yes | No | No | Dedicated runtime compatibility gate is pending |
 | `onnx-int8-v1` | Yes | Yes | No | No | Quantized numerical compatibility gate is pending |
 
+The ONNX entries describe execution of validated tensors. DNN/PU Bundle
+publication includes digest-protected preprocessing state, and
+`IdentityPredictor` consumes it for raw-feature online inference. Distributed
+batch inference currently requires callers to bind already-preprocessed
+tensors; it does not apply DNN/PU preprocessing implicitly.
+
 ## Serving and streaming
 
 | Capability | Status | Boundary |

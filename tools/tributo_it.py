@@ -494,16 +494,48 @@ def _registry_reference(registry: str, identity: RuntimeIdentity) -> str:
     return f"{registry.rstrip('/')}:{identity.profile.name}-{identity.runtime_key}"
 
 
-def _registry_miss(output: str) -> bool:
+def _registry_miss(output: str, reference: str) -> bool:
+    """Return whether an authenticated registry lookup found no image.
+
+    Buildx reports a missing GHCR tag as ``<reference>: not found`` instead of
+    one of the OCI ``manifest unknown`` variants.  Match that response only
+    when it names the exact requested reference so authentication, permission,
+    and transport failures remain fatal.
+    """
     lowered = output.lower()
-    return any(
-        marker in lowered
-        for marker in (
-            "manifest unknown",
-            "manifest not found",
-            "name unknown",
-            "404 not found",
+    lowered_reference = reference.lower()
+    fatal_markers = (
+        "failed to authorize",
+        "unauthorized",
+        "forbidden",
+        "permission_denied",
+        "permission denied",
+        "network is unreachable",
+        "connection refused",
+        "dial tcp",
+    )
+    if any(marker in lowered for marker in fatal_markers):
+        return False
+    oci_miss_markers = (
+        "manifest unknown",
+        "manifest not found",
+        "name unknown",
+        "404 not found",
+    )
+    for line in lowered.splitlines():
+        candidate = re.sub(r"^error:\s*", "", line.strip())
+        if not candidate.startswith(f"{lowered_reference}:"):
+            continue
+        detail = candidate[len(lowered_reference) + 1 :].strip()
+        if any(marker in detail for marker in oci_miss_markers):
+            return True
+    return (
+        re.search(
+            rf"(?m)^(?:error:\s*)?{re.escape(reference)}:\s*not found\s*$",
+            output,
+            flags=re.IGNORECASE,
         )
+        is not None
     )
 
 
@@ -1512,7 +1544,7 @@ def publish_runtime(
         print(f"Registry runtime already exists and is valid: {pinned_remote}")
         return
     pull_output = "\n".join((pull.stdout, pull.stderr)).strip()
-    if not _registry_miss(pull_output):
+    if not _registry_miss(pull_output, remote):
         raise TributoITError(
             f"could not safely inspect registry runtime {remote}: {pull_output}"
         )
