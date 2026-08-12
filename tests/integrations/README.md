@@ -21,7 +21,7 @@ existing MLflow server, or a pre-existing container.
 | PostgreSQL conformance | `../integration/test_postgresql_ingestion.py` | Structured table read through Ray Data and Daft | Local Ray runtime + PostgreSQL |
 | Inference Ray Jobs | `../integration/test_inference_ray_jobs.py` | Bundle, real post-training inline/detached inference, MLflow import, external artifacts, retry identity, credential domains, empty/NaN behavior | Isolated version-locked Docker Ray + MLflow + MinIO |
 | Streaming | `test_e2e_streaming.py` | Streaming inference service | TBD |
-| Tune | `test_e2e_tune.py` | Hyperparameter search | TBD |
+| Tune trial correctness | `../integration/test_tune_ray_cluster.py` | Ray Jobs → two concurrent XGBoost Tune trials, strict target metric, isolated checkpoints, ResultGrid, and zero Bundle publication | Isolated version-locked Docker Ray cluster via `run_tune_it.sh` |
 
 ---
 
@@ -44,6 +44,37 @@ An EXIT/INT/TERM trap captures logs and executes project-scoped `down
 `always()` step. Both paths verify that project-labelled resources are gone;
 no prune, global deletion, or shared-image cleanup is permitted. Test and
 service logs remain under `/tmp/<compose-project>-*.log` after cleanup.
+
+---
+
+## Tune Integration Gate
+
+Run the Tune-only Gate from the repository root:
+
+```bash
+./scripts/run_tune_it.sh
+```
+
+The runner creates a unique `tributo-tune-it-<timestamp>-<pid>` Compose
+project, submits the workload through the Ray Jobs API, and stores test,
+cluster-readiness, and service logs under `/tmp/<project-name>/`. It removes
+only that project's containers, network, and volumes. The Gate scales the Ray
+worker service from one to three replicas, adding one worker at a time. After
+each step, it requires the Ray State API to report the exact head-plus-worker
+node count for three consecutive samples before continuing, avoiding concurrent
+worker registration pressure. The final one-CPU head and three two-CPU workers
+provide seven logical CPUs. Two outer Tune trial actors and their two inner Ray
+Train placement groups require six CPUs in total, leaving one CPU of scheduling
+headroom.
+
+The `trials` directory is a Tributo-reserved namespace passed to Ray Tune as
+its storage root, so Tune owns recovery state below `output_path/trials` and
+Tributo does not delete it. With local storage, the inner Ray Train run starts
+under the trial driver staging directory and Ray's final experiment sync
+persists it below the corresponding `Result.path`. With remote storage, the
+inner run writes to its isolated persistent URI directly. The Docker Gate uses
+a run-scoped volume, so its isolated test artifacts are removed with the
+Compose project after logs have been captured.
 
 ---
 
