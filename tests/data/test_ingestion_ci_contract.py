@@ -150,6 +150,27 @@ def test_runtime_publish_workflow_is_trusted_and_immutable() -> None:
     assert ":latest" not in workflow
 
 
+def test_registry_runtime_consumers_authenticate_only_on_trusted_pushes() -> None:
+    workflow = _WORKFLOW.read_text(encoding="utf-8")
+    job_boundaries = (
+        ("  data-ingestion-distributed:", "  inference-distributed:", 80),
+        ("  core-walking-skeleton:", "  core-gate:", 65),
+    )
+
+    for start, end, timeout_minutes in job_boundaries:
+        job = workflow.split(start, 1)[1].split(end, 1)[0]
+        assert "packages: read" in job
+        assert "Authenticate to GHCR for the published runtime" in job
+        assert "if: github.event_name == 'push'" in job
+        assert "secrets.GITHUB_TOKEN" in job
+        assert "docker login ghcr.io" in job
+        assert f"timeout-minutes: {timeout_minutes}" in job
+        assert (
+            "TRIBUTO_IT_RUNTIME_REGISTRY_WAIT_SECONDS: "
+            "${{ github.event_name == 'push' && '2100' || '0' }}"
+        ) in job
+
+
 def test_model_export_ci_executes_mlflow_contract_and_waits_for_minio() -> None:
     workflow = _WORKFLOW.read_text(encoding="utf-8")
     core_job = workflow.split("  core-walking-skeleton:", 1)[1].split(

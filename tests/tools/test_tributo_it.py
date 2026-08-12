@@ -339,6 +339,107 @@ def test_registry_runtime_is_resolved_and_pulled_by_digest(
     assert commands[-1] == ["docker", "pull", pinned]
 
 
+def test_registry_miss_accepts_exact_ghcr_not_found_response() -> None:
+    reference = "ghcr.io/example/runtime:data-key"
+
+    assert tributo_it._registry_miss(
+        f"ERROR: {reference}: not found\n",
+        reference,
+    )
+
+
+@pytest.mark.parametrize(
+    "marker",
+    ("manifest unknown", "manifest not found", "name unknown", "404 not found"),
+)
+def test_registry_miss_accepts_oci_marker_for_exact_reference(marker: str) -> None:
+    reference = "ghcr.io/example/runtime:data-key"
+
+    assert tributo_it._registry_miss(f"ERROR: {reference}: {marker}\n", reference)
+
+
+@pytest.mark.parametrize(
+    "output",
+    (
+        "ERROR: failed to authorize: unexpected status: 403 Forbidden",
+        "ERROR: denied: permission_denied: write_package",
+        "ERROR: failed to do request: dial tcp: network is unreachable",
+        "ERROR: ghcr.io/example/other:data-key: not found",
+        "ERROR: ghcr.io/example/other:data-key: manifest unknown",
+        (
+            "Inspecting ghcr.io/example/runtime:data-key\n"
+            "ERROR: ghcr.io/example/other:data-key: manifest unknown"
+        ),
+        (
+            "ERROR: ghcr.io/example/runtime:data-key: manifest unknown\n"
+            "ERROR: failed to authorize: unexpected status: 403 Forbidden"
+        ),
+    ),
+)
+def test_registry_miss_rejects_non_missing_failures(output: str) -> None:
+    assert not tributo_it._registry_miss(
+        output,
+        "ghcr.io/example/runtime:data-key",
+    )
+
+
+def test_publish_runtime_builds_and_pushes_exact_missing_tag(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile = _write_profile(tmp_path)
+    identity = tributo_it.runtime_identity(profile, "linux/amd64")
+    registry = "ghcr.io/example/runtime"
+    remote = f"{registry}:{profile.name}-{identity.runtime_key}"
+    digest = "sha256:" + "a" * 64
+    prepared = tributo_it.PreparedRuntime(identity, "sha256:image", "build")
+    pulls = iter(
+        (
+            (
+                subprocess.CompletedProcess(
+                    ["docker", "buildx"], 1, "", f"ERROR: {remote}: not found\n"
+                ),
+                None,
+            ),
+            (
+                subprocess.CompletedProcess(["docker", "pull"], 0, "pulled", ""),
+                f"{remote}@{digest}",
+            ),
+        )
+    )
+    commands: list[list[str]] = []
+
+    monkeypatch.setattr(
+        tributo_it,
+        "_pull_registry_runtime",
+        lambda _reference, *, wait_seconds: next(pulls),
+    )
+    monkeypatch.setattr(tributo_it, "prepare_runtime", lambda *args, **kwargs: prepared)
+    monkeypatch.setattr(
+        tributo_it,
+        "validate_runtime_image",
+        lambda _identity, _reference=None: "sha256:image",
+    )
+    monkeypatch.setattr(
+        tributo_it,
+        "_run",
+        lambda args, **_kwargs: (
+            commands.append(args) or subprocess.CompletedProcess(args, 0, "", "")
+        ),
+    )
+
+    tributo_it.publish_runtime(
+        profile,
+        platform="linux/amd64",
+        registry=registry,
+    )
+
+    assert commands == [
+        ["docker", "tag", identity.local_tag, remote],
+        ["docker", "push", remote],
+    ]
+
+
 def test_digest_image_gets_readable_tag_without_overwriting(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
