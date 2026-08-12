@@ -84,6 +84,7 @@ def build_test_bundle(
     input_field_shape: tuple[int | str, ...] = (),
     output_field_shapes: dict[str, tuple[int | str, ...]] | None = None,
     architecture_id: str | None = None,
+    source_kind: str = "xgboost_result",
     extra_artifacts: dict[str, dict[str, tuple[str, bytes]]] | None = None,
 ) -> Path:
     """Write a minimal valid local bundle and return its root directory.
@@ -162,7 +163,7 @@ def build_test_bundle(
         canonical_uri=str(bundle_dir),
         tributo_version="0.0.0",
         source_info=ManifestSourceInfo(
-            source_kind="xgboost_result", architecture_id=architecture_id
+            source_kind=source_kind, architecture_id=architecture_id
         ),
         input_signature=ManifestSignature(
             input_fields=(

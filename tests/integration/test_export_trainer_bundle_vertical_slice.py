@@ -37,7 +37,7 @@ def _training_config(storage_path: Path) -> dict[str, Any]:
             {
                 "name": "age",
                 "type": "dense",
-                "dimension": 1,
+                "dimension": 2,
                 "norm": "none",
             }
         ],
@@ -71,7 +71,7 @@ def _write_torch_checkpoint(
     from tributo.training.features.column_types import features_from_dicts
     from tributo.training.models.dnn import DNNModel
 
-    feature_configs = [{"name": "age", "dimension": 1, "norm": "none"}]
+    feature_configs = [{"name": "age", "dimension": 2, "norm": "none"}]
     features = features_from_dicts(feature_configs)
     model_config = {"dnn_hidden_units": [4], "dnn_dropout": 0.0}
     model = DNNModel(features, **model_config)
@@ -92,7 +92,13 @@ def _write_torch_checkpoint(
     )
     (checkpoint_dir / "model_config.json").write_text(json.dumps(metadata))
     (checkpoint_dir / "preprocessor.json").write_text(
-        json.dumps({"features": feature_configs})
+        json.dumps(
+            {
+                "features": feature_configs,
+                "label_encoders": {},
+                "norm_params": {},
+            }
+        )
     )
 
 
@@ -138,6 +144,24 @@ def test_dnn_trainer_run_publishes_typed_manifest(
         _assert_onnx_signature_matches_manifest(
             artifact.path_for("model.onnx"), manifest
         )
+        preprocessor_file = next(
+            file for file in artifact.descriptor.files if file.role == "preprocessor"
+        )
+        assert preprocessor_file.relative_path == "preprocessor.json"
+        assert json.loads(artifact.path_for("preprocessor.json").read_text()) == {
+            "features": [{"name": "age", "dimension": 2, "norm": "none"}],
+            "label_encoders": {},
+            "norm_params": {},
+        }
+
+    from tributo.serving.identity_predictor import IdentityPredictor
+
+    predictor = IdentityPredictor(bundle_uri=summary["canonical_uri"])
+    try:
+        prediction = predictor.predict({"age": [21.0, 34.0]})
+    finally:
+        predictor.close()
+    assert 0.0 <= prediction["probability"] <= 1.0
 
 
 @pytest.mark.slow
@@ -173,6 +197,10 @@ def test_pu_trainer_run_publishes_typed_manifest_and_prior(
     with reader.open_artifact(summary["canonical_uri"], role="inference") as artifact:
         _assert_onnx_signature_matches_manifest(
             artifact.path_for("model.onnx"), manifest
+        )
+        assert any(
+            file.role == "preprocessor" and file.relative_path == "preprocessor.json"
+            for file in artifact.descriptor.files
         )
 
     with reader.open_artifact(summary["canonical_uri"], role="inference") as artifact:

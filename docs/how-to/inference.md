@@ -78,6 +78,12 @@ profile is rejected instead of silently falling back to another domain's
 default credentials. The default IAM/environment chain remains available when
 the request omits the profile name.
 
+The distributed batch path compiles table columns directly into the named
+model tensors declared by `input_binding`; it does not execute DNN/PU
+`FeatureTransformer` state. Batch requests for DNN/PU Bundles must therefore
+bind already-preprocessed columns. Raw-feature preprocessing for these Bundles
+is currently provided by `IdentityPredictor` in the online-serving path.
+
 Source profile resolution and source-local S3 precedence are owned by the Data
 Gateway. Inference does not merge provider options or copy source credentials
 into its model and sink adapters.
