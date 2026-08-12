@@ -551,10 +551,25 @@ class DNNTrainerImpl(BaseTrainer):
 
     def training_loop(self) -> Any:
         """Invoke Ray Train TorchTrainer to execute distributed training."""
+        cfg = self._train_config
+        storage_path = self.run_config.get("storage_path")
+        if storage_path is None:
+            storage_path = cfg.ray.storage_path
+        elif not isinstance(storage_path, str) or not storage_path:
+            raise JobConfigurationError(
+                "run_config 'storage_path' must be a non-empty string or None"
+            )
+        run_name = self.run_config.get("name")
+        if run_name is None:
+            run_name = "tributo-dnn"
+        elif not isinstance(run_name, str) or not run_name:
+            raise JobConfigurationError(
+                "run_config 'name' must be a non-empty string or None"
+            )
+
         import ray
         import ray.train
         from ray.train import FailureConfig, RunConfig, ScalingConfig
-        from ray.train.torch import TorchTrainer
 
         from tributo.training.checkpoint import (
             checkpoint_config,
@@ -563,8 +578,6 @@ class DNNTrainerImpl(BaseTrainer):
 
         if not ray.is_initialized():
             ray.init(address="auto", ignore_reinit_error=True)
-
-        cfg = self._train_config
 
         # Prepare training config
         train_loop_config = {
@@ -579,7 +592,6 @@ class DNNTrainerImpl(BaseTrainer):
         }
 
         # Auto-detect storage_path
-        storage_path = cfg.ray.storage_path
         if storage_path is None:
             import os
             import tempfile
@@ -593,6 +605,8 @@ class DNNTrainerImpl(BaseTrainer):
 
         logger.info("Using storage_path: %s", storage_path)
 
+        from ray.train.torch import TorchTrainer
+
         # Build TorchTrainer
         trainer = TorchTrainer(
             train_loop_per_worker=dnn_train_loop_per_worker,
@@ -604,7 +618,7 @@ class DNNTrainerImpl(BaseTrainer):
             ),
             datasets=self.datasets,
             run_config=RunConfig(
-                name="tributo-dnn",
+                name=run_name,
                 storage_path=storage_path,
                 failure_config=FailureConfig(max_failures=cfg.ray.max_failures),
                 checkpoint_config=checkpoint_config(cfg.ray.resume),

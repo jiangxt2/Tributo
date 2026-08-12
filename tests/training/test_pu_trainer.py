@@ -830,5 +830,109 @@ class TestPUTrainerResourceSafety:
         assert created_dirs and all(not path.exists() for path in created_dirs)
 
 
+class TestPUTrainerRunConfig:
+    """PU forwards only the existing Ray Train identity overrides."""
+
+    @pytest.mark.parametrize(
+        ("run_config", "expected_storage", "expected_name"),
+        [
+            (None, "/configured-storage", "tributo-pu"),
+            (
+                {"name": None, "storage_path": None},
+                "/configured-storage",
+                "tributo-pu",
+            ),
+            (
+                {"name": "tune-pu-trial-001", "storage_path": "/trial-storage"},
+                "/trial-storage",
+                "tune-pu-trial-001",
+            ),
+        ],
+    )
+    def test_training_loop_applies_narrow_run_config_overrides(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        run_config: dict[str, Any] | None,
+        expected_storage: str,
+        expected_name: str,
+    ) -> None:
+        import sys
+        from types import SimpleNamespace
+
+        import ray
+
+        import tributo.training.checkpoint as checkpoint_module
+        from tributo.training.pu_trainer import PUTrainerImpl
+
+        captured: dict[str, Any] = {}
+        resume_checkpoint = object()
+
+        class FakeTorchTrainer:
+            def __init__(self, **kwargs: Any) -> None:
+                captured.update(kwargs)
+
+            def fit(self) -> Any:
+                return SimpleNamespace(metrics={})
+
+        monkeypatch.setattr(ray, "is_initialized", lambda: True)
+        monkeypatch.setitem(
+            sys.modules,
+            "ray.train.torch",
+            SimpleNamespace(TorchTrainer=FakeTorchTrainer),
+        )
+        monkeypatch.setattr(
+            checkpoint_module,
+            "load_initial_checkpoint",
+            lambda path: resume_checkpoint if path == "/persisted-checkpoint" else None,
+        )
+        trainer = PUTrainerImpl(
+            datasets={},
+            config={
+                "features": [],
+                "pu": {"class_prior": 0.2},
+                "ray": {
+                    "storage_path": "/configured-storage",
+                    "resume": {"checkpoint_path": "/persisted-checkpoint"},
+                },
+            },
+            run_config=run_config,
+        )
+
+        trainer.training_loop()
+
+        inner_run_config = captured["run_config"]
+        assert inner_run_config.storage_path == expected_storage
+        assert inner_run_config.name == expected_name
+        assert captured["resume_from_checkpoint"] is resume_checkpoint
+        assert captured["train_loop_config"]["resume"]["checkpoint_path"] == (
+            "/persisted-checkpoint"
+        )
+
+    @pytest.mark.parametrize(
+        "run_config",
+        (
+            {"name": ""},
+            {"name": 1},
+            {"storage_path": ""},
+            {"storage_path": 1},
+        ),
+    )
+    def test_training_loop_rejects_invalid_run_config_override(
+        self,
+        run_config: dict[str, Any],
+    ) -> None:
+        from tributo.exceptions import JobConfigurationError
+        from tributo.training.pu_trainer import PUTrainerImpl
+
+        trainer = PUTrainerImpl(
+            datasets={},
+            config={"features": [], "pu": {"class_prior": 0.2}},
+            run_config=run_config,
+        )
+
+        with pytest.raises(JobConfigurationError, match="run_config"):
+            trainer.training_loop()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
