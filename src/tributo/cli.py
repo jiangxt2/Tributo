@@ -26,7 +26,49 @@ from tributo.vector_index.cli import vector as vector_group
 logger = logging.getLogger(__name__)
 
 
-@click.group()
+class _LazyTributoGroup(click.Group):
+    """Load the broker command module only when the broker command is used."""
+
+    def get_command(self, ctx: click.Context, cmd_name: str) -> click.Command | None:
+        if cmd_name == "broker":
+            from tributo.cli_broker import broker
+
+            return broker
+        return super().get_command(ctx, cmd_name)
+
+    def list_commands(self, ctx: click.Context) -> list[str]:
+        commands = super().list_commands(ctx)
+        if "broker" not in commands:
+            commands.append("broker")
+        return sorted(commands)
+
+    def format_commands(
+        self,
+        ctx: click.Context,
+        formatter: click.HelpFormatter,
+    ) -> None:
+        """Render broker help from a lightweight placeholder."""
+        commands: list[tuple[str, click.Command]] = []
+        for command_name in self.list_commands(ctx):
+            command = (
+                click.Command(
+                    "broker",
+                    help="Discover and run explicitly selected message broker plugins.",
+                )
+                if command_name == "broker"
+                else self.get_command(ctx, command_name)
+            )
+            if command is not None and not command.hidden:
+                commands.append((command_name, command))
+        if not commands:
+            return
+        limit = formatter.width - 6 - max(len(name) for name, _ in commands)
+        rows = [(name, command.get_short_help_str(limit)) for name, command in commands]
+        with formatter.section("Commands"):
+            formatter.write_dl(rows)
+
+
+@click.group(cls=_LazyTributoGroup)
 @click.version_option(package_name="tributo")
 def main():
     """Tributo: Unified framework for submitting Ray Jobs."""

@@ -10,6 +10,7 @@ from ray.job_submission import JobStatus
 from tributo.algorithms import AlgorithmArtifact, EnvironmentSpec, ImageProfile
 from tributo.training.job_submitter import (
     submit_training_job,
+    submit_training_job_with_identity,
     submit_training_job_with_retry,
 )
 
@@ -69,15 +70,15 @@ class TestStableSubmission:
                 attempt_id="attempt-1",
             )
 
-        assert first == second == "job-1"
+        assert first == second
+        assert first.startswith("tributo-train-")
         ids = [
             call.kwargs["submission_id"] for call in client.submit_job.call_args_list
         ]
         assert ids[0] == ids[1]
-        assert (
-            "TRIBUTO_RUN_ID"
-            in client.submit_job.call_args.kwargs["runtime_env"]["env_vars"]
-        )
+        worker_env = client.submit_job.call_args.kwargs["runtime_env"]["env_vars"]
+        assert "TRIBUTO_RUN_ID" in worker_env
+        assert worker_env["TRIBUTO_SUBMISSION_ID"] == ids[-1]
 
     def test_existing_failed_attempt_is_reconciled_without_timestamp_retry(
         self,
@@ -85,6 +86,9 @@ class TestStableSubmission:
         client = MagicMock()
         client.submit_job.side_effect = RuntimeError("submission already exists")
         client.get_job_status.return_value = JobStatus.FAILED
+        client.get_job_info.return_value = type(
+            "JobInfo", (), {"job_id": "ray-job-1"}
+        )()
 
         with (
             patch(
@@ -96,13 +100,14 @@ class TestStableSubmission:
                 side_effect=_runtime_env,
             ),
         ):
-            job_id = submit_training_job(
+            submission = submit_training_job_with_identity(
                 "python train.py",
                 run_id="run-1",
                 attempt_id="attempt-1",
             )
 
-        assert job_id.startswith("tributo-train-")
+        assert submission.submission_id.startswith("tributo-train-")
+        assert submission.ray_job_id == "ray-job-1"
         assert client.submit_job.call_count == 1
 
 
@@ -138,6 +143,13 @@ class TestRetryClassification:
         assert result.attempts[1].attempt_id == "attempt-2"
         assert result.attempts[1].status == "SUCCEEDED"
         assert result.attempts[0].submission_id != result.attempts[1].submission_id
+        for call, attempt in zip(
+            client.submit_job.call_args_list, result.attempts, strict=True
+        ):
+            assert (
+                call.kwargs["runtime_env"]["env_vars"]["TRIBUTO_SUBMISSION_ID"]
+                == attempt.submission_id
+            )
 
     def test_stopped_job_is_never_retried(self) -> None:
         client = MagicMock()
@@ -259,9 +271,51 @@ class TestRetryClassification:
                 ),
             )
 
-        assert job_id == "job-artifact"
+        assert job_id.startswith("tributo-train-")
         assert build_runtime_env.call_args.kwargs["algorithm_artifact"] is artifact
         assert build_runtime_env.call_args.kwargs["image_profile"] is profile
         assert build_runtime_env.call_args.kwargs["declared_dependencies"] == (
             "scikit-learn<2,>=1.6",
         )
+
+    def test_metadata_cannot_override_submission_identity(self) -> None:
+        with pytest.raises(ValueError, match="TRIBUTO_SUBMISSION_ID"):
+            submit_training_job(
+                "python train.py",
+                run_id="run-1",
+                metadata={"TRIBUTO_SUBMISSION_ID": "other-submission"},
+            )
+
+    def test_submission_result_preserves_identity_and_optional_digest(self) -> None:
+        client = MagicMock()
+        client.submit_job.return_value = "submission-return"
+        client.get_job_info.return_value = type(
+            "JobInfo", (), {"job_id": "ray-job-1"}
+        )()
+        with (
+            patch(
+                "tributo.training.job_submitter._get_submission_client",
+                return_value=client,
+            ),
+            patch(
+                "tributo.training.job_submitter.build_runtime_env",
+                side_effect=_runtime_env,
+            ),
+        ):
+            result = submit_training_job_with_identity(
+                "python -m worker",
+                run_id="business-job-1",
+                attempt_id="attempt-2",
+                request_digest="request-digest",
+            )
+        assert result.run_id == "business-job-1"
+        assert result.attempt_id == "attempt-2"
+        assert result.submission_id.startswith("tributo-train-")
+        assert result.ray_job_id == "ray-job-1"
+        assert result.request_digest == "request-digest"
+        worker_env = client.submit_job.call_args.kwargs["runtime_env"]["env_vars"]
+        assert worker_env["TRIBUTO_SUBMISSION_ID"] == result.submission_id
+        assert "TRIBUTO_EXECUTION_CONTEXT" not in worker_env
+        assert client.submit_job.call_args.kwargs["metadata"] == {
+            "tributo.request_digest": "request-digest"
+        }

@@ -895,3 +895,149 @@ def _discover_storage_adapter_plugins(
         classes.append(cls)
         logger.info("Discovered storage adapter %r (%s)", ep.name, ep.value)
     return classes
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Broker plugins
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _broker_contract_issues(cls: Any) -> tuple[str, ...]:
+    """Return structural API issues without instantiating a provider."""
+    issues: list[str] = []
+    if not isinstance(cls, type):
+        return ("provider class",)
+    if not isinstance(getattr(cls, "api_version", None), int):
+        issues.append("api_version")
+    if not isinstance(getattr(cls, "broker_id", None), str):
+        issues.append("broker_id")
+    capabilities = getattr(cls, "capabilities", None)
+    if not isinstance(capabilities, frozenset):
+        issues.append("capabilities")
+    for method in (
+        "validate_config",
+        "create_runtime",
+        "create_cancellation_checker",
+    ):
+        if not callable(getattr(cls, method, None)):
+            issues.append(method)
+    return tuple(issues)
+
+
+def discover_broker_plugins(
+    diagnostics: list[PluginLoadDiagnostic] | None = None,
+) -> list[type[Any]]:
+    """Discover broker provider classes from ``tributo.brokers``.
+
+    Discovery is fail-open and never instantiates a provider.  In particular,
+    it cannot create a Redis client or perform a network probe.  Explicit
+    resolution is provided by :func:`resolve_broker_plugin` and is
+    fail-closed.
+    """
+    from tributo.integrations.broker import BROKER_API_VERSION
+
+    enabled = _get_enabled_plugins()
+    classes: list[type[Any]] = []
+    for ep in _iter_entry_points("tributo.brokers"):
+        if enabled is not None and ep.name not in enabled:
+            logger.debug("Skipping broker plugin %r", ep.name)
+            continue
+        try:
+            cls = ep.load()
+        except Exception as exc:
+            logger.warning(
+                "Failed to load broker plugin %r (%s)",
+                ep.name,
+                ep.value,
+                exc_info=True,
+            )
+            _record_diagnostic(
+                diagnostics,
+                "tributo.brokers",
+                ep.name,
+                f"Failed to load entry point: {exc}",
+                error_type=type(exc).__name__,
+            )
+            continue
+
+        issues = _broker_contract_issues(cls)
+        if issues:
+            logger.warning(
+                "Broker plugin %r does not satisfy API v%d: %s",
+                ep.name,
+                BROKER_API_VERSION,
+                ", ".join(issues),
+            )
+            _record_diagnostic(
+                diagnostics,
+                "tributo.brokers",
+                ep.name,
+                "Missing or invalid BrokerPlugin members: " + ", ".join(issues),
+            )
+            continue
+        if cls.api_version != BROKER_API_VERSION:
+            reason = (
+                f"Unsupported BrokerPlugin api_version {cls.api_version!r}; "
+                f"expected {BROKER_API_VERSION}"
+            )
+            _record_diagnostic(diagnostics, "tributo.brokers", ep.name, reason)
+            logger.warning("Broker plugin %r: %s", ep.name, reason)
+            continue
+        if ep.name != cls.broker_id:
+            reason = (
+                f"Entry-point name {ep.name!r} does not match broker_id "
+                f"{cls.broker_id!r}"
+            )
+            _record_diagnostic(diagnostics, "tributo.brokers", ep.name, reason)
+            logger.warning("Broker plugin %r: %s", ep.name, reason)
+            continue
+        classes.append(cls)
+        logger.info("Discovered broker plugin %r (%s)", ep.name, ep.value)
+    return classes
+
+
+def resolve_broker_plugin(broker_id: str) -> type[Any]:
+    """Resolve one explicitly selected broker, using fail-closed semantics."""
+    enabled = _get_enabled_plugins()
+    if enabled is not None and broker_id not in enabled:
+        raise JobConfigurationError(
+            f"Broker {broker_id!r} is disabled by TRIBUTO_PLUGINS"
+        )
+
+    matches = [
+        ep for ep in _iter_entry_points("tributo.brokers") if ep.name == broker_id
+    ]
+    if not matches:
+        raise JobConfigurationError(f"Unknown broker {broker_id!r}")
+    if len(matches) > 1:
+        raise JobConfigurationError(
+            f"Multiple entry points are registered for broker {broker_id!r}"
+        )
+
+    ep = matches[0]
+    try:
+        cls = ep.load()
+    except Exception as exc:
+        raise JobConfigurationError(
+            f"Failed to load broker {broker_id!r} ({type(exc).__name__})"
+        ) from exc
+
+    issues = _broker_contract_issues(cls)
+    from tributo.integrations.broker import BROKER_API_VERSION
+
+    if issues:
+        raise JobConfigurationError(
+            f"Broker {broker_id!r} does not implement the BrokerPlugin v"
+            f"{BROKER_API_VERSION} contract: {', '.join(issues)}"
+        )
+    if cls.api_version != BROKER_API_VERSION:
+        raise JobConfigurationError(
+            f"Broker {broker_id!r} has unsupported api_version "
+            f"{cls.api_version!r}; expected {BROKER_API_VERSION}"
+        )
+    if cls.broker_id != ep.name:
+        raise JobConfigurationError(
+            f"Broker entry-point name {ep.name!r} does not match broker_id "
+            f"{cls.broker_id!r}"
+        )
+    return cls

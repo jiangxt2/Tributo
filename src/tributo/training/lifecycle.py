@@ -173,6 +173,12 @@ class TrainingLifecycle:
             trainer.setup()
             checkpoint = trainer.training_loop()
             training_completed = True
+            checkpoint_metrics = getattr(checkpoint, "metrics", None)
+            if isinstance(checkpoint_metrics, dict):
+                # Preserve Ray Train metrics/history for both legacy export
+                # and Bundle paths.  Provider reporters may replay this
+                # broker-neutral summary after the driver finishes.
+                summary["metrics"] = dict(checkpoint_metrics)
 
             self._dispatcher.on_training_end(trainer, checkpoint)
 
@@ -449,6 +455,7 @@ class TrainingLifecycle:
                 "bundle_id": result.bundle_id,
                 "execution_id": result.execution_id,
                 "canonical_uri": result.canonical_uri,
+                "manifest_uri": getattr(result, "manifest_uri", None),
                 "manifest_sha256": result.manifest_sha256,
                 "artifacts": [
                     {"name": a.name, "format": a.format, "tree_digest": a.tree_digest}

@@ -30,6 +30,8 @@ STABILITY_MAP: dict[str, str] = {
     "tributo.config": "stable",
     "tributo.job": "stable",
     "tributo.exceptions": "stable",
+    # Core — alpha
+    "tributo.ray_jobs": "alpha",
     # Core — beta
     "tributo.cli": "beta",
     # Portable algorithm execution — alpha
@@ -155,6 +157,8 @@ STABILITY_MAP: dict[str, str] = {
     "tributo.integrations.hooks": "beta",
     "tributo.integrations.sinks.parquet": "alpha",
     "tributo.integrations.sinks.lance": "alpha",
+    "tributo.integrations.broker": "alpha",
+    "tributo.integrations.broker_registry": "alpha",
     # Inference — beta
     "tributo.inference.base": "beta",
     "tributo.inference.batch_predictor": "beta",
@@ -225,9 +229,13 @@ _SYMBOL_OVERRIDES: dict[str, str] = {
     "tributo.inference.job_runner.InferenceJobResult": "alpha",
     "tributo.inference.job_runner.map_ray_job_status": "alpha",
     "tributo.inference.job_runner.submit_inference_request": "alpha",
+    "tributo.inference.job_runner.submit_inference_request_with_identity": "alpha",
     "tributo.inference.job_runner.submit_resolved_inference": "alpha",
+    "tributo.inference.job_runner.submit_resolved_inference_with_identity": "alpha",
     "tributo.inference.job_runner.submit_inference_request_with_retry": "alpha",
     "tributo.inference.job_runner.wait_for_job": "alpha",
+    "tributo.training.job_submitter.submit_training_job_with_identity": "alpha",
+    "tributo.training.xgboost_trainer.run_training_result_with_config": "alpha",
 }
 
 

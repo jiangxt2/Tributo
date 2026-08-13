@@ -71,6 +71,14 @@ class _SummaryWritingTrainer(_FakeTrainer):
         self._summary["metrics"] = {"accuracy": 0.9}
 
 
+class _MetricsCheckpointTrainer(_FakeTrainer):
+    def training_loop(self) -> Any:
+        self.events.append("training_loop")
+        return SimpleNamespace(
+            metrics={"eval-logloss_history": [0.8, 0.4], "eval-logloss": 0.4}
+        )
+
+
 class _EntryTrainer(BaseTrainer):
     """Production-shaped trainer: accepts ``datasets``/``config`` like
     ``run_local_trial`` constructs them (``trainer_cls(datasets=...,
@@ -352,6 +360,15 @@ class TestLegacyFlow:
 
         assert summary["metrics"] == {"accuracy": 0.9}
         assert trainer._summary is summary
+
+    def test_ray_checkpoint_metrics_are_preserved_for_replay(self) -> None:
+        trainer = _MetricsCheckpointTrainer()
+        summary = _lifecycle(trainer).run("/tmp/out")
+
+        assert summary["metrics"] == {
+            "eval-logloss_history": [0.8, 0.4],
+            "eval-logloss": 0.4,
+        }
 
 
 class TestBundleMode:

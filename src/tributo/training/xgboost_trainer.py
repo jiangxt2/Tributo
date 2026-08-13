@@ -21,7 +21,6 @@ from tributo.integrations.algorithm_runtimes.legacy_descriptors import (
     XGBOOST_DESCRIPTOR,
     build_legacy_spec,
 )
-from tributo.integrations.broker import CancellationChecker
 from tributo.training.base import BaseTrainer
 from tributo.training.checkpoint import ResumeConfig
 from tributo.training.resource import (
@@ -36,6 +35,8 @@ from tributo.util.annotations import PublicAPI
 if TYPE_CHECKING:
     import ray.data
     from ray.train.xgboost import XGBoostTrainer
+
+    from tributo.training.results import TrainingResult
 
 # XGBoost params reserved by Tributo: silently passing these as native
 # training parameters would change the execution path (e.g. external-memory
@@ -528,30 +529,6 @@ def train_loop_per_worker(config: dict[str, Any]) -> None:
     # pass would double-count bytes and rows against the shared budget.
     test_labels: list[Any] = []
 
-    # Cancel signal — inject CancellationChecker via config when using a broker.
-    # TODO(v1.1): _tributo_cancel_key and _tributo_cancel_checker are dead code
-    # until a broker implementation (e.g. tributo-broker-redis) populates them.
-    _cancel_key: str | None = config.get("_tributo_cancel_key")
-    _cancel_checker: CancellationChecker | None = config.get("_tributo_cancel_checker")
-
-    class _CancelCallback(xgboost.callback.TrainingCallback):
-        """Check cancellation signal after each iteration (broker protocol)."""
-
-        def after_iteration(
-            self, model: xgboost.Booster, epoch: int, evts_log: dict
-        ) -> bool:
-            if _cancel_key is None or _cancel_checker is None:
-                return False
-            try:
-                return _cancel_checker.is_cancelled(_cancel_key)
-            except Exception:
-                logger.warning(
-                    "Cancellation check failed for job %s",
-                    _cancel_key,
-                    exc_info=True,
-                )
-                return False  # transient error → don't cancel
-
     def _make_quantile_dmatrix(
         dataset_key: str,
         ref: xgboost.QuantileDMatrix | None = None,
@@ -777,7 +754,7 @@ def train_loop_per_worker(config: dict[str, Any]) -> None:
             evals=evals,
             evals_result=current_evals_result,
             early_stopping_rounds=config.get("early_stopping_rounds"),
-            callbacks=[_CancelCallback(), _ResumeCheckpointCallback()],
+            callbacks=[_ResumeCheckpointCallback()],
             xgb_model=initial_booster,
         )
         evals_result = _merge_xgb_eval_results(
@@ -1238,6 +1215,17 @@ def run_training_with_config(config: dict[str, Any]) -> dict[str, Any]:
         )
         return trainer.run(output_path=cfg.output.onnx_path, legacy_export=True)
     return trainer.run()
+
+
+@PublicAPI(stability="alpha")
+def run_training_result_with_config(config: dict[str, Any]) -> TrainingResult:
+    """Run training in-process and return the structured terminal result."""
+    from tributo.training.results import TrainingResult
+
+    summary = run_training_with_config(config)
+    return TrainingResult.model_validate(
+        {key: summary.get(key) for key in TrainingResult.model_fields if key in summary}
+    )
 
 
 # Built-in registration
