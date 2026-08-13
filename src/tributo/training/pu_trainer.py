@@ -841,7 +841,16 @@ def run_pu_training_with_config(config: dict[str, Any]) -> dict[str, Any]:
         _validated_config=cfg,
     )
     if cfg.output.bundle_uri:
-        return trainer.run(output_path=cfg.output.bundle_uri)
+        from tributo.exporting.models import BundleOutputConfig
+
+        bundle_config = BundleOutputConfig(
+            bundle_uri=cfg.output.bundle_uri,
+            explainability=cfg.output.explainability,
+        )
+        return trainer.run(
+            output_path=cfg.output.bundle_uri,
+            bundle_config=bundle_config,
+        )
     if cfg.output.onnx_path:
         import warnings
 

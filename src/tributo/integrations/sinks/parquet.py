@@ -55,6 +55,7 @@ class ParquetResultSink:
         if request.min_rows_per_file is not None:
             write_kwargs["min_rows_per_file"] = request.min_rows_per_file
         output_path = request.uri
+        output_filesystem: Any | None = None
         parsed = urlsplit(request.uri)
         scheme = parsed.scheme.lower()
         if scheme == "s3":
@@ -82,9 +83,8 @@ class ParquetResultSink:
                 access_key_id=profile.access_key_id,
                 secret_access_key=profile.secret_access_key,
             )
-            write_kwargs["filesystem"] = pafs.S3FileSystem(
-                **to_pyarrow_s3_kwargs(s3_config)
-            )
+            output_filesystem = pafs.S3FileSystem(**to_pyarrow_s3_kwargs(s3_config))
+            write_kwargs["filesystem"] = output_filesystem
             output_path = f"{parsed.netloc}{parsed.path}"
         elif scheme == "file":
             output_path = unquote(parsed.path)
@@ -98,6 +98,13 @@ class ParquetResultSink:
                 safe_exception_summary(exc),
             )
             raise ResultMaterializationError(type(exc).__name__) from None
+
+        if request.max_bytes is not None:
+            actual_bytes = _output_bytes(output_path, output_filesystem)
+            if actual_bytes > request.max_bytes:
+                raise ResultWriteError(
+                    "Parquet result exceeds the configured max_bytes limit"
+                )
 
         result_id = _result_id(
             run_id=run_id,
@@ -131,6 +138,21 @@ def _result_id(*, run_id: str, plan_digest: str, uri: str, compression: str) -> 
         ensure_ascii=True,
     ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
+
+
+def _output_bytes(output_path: str, filesystem: Any | None) -> int:
+    """Return materialized output bytes without reading result contents."""
+    if filesystem is not None:
+        import pyarrow.fs as pafs
+
+        infos = filesystem.get_file_info(pafs.FileSelector(output_path, recursive=True))
+        return sum(info.size for info in infos if info.is_file)
+    from pathlib import Path
+
+    path = Path(output_path)
+    if path.is_file():
+        return path.stat().st_size
+    return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
 
 
 __all__ = ["ParquetResultSink"]

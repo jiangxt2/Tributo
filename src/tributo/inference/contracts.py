@@ -257,6 +257,7 @@ class ParquetResultSinkRequest(_FrozenContract):
     storage_profile: str | None = None
     compression: str = Field(default="zstd", min_length=1)
     min_rows_per_file: int | None = Field(default=None, ge=1)
+    max_bytes: int | None = Field(default=None, ge=1)
 
     @field_validator("uri")
     @classmethod

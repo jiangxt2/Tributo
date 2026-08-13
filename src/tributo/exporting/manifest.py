@@ -11,7 +11,7 @@ import hashlib
 import json
 from collections.abc import Callable
 from datetime import datetime, timezone
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from pydantic import (
     BaseModel,
@@ -28,6 +28,9 @@ from tributo.exporting.models import (
     LogicalArtifact,
 )
 from tributo.util.annotations import PublicAPI
+
+if TYPE_CHECKING:
+    from tributo.explainability.contracts import ExplainabilityDescriptor
 
 #: Signature for a manifest reader callable.
 ManifestReader = Callable[[dict[str, Any], bytes], "ExportManifest"]
@@ -262,6 +265,29 @@ class ExportManifest(BaseModel):
         return hashlib.sha256(self.canonical_json()).hexdigest()
 
 
+@PublicAPI(stability="beta")
+class ExportManifestV2(ExportManifest):
+    """Manifest schema v2 with an explicit explainability descriptor."""
+
+    schema_version: Literal[2] = 2
+    explainability: ExplainabilityDescriptor | None = None
+
+
+# Resolve the optional field after both manifest base models and the
+# framework-neutral descriptor are available.  Keeping this at the end of the
+# manifest model declarations makes direct ``ExportManifestV2`` construction
+# work without making the base exporter import SHAP or the data/plugin graph.
+def _rebuild_manifest_v2() -> None:
+    from tributo.explainability.contracts import ExplainabilityDescriptor
+
+    ExportManifestV2.model_rebuild(
+        _types_namespace={"ExplainabilityDescriptor": ExplainabilityDescriptor}
+    )
+
+
+_rebuild_manifest_v2()
+
+
 # ── Schema registry ────────────────────────────────────────────────────────────
 
 
@@ -314,6 +340,11 @@ def _read_manifest_v1(raw: dict[str, Any], canonical_bytes: bytes) -> ExportMani
     ``canonical_bytes`` unchanged.
     """
     del canonical_bytes
+    if raw.get("schema_version", 1) != 1:
+        raise ValueError(
+            "schema v1 reader cannot read manifest schema "
+            f"{raw.get('schema_version')!r}"
+        )
 
     def normalise_artifact(artifact: Any) -> Any:
         if not isinstance(artifact, dict):
@@ -343,6 +374,94 @@ def _read_manifest_v1(raw: dict[str, Any], canonical_bytes: bytes) -> ExportMani
     return manifest
 
 
+def _read_manifest_v2(raw: dict[str, Any], canonical_bytes: bytes) -> ExportManifestV2:
+    """Parse schema v2 without normalising the committed bytes."""
+    del canonical_bytes
+    raw = dict(raw)
+    artifacts = raw.get("artifacts", ())
+    if artifacts:
+        raw["artifacts"] = tuple(
+            {
+                **artifact,
+                "artifact_kind": artifact.get("artifact_kind", "model"),
+            }
+            if isinstance(artifact, dict)
+            else artifact
+            for artifact in artifacts
+        )
+    manifest = ExportManifestV2(**raw)
+    validate_explainability_descriptor(manifest)
+    return manifest
+
+
+def validate_explainability_descriptor(manifest: ExportManifest) -> None:
+    """Validate descriptor references and the minimum loader capability.
+
+    This check is intentionally independent of optional runtime imports.  It
+    prevents a Bundle from publishing a capability promise that its declared
+    artifact flavor cannot satisfy; dependency installation is checked later
+    by the adapter planner in the worker environment.
+    """
+    descriptor = getattr(manifest, "explainability", None)
+    if descriptor is None:
+        return
+
+    artifacts_by_name = {artifact.name: artifact for artifact in manifest.artifacts}
+    missing_artifacts = sorted(
+        set(descriptor.required_artifacts) - set(artifacts_by_name)
+    )
+    if missing_artifacts:
+        raise ValueError(
+            "Explainability descriptor references missing artifacts: "
+            f"{missing_artifacts}"
+        )
+    missing_roles = sorted(set(descriptor.model_roles) - set(manifest.roles))
+    if missing_roles:
+        raise ValueError(
+            f"Explainability descriptor references missing roles: {missing_roles}"
+        )
+
+    for role in descriptor.model_roles:
+        target_name = manifest.roles[role]
+        artifact = artifacts_by_name.get(target_name)
+        if artifact is None:
+            raise ValueError(
+                f"Explainability role {role!r} references missing artifact "
+                f"{target_name!r}"
+            )
+        if descriptor.backend == "tree" and not (
+            artifact.flavor_id == "xgboost-native-v1"
+            and artifact.format in {"ubj", "xgboost-json"}
+        ):
+            raise ValueError(
+                f"Tree explainability role {role!r} must reference an "
+                "xgboost-native-v1 UBJ/JSON artifact"
+            )
+        if descriptor.backend == "model_agnostic" and not (
+            artifact.flavor_id == "onnx-runtime-v1" and artifact.format == "onnx"
+        ):
+            raise ValueError(
+                f"Model-agnostic explainability role {role!r} must reference "
+                "an onnx-runtime-v1 ONNX artifact"
+            )
+        if target_name not in descriptor.required_artifacts:
+            raise ValueError(
+                f"Explainability model role {role!r} must be listed in "
+                "descriptor.required_artifacts"
+            )
+
+    if descriptor.exactness == "exact" and descriptor.backend == "model_agnostic":
+        raise ValueError("model_agnostic explainability cannot be declared exact")
+    if (
+        descriptor.reference_policy == "required"
+        and descriptor.reference_digest is None
+    ):
+        raise ValueError(
+            "Explainability descriptor with a required reference must include "
+            "reference_digest"
+        )
+
+
 # ── Bundle digest computation ───────────────────────────────────────────────────
 
 
@@ -354,6 +473,7 @@ def compute_bundle_digest(
     output_sig: ManifestSignature | None = None,
     flavor: str | None = None,
     exporter_options: dict[str, dict[str, Any]] | None = None,
+    explainability: ExplainabilityDescriptor | None = None,
 ) -> str:
     """Compute a content-addressable bundle digest.
 
@@ -411,6 +531,8 @@ def compute_bundle_digest(
         payload["flavor"] = flavor
     if exporter_options:
         payload["exporter_options"] = dict(sorted(exporter_options.items()))
+    if explainability is not None:
+        payload["explainability"] = explainability.model_dump(mode="json")
 
     canonical = json.dumps(
         payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
@@ -422,6 +544,7 @@ def compute_bundle_digest(
 
 _SCHEMA_REGISTRY = ManifestSchemaRegistry()
 _SCHEMA_REGISTRY.register(1, _read_manifest_v1)
+_SCHEMA_REGISTRY.register(2, _read_manifest_v2)
 
 
 def get_schema_registry() -> ManifestSchemaRegistry:

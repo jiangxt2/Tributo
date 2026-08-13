@@ -110,10 +110,14 @@ class BundleExportService:
         self._last_operation_event: OperationEvent | None = None
 
         # Register built-in schema readers.
-        from tributo.exporting.manifest import _read_manifest_v1
+        from tributo.exporting.manifest import _read_manifest_v1, _read_manifest_v2
 
         try:
             self._manifest_registry.register(1, _read_manifest_v1)
+        except ValueError:
+            pass
+        try:
+            self._manifest_registry.register(2, _read_manifest_v2)
         except ValueError:
             pass
 
@@ -169,6 +173,7 @@ class BundleExportService:
             raise JobConfigurationError(
                 "BundleExportService requires targets (bundle mode)"
             )
+        config = self._prepare_explainability_config(config, source)
         self._last_operation_event = None
 
         # Fail before planning or staging if a requested side effect is
@@ -237,12 +242,26 @@ class BundleExportService:
                 storage_profile=config.storage_profile,
                 alias_config=config.alias,
                 roles=config.roles,
+                explainability=config.explainability,
             )
 
             # Phase 5: Compute bundle_digest and record execution.
-            from tributo.exporting.manifest import compute_bundle_digest
+            from tributo.exporting.manifest import (
+                _read_manifest_v1,
+                _read_manifest_v2,
+                compute_bundle_digest,
+            )
 
             try:
+                committed_raw = json.loads(published.manifest_bytes.decode("utf-8"))
+                committed_reader = (
+                    _read_manifest_v2
+                    if committed_raw.get("schema_version") == 2
+                    else _read_manifest_v1
+                )
+                committed_manifest = committed_reader(
+                    committed_raw, published.manifest_bytes
+                )
                 bundle_digest = compute_bundle_digest(
                     artifacts=published.result.artifacts,
                     roles=published.result.roles,
@@ -251,6 +270,7 @@ class BundleExportService:
                         for nr in execution.node_results
                         if nr.exporter_id
                     },
+                    explainability=getattr(committed_manifest, "explainability", None),
                 )
             except Exception as exc:
                 logger.error(
@@ -374,7 +394,16 @@ class BundleExportService:
                             bundle_result=published.result,
                         ) from exc
 
-            return published.result
+        return published.result
+
+    @staticmethod
+    def _prepare_explainability_config(
+        config: BundleOutputConfig, source: ExportSource
+    ) -> BundleOutputConfig:
+        """Delegate companion selection to the explainability boundary."""
+        from tributo.explainability.export import prepare_bundle_output_config
+
+        return prepare_bundle_output_config(config, source)
 
 
 # ── Plugin loading ─────────────────────────────────────────────────────────────

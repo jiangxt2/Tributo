@@ -8,6 +8,7 @@ Both paths prefer validated model bundles over raw model paths.
 
 ../how-to/inference
 ../how-to/serving
+../how-to/explainability
 ```
 
 Batch inference uses Ray Data batch transforms and actor reuse. Online

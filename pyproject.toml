@@ -76,6 +76,7 @@ s3 = [
 ]
 model-export = [
     "tributo[s3]",
+    "ml-dtypes>=0.5.0",
     "onnx>=1.16.0",
     "onnxruntime>=1.20.0",
 ]
@@ -90,6 +91,10 @@ training = [
     "xgboost>=2.1.0",
     "onnxmltools>=1.13.0",
     "skl2onnx>=1.17.0",
+]
+explainability = [
+    "shap>=0.52.0,<0.53.0",
+    "numpy>=2.0.0,<3.0.0",
 ]
 embeddings = [
     "tributo[data,data-daft,model-export,s3]",
@@ -180,6 +185,9 @@ s3-alias-v1 = "tributo.integrations.storage.bundle_repository:S3BundleAliasStore
 
 [project.entry-points."tributo.hooks"]
 mlflow-log-artifacts-v1 = "tributo.integrations.hooks.mlflow_hook:MLflowPostPublishHook"
+
+[project.entry-points."tributo.explainers"]
+shap-v1 = "tributo.explainability.shap:ShapAdapter"
 
 [project.entry-points."tributo.stream_sources"]
 kafka = "tributo.streaming.kafka_source:KafkaStreamSource"
@@ -322,5 +330,6 @@ dev = [
     "clickhouse-connect>=1.3.0",
     "mypy>=2.3.0",
     "daft>=0.7.0,<0.8.0",
+    "ml-dtypes>=0.5.0",
     "skl2onnx>=1.17.0",
 ]

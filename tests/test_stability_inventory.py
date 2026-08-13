@@ -112,6 +112,17 @@ STABILITY_MAP: dict[str, str] = {
     "tributo.exporting.repository": "beta",
     "tributo.exporting.runtime": "beta",
     "tributo.exporting.conftest": "beta",
+    # Explainability — alpha
+    "tributo.explainability.conformance": "alpha",
+    "tributo.explainability.contracts": "alpha",
+    "tributo.explainability.executor": "alpha",
+    "tributo.explainability.export": "alpha",
+    "tributo.explainability.job_runner": "alpha",
+    "tributo.explainability.planner": "alpha",
+    "tributo.explainability.protocols": "alpha",
+    "tributo.explainability.reference": "alpha",
+    "tributo.explainability.registry": "alpha",
+    "tributo.explainability.shap": "alpha",
     # Integrations — beta
     "tributo.integrations.algorithm_inputs": "alpha",
     "tributo.integrations.algorithm_inputs.ingestion": "alpha",

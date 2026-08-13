@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 
 from tributo._common.storage_profiles import StorageProfileResolver
+from tributo.explainability.contracts import ExplainabilityConfig
 from tributo.exporting.assembler import BundleAssembler
 from tributo.exporting.errors import sanitize_error_message
 from tributo.exporting.manifest import (
@@ -69,6 +70,7 @@ class Publisher:
         storage_profile: str | None = None,
         alias_config: AliasConfig | None = None,
         roles: dict[str, str] | None = None,
+        explainability: ExplainabilityConfig | None = None,
     ) -> PublishedBundle:
         """Assemble, commit, and optionally alias an immutable bundle."""
         staged_bundle = self._assembler.assemble(
@@ -82,6 +84,7 @@ class Publisher:
             input_signature=input_signature,
             output_signature=output_signature,
             roles=roles,
+            explainability=explainability,
         )
         repository = self._repository_router.repository_for(bundle_uri)
         commit = repository.commit(
@@ -119,7 +122,7 @@ class Publisher:
                     ),
                 )
 
-        effective_roles = roles if roles is not None else execution.roles
+        effective_roles = dict(staged_bundle.manifest.roles)
         result = BundleResult(
             bundle_id=bundle_id,
             execution_id=execution_id,

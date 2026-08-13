@@ -76,6 +76,23 @@ class TestParquetResultSink:
 
         assert dataset.calls[0][0] == ("/tmp/result set",)
 
+    def test_max_bytes_is_checked_after_materialization(self, tmp_path) -> None:
+        output = tmp_path / "result"
+        output.mkdir()
+        (output / "part-0.parquet").write_bytes(b"too large")
+        dataset = _Dataset()
+
+        with (
+            patch("tributo.integrations.sinks.parquet._output_bytes", return_value=101),
+            pytest.raises(ResultWriteError, match="max_bytes"),
+        ):
+            ParquetResultSink().write(
+                dataset,
+                ParquetResultSinkRequest(uri=str(output), max_bytes=100),
+                run_id="run-1",
+                plan_digest="a" * 64,
+            )
+
     def test_s3_write_resolves_only_sink_profile(self) -> None:
         dataset = _Dataset()
         profiles = _Profiles()

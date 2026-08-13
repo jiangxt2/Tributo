@@ -137,6 +137,34 @@ def logs(address: str, job_id: str):
         sys.exit(1)
 
 
+@main.command("explain")
+@click.option(
+    "--config",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False),
+    help="Path to an explainability request JSON file",
+)
+@click.option(
+    "--address",
+    default=DEFAULT_DASHBOARD_URL,
+    show_default=True,
+    help="Ray Dashboard address",
+)
+def explain(config: str, address: str):
+    """Submit a distributed batch explainability operation."""
+    try:
+        from tributo.explainability.job_runner import submit_explainability_job
+
+        job_id = submit_explainability_job(config, dashboard_url=address)
+        click.echo(f"Explainability job submitted: {job_id}")
+    except TributoError as exc:
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
+    except Exception as exc:
+        click.echo(f"Unexpected error: {exc}", err=True)
+        sys.exit(1)
+
+
 @main.command()
 @click.option(
     "--address",

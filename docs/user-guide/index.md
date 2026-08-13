@@ -9,6 +9,7 @@ runtime service, optional dependency, and maturity constraints that apply.
 - [Train and tune models](../training/index.md).
 - [Publish model bundles](../model-lifecycle/index.md).
 - [Run batch or online inference](../inference/index.md).
+- [Run batch explainability](../how-to/explainability.md).
 - [Generate embeddings](../embeddings/index.md).
 - [Operate and troubleshoot jobs](../operations/index.md).
 

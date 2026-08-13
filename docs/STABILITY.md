@@ -127,6 +127,21 @@ from the legacy setup-only propagation rule.
 | `tributo.exporting.runtime` | `beta` | Bundle model runtime and Flavor protocol |
 | `tributo.exporting.conftest` | `beta` | Public plugin conformance test kit |
 
+### Explainability (tributo.explainability.*)
+
+| Module | Level | Notes |
+|--------|-------|-------|
+| `tributo.explainability.conformance` | `alpha` | Adapter SPI structural conformance validation |
+| `tributo.explainability.contracts` | `alpha` | Explainability request, descriptor, attribution, receipt and policy contracts |
+| `tributo.explainability.executor` | `alpha` | Ray Data batch executor, lease heartbeat and attempt isolation |
+| `tributo.explainability.export` | `alpha` | Bundle export companion-artifact preparation |
+| `tributo.explainability.job_runner` | `alpha` | Ray Jobs submission entry point for batch explanations |
+| `tributo.explainability.planner` | `alpha` | Adapter selection and resource preflight planning |
+| `tributo.explainability.protocols` | `alpha` | Adapter SPI, model context and support decision protocols |
+| `tributo.explainability.reference` | `alpha` | Reference/background data provider protocol and file provider |
+| `tributo.explainability.registry` | `alpha` | Adapter registry and entry-point discovery |
+| `tributo.explainability.shap` | `alpha` | First-party SHAP adapter (tree and model-agnostic backends) |
+
 ### Integrations (tributo.integrations.*)
 
 | Module | Level | Notes |
