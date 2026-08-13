@@ -1104,6 +1104,34 @@ def validate_compose_contract(
         )
 
 
+def _image_has_repo_digests(image_id: str) -> bool:
+    """Whether *image_id* carries registry digest references.
+
+    Digest-only references (``repo@sha256:...``) surface as ``<none>`` rows in
+    ``docker image ls``; they are legitimate pull artifacts from the reusable
+    runtime registry, not dangling images created by the IT. Local builds and
+    build leftovers have no RepoDigests and stay subject to the check.
+    """
+    try:
+        result = _run(
+            [
+                "docker",
+                "image",
+                "inspect",
+                image_id,
+                "--format",
+                "{{json .RepoDigests}}",
+            ]
+        )
+    except TributoITError:
+        return False
+    try:
+        digests = json.loads(result.stdout.strip() or "[]")
+    except ValueError:
+        return False
+    return bool(digests)
+
+
 def _image_baseline() -> set[str]:
     dangling = _run(
         [
@@ -1131,7 +1159,11 @@ def _image_baseline() -> set[str]:
     image_ids = {line.strip() for line in dangling.stdout.splitlines() if line.strip()}
     for line in none_rows.stdout.splitlines():
         fields = line.split("\t")
-        if len(fields) == 3 and "<none>" in fields[:2]:
+        if (
+            len(fields) == 3
+            and "<none>" in fields[:2]
+            and not _image_has_repo_digests(fields[2])
+        ):
             image_ids.add(fields[2])
     return image_ids
 

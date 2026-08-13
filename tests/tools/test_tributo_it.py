@@ -503,3 +503,86 @@ def test_run_data_ingestion_cli_dispatches_without_platform_argument(
 
     assert tributo_it.main(["run-data-ingestion"]) == 0
     assert called == [profile]
+
+
+def test_image_has_repo_digests_detects_pulled_references(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        tributo_it,
+        "_run",
+        lambda args, **_kwargs: subprocess.CompletedProcess(
+            args, 0, '["ghcr.io/example/runtime@sha256:' + "a" * 64 + '"]', ""
+        ),
+    )
+    assert tributo_it._image_has_repo_digests("sha256:" + "b" * 64)
+
+
+def test_image_has_repo_digests_is_false_for_build_leftovers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        tributo_it,
+        "_run",
+        lambda args, **_kwargs: subprocess.CompletedProcess(args, 0, "[]", ""),
+    )
+    assert not tributo_it._image_has_repo_digests("sha256:" + "b" * 64)
+
+
+def test_image_has_repo_digests_tolerates_inspect_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def failing_run(
+        args: list[str], **_kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        raise tributo_it.TributoITError(f"command failed: {args}")
+
+    monkeypatch.setattr(tributo_it, "_run", failing_run)
+    assert not tributo_it._image_has_repo_digests("sha256:" + "b" * 64)
+
+
+def test_image_baseline_skips_digest_only_references(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    none_id = "sha256:" + "c" * 64
+    dangling_id = "sha256:" + "d" * 64
+
+    def fake_run(
+        args: list[str], **_kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        if "dangling=true" in args:
+            return subprocess.CompletedProcess(args, 0, f"{dangling_id}\n", "")
+        if "inspect" in args:
+            return subprocess.CompletedProcess(
+                args, 0, '["ghcr.io/example/runtime@sha256:' + "a" * 64 + '"]', ""
+            )
+        return subprocess.CompletedProcess(
+            args, 0, f"ghcr.io/example/runtime\t<none>\t{none_id}\n", ""
+        )
+
+    monkeypatch.setattr(tributo_it, "_run", fake_run)
+
+    baseline = tributo_it._image_baseline()
+    assert none_id not in baseline
+    assert dangling_id in baseline
+
+
+def test_image_baseline_keeps_none_tag_without_repo_digests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    leftover_id = "sha256:" + "e" * 64
+
+    def fake_run(
+        args: list[str], **_kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        if "dangling=true" in args:
+            return subprocess.CompletedProcess(args, 0, "", "")
+        if "inspect" in args:
+            return subprocess.CompletedProcess(args, 0, "[]", "")
+        return subprocess.CompletedProcess(
+            args, 0, f"repo\t<none>\t{leftover_id}\n", ""
+        )
+
+    monkeypatch.setattr(tributo_it, "_run", fake_run)
+
+    assert leftover_id in tributo_it._image_baseline()

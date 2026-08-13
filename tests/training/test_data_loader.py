@@ -2,33 +2,43 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
 
 from tributo.data import CsvSourceConfig, ParquetSourceConfig
+from tributo.data.ingestion import RayDataHandle
 from tributo.exceptions import EngineNotAvailableError, JobConfigurationError
-from tributo.training.data_loader import load_ray_dataset_from_source
+from tributo.training.data_loader import (
+    load_ray_dataset_from_config,
+    load_ray_dataset_from_source,
+)
 
 
 def test_s3_parquet_uses_ray_ingestion_binding() -> None:
     dataset = MagicMock()
+    result = MagicMock(handle=RayDataHandle(dataset))
     with patch(
-        "tributo.training.data_loader.open_ray_compat", return_value=dataset
+        "tributo.training.data_loader.open_ingestion", return_value=result
     ) as open_:
         actual = load_ray_dataset_from_source(
             {"type": "parquet", "path": "s3://bucket/data.parquet"}
         )
-    source = open_.call_args.args[0]
+    request = open_.call_args.args[0]
+    source = request.source
     assert isinstance(source, ParquetSourceConfig)
+    assert request.engine == "tributo.ray_data"
     assert actual is dataset
+    result.close.assert_called_once_with()
 
 
 def test_s3_csv_uses_ray_ingestion_binding() -> None:
     dataset = MagicMock()
+    result = MagicMock(handle=RayDataHandle(dataset))
     with patch(
-        "tributo.training.data_loader.open_ray_compat", return_value=dataset
+        "tributo.training.data_loader.open_ingestion", return_value=result
     ) as open_:
         actual = load_ray_dataset_from_source(
             {
@@ -37,9 +47,53 @@ def test_s3_csv_uses_ray_ingestion_binding() -> None:
                 "s3": {"region": "us-east-1"},
             }
         )
-    source = open_.call_args.args[0]
+    request = open_.call_args.args[0]
+    source = request.source
     assert isinstance(source, CsvSourceConfig)
+    assert request.engine == "tributo.ray_data"
     assert actual is dataset
+    result.close.assert_called_once_with()
+
+
+def test_training_loader_rejects_non_ray_handle_and_closes_result() -> None:
+    result = MagicMock(handle=MagicMock())
+    with (
+        patch("tributo.training.data_loader.open_ingestion", return_value=result),
+        pytest.raises(
+            JobConfigurationError,
+            match="requires a RayDataHandle",
+        ),
+    ):
+        load_ray_dataset_from_source(
+            {"type": "parquet", "path": "s3://bucket/data.parquet"}
+        )
+
+    result.close.assert_called_once_with()
+
+
+def test_legacy_flat_config_uses_ray_ingestion_gateway(tmp_path: Path) -> None:
+    source_path = tmp_path / "data.parquet"
+    source_path.touch()
+    dataset = MagicMock()
+    result = MagicMock(handle=RayDataHandle(dataset))
+    with (
+        patch(
+            "tributo.training.data_loader.open_ingestion", return_value=result
+        ) as open_,
+        pytest.warns(
+            FutureWarning,
+            match=r"load_ray_dataset_from_config\(\) is deprecated",
+        ),
+    ):
+        actual = load_ray_dataset_from_config(
+            {"type": "parquet", "path": str(source_path)}
+        )
+
+    request = open_.call_args.args[0]
+    assert isinstance(request.source, ParquetSourceConfig)
+    assert request.engine == "tributo.ray_data"
+    assert actual is dataset
+    result.close.assert_called_once_with()
 
 
 def test_s3_unsupported_format_raises():
