@@ -62,11 +62,13 @@ Compatibility:
   working directory during that window; canonical source objects use the
   shared project-root path policy.
 - They normalize to the same Provider path and cannot select a legacy backend.
-- Existing downstream callers use the Ray compatibility adapter, which now
-  delegates the same Gateway with `engine="ray"`; it is an API-shape adapter,
-  not an alternate reader backend.
-- Third-party Providers that shipped only the beta `normalize()+open()` SPI
-  remain callable from that Ray compatibility adapter with a `FutureWarning`.
+- The internal training loader normalizes legacy input and constructs an explicit
+  `IngestionRequest` for the Gateway with `engine="ray"`; it is a Ray Dataset
+  shape adapter, not an alternate reader backend.
+- `DataConnector.read()` and other old public Ray compatibility callers continue
+  to use the Ray compatibility adapter during the deprecation window.
+  Third-party Providers that shipped only the beta `normalize()+open()` SPI
+  remain callable from that adapter with a `FutureWarning`.
   The alpha Gateway never catches a planning or Binding failure and falls back
   to `open()`; external Providers must migrate to `plan()` plus an
   `EngineBinding` before the next major release.
@@ -97,10 +99,11 @@ IDs. The unused `SourcePlan` / `SourceRouter` prototype has been replaced by
 the explicit `IngestionRequest` → `IngestionGateway` → `LogicalScanPlan` →
 `EngineBinding` path. Gateway `describe()` performs static validation without
 metadata I/O; `open()` creates the lazy typed handle and receipt. Built-in
-`DataConnector.read()` and training loader surfaces are one-way Ray adapters
-over this path and must never restore a reader. Provider `open()` is a temporary
-external beta-SPI compatibility exception described above, not a Gateway
-fallback. File
+`DataConnector.read()` remains a one-way Ray adapter over this path. Training
+loader surfaces normalize compatibility input and open the explicit Gateway
+request directly; neither surface may restore an independent reader. Provider
+`open()` is a temporary external beta-SPI compatibility exception described
+above, not a Gateway fallback. File
 providers accept local paths and S3 paths with an explicit `S3Config`; S3 URI
 userinfo, query parameters, and fragments are rejected because accepting them
 would change object-key or credential semantics.

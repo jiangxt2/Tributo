@@ -12,13 +12,19 @@ real-infrastructure gates, not by this inventory alone.
 
 ```
 User code
-  ↓
-load_ray_dataset_from_config(config: dict)        ← main public entry
-  ↓
-LegacySourceInput(raw=config, mode="legacy")
-  ↓
-load_ray_dataset_from_source(source: CanonicalSourceInput)
-  ↓
+  ├─ load_ray_dataset_from_source(source: CanonicalSourceInput)
+  │    └─ resolve_file_source_path()
+  │         └─ _load_via_ingestion(CanonicalSourceInput)
+  │
+  └─ load_ray_dataset_from_config(config: dict)        ← legacy compatibility entry
+       └─ LegacySourceInput(raw=config, mode="legacy")
+            └─ _load_via_ingestion(LegacySourceInput)
+                 ├─ LegacyConfigNormalizer.normalize()
+                 └─ resolve_file_source_path()
+
+Both `_load_via_ingestion()` branches then perform:
+  └─ require_local_file_source_exists()
+       ↓
 IngestionRequest(source, engine="ray")
   ↓
 IngestionGateway.open()
@@ -29,9 +35,10 @@ EngineBindings.compile() → RayDataHandle.dataset
 ```
 
 **Compatibility aliases**: `load_ray_dataset_from_config()` converts legacy
-flat dictionaries through `LegacyConfigNormalizer`; `load_dataframe_from_config()`
+flat dictionaries through `LegacyConfigNormalizer`; the training loader then
+constructs the explicit `IngestionRequest` shown above. `load_dataframe_from_config()`
 materializes its Ray result for small historical callers. Neither selects a
-separate reader backend.
+separate reader backend or invokes the old Connector compatibility reader.
 
 **Canonical ingestion implementation**:
 - `data/transform_ir.py` — versioned engine-neutral ETL contract.
@@ -56,7 +63,8 @@ CanonicalSourceInput (provider/uri or type/path/dialect shapes)
                                          after lazy Provider-plugin discovery
   → provider.normalize() → ResolvedSource(provider_id, canonical_uri, options)
   → provider.plan() → LogicalScanPlan
-  → EngineBindings.resolve(engine, scan_kind, connector, binding_id/constraints)
+  → EngineBindings.compile(engine_id, plan, binding_id, ...)
+                                        descriptor selection and capability validation
   → thin Binding → public Ray Data / Daft / installed connector API
   → IngestionOpenResult(Typed Handle, IngestionPlanReceipt, ownership)
 
@@ -77,6 +85,11 @@ The relative-path resolver is shared with the beta compatibility entrypoint.
 The resolved path reaches `ResolvedSource` before source and plan digests are
 computed, so migrating entrypoints cannot silently change either the file read
 or its identity. URI sources and absolute paths are unchanged.
+
+`EngineBindings.resolve(key)` is the registry's exact descriptor lookup API; the
+Gateway's `open()` path uses `EngineBindings.compile()`, which performs binding
+selection and capability validation internally. `describe()` exposes the same
+validation without compiling an engine-native plan.
 
 Built-ins register explicitly. Independent packages contribute the logical
 Provider through `tributo.ingestion_providers` and the physical Ray/Daft

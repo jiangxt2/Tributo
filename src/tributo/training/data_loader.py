@@ -1,10 +1,11 @@
-"""Ray Dataset compatibility adapters over the canonical Provider path.
+"""Ray Dataset consumer adapters over the canonical Ingestion Gateway.
 
-New dual-engine consumers use :mod:`tributo.data.ingestion`.  These training
-helpers preserve existing JSON shapes and Ray Dataset return values, but no
-longer contain an independent reader, SQL dispatcher, or rollback backend.
-Legacy flat dictionaries are converted once by ``LegacyConfigNormalizer`` and
-then enter the same Provider path as canonical inputs.
+These training helpers preserve existing input shapes and Ray Dataset return
+values while constructing an explicit ``IngestionRequest`` and consuming a
+typed ``RayDataHandle``. They are not an independent Reader: canonical inputs
+and legacy flat dictionaries both enter ``open_ingestion()`` after
+normalization. The deprecated Provider ``open()`` branch remains reachable
+only from public compatibility entry points such as ``DataConnector.read()``.
 
 ``TRIBUTO_DATA_BACKEND=legacy`` remains a deprecated compatibility selector
 during the migration window. It emits a warning and uses the same conversion
@@ -20,11 +21,11 @@ from typing import TYPE_CHECKING, Any, cast
 
 from pydantic import TypeAdapter
 
-from tributo.data._compat_read import open_ray_compat
 from tributo.data._source_paths import (
     require_local_file_source_exists,
     resolve_file_source_path,
 )
+from tributo.data.ingestion import IngestionRequest, RayDataHandle, open_ingestion
 from tributo.data.source_config import (
     CanonicalSourceInput,
     LegacyConfigNormalizer,
@@ -122,10 +123,19 @@ def _load_via_ingestion(
     else:
         resolved_input = resolve_file_source_path(source, project_root_path)
     require_local_file_source_exists(resolved_input)
-    return open_ray_compat(
-        resolved_input,
+    result = open_ingestion(
+        IngestionRequest(source=resolved_input, engine="ray"),
         project_root_path=project_root_path,
     )
+    try:
+        if not isinstance(result.handle, RayDataHandle):
+            raise JobConfigurationError(
+                "Training data loading requires a RayDataHandle; "
+                "implicit Daft-to-Ray conversion is disabled"
+            )
+        return result.handle.dataset
+    finally:
+        result.close()
 
 
 def load_dataframe_from_config(
