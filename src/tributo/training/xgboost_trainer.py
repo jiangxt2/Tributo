@@ -16,6 +16,7 @@ from pydantic import AliasChoices, ConfigDict, Field, model_validator
 from tributo._common.config import StrictConfigModel
 from tributo.data.base import S3Config
 from tributo.exceptions import JobConfigurationError
+from tributo.explainability.contracts import ExplainabilityConfig
 from tributo.integrations.algorithm_runtimes.legacy_descriptors import (
     XGBOOST_DESCRIPTOR,
     build_legacy_spec,
@@ -213,6 +214,7 @@ class OutputConfig(StrictConfigModel):
     onnx_path: Optional[str] = None
     onnx_opset: int = Field(default=12, ge=1)
     metrics_path: Optional[str] = None
+    explainability: ExplainabilityConfig = Field(default_factory=ExplainabilityConfig)
 
     @model_validator(mode="after")
     def validate_destination_contract(self) -> OutputConfig:
@@ -223,6 +225,8 @@ class OutputConfig(StrictConfigModel):
                 "output.bundle_uri cannot be combined with legacy output fields: "
                 + ", ".join(configured_legacy)
             )
+        if self.explainability.enabled and self.bundle_uri is None:
+            raise ValueError("output.explainability.enabled requires output.bundle_uri")
         return self
 
 
@@ -1165,7 +1169,16 @@ def run_training_with_config(config: dict[str, Any]) -> dict[str, Any]:
         _validated_config=cfg,
     )
     if cfg.output.bundle_uri:
-        return trainer.run(output_path=cfg.output.bundle_uri)
+        from tributo.exporting.models import BundleOutputConfig
+
+        bundle_config = BundleOutputConfig(
+            bundle_uri=cfg.output.bundle_uri,
+            explainability=cfg.output.explainability,
+        )
+        return trainer.run(
+            output_path=cfg.output.bundle_uri,
+            bundle_config=bundle_config,
+        )
     if cfg.output.onnx_path:
         import warnings
 

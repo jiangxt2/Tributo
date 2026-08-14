@@ -10,9 +10,11 @@ import json
 import os
 import threading
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from tributo.explainability.contracts import ExplainabilityOperationRecord
 from tributo.exporting.models import HookStatus
 from tributo.exporting.records import (
     DeliveryClaim,
@@ -39,10 +41,12 @@ class JsonFileOperationStore:
     def __init__(self, store_dir: str | Path) -> None:
         self._store_dir = Path(store_dir)
         self._executions_dir = self._store_dir / "executions"
+        self._explainability_dir = self._store_dir / "explainability"
         self._attempts_dir = self._store_dir / "attempts"
         self._deliveries_dir = self._store_dir / "deliveries"
         self._lock = threading.RLock()
         self._mem = InMemoryOperationStore()
+        self._explainability_loaded = False
         self._deliveries_loaded = False
 
     # ── Persistence ──────────────────────────────────────────────────────────
@@ -62,6 +66,49 @@ class JsonFileOperationStore:
         fpath = self._attempts_dir / f"{attempt.attempt_id}.json"
         _atomic_write_json(fpath, attempt.model_dump(mode="json"), self._lock)
         self._mem.record_publication_attempt(attempt)
+
+    def record_explainability(self, record: ExplainabilityOperationRecord) -> None:
+        """Persist an explainability operation snapshot atomically."""
+        with self._lock:
+            self._load_explainability()
+            self._mem.record_explainability(record)
+            self._explainability_dir.mkdir(parents=True, exist_ok=True)
+            fpath = self._explainability_dir / (
+                f"{record.operation_id}--{uuid.uuid4().hex}.json"
+            )
+            try:
+                _atomic_write_json(fpath, record.model_dump(mode="json"), self._lock)
+            except Exception:
+                self._mem.remove_explainability(record)
+                raise
+
+    def renew_explainability(
+        self,
+        operation_id: str,
+        *,
+        idempotency_key: str,
+        lease_token: str,
+        lease_expires_at: datetime,
+    ) -> ExplainabilityOperationRecord:
+        """Persist a lease renewal using the same atomic snapshot protocol."""
+        with self._lock:
+            self._load_explainability()
+            renewed = self._mem.renew_explainability(
+                operation_id,
+                idempotency_key=idempotency_key,
+                lease_token=lease_token,
+                lease_expires_at=lease_expires_at,
+            )
+            fpath = self._explainability_dir / (
+                f"{renewed.operation_id}--{uuid.uuid4().hex}.json"
+            )
+            try:
+                self._explainability_dir.mkdir(parents=True, exist_ok=True)
+                _atomic_write_json(fpath, renewed.model_dump(mode="json"), self._lock)
+            except Exception:
+                self._mem.remove_explainability(renewed)
+                raise
+            return renewed
 
     # ── Queries ──────────────────────────────────────────────────────────────
 
@@ -91,6 +138,33 @@ class JsonFileOperationStore:
         for record in results:
             self._mem.record_execution(record)
         return results
+
+    def get_explainability(
+        self, operation_id: str
+    ) -> ExplainabilityOperationRecord | None:
+        records = self.list_explainability(operation_id)
+        return records[-1] if records else None
+
+    def list_explainability(
+        self, operation_id: str
+    ) -> list[ExplainabilityOperationRecord]:
+        with self._lock:
+            self._load_explainability()
+            return self._mem.list_explainability(operation_id)
+
+    def _load_explainability(self) -> None:
+        if self._explainability_loaded:
+            return
+        if self._explainability_dir.exists():
+            records: list[ExplainabilityOperationRecord] = []
+            for fpath in self._explainability_dir.glob("*.json"):
+                raw = _read_json(fpath)
+                if raw and "operation_id" in raw:
+                    records.append(ExplainabilityOperationRecord(**raw))
+            records.sort(key=lambda record: record.updated_at)
+            for record in records:
+                self._mem.restore_explainability(record)
+        self._explainability_loaded = True
 
     def list_attempts(
         self, bundle_digest: str, hook_id: str
@@ -197,9 +271,11 @@ class JsonFileOperationStore:
         """Remove all persisted records (for testing)."""
         with self._lock:
             self._mem = InMemoryOperationStore()
+            self._explainability_loaded = False
             self._deliveries_loaded = False
             for d in (
                 self._executions_dir,
+                self._explainability_dir,
                 self._attempts_dir,
                 self._deliveries_dir,
             ):

@@ -154,6 +154,17 @@ class TorchONNXExporter:
         input_names = _resolve_input_names(source)
         sample_inputs = _resolve_sample_inputs(source, input_names)
         output_names = ["output"]
+        feature_map_json: str | None = None
+        if opts.get("include_feature_map", False):
+            if source.source_kind not in ("dnn_result", "pu_result"):
+                raise ValueError(
+                    "include_feature_map is only supported for dnn_result/pu_result"
+                )
+            feature_map_json = _serialize_json_artifact(
+                _build_feature_map(source.preprocessing_state, input_names),
+                artifact_name="feature_map.json",
+                source_kind=source.source_kind,
+            )
 
         # Tracks which path actually ran — the dynamo path may fall back
         # to legacy export at runtime, and the manifest must record the
@@ -239,6 +250,12 @@ class TorchONNXExporter:
                         role="preprocessor",
                     )
                 )
+                if feature_map_json is not None:
+                    feature_map_path = context.artifact_dir / "feature_map.json"
+                    feature_map_path.write_text(feature_map_json)
+                    files.append(
+                        DraftFile(relative_path="feature_map.json", role="aux")
+                    )
 
             return ArtifactDraft(
                 name=target.target.name,
@@ -256,6 +273,7 @@ class TorchONNXExporter:
                         "opset": opset,
                         "dynamo": used_dynamo,
                         "external_data": external_data,
+                        "include_feature_map": opts.get("include_feature_map", False),
                     },
                 ),
                 derived_from=(),
@@ -356,6 +374,30 @@ def _validate_preprocessing_state(
             f"{source_kind} preprocessing_state['features'] must contain named "
             "feature objects"
         )
+
+
+def _build_feature_map(
+    state: Mapping[str, Any], input_names: list[str]
+) -> dict[str, Any]:
+    """Build the auditable one-to-one raw-to-model feature map."""
+    raw_names = [str(feature["name"]) for feature in state["features"]]
+    if len(raw_names) != len(input_names) or set(raw_names) != set(input_names):
+        raise ValueError(
+            "DNN/PU raw explainability requires a one-to-one feature map; "
+            f"raw={raw_names!r}, model_inputs={input_names!r}"
+        )
+    return {
+        "schema_version": 1,
+        "feature_view": "raw",
+        "mappings": [
+            {
+                "raw_feature": raw_name,
+                "model_input": raw_name,
+                "aggregation": "identity",
+            }
+            for raw_name in raw_names
+        ],
+    }
 
 
 def _serialize_json_artifact(

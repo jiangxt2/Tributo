@@ -41,10 +41,14 @@ class BundleReader:
             storage_resolver
         )
         self._manifest_registry = manifest_registry or ManifestSchemaRegistry()
-        from tributo.exporting.manifest import _read_manifest_v1
+        from tributo.exporting.manifest import _read_manifest_v1, _read_manifest_v2
 
         try:
             self._manifest_registry.register(1, _read_manifest_v1)
+        except ValueError:
+            pass
+        try:
+            self._manifest_registry.register(2, _read_manifest_v2)
         except ValueError:
             pass
 

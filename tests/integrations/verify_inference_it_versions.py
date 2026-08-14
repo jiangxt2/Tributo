@@ -32,6 +32,7 @@ def main() -> None:
         "onnxruntime": _expected("TRIBUTO_EXPECTED_ONNXRUNTIME_VERSION"),
         "pyarrow": _expected("TRIBUTO_EXPECTED_PYARROW_VERSION"),
         "xgboost": _expected("TRIBUTO_EXPECTED_XGBOOST_VERSION"),
+        "shap": _expected("TRIBUTO_EXPECTED_SHAP_VERSION"),
     }
     actual = {name: importlib.metadata.version(name) for name in packages}
     mismatches = {

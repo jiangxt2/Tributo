@@ -76,6 +76,7 @@ dtypes
 Embedder
 embedding
 embeddings
+Explainability
 entrypoint
 entrypoints
 env
@@ -165,6 +166,7 @@ MyST
 namespace
 namespaces
 NaN
+NPY
 ndarray
 nnPU
 normalizer
@@ -194,7 +196,10 @@ PostTrainingInferenceAction
 PostgreSQL
 Pre
 pre
+preflight
 preprocessing
+preprocessed
+preprocessor
 PhysicalSplitSummary
 ProblemType
 Proto
@@ -298,3 +303,5 @@ xgboost
 YAML
 zh
 zstd
+explainability
+sharded

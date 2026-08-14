@@ -16,6 +16,7 @@ from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from tributo.explainability.contracts import ExplainabilityOperationRecord
 from tributo.exporting.manifest import ManifestExecutionNode
 from tributo.exporting.models import HookStatus
 from tributo.util.annotations import DeveloperAPI, PublicAPI
@@ -119,6 +120,25 @@ class OperationStore(Protocol):
 
     def list_executions(self, execution_id: str) -> list[ExecutionRecord]: ...
 
+    def record_explainability(self, record: ExplainabilityOperationRecord) -> None: ...
+
+    def renew_explainability(
+        self,
+        operation_id: str,
+        *,
+        idempotency_key: str,
+        lease_token: str,
+        lease_expires_at: datetime,
+    ) -> ExplainabilityOperationRecord: ...
+
+    def get_explainability(
+        self, operation_id: str
+    ) -> ExplainabilityOperationRecord | None: ...
+
+    def list_explainability(
+        self, operation_id: str
+    ) -> list[ExplainabilityOperationRecord]: ...
+
     def list_attempts(
         self, bundle_digest: str, hook_id: str
     ) -> list[PublicationAttempt]: ...
@@ -154,6 +174,7 @@ class InMemoryOperationStore:
 
     def __init__(self, clock: Callable[[], datetime] | None = None) -> None:
         self._executions: dict[str, list[ExecutionRecord]] = {}
+        self._explainability: dict[str, list[ExplainabilityOperationRecord]] = {}
         self._attempts: dict[str, list[PublicationAttempt]] = {}
         self._deliveries: dict[str, list[DeliveryRecord]] = {}
         self._delivery_ids: dict[str, str] = {}
@@ -177,6 +198,124 @@ class InMemoryOperationStore:
     def list_executions(self, execution_id: str) -> list[ExecutionRecord]:
         with self._lock:
             return list(self._executions.get(execution_id, []))
+
+    def record_explainability(self, record: ExplainabilityOperationRecord) -> None:
+        with self._lock:
+            records = self._explainability.setdefault(record.operation_id, [])
+            previous = records[-1] if records else None
+            if previous is not None:
+                if previous.idempotency_key != record.idempotency_key:
+                    raise ValueError(
+                        f"operation {record.operation_id!r} was reused with a "
+                        "different idempotency key"
+                    )
+                if previous.status in {"succeeded", "partial"}:
+                    if record.model_dump() == previous.model_dump():
+                        return
+                    raise ValueError(
+                        f"operation {record.operation_id!r} is already terminal"
+                    )
+                now = self._clock()
+                if previous.status == "running" and record.status == "running":
+                    if (
+                        previous.lease_expires_at is None
+                        or previous.lease_expires_at > now
+                        or previous.lease_token == record.lease_token
+                    ):
+                        raise ValueError(
+                            f"operation {record.operation_id!r} is already running"
+                        )
+                if previous.status == "running" and record.status != "running":
+                    if previous.lease_token != record.lease_token:
+                        raise ValueError(
+                            f"operation {record.operation_id!r} lease token does not match"
+                        )
+                if previous.status == "failed" and record.status == "running":
+                    if not previous.retryable:
+                        raise ValueError(
+                            f"operation {record.operation_id!r} is not retryable"
+                        )
+                allowed_transitions = {
+                    "pending": {"running", "failed"},
+                    "running": {"running", "succeeded", "partial", "failed"},
+                    "failed": {"running"},
+                }
+                if record.status not in allowed_transitions.get(previous.status, set()):
+                    raise ValueError(
+                        f"invalid explainability state transition from "
+                        f"{previous.status!r} to {record.status!r}"
+                    )
+            records.append(record)
+
+    def renew_explainability(
+        self,
+        operation_id: str,
+        *,
+        idempotency_key: str,
+        lease_token: str,
+        lease_expires_at: datetime,
+    ) -> ExplainabilityOperationRecord:
+        with self._lock:
+            records = self._explainability.get(operation_id, [])
+            if not records:
+                raise ValueError(f"unknown explainability operation {operation_id!r}")
+            previous = records[-1]
+            now = self._clock()
+            if previous.idempotency_key != idempotency_key:
+                raise ValueError("explainability lease idempotency key does not match")
+            if previous.status != "running":
+                raise ValueError("only running explainability operations have a lease")
+            if previous.lease_token != lease_token:
+                raise ValueError("explainability lease token does not match")
+            if (
+                previous.lease_expires_at is not None
+                and previous.lease_expires_at <= now
+            ):
+                raise ValueError("explainability lease has expired")
+            if lease_expires_at <= now:
+                raise ValueError("new explainability lease must be in the future")
+            renewed = previous.model_copy(
+                update={
+                    "lease_expires_at": lease_expires_at,
+                    "updated_at": now,
+                }
+            )
+            records.append(renewed)
+            return renewed
+
+    def restore_explainability(self, record: ExplainabilityOperationRecord) -> None:
+        """Restore a persisted snapshot without reapplying transitions."""
+        with self._lock:
+            records = self._explainability.setdefault(record.operation_id, [])
+            if any(
+                existing.updated_at == record.updated_at
+                and existing.model_dump() == record.model_dump()
+                for existing in records
+            ):
+                return
+            records.append(record)
+
+    def get_explainability(
+        self, operation_id: str
+    ) -> ExplainabilityOperationRecord | None:
+        with self._lock:
+            records = self._explainability.get(operation_id, [])
+            return records[-1] if records else None
+
+    def list_explainability(
+        self, operation_id: str
+    ) -> list[ExplainabilityOperationRecord]:
+        with self._lock:
+            return list(self._explainability.get(operation_id, []))
+
+    def remove_explainability(self, record: ExplainabilityOperationRecord) -> None:
+        """Rollback the latest snapshot when a durable write fails."""
+        with self._lock:
+            records = self._explainability.get(record.operation_id, [])
+            if records and records[-1] == record:
+                records.pop()
+            if not records:
+                self._explainability.pop(record.operation_id, None)
 
     def list_attempts(
         self, bundle_digest: str, hook_id: str

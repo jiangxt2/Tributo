@@ -52,6 +52,7 @@ class TorchONNXOptions(BaseModel):
     opset: Literal[18] = 18
     dynamo: bool = True
     external_data: bool = False
+    include_feature_map: bool = False
 
 
 @PublicAPI(stability="beta")

@@ -36,6 +36,13 @@ _TARGET_NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$")
 _RESERVED_NAMES: frozenset[str] = frozenset({".leases", "aliases", "trials"})
 
 
+def _default_explainability_config() -> Any:
+    """Construct the optional explainability config without import-time coupling."""
+    from tributo.explainability.contracts import ExplainabilityConfig
+
+    return ExplainabilityConfig()
+
+
 def _validate_safe_name(v: str, label: str) -> str:
     """Reject names that don't match the allowlist or shadow reserved prefixes."""
     if not _TARGET_NAME_RE.match(v):
@@ -223,6 +230,7 @@ class BundleOutputConfig(BaseModel):
     )
     alias: AliasConfig | None = None
     roles: dict[str, str] = Field(default_factory=dict)
+    explainability: Any = Field(default_factory=_default_explainability_config)
     hooks: tuple[HookBinding, ...] = ()
     targets: list[ExportTarget] | None = Field(
         default=None,
@@ -232,6 +240,50 @@ class BundleOutputConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_bundle_mode(self) -> BundleOutputConfig:
+        from tributo.explainability.contracts import ExplainabilityConfig
+
+        if not isinstance(self.explainability, ExplainabilityConfig):
+            object.__setattr__(
+                self,
+                "explainability",
+                ExplainabilityConfig.model_validate(self.explainability),
+            )
+        if (
+            self.explainability.enabled
+            and self.explainability.backend == "tree"
+            and self.targets is not None
+        ):
+            native_targets = [
+                target
+                for target in self.targets
+                if target.format in {"ubj", "xgboost-json"}
+                or target.exporter_id in {"xgboost-ubj-v1", "xgboost-json-v1"}
+            ]
+            if native_targets and "explainability_model" not in self.roles:
+                object.__setattr__(
+                    self,
+                    "roles",
+                    {
+                        **self.roles,
+                        "explainability_model": native_targets[0].name,
+                    },
+                )
+            elif not native_targets:
+                companion = ExportTarget(
+                    name="explainability-model",
+                    format="ubj",
+                    exporter_id="xgboost-ubj-v1",
+                    required=True,
+                )
+                object.__setattr__(self, "targets", [*self.targets, companion])
+                object.__setattr__(
+                    self,
+                    "roles",
+                    {
+                        **self.roles,
+                        "explainability_model": companion.name,
+                    },
+                )
         if self.request_id is not None and self.run_id is not None:
             if self.request_id != self.run_id:
                 raise ValueError("request_id and run_id must identify the same run")
