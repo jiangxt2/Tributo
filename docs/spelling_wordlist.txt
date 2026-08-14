@@ -23,7 +23,6 @@ BasePredictor
 BaseTrainer
 BayesOpt
 benchmarked
-bge
 boto
 botocore
 bundle
@@ -139,6 +138,8 @@ Kubernetes
 kwargs
 Lance
 pylance
+LanceResultSinkRequest
+LanceVectorColumnSpec
 labelled
 Lifecycle
 lifecycle
@@ -234,6 +235,7 @@ redirect
 registry
 RegistryModelReference
 repos
+repartitioning
 ResolvedInference
 ResolvedSource
 ResultSink
@@ -266,6 +268,7 @@ subtypes
 Symlink
 symlinks
 telecom
+tokenization
 tokenizer
 topologies
 TorchScript

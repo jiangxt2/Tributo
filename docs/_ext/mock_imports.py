@@ -22,7 +22,6 @@ DOC_MOCK_IMPORTS: tuple[str, ...] = (
     "onnxmltools",
     "onnxruntime",
     "onnxscript",
-    "optimum",
     "pandas",
     "pyarrow",
     "pyiceberg",

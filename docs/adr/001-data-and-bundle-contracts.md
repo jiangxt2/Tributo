@@ -215,7 +215,7 @@ lifetime.
 Within the bounded tabular contract and the two supported engines, adding a
 source is therefore an extension-only operation: add Provider/Binding
 descriptors, connector dependencies, Conformance tests, and support-matrix
-evidence. Training, Inference, Embeddings, and Graph must not import or branch
+evidence. Training, Inference, and Graph must not import or branch
 on the new source. Adding another execution engine, an unbounded source, or a
 new scan semantic remains a separate ADR.
 

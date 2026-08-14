@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
+from typing import Any, ClassVar
 
 import pytest
 from pydantic import ValidationError
 
 from tributo.exceptions import ResultWriteError, UnsupportedArtifactFormat
 from tributo.inference.contracts import (
+    LanceResultSinkRequest,
     ParquetResultSinkRequest,
     ResultSink,
     ResultSinkReceipt,
@@ -17,13 +19,20 @@ from tributo.inference.contracts import (
 
 
 class _FakeSink:
-    api_version = 1
-    sink_id = "parquet-v1"
+    api_version: ClassVar[int] = 1
+    sink_id: ClassVar[str] = "parquet-v1"
 
     def __init__(self, rows_written: int | None) -> None:
         self.rows_written = rows_written
 
-    def write(self, dataset, request, *, run_id, plan_digest):
+    def write(
+        self,
+        dataset: Any,
+        request: ParquetResultSinkRequest | LanceResultSinkRequest,
+        *,
+        run_id: str,
+        plan_digest: str,
+    ) -> ResultSinkReceipt:
         del dataset, run_id, plan_digest
         return ResultSinkReceipt(
             sink_id=self.sink_id,
@@ -33,11 +42,17 @@ class _FakeSink:
         )
 
 
-def assert_result_sink_conformance(sink: ResultSink) -> None:
+def assert_result_sink_conformance(
+    sink: ResultSink,
+    *,
+    request: ParquetResultSinkRequest | LanceResultSinkRequest | None = None,
+    dataset: object | None = None,
+) -> None:
     assert isinstance(sink, ResultSink)
-    request = ParquetResultSinkRequest(uri="s3://results/output")
-    receipt = sink.write(object(), request, run_id="run-1", plan_digest="a" * 64)
-    repeated = sink.write(object(), request, run_id="run-1", plan_digest="a" * 64)
+    request = request or ParquetResultSinkRequest(uri="s3://results/output")
+    dataset = object() if dataset is None else dataset
+    receipt = sink.write(dataset, request, run_id="run-1", plan_digest="a" * 64)
+    repeated = sink.write(dataset, request, run_id="run-1", plan_digest="a" * 64)
     assert receipt.sink_id == sink.sink_id
     assert receipt.uri == request.uri
     assert len(receipt.result_id) == 64
@@ -67,12 +82,26 @@ def test_sink_rejects_credential_bearing_receipt() -> None:
 
 def test_sink_failure_and_unsupported_are_distinct() -> None:
     class _FailingSink(_FakeSink):
-        def write(self, dataset, request, *, run_id, plan_digest):
+        def write(
+            self,
+            dataset: Any,
+            request: ParquetResultSinkRequest | LanceResultSinkRequest,
+            *,
+            run_id: str,
+            plan_digest: str,
+        ) -> ResultSinkReceipt:
             del dataset, request, run_id, plan_digest
             raise ResultWriteError("classified result write failure")
 
     class _UnsupportedSink(_FakeSink):
-        def write(self, dataset, request, *, run_id, plan_digest):
+        def write(
+            self,
+            dataset: Any,
+            request: ParquetResultSinkRequest | LanceResultSinkRequest,
+            *,
+            run_id: str,
+            plan_digest: str,
+        ) -> ResultSinkReceipt:
             del dataset, request, run_id, plan_digest
             raise UnsupportedArtifactFormat("classified unsupported sink")
 
@@ -91,7 +120,14 @@ def test_sink_releases_temporary_staging_state() -> None:
     class _CleanupSink(_FakeSink):
         released_path: Path | None = None
 
-        def write(self, dataset, request, *, run_id, plan_digest):
+        def write(
+            self,
+            dataset: Any,
+            request: ParquetResultSinkRequest | LanceResultSinkRequest,
+            *,
+            run_id: str,
+            plan_digest: str,
+        ) -> ResultSinkReceipt:
             del dataset, run_id, plan_digest
             with tempfile.TemporaryDirectory(prefix="sink-conformance-") as raw:
                 type(self).released_path = Path(raw)

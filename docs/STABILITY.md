@@ -191,6 +191,7 @@ from the legacy setup-only propagation rule.
 | `tributo.integrations.flavors.xgboost_native` | `alpha` | Safe native JSON/UBJ XGBoost runtime flavor |
 | `tributo.integrations.model_importers.*` | `alpha` | Canonical ModelImporter protocol/registry plus explicit MLflow and typed artifact-to-Bundle implementations |
 | `tributo.integrations.sinks.parquet` | `alpha` | Parquet inference ResultSink adapter |
+| `tributo.integrations.sinks.lance` | `alpha` | Generic Lance inference ResultSink adapter |
 
 ### Inference (tributo.inference.*)
 
@@ -223,15 +224,6 @@ from the legacy setup-only propagation rule.
 | `tributo.serving.schema` | `beta` | Serving schema types |
 | `tributo.serving.proto.*` | `developer` | Generated protobuf code |
 | `tributo.serving.proto` | `developer` | Generated protobuf package |
-
-### Embeddings (tributo.embeddings.*)
-
-| Module | Level | Notes |
-|--------|-------|-------|
-| `tributo.embeddings.job_runner` | `beta` | Embedding job submission |
-| `tributo.embeddings.serve_runner` | `beta` | Embedding serving |
-| `tributo.embeddings.registry` | `beta` | Embedding model registry |
-| `tributo.embeddings.schema` | `beta` | Embedding schema types |
 
 ### Streaming (tributo.streaming.*)
 

@@ -1,4 +1,4 @@
-"""Lance data connector with native-engine write delegation."""
+"""Lance data connector backed by the shared distributed Lance writer."""
 
 from __future__ import annotations
 
@@ -6,8 +6,9 @@ import logging
 from typing import Any, Optional
 
 import ray.data
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
+from tributo._common.lance_write import write_lance_dataset
 from tributo.data.base import DataConnector, S3Config, WriteMode
 from tributo.data.registry import register_connector
 from tributo.util.annotations import PublicAPI
@@ -28,15 +29,24 @@ class LanceWriteConfig(BaseModel):
     path: str = Field(min_length=1, description="Lance dataset path or s3:// URI")
     mode: WriteMode = Field(default=WriteMode.OVERWRITE, description="Write mode")
     s3: Optional[S3Config] = Field(default=None, description="S3 connection config")
+    min_rows_per_file: int = Field(default=1024 * 1024, ge=1)
+    max_rows_per_file: int = Field(default=64 * 1024 * 1024, ge=1)
+    data_storage_version: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def _validate_file_bounds(self) -> "LanceWriteConfig":
+        if self.max_rows_per_file < self.min_rows_per_file:
+            raise ValueError("max_rows_per_file must be >= min_rows_per_file")
+        return self
 
 
 @PublicAPI(stability="beta")
 class LanceDataConnector(DataConnector):
     """Lance data connector.
 
-    Writes delegate to the native Ray Lance writer.  Format selection for
-    scalar compatibility outputs is kept in the compatibility facade and
-    never reimplements Lance fragments or commits.
+    The compatibility write path retains the historical connector shape while
+    sharing Tributo's distributed Ray Data/Lance transaction writer and strict
+    save-mode semantics with inference.
     """
 
     def read(self, **kwargs: Any) -> ray.data.Dataset:
@@ -66,8 +76,8 @@ class LanceDataConnector(DataConnector):
     def write(self, dataset: ray.data.Dataset, **kwargs: Any) -> None:
         """Write a Lance dataset.
 
-        Auto-detects vector columns: writes Lance when vectors are present,
-        otherwise falls back to Parquet + ZSTD.
+        Always write Lance.  Output format selection belongs to the caller;
+        this compatibility connector no longer guesses based on a column type.
 
         Args:
             dataset: The dataset to write.
@@ -75,32 +85,21 @@ class LanceDataConnector(DataConnector):
         """
         cfg = LanceWriteConfig(**kwargs)
 
+        logger.info("Writing Lance dataset: %s", cfg.path)
+        from tributo.data._s3 import to_lance_storage_options
+
         schema = dataset.schema()
         arrow_schema = schema.base_schema if hasattr(schema, "base_schema") else schema
-        target_kind = "lance"
-        if not _has_vector_column(arrow_schema):
-            logger.info(
-                "No vector columns detected; using Parquet compatibility target"
-            )
-            target_kind = "parquet"
-
-        from tributo.data.writing.compatibility import execute_ray_connector_write
-
-        execute_ray_connector_write(
-            dataset=dataset,
-            target_kind=target_kind,
-            target=cfg.path,
-            options={"compression": "zstd"} if target_kind == "parquet" else {},
-            runtime_options={"s3": cfg.s3} if cfg.s3 is not None else {},
-            mode=cfg.mode,
+        write_lance_dataset(
+            dataset,
+            uri=cfg.path,
+            schema=arrow_schema,
+            mode=cfg.mode.value,
+            min_rows_per_file=cfg.min_rows_per_file,
+            max_rows_per_file=cfg.max_rows_per_file,
+            data_storage_version=cfg.data_storage_version,
+            storage_options=to_lance_storage_options(cfg.s3),
         )
-
-
-def _has_vector_column(schema: Any) -> bool:
-    """Backward-compatible alias for the shared format-selection policy."""
-    from tributo.data.writing.policy import has_vector_column
-
-    return has_vector_column(schema)
 
 
 # ── Built-in registration ──

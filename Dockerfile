@@ -16,7 +16,7 @@ ARG TZ=UTC
 
 FROM ${BASE_IMAGE}
 
-ARG EXTRAS="training,embeddings,identity,streaming,registry"
+ARG EXTRAS="training,identity,streaming,registry"
 ARG TORCH_VERSION
 ARG PIP_INDEX_URL
 ARG TZ

@@ -29,7 +29,7 @@ Current exit-gate status:
 - [x] Representative compatibility comparisons show that canonical and legacy
   inputs enter the same Gateway and produce equivalent Ray Data results. The
   new public path returns an `IngestionOpenResult` with a typed native handle.
-- [x] Training, inference, and embeddings all route through the new Provider
+- [x] Training and inference route through the new Provider
   (verified by code audit, not just test coverage).
 - [ ] Legacy input adapters have completed their documented compatibility
   window. They remain available and keep their `FutureWarning`; only the
@@ -48,16 +48,16 @@ reader code.
 Migration impact:
 
 - `InferenceConfig.source` is the canonical input for new callers.
-- Legacy `input_uri`, flat ClickHouse fields, `data.uri`, `data.input`, and
-  embedding `--input`/`s3_input_path` remain compatibility inputs.
+- Legacy `input_uri`, flat ClickHouse fields, `data.uri`, and `data.input`
+  remain compatibility inputs.
 - Feature and text column selection is expressed through provider-native
   projection.
 - Output sinks are unchanged.
 
 Compatibility:
 
-- Legacy inference and embedding input forms remain accepted during their
-  deprecation windows.
+- Legacy inference input forms remain accepted during their deprecation
+  windows.
 - Legacy local-runner `val_path` and `test_path` remain relative to the caller
   working directory during that window; canonical source objects use the
   shared project-root path policy.
@@ -76,11 +76,6 @@ Compatibility:
   credential-free migration error. Built-in execution supports structured
   table/projection/partitioning requests; Tributo does not restore an arbitrary
   SQL reader.
-- Embedding submission validates and transports a credential-free source but
-  does not resolve Providers, Bindings, or optional dependencies on the submit
-  host. The Ray job performs that validation in its cluster image. Its engine
-  remains explicit; Daft input reaches the Ray-only embedding consumer through
-  the recorded Daft-to-Ray adapter.
 
 Deprecation window:
 

@@ -187,9 +187,7 @@ SAFETENSORS = DependencySpec(
 )
 XGBOOST = DependencySpec("xgboost", "xgboost", "2.1.0", extra="training")
 ONNXMLTOOLS = DependencySpec("onnxmltools", "onnxmltools", "1.13.0", extra="training")
-TRANSFORMERS = DependencySpec(
-    "transformers", "transformers", "4.40.0", extra="embeddings"
-)
+TRANSFORMERS = DependencySpec("transformers", "transformers", "4.40.0", extra="hf")
 # pylance is the PyPI distribution name of the Lance vector database
 # (unrelated to the VS Code Pylance language server).
 LANCE = DependencySpec("lance", "pylance", "4.0.0", extra="data")

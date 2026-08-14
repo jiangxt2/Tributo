@@ -22,8 +22,8 @@ from tributo.inference.contracts import (
     InferenceResult,
     InputBindingSpec,
     OutputBindingSpec,
-    ParquetResultSinkRequest,
     RayExecutionPolicy,
+    ResultSinkRequest,
 )
 from tributo.util.annotations import PublicAPI
 
@@ -41,7 +41,7 @@ class PostTrainingInferenceAction(BaseModel):
     input: IngestionRequest
     input_binding: InputBindingSpec
     output_binding: OutputBindingSpec
-    result_sink: ParquetResultSinkRequest
+    result_sink: ResultSinkRequest
     execution: RayExecutionPolicy = Field(default_factory=RayExecutionPolicy)
     role: str = Field(default="inference", min_length=1)
     model_storage_profile: str | None = None

@@ -6,12 +6,13 @@ from tributo.inference.contracts import (
     InferenceExecutor,
     InferenceRequest,
     InferenceResult,
+    LanceResultSinkRequest,
     ResolvedInference,
     ResultSink,
 )
 from tributo.inference.executor import RayMapBatchesExecutor
 from tributo.inference.resolver import InferenceResolver
-from tributo.integrations.sinks import ParquetResultSink
+from tributo.integrations.sinks import LanceResultSink, ParquetResultSink
 from tributo.util.annotations import PublicAPI
 
 
@@ -35,9 +36,13 @@ def run_resolved_inference(
 ) -> InferenceResult:
     """Execute one already-pinned plan without reinterpreting user intent."""
     plan = ResolvedInference.model_validate(plan.model_dump(mode="python"))
-    result = (executor or RayMapBatchesExecutor()).execute(
-        plan, sink or ParquetResultSink()
-    )
+    if sink is None:
+        sink = (
+            LanceResultSink()
+            if isinstance(plan.result_sink, LanceResultSinkRequest)
+            else ParquetResultSink()
+        )
+    result = (executor or RayMapBatchesExecutor()).execute(plan, sink)
     # Extension implementations cross back into the public domain through a
     # fresh contract validation, including receipt/metrics credential gates.
     return InferenceResult.model_validate(result.model_dump(mode="python"))

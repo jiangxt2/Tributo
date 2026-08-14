@@ -284,6 +284,69 @@ class ParquetResultSinkRequest(_FrozenContract):
 
 
 @PublicAPI(stability="alpha")
+class LanceVectorColumnSpec(_FrozenContract):
+    """Expected fixed-size floating-point vector column in a Lance result."""
+
+    name: str = Field(min_length=1)
+    dimension: int = Field(ge=1)
+    dtype: Literal["float16", "float32", "float64"] = "float32"
+
+
+@PublicAPI(stability="alpha")
+class LanceResultSinkRequest(_FrozenContract):
+    """Configuration for explicit Lance result materialization.
+
+    Tributo validates only the Arrow schema contract declared here.  It does
+    not infer model task semantics, pooling, normalization, or vector metadata.
+    Direct requests default to fail-closed ``create``.  The legacy
+    ``InferenceConfig`` pipeline separately retains its historical
+    ``overwrite`` default for compatibility.
+    """
+
+    sink_id: Literal["lance-v1"] = "lance-v1"
+    uri: str = Field(min_length=1)
+    mode: Literal["create", "append", "overwrite"] = "create"
+    storage_profile: str | None = None
+    data_storage_version: str | None = Field(default=None, min_length=1)
+    min_rows_per_file: int = Field(default=1024 * 1024, ge=1)
+    max_rows_per_file: int = Field(default=64 * 1024 * 1024, ge=1)
+    vector_columns: tuple[LanceVectorColumnSpec, ...] = ()
+
+    @field_validator("uri")
+    @classmethod
+    def _validate_uri(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        if not parsed.scheme:
+            return value
+        if parsed.scheme.lower() not in {"file", "s3"}:
+            raise ValueError("Lance ResultSink URI must be local, file://, or s3://")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("Lance ResultSink URI must not contain credentials")
+        if parsed.query or parsed.fragment:
+            raise ValueError("Lance ResultSink URI must not contain query or fragment")
+        if parsed.scheme.lower() == "file" and parsed.netloc not in {"", "localhost"}:
+            raise ValueError("file ResultSink URI must not name a remote host")
+        if parsed.scheme.lower() == "s3" and not parsed.netloc:
+            raise ValueError("s3 ResultSink URI must include a bucket")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_file_bounds(self) -> "LanceResultSinkRequest":
+        if self.max_rows_per_file < self.min_rows_per_file:
+            raise ValueError("max_rows_per_file must be >= min_rows_per_file")
+        names = tuple(spec.name for spec in self.vector_columns)
+        if len(set(names)) != len(names):
+            raise ValueError("vector_columns must contain unique column names")
+        return self
+
+
+ResultSinkRequest = Annotated[
+    Union[ParquetResultSinkRequest, LanceResultSinkRequest],
+    Field(discriminator="sink_id"),
+]
+
+
+@PublicAPI(stability="alpha")
 class InferenceRequest(_FrozenContract):
     """User intent for one bounded batch-inference run."""
 
@@ -292,7 +355,7 @@ class InferenceRequest(_FrozenContract):
     input: IngestionRequest
     input_binding: InputBindingSpec
     output_binding: OutputBindingSpec
-    result_sink: ParquetResultSinkRequest
+    result_sink: ResultSinkRequest
     execution: RayExecutionPolicy = Field(default_factory=RayExecutionPolicy)
     run_id: str | None = Field(default=None, min_length=1)
     parent_run_id: str | None = Field(default=None, min_length=1)
@@ -388,7 +451,7 @@ class ResolvedInference(_FrozenContract):
     output_signature: ManifestSignature
     input_binding: InputBindingSpec
     output_binding: OutputBindingSpec
-    result_sink: ParquetResultSinkRequest
+    result_sink: ResultSinkRequest
     execution: RayExecutionPolicy
     run_id: str
     attempt_id: str
@@ -521,7 +584,7 @@ class ResultSink(Protocol):
     def write(
         self,
         dataset: Any,
-        request: ParquetResultSinkRequest,
+        request: ResultSinkRequest,
         *,
         run_id: str,
         plan_digest: str,
@@ -559,6 +622,8 @@ __all__ = [
     "InferenceRequest",
     "InferenceResult",
     "InputBindingSpec",
+    "LanceResultSinkRequest",
+    "LanceVectorColumnSpec",
     "OutputBindingSpec",
     "ParquetResultSinkRequest",
     "RayExecutionPolicy",
@@ -567,6 +632,7 @@ __all__ = [
     "ResolvedInputSelection",
     "ResolvedModelSelection",
     "ResultSink",
+    "ResultSinkRequest",
     "ResultSinkReceipt",
     "TensorInputBinding",
     "TensorOutputBinding",

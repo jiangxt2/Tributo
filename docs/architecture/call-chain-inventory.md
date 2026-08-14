@@ -194,39 +194,7 @@ The flat `s3_config` field warns and remains only inside this adapter.
 ordinary `InferenceRequest`; no Trainer or in-memory model crosses the domain
 boundary.
 
-### 3. Embedding Data Loading
-
-**Primary entry**: `embeddings/job_runner.py`
-
-```
-CLI / Python API
-  ↓
-submit_embedding_job(source=... or s3_input_path=...)
-  ↓
-IngestionRequest(source, explicit engine)
-  ↓
-credential-safe source serialization + deterministic submission identity
-  (no Provider/Binding resolution on the submit host)
-  ↓
-Ray Job submission (entrypoint script runs inside Ray cluster)
-  ↓
-embeddings.batch_job._resolve_embedding_source()
-  ↓
-IngestionGateway.open(explicit engine)
-  ↓
-RayDataHandle.dataset, or explicit DaftDataFrameHandle → Ray adapter
-  ↓
-Ray Data → model inference → output writer
-```
-
-Ray Job entrypoints carry only source configuration accepted by
-`IngestionRequest.source_json_for_remote_transport()`; credentials are resolved
-from the cluster environment, IAM, or a storage profile. Optional Provider,
-Binding, and Connector dependencies are resolved inside the cluster, never on
-the submit host. Embeddings never calls Provider normalization or a registry
-directly and never performs automatic engine fallback.
-
-### 4. CLI Data Entry
+### 3. CLI Data Entry
 
 **Primary entry**: `cli.py`
 
@@ -238,7 +206,7 @@ CLI parses JSON → builds JobConfig / TrainingConfig
 submits to Ray Job API or calls local runner
 ```
 
-### 5. Plugin and Optional Data Connectors
+### 4. Plugin and Optional Data Connectors
 
 **Discovery**: `plugin.py::discover_connector_plugins()`
 
@@ -425,7 +393,7 @@ Plugin groups also discovered:
 
 | Issue | Location | Impact |
 |-------|----------|--------|
-| Existing downstream consumers still expect Ray Dataset values | Training / local runner / inference / embeddings | Their compatibility functions explicitly select Ray and delegate the same Gateway; native Daft consumption requires a later consumer capability change |
+| Existing downstream consumers still expect Ray Dataset values | Training / local runner / inference | Their compatibility functions explicitly select Ray and delegate the same Gateway; native Daft consumption requires a later consumer capability change |
 | A Ray-only consumer intentionally selects a Daft-only source | Consumer boundary | `adapt_daft_result_to_ray()` calls Daft's public adapter and records conversion evidence; the Gateway never performs this conversion implicitly |
 | External model importers use explicit IDs and normalize to BundleRef | `inference/importers.py`, `integrations/model_importers/` | MLflow and typed ONNX/XGBoost artifacts pass Conformance and real-service IT |
 | Raw-artifact compatibility still exists | `BaseTrainer.run(..., legacy_export=True)` | Removal waits for the documented compatibility window and a separate E4 change |

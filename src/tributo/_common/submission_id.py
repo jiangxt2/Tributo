@@ -21,7 +21,7 @@ def generate_submission_id(prefix: str, *components: str) -> str:
     - The ID length stays well below Ray's 64-character limit.
 
     Args:
-        prefix: Short prefix indicating the job type, e.g. ``"embed"`` or
+        prefix: Short prefix indicating the job type, e.g. ``"custom"`` or
             ``"train"``.
         *components: String components that uniquely identify the job.
 
@@ -29,8 +29,8 @@ def generate_submission_id(prefix: str, *components: str) -> str:
         A deterministic submission ID string.
 
     Example:
-        >>> generate_submission_id("embed", "bge-small-zh", "s3://in", "s3://out", "64", "4")
-        'tributo-embed-a1b2c3d4e5f67890'
+        >>> generate_submission_id("custom", "model-a", "s3://in", "s3://out", "64", "4")
+        'tributo-custom-a1b2c3d4e5f67890'
     """
     payload = "|".join(components)
     digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]

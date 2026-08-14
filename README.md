@@ -2,7 +2,7 @@
 
 <p align="center">
   <strong>Telecom-native ML framework for Ray clusters.</strong><br>
-  PU Learning · Distributed Training · Batch Embedding & ONNX Serving
+  PU Learning · Distributed Training · Batch Inference & ONNX Serving
 </p>
 
 <p align="center">
@@ -44,10 +44,10 @@ Call records, SMS logs, and app usage traces have irregular intervals and multi-
 # model.pretrain(data_path="s3://bucket/events/*.parquet")
 ```
 
-**③ Large-scale Embedding Pipeline — bounded ingestion → distributed inference → Lance storage**
+**③ Large-scale inference pipeline — bounded ingestion → distributed inference → Lance storage**
 
 A typed ingestion Gateway selects Ray Data or Daft explicitly and delegates
-physical reads to that engine. Existing embedding consumers select Ray Data;
+physical reads to that engine. Inference consumers select Ray Data;
 there is no implicit Daft-to-Ray materialization. Lance writes remain a
 separate output concern.
 
@@ -133,8 +133,8 @@ uv sync --extra training
 # With data connectors (Lance / Iceberg)
 uv sync --extra data
 
-# With text embeddings (BGE models)
-uv sync --extra embeddings
+# With Hugging Face sources/exporters
+uv sync --extra model-export-hf
 
 # Development dependencies
 uv sync --extra dev
@@ -181,18 +181,24 @@ uv run python examples/xgboost_s3_training.py
 
 nnPU/uPU training with an explicit class prior and PU-specific metrics. The trainer currently requires one Ray worker. See the [PU Learning guide](docs/how-to/pu-learning.md) and [support matrix](docs/reference/support-matrix.md).
 
-### Batch Text Embedding
+### Custom Batch Inference
 
-Distributed embedding with BGE models, output to Lance or Parquet.
+Distributed inference with a user-supplied Ray `BasePredictor`, output to
+Parquet or Lance.
 
-```bash
-uv run tributo embed batch \
-  --input s3://bucket/data.parquet \
-  --output s3://bucket/embedded.lance \
-  --model bge-small-zh \
-  --concurrency 2
+```python
+from tributo.inference import BasePredictor, InferenceConfig, run_batch_inference
 
-uv run tributo embed list
+
+class MyPredictor(BasePredictor):
+    def _load_model(self):
+        self.model = load_model_from_your_runtime()
+
+    def __call__(self, batch):
+        return predict_with_your_model(self.model, batch)
+
+
+run_batch_inference(config, predictor_cls=MyPredictor)
 ```
 
 ### ONNX Inference Serving
@@ -263,7 +269,6 @@ src/tributo/
 ├── _common/             # Shared utilities (runtime_env, IO, logging, Serve)
 ├── data/                # Data connectors (Parquet / Lance / Iceberg)
 ├── training/            # XGBoost, DNN, PU Learning, Tune on Ray Train
-├── embeddings/          # Text embeddings (batch + online)
 ├── serving/             # ONNX inference service (HTTP / gRPC / streaming)
 ├── inference/           # Distributed batch inference
 ├── registry/            # Model registry (MLflow integration)

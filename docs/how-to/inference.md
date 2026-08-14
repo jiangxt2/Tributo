@@ -94,6 +94,68 @@ convert a Daft handle to Ray. Input feature projection is appended through the
 shared Data Transform IR. The final result includes the Data Gateway's
 credential-free ingestion receipt alongside the sink receipt.
 
+## User-provided predictors and Lance output
+
+The first-phase extension point for an arbitrary Hugging Face model or task is
+the existing `run_batch_inference(config, predictor_cls=...)` entry point (or a
+user-owned Ray Job that builds the same Ray Data graph). Tributo and Ray do not
+choose an `AutoModel` class, tokenizer, processor, task, pooling strategy,
+normalization, output interpretation, dtype, or embedding metadata.
+
+```python
+from tributo.inference import BasePredictor, InferenceConfig, run_batch_inference
+
+
+class MyPredictor(BasePredictor):
+    def _load_model(self):
+        self.tokenizer = load_your_tokenizer(self.model_uri)
+        self.model = load_your_hugging_face_model(self.model_uri)
+
+    def __call__(self, batch):
+        return predict_and_format_your_outputs(self.tokenizer, self.model, batch)
+
+
+config = InferenceConfig(
+    input_uri="s3://data/input.parquet",
+    output_uri="s3://results/output.lance",
+    model_uri="model-id-or-local-artifact",
+    output_format="lance",
+)
+run_batch_inference(config, predictor_cls=MyPredictor)
+```
+
+The non-Bundle path passes `(model_uri, predictor_config)` to the custom
+Predictor constructor. The Bundle path passes the existing six-argument
+Bundle constructor shape. A custom Predictor must explicitly support the
+shape selected by the configuration; inheriting `BasePredictor` does not
+change this boundary. The formal `InferenceRequest` executor remains fixed to
+`BundleBatchPredictor` until a separately designed trusted Predictor reference
+contract is approved.
+
+`output_format="lance"` selects a generic Lance ResultSink. Declare
+`output_vector_columns` when fixed-size floating-point vector validation is
+required. Ray Data owns distributed repartitioning and fragment tasks, while
+Lance owns the atomic transaction commit. This shared writer records the
+resulting dataset version and schema fingerprint and does not build an ANN
+index. A Lance table may contain ordinary columns as well as user-produced
+vectors.
+
+Direct `LanceResultSinkRequest` construction defaults to fail-closed `create`.
+The legacy `InferenceConfig.output_mode` remains `overwrite` to preserve its
+historical output behavior. `create` rejects an existing dataset and permits
+only one concurrent creator; `append` requires an existing dataset; and
+`overwrite` may create or replace a dataset. Empty `create` and `overwrite`
+operations materialize a schema-bearing dataset, while an empty `append` is a
+version-preserving no-op.
+
+`LanceDataConnector.write` now always writes Lance. Earlier beta releases
+silently wrote Parquet with ZSTD when no floating-point list column was
+detected. Call `ParquetDataConnector` or select the Parquet ResultSink
+explicitly when Parquet is required. The removed `tributo.embeddings` API has
+no compatibility shim; migrate its model semantics into a user-supplied
+Predictor and select the generic Lance ResultSink only when Lance output is
+desired.
+
 Submit the same request as a detached Ray Job with
 `submit_inference_request(request)`. The request is resolved once before
 submission, including manifest digest, role, flavor, data identity, run ID,
@@ -182,7 +244,7 @@ Create `inference.json`:
 ```
 
 `source` accepts the same canonical `SourceConfig` and `provider`/`uri`
-shapes used by training and embeddings. The historical `data.uri`,
+shapes used by training and generic inference. The historical `data.uri`,
 `data.input`, and ClickHouse fields remain compatible and are normalized
 before execution; they must not be mixed with `source`. The root, `model`,
 `output`, and `ray` JSON objects reject unknown fields. Validation errors do
@@ -227,6 +289,10 @@ references rather than embedding it in a request.
 | `batch_size` | int | Rows per inference batch. Default: `4096`. |
 | `concurrency` | int | Number of parallel inference actors. Default: `4`. |
 | `num_cpus_per_actor` | float | CPUs per actor. Default: `1.0`. |
+| `output_format` | `parquet` or `lance` | Explicit result format. Default: `parquet`. |
+| `output_mode` | `create`, `append`, or `overwrite` | Lance write mode. Default: `overwrite`. |
+| `output_data_storage_version` | str | Optional Lance data-storage format version. |
+| `output_vector_columns` | list[object] | Optional fixed-size vector declarations owned by the caller. |
 
 ## Identity Predictor Output Contract
 

@@ -27,7 +27,7 @@ carry their own integrity and provenance.
 
 ## Goals (This Cycle)
 
-1. **Unify data source protocol**: Training, inference, embeddings, and graph
+1. **Unify data source protocol**: Training, inference, and graph
    adapters consume typed bounded-ingestion handles behind one Gateway. Ray
    Data and Daft perform reads; Tributo owns only contracts, translation,
    routing, error normalization, and provenance. Bounded data and streaming

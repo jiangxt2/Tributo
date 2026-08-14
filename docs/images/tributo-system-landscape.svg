@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="736" height="860" viewBox="0 0 736 860" role="img" aria-labelledby="title description">
   <title id="title">Tributo system landscape on Ray</title>
-  <desc id="description">Users submit training, embedding, inference, serving, and streaming workloads through Tributo. Tributo owns portable framework contracts and delegates distributed execution to Ray 2.55.1. Data systems, bundle stores, MLflow, and Kafka remain external systems. Platform control-plane capabilities are outside the Tributo boundary.</desc>
+  <desc id="description">Users submit training, inference, serving, and streaming workloads through Tributo. Tributo owns portable framework contracts and delegates distributed execution to Ray 2.55.1. Data systems, bundle stores, MLflow, and Kafka remain external systems. Platform control-plane capabilities are outside the Tributo boundary.</desc>
   <style>
     :root {
       --canvas: #ffffff;
@@ -163,8 +163,8 @@
   <text class="tiny" x="156" y="225">legacy Beta</text>
   <text class="tiny" x="156" y="243">portable Alpha</text>
   <line class="divider" x1="326" y1="190" x2="326" y2="244"/>
-  <text x="344" y="204">Embedding</text>
-  <text class="tiny" x="344" y="225">batch + online</text>
+  <text x="344" y="204">Custom inference</text>
+  <text class="tiny" x="344" y="225">user Predictor</text>
   <line class="divider" x1="516" y1="190" x2="516" y2="244"/>
   <text x="534" y="204">Batch inference</text>
   <text class="tiny" x="534" y="225">resolved plan</text>
@@ -263,7 +263,7 @@
 
     <rect class="node workload" x="38" y="234" width="660" height="152" rx="8"/>
     <text class="strong" x="56" y="271">Scenario workloads</text>
-    <text x="56" y="304">Train / Tune · Embedding</text>
+    <text x="56" y="304">Train / Tune · Custom inference</text>
     <text x="56" y="337">Batch inference · Online serving</text>
     <text x="56" y="370">Kafka input Alpha · no service loop</text>
 

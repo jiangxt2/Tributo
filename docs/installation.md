@@ -20,7 +20,7 @@ Runtime, PyArrow, pandas, and S3 filesystem support.
 | Daft ingestion | `python -m pip install "tributo[data,data-daft]"` |
 | PostgreSQL ingestion | `python -m pip install "tributo[postgresql]"` |
 | Distributed training | `python -m pip install "tributo[training]"` |
-| Embeddings | `python -m pip install "tributo[embeddings]"` |
+| Hugging Face source/exporter and streaming | `python -m pip install "tributo[hf]"` or `python -m pip install "tributo[model-export-hf]"` |
 | Torch model export | `python -m pip install "tributo[model-export-torch]"` |
 | MLflow registry | `python -m pip install "tributo[registry]"` |
 | gRPC serving | `python -m pip install "tributo[grpc]"` |

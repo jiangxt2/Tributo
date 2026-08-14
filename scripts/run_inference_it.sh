@@ -153,6 +153,7 @@ set -o pipefail
 "${compose[@]}" exec -T ray-head \
   python -m pytest \
   tests/integration/test_inference_ray_jobs.py \
+  tests/integration/test_lance_result_sink_ray.py \
   -o "addopts=" \
   -m integration \
   -v --tb=short --timeout=600 \

@@ -200,9 +200,9 @@
     <rect x="95" y="0" width="84" height="30" rx="15" fill="url(#pillCyan)" stroke="#06B6D4" stroke-width="0.8" opacity="0.7"/>
     <text x="137" y="19" font-family="system-ui, -apple-system, sans-serif" font-weight="600" font-size="13" fill="#22D3EE" text-anchor="middle">Inference</text>
 
-    <!-- Embeddings -->
+    <!-- Data -->
     <rect x="192" y="0" width="98" height="30" rx="15" fill="url(#pillPurple)" stroke="#7C3AED" stroke-width="0.8" opacity="0.7"/>
-    <text x="241" y="19" font-family="system-ui, -apple-system, sans-serif" font-weight="600" font-size="13" fill="#C084FC" text-anchor="middle">Embeddings</text>
+    <text x="241" y="19" font-family="system-ui, -apple-system, sans-serif" font-weight="600" font-size="13" fill="#C084FC" text-anchor="middle">Data</text>
 
     <!-- Serving -->
     <rect x="303" y="0" width="76" height="30" rx="15" fill="url(#pillCyan)" stroke="#06B6D4" stroke-width="0.8" opacity="0.7"/>

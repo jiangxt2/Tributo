@@ -21,7 +21,7 @@ Ray-only loaders are compatibility adapters over this same path.
 `IngestionGateway`, typed handles, receipts, and explicit handle adapters.
 `scan_plan`, `engine_binding`, Provider registries, and native Connector plans
 are Developer SPI for ingestion extensions and must not be imported by
-Training, Inference, Embeddings, or graph algorithms. Historical beta Provider
+Training, Inference, or graph algorithms. Historical beta Provider
 exports remain only for their documented compatibility window.
 
 New bounded sources use `ProviderSourceConfig(provider, uri, options)` and may
@@ -57,3 +57,16 @@ Credentials belong to runtime configuration. They must not appear in dataset
 identifiers, logical plans, receipts, logs, or public errors. Bounded providers
 and unbounded stream sources remain separate contracts, and an input Connector
 does not imply an inference output sink.
+
+## Lance output compatibility
+
+`LanceDataConnector` is a beta compatibility adapter over the same distributed
+Lance writer used by inference. It always writes Lance and never infers an
+output format from vector-like columns. Older releases wrote Parquet with ZSTD
+when no floating-point list column was present; callers that require Parquet
+must now select `ParquetDataConnector` or a Parquet ResultSink explicitly.
+
+Lance save modes are fail-closed: `create` is an atomic create-only operation,
+`append` requires an existing target, and `overwrite` creates or replaces the
+target. Empty create/overwrite inputs still materialize the declared schema;
+an empty append preserves the existing dataset version.

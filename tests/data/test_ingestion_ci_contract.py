@@ -90,7 +90,7 @@ def test_distributed_ingestion_image_uses_locked_project_dependencies() -> None:
     assert "FROM ${UV_IMAGE} AS uv" in dockerfile
     assert "COPY --from=uv" in dockerfile
     assert "uv sync" in dockerfile
-    assert "--extra embeddings" in dockerfile
+    assert "--extra model-export-hf" in dockerfile
     assert "--extra data-daft" in dockerfile
     assert "--no-default-groups" in dockerfile
     assert "--no-install-project" in dockerfile

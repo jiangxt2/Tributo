@@ -272,8 +272,31 @@ class TestSupportsExactMissingSet:
             ],
         ):
             result = HuggingFaceONNXExporter.supports(request)
-        assert result.reason == "transformers>=4.40.0 required"
+        assert result.reason == (
+            "transformers>=4.40.0 required; install tributo[model-export-hf]"
+        )
         assert result.missing_dependencies == ("transformers",)
+
+    def test_hf_reason_points_both_missing_dependencies_to_combined_extra(
+        self,
+    ) -> None:
+        from tributo.exporting.models import SupportRequest
+        from tributo.integrations.exporters.hf_onnx import HuggingFaceONNXExporter
+
+        request = SupportRequest(source_kind="hf_model", upstream_formats=())
+        with patch(
+            "tributo.integrations.exporters.hf_onnx.probe_dependency",
+            side_effect=[
+                DependencyStatus(TRANSFORMERS, DependencyState.MISSING),
+                DependencyStatus(TORCH, DependencyState.MISSING),
+            ],
+        ):
+            result = HuggingFaceONNXExporter.supports(request)
+        assert result.reason == (
+            "transformers>=4.40.0/torch>=2.5.0 required; "
+            "install tributo[model-export-hf]"
+        )
+        assert result.missing_dependencies == ("transformers", "torch")
 
     def test_safetensors_reason_matches_exact_missing_set(self) -> None:
         from tributo.exporting.models import SupportRequest

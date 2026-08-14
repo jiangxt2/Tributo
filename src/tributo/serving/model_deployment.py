@@ -319,7 +319,7 @@ class ONNXModel:
         """Release bundle resources (idempotent).
 
         Call when the deployment is torn down (e.g. Ray Serve replica
-        shutdown, or the embedding actor's lifetime ends).  Prediction
+        shutdown, or the deployment actor's lifetime ends).  Prediction
         keeps working after close — the model is in memory; close only
         releases the bundle's temp files.  No-op on the legacy
         ``model_path`` path, which owns no runtime resources.

@@ -28,7 +28,7 @@ RUN --mount=type=cache,target=/home/ray/.cache/uv,uid=1000,gid=100 \
         --extra training \
         --extra registry \
         --extra model-export-torch \
-        --extra embeddings \
+        --extra model-export-hf \
         --extra data-daft \
         --extra vector-index \
         --no-default-groups \

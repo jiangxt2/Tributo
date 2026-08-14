@@ -63,7 +63,6 @@ _RAY_STYLE_ROOT_TARGETS = (
     "training/index",
     "model-lifecycle/index",
     "inference/index",
-    "embeddings/index",
     "reference/index",
     "ray-jobs/index",
     "operations/index",
@@ -96,7 +95,6 @@ _REQUIRED_ROOT_API_TARGETS = frozenset(
 _REQUIRED_TOP_LEVEL_COMMANDS = frozenset(
     {
         "algo",
-        "embed",
         "export",
         "export-gc",
         "inspect",
@@ -112,7 +110,6 @@ _REQUIRED_TOP_LEVEL_COMMANDS = frozenset(
 _REQUIRED_NESTED_COMMANDS = frozenset(
     {
         "tributo algo config-schema",
-        "tributo embed serve start",
         "tributo registry transition",
         "tributo serve grpc start",
         "tributo serve streaming start",

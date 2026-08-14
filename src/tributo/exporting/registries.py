@@ -318,7 +318,7 @@ class FlavorRegistry:
     """Registry of ``ModelFlavor`` classes keyed by ``flavor_id``.
 
     Flavor IDs are more specific than format strings: ``onnx-runtime-v1``
-    and ``hf-embedding-onnx-v1`` share ``format="onnx"`` but differ in
+    and ``hf-onnx-v1`` share ``format="onnx"`` but differ in
     their loading behaviour.
     """
 

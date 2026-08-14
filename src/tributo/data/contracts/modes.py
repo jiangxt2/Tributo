@@ -11,6 +11,7 @@ class WriteMode(Enum):
 
     OVERWRITE = "overwrite"
     APPEND = "append"
+    CREATE = "create"
 
 
 __all__ = ["WriteMode"]
