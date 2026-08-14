@@ -6,7 +6,7 @@ import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Iterable, Protocol, runtime_checkable
 
 from tributo._common.immutable import deep_freeze
 from tributo.algorithms.api import (
@@ -114,6 +114,7 @@ class WorkerInputPayload:
     value: object = field(repr=False)
     partition_index: int = 0
     partition_count: int = 1
+    expected_total_rows: int | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.input_name, str) or not self.input_name:
@@ -128,6 +129,14 @@ class WorkerInputPayload:
             or self.partition_index >= self.partition_count
         ):
             raise AlgorithmInputError("Worker input partition is invalid")
+        if self.expected_total_rows is not None and (
+            not isinstance(self.expected_total_rows, int)
+            or isinstance(self.expected_total_rows, bool)
+            or self.expected_total_rows < 0
+        ):
+            raise AlgorithmInputError(
+                "Worker input expected_total_rows must be a non-negative integer"
+            )
 
 
 @PublicAPI(stability="alpha")
@@ -155,6 +164,11 @@ class RuntimeInputBinding:
         ):
             raise AlgorithmInputError(
                 "runtime input payloads must contain every partition exactly once"
+            )
+        expected_totals = {payload.expected_total_rows for payload in normalized}
+        if len(expected_totals) > 1:
+            raise AlgorithmInputError(
+                "runtime input payloads disagree on expected total rows"
             )
         self.payloads = tuple(sorted(normalized, key=lambda item: item.partition_index))
         self._closed = False
@@ -231,6 +245,20 @@ class MaterializedTabularInputView(Protocol):
 
 
 @PublicAPI(stability="alpha")
+@runtime_checkable
+class TabularBatchInputView(Protocol):
+    """Streaming tabular shard consumed without Worker-side materialization."""
+
+    @property
+    def feature_names(self) -> tuple[str, ...]: ...
+
+    @property
+    def label_name(self) -> str | None: ...
+
+    def iter_batches(self) -> Iterable[Mapping[str, object]]: ...
+
+
+@PublicAPI(stability="alpha")
 class InputResolverPort(Protocol):
     """Core-facing two-stage input resolution port."""
 
@@ -278,6 +306,7 @@ __all__ = [
     "PreparedInput",
     "ResolvedInputLease",
     "RuntimeInputBinding",
+    "TabularBatchInputView",
     "WorkerInputAdapter",
     "WorkerInputPayload",
 ]

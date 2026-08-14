@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Mapping
+from dataclasses import replace
+from typing import cast
 
 from tributo.algorithms.api import (
     AlgorithmConfigurationError,
@@ -13,10 +15,16 @@ from tributo.algorithms.api import (
     AlgorithmRequest,
     AlgorithmRunResult,
     ArtifactDraft,
+    ExecutionReceipt,
+    ExecutionRequest,
     ResolvedAlgorithmPlan,
+    StateCoordinationEvidence,
+    WorkerExecutionEvidence,
     WorkerExecutionResult,
+    WorkerResources,
 )
 from tributo.algorithms.core.planner import AlgorithmPlanner
+from tributo.algorithms.core.runtime import RayRuntimeManager
 from tributo.algorithms.spi import (
     InputExecutionContext,
     InputResolutionContext,
@@ -55,6 +63,7 @@ class AlgorithmRunCoordinator:
     ) -> AlgorithmRunResult:
         """Open input, invoke the selected Runtime, and close in reverse order."""
         plan.validate_integrity()
+        run_id = uuid.uuid4().hex
         try:
             resolver = self._resolvers[plan.input_descriptor.resolver_id]
             input_adapter = self._input_adapters[plan.input_descriptor.resolver_id]
@@ -78,6 +87,7 @@ class AlgorithmRunCoordinator:
             runtime_binding = input_adapter.bind(lease, plan)
             runtime_result = runtime.execute(
                 RuntimeExecutionEnvelope(
+                    run_id=run_id,
                     plan=plan,
                     input_payloads=runtime_binding.payloads,
                     artifacts=artifacts,
@@ -136,12 +146,87 @@ class AlgorithmRunCoordinator:
                 ) from first_error
 
         return AlgorithmRunResult(
-            run_id=uuid.uuid4().hex,
+            run_id=run_id,
             plan_id=plan.plan_id,
             execution=worker_result.execution,
             actual_versions=worker_result.actual_versions,
             input_provenance=provenance,
             worker_metadata=worker_result.worker_metadata,
+            execution_receipt=self._execution_receipt(
+                run_id,
+                plan,
+                worker_result,
+            ),
+        )
+
+    @staticmethod
+    def _execution_receipt(
+        run_id: str,
+        plan: ResolvedAlgorithmPlan,
+        result: WorkerExecutionResult,
+    ) -> ExecutionReceipt | None:
+        """Build formal evidence only when the selected runtime supplies it."""
+        if plan.distribution_spec is None or plan.runtime.execution_profile is None:
+            return None
+        metadata = result.worker_metadata
+        workers_value = metadata.get("workers")
+        state_value = metadata.get("state")
+        if not isinstance(workers_value, (list, tuple)) or not isinstance(
+            state_value, Mapping
+        ):
+            raise AlgorithmExecutionError(
+                "formal distributed runtime did not return execution evidence"
+            )
+        try:
+            workers = tuple(
+                WorkerExecutionEvidence.from_dict(item)
+                for item in workers_value
+                if isinstance(item, Mapping)
+            )
+            if len(workers) != len(workers_value):
+                raise AlgorithmConfigurationError(
+                    "worker evidence entries must be mappings"
+                )
+            state = StateCoordinationEvidence.from_dict(state_value)
+            input_complete = metadata.get("input_complete")
+            driver_rows = metadata.get("driver_materialized_training_rows")
+            if not isinstance(input_complete, bool):
+                raise AlgorithmConfigurationError(
+                    "input_complete evidence must be a boolean"
+                )
+            if not isinstance(driver_rows, int) or isinstance(driver_rows, bool):
+                raise AlgorithmConfigurationError(
+                    "driver materialization evidence must be an integer"
+                )
+        except (AlgorithmConfigurationError, KeyError, TypeError, ValueError) as exc:
+            raise AlgorithmExecutionError(
+                "formal distributed runtime returned malformed execution evidence"
+            ) from exc
+        artifact_ids = [artifact.sha256 for artifact in result.execution.artifacts]
+        for output_name in ("bundle_id", "manifest_sha256"):
+            output_value = result.execution.outputs.get(output_name)
+            if isinstance(output_value, str) and output_value not in artifact_ids:
+                artifact_ids.append(output_value)
+        return ExecutionReceipt(
+            run_id=run_id,
+            plan_id=plan.plan_id,
+            requested_algorithm=plan.resolution.requested_algorithm,
+            canonical_algorithm=plan.resolution.algorithm,
+            profile=plan.runtime.execution_profile,
+            strategy=plan.distribution_spec.strategy,
+            requested_worker_count=plan.runtime.worker_count,
+            distributed_min_workers=plan.distribution_spec.distributed_min_workers,
+            requested_resources_per_worker=WorkerResources(
+                num_cpus=plan.runtime.num_cpus,
+                num_gpus=plan.runtime.num_gpus,
+                custom=plan.runtime.custom_resources,
+            ),
+            workers=workers,
+            input_complete=input_complete,
+            state=state,
+            driver_materialized_training_rows=driver_rows,
+            artifact_ids=tuple(artifact_ids),
+            cluster_resources={},
         )
 
 
@@ -153,13 +238,15 @@ class AlgorithmDispatcher:
         self,
         planner: AlgorithmPlanner,
         coordinator: AlgorithmRunCoordinator,
+        runtime_manager: RayRuntimeManager | None = None,
     ) -> None:
         self._planner = planner
         self._coordinator = coordinator
+        self._runtime_manager = runtime_manager or RayRuntimeManager()
 
     def plan(
         self,
-        request: AlgorithmRequest,
+        request: AlgorithmRequest | ExecutionRequest,
         context: InputResolutionContext | None = None,
     ) -> ResolvedAlgorithmPlan:
         """Resolve a request without loading code or opening runtime input."""
@@ -167,7 +254,7 @@ class AlgorithmDispatcher:
 
     def explain(
         self,
-        request: AlgorithmRequest,
+        request: AlgorithmRequest | ExecutionRequest,
         context: InputResolutionContext | None = None,
     ) -> dict[str, object]:
         """Return a credential-free deterministic plan projection."""
@@ -175,7 +262,7 @@ class AlgorithmDispatcher:
 
     def execute(
         self,
-        request: AlgorithmRequest,
+        request: AlgorithmRequest | ExecutionRequest,
         context: InputExecutionContext,
         *,
         artifacts: tuple[ArtifactDraft, ...] = (),
@@ -184,12 +271,42 @@ class AlgorithmDispatcher:
     ) -> AlgorithmRunResult:
         """Plan and execute one bounded request."""
         plan = self.plan(request, resolution_context)
-        return self._coordinator.execute(
-            plan,
-            context,
-            artifacts,
-            cancelled=cancelled,
+        if plan.runtime.execution_profile is None:
+            return self._coordinator.execute(
+                plan,
+                context,
+                artifacts,
+                cancelled=cancelled,
+            )
+        if plan.distribution_spec is None:
+            raise AlgorithmConfigurationError(
+                "formal execution profile requires a DistributionSpec"
+            )
+        resources = WorkerResources(
+            num_cpus=plan.runtime.num_cpus,
+            num_gpus=plan.runtime.num_gpus,
+            custom=plan.runtime.custom_resources,
         )
+        with self._runtime_manager.open(
+            plan.runtime.execution_profile,
+            resources_per_worker=resources,
+            worker_count=plan.runtime.worker_count,
+        ) as runtime_session:
+            result = self._coordinator.execute(
+                plan,
+                context,
+                artifacts,
+                cancelled=cancelled,
+            )
+            receipt = result.execution_receipt
+            if receipt is None:
+                return result
+            updated_receipt = replace(
+                cast(ExecutionReceipt, receipt),
+                cluster_resources=dict(runtime_session.cluster_resources),
+                runtime_owned=runtime_session.runtime_owned,
+            )
+            return replace(result, execution_receipt=updated_receipt)
 
 
 __all__ = ["AlgorithmDispatcher", "AlgorithmRunCoordinator"]

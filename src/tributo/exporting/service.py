@@ -127,6 +127,13 @@ class BundleExportService:
         if StructureValidator.validator_id not in self._validators.list_all():
             self._validators.register(StructureValidator)
 
+        from tributo.integrations.exporters.prebuilt_onnx import (
+            PrebuiltONNXExporter,
+        )
+
+        if PrebuiltONNXExporter.exporter_id not in self._exports.list_all():
+            self._exports.register(PrebuiltONNXExporter)
+
         # Load entry-point plugins (cached across instances).
         _load_entry_point_plugins(self._exports, self._validators)
 

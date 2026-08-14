@@ -14,7 +14,11 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from tributo._bootstrap import first_party_export_plugins, first_party_model_flavors
+from tributo._bootstrap import (
+    first_party_export_plugins,
+    first_party_model_flavors,
+    first_party_source_providers,
+)
 from tributo.exporting.capabilities import get_default_capability_registry
 from tributo.exporting.events import OperationEvent
 from tributo.exporting.executor import _materialize_artifact
@@ -182,6 +186,17 @@ def test_first_party_exporters_do_not_require_entry_point_metadata(
     assert "xgboost-onnx-v1" in exporters.list_all()
     assert "torch-onnx-v1" in exporters.list_all()
     assert "onnx-runtime-v1" in validators.list_all()
+
+
+def test_first_party_source_providers_have_stable_unique_ids() -> None:
+    providers = first_party_source_providers()
+
+    assert {provider.provider_id for provider in providers} == {
+        "ray-dnn-v1",
+        "ray-pu-v1",
+        "ray-xgboost-v1",
+    }
+    assert len({provider.trainer_type for provider in providers}) == len(providers)
 
 
 def test_first_party_flavors_declare_capability_metadata() -> None:

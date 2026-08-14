@@ -1,0 +1,11 @@
+services:
+  ray-worker:
+    command:
+      - /bin/bash
+      - -lc
+      - >-
+        exec ray start
+        --address=ray-head:6379
+        --num-cpus=2
+        --temp-dir="/workspace/tributo-work/tmp/ray-$${HOSTNAME}"
+        --block

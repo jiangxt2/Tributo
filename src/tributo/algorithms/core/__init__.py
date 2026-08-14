@@ -7,6 +7,11 @@ from tributo.algorithms.core.dispatcher import (
 )
 from tributo.algorithms.core.planner import AlgorithmPlanner
 from tributo.algorithms.core.registry import AlgorithmRegistrationRegistry
+from tributo.algorithms.core.runtime import (
+    LocalRuntimeOptions,
+    RayRuntimeManager,
+    RayRuntimeSession,
+)
 
 __all__ = [
     "AlgorithmBuilder",
@@ -14,4 +19,7 @@ __all__ = [
     "AlgorithmPlanner",
     "AlgorithmRegistrationRegistry",
     "AlgorithmRunCoordinator",
+    "LocalRuntimeOptions",
+    "RayRuntimeManager",
+    "RayRuntimeSession",
 ]

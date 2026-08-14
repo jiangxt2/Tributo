@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+from typing import Any, Generic, Iterable, Protocol, TypeVar, runtime_checkable
 
 from tributo.algorithms.api import (
     AlgorithmConfigurationError,
@@ -14,6 +15,7 @@ from tributo.algorithms.api import (
     RuntimeTopology,
     WorkerExecutionResult,
 )
+from tributo.algorithms.api.distribution import StateField
 from tributo.algorithms.spi.input import WorkerInputPayload
 from tributo.util.annotations import PublicAPI
 
@@ -45,17 +47,26 @@ class ExecutionEnvelope:
 class RuntimeExecutionEnvelope:
     """Driver-to-Runtime handoff for one Worker or a data-parallel group."""
 
+    run_id: str
     plan: ResolvedAlgorithmPlan
     input_payloads: tuple[WorkerInputPayload, ...]
     artifacts: tuple[ArtifactDraft, ...] = field(default_factory=tuple)
     cancelled: bool = False
 
     def __post_init__(self) -> None:
+        if not isinstance(self.run_id, str) or not self.run_id:
+            raise AlgorithmConfigurationError(
+                "Runtime envelope run_id must be non-empty"
+            )
         payloads = tuple(self.input_payloads)
         object.__setattr__(self, "input_payloads", payloads)
         expected = (
             self.plan.runtime.worker_count
-            if self.plan.runtime.topology is RuntimeTopology.DATA_PARALLEL
+            if self.plan.runtime.topology
+            in {
+                RuntimeTopology.DATA_PARALLEL,
+                RuntimeTopology.RAY_MAP_REDUCE,
+            }
             else 1
         )
         if len(payloads) != expected:
@@ -121,11 +132,111 @@ class PortableRuntimeAdapter(Protocol):
     def execute(self, envelope: RuntimeExecutionEnvelope) -> WorkerExecutionResult: ...
 
 
+@PublicAPI(stability="alpha")
+class CollectiveAlgorithm(ABC):
+    """Required surface for iterative Ray Train collective algorithms."""
+
+    def bind_datasets(self, datasets: Mapping[str, object]) -> Mapping[str, object]:
+        """Optionally apply bounded Ray Data transformations before sharding."""
+        return datasets
+
+    @abstractmethod
+    def build_model(self, config: Mapping[str, Any]) -> object:
+        """Construct the worker-local model before collective preparation."""
+
+    @abstractmethod
+    def build_optimizer(self, model: object, config: Mapping[str, Any]) -> object:
+        """Construct the optimizer for the collectively prepared model."""
+
+    @abstractmethod
+    def build_loss(self, config: Mapping[str, Any]) -> object:
+        """Construct the loss or risk implementation."""
+
+    @abstractmethod
+    def train_loop_per_worker(self, config: Mapping[str, Any]) -> None:
+        """Run one rank using Ray Train dataset/report/checkpoint contracts."""
+
+    @abstractmethod
+    def checkpoint_state(self, model: object, optimizer: object) -> Mapping[str, Any]:
+        """Return bounded state owned by the coordinated checkpoint rank."""
+
+
+BatchT = TypeVar("BatchT")
+PartialStateT = TypeVar("PartialStateT")
+ModelT = TypeVar("ModelT")
+
+
+@PublicAPI(stability="alpha")
+class MapReduceAlgorithm(ABC, Generic[BatchT, PartialStateT, ModelT]):
+    """Required Hadoop-like surface for bounded sufficient-statistics models."""
+
+    @abstractmethod
+    def map_partition(
+        self,
+        batches: Iterable[BatchT],
+        context: AlgorithmExecutionContext,
+    ) -> PartialStateT:
+        """Map one input shard to one bounded partial state."""
+
+    @abstractmethod
+    def merge_states(self, left: PartialStateT, right: PartialStateT) -> PartialStateT:
+        """Associatively merge two bounded states."""
+
+    @abstractmethod
+    def finalize_model(self, state: PartialStateT) -> ModelT:
+        """Construct one model from the globally reduced state."""
+
+    @abstractmethod
+    def state_schema(self) -> tuple[StateField, ...]:
+        """Return the exact bounded state schema declared by the descriptor."""
+
+    @abstractmethod
+    def empty_partition(self) -> PartialStateT:
+        """Return the reducer identity for an empty input shard."""
+
+    @property
+    @abstractmethod
+    def retry_safe(self) -> bool:
+        """Return whether map and merge operations are side-effect free."""
+
+
+@PublicAPI(stability="alpha")
+class FrameworkNativeAlgorithm(ABC):
+    """Required binding surface for a framework-owned distributed trainer."""
+
+    @abstractmethod
+    def validate_environment(self) -> None:
+        """Fail before data access when framework dependencies are incompatible."""
+
+    @abstractmethod
+    def bind_datasets(self, datasets: Mapping[str, object]) -> Mapping[str, object]:
+        """Bind canonical datasets without driver materialization."""
+
+    @abstractmethod
+    def build_trainer(
+        self,
+        config: Mapping[str, Any],
+        datasets: Mapping[str, object],
+    ) -> object:
+        """Construct the framework-native distributed trainer."""
+
+    @abstractmethod
+    def collect_evidence(self, result: object) -> Mapping[str, Any]:
+        """Collect actual worker, node, shard, and coordination evidence."""
+
+    @abstractmethod
+    def checkpoint_source(self, result: object) -> object:
+        """Return the framework checkpoint used by existing Bundle exporting."""
+
+
 __all__ = [
     "AlgorithmExecutionContext",
+    "CollectiveAlgorithm",
     "Evaluable",
     "ExecutionEnvelope",
     "Fittable",
+    "FrameworkNativeAlgorithm",
+    "MapReduceAlgorithm",
     "PortableRuntimeAdapter",
     "Predictable",
     "RuntimeExecutionEnvelope",

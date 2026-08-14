@@ -1,12 +1,34 @@
 """Public alpha contracts for portable algorithm execution."""
 
 from tributo.algorithms.api.context import UserExecutionContext
+from tributo.algorithms.api.descriptor import DistributedAlgorithmDescriptor
+from tributo.algorithms.api.distribution import (
+    CollectivePolicy,
+    DistributionSpec,
+    DistributionStrategy,
+    ExecutionProfile,
+    FrameworkNativePolicy,
+    InputDistribution,
+    MapReducePolicy,
+    MetricReduction,
+    ResultPolicy,
+    StateCoordination,
+    StateField,
+    WorkerRange,
+    WorkerResources,
+)
 from tributo.algorithms.api.errors import (
     AlgorithmConfigurationError,
     AlgorithmDependencyError,
     AlgorithmExecutionError,
     AlgorithmInputError,
     AlgorithmResolutionError,
+)
+from tributo.algorithms.api.execution import (
+    ExecutionReceipt,
+    ExecutionRequest,
+    StateCoordinationEvidence,
+    WorkerExecutionEvidence,
 )
 from tributo.algorithms.api.models import (
     AlgorithmExecutionResult,
@@ -45,17 +67,35 @@ __all__ = [
     "AlgorithmRunResult",
     "ArtifactDraft",
     "BackendInputCompatibility",
+    "CollectivePolicy",
+    "DistributionSpec",
+    "DistributedAlgorithmDescriptor",
+    "DistributionStrategy",
     "EnvironmentSpec",
     "ExecutionMode",
+    "ExecutionProfile",
+    "ExecutionReceipt",
+    "ExecutionRequest",
     "FailureCategory",
+    "FrameworkNativePolicy",
     "ImplementationDescriptor",
+    "InputDistribution",
     "InputBinding",
+    "MapReducePolicy",
+    "MetricReduction",
     "QualifiedReference",
     "ResolvedAlgorithmPlan",
     "ResolvedInputDescriptor",
     "RuntimeBinding",
     "RuntimeTopology",
+    "ResultPolicy",
+    "StateCoordination",
+    "StateCoordinationEvidence",
+    "StateField",
     "UserExecutionContext",
+    "WorkerExecutionEvidence",
     "WorkerExecutionResult",
+    "WorkerRange",
+    "WorkerResources",
     "canonical_digest",
 ]

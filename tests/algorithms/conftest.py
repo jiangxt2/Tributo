@@ -9,12 +9,22 @@ from tributo.algorithms.api import (
     AlgorithmRegistration,
     AlgorithmRequest,
     BackendInputCompatibility,
+    DistributionSpec,
+    DistributionStrategy,
     EnvironmentSpec,
     ExecutionMode,
+    ExecutionProfile,
+    ImplementationDescriptor,
     InputBinding,
+    InputDistribution,
+    MapReducePolicy,
     QualifiedReference,
     RuntimeBinding,
     RuntimeTopology,
+    StateCoordination,
+    StateField,
+    WorkerRange,
+    WorkerResources,
 )
 from tributo.algorithms.core import (
     AlgorithmBuilder,
@@ -201,6 +211,65 @@ def function_registration(
             RuntimeTopology.DATA_PARALLEL,
         ),
         allowed_config_keys=("threshold",),
+        is_default=True,
+    )
+
+
+def map_reduce_registration() -> AlgorithmRegistration:
+    """Build one formal MapReduce registration without importing its code."""
+    adapter_ref = QualifiedReference.parse(
+        "tributo.algorithms.input.fake:prepare_input"
+    )
+    return AlgorithmRegistration(
+        spec=make_spec(
+            "external_map_reduce",
+            operations=("fit",),
+            mode=ExecutionMode.MAP_REDUCE,
+        ),
+        implementation=ImplementationDescriptor(
+            implementation_id="tests.map_reduce",
+            version="1.0.0",
+            execution_mode=ExecutionMode.MAP_REDUCE,
+            implementation_ref=QualifiedReference.parse(
+                "tests.support.portable_algorithms:ExampleMapReduceAlgorithm"
+            ),
+            executable_factory_ref=QualifiedReference.parse(
+                "tests.support.portable_algorithms:map_reduce_factory"
+            ),
+            operations=(AlgorithmOperation.FIT,),
+            input_compatibility=fake_input_compatibility(
+                RuntimeTopology.RAY_MAP_REDUCE
+            ),
+            allowed_config_keys=("alpha",),
+            runtime_id="tributo.ray_map_reduce",
+            worker_input_adapter_ref=adapter_ref,
+            exporter_ref=QualifiedReference.parse(
+                "tests.support.portable_algorithms:export_map_reduce_model"
+            ),
+            flavor_id="tests.sklearn.multinomial_nb",
+        ),
+        environment=EnvironmentSpec(environment_id="tests.map_reduce"),
+        distribution_spec=DistributionSpec(
+            strategy=DistributionStrategy.RAY_MAP_REDUCE,
+            supported_worker_range=WorkerRange(1, 8),
+            supported_execution_profiles=(
+                ExecutionProfile.LOCAL,
+                ExecutionProfile.KUBERNETES,
+            ),
+            resources_per_worker=WorkerResources(),
+            input_distribution=InputDistribution.SHARDED,
+            state_coordination=StateCoordination.ASSOCIATIVE_REDUCE,
+            policy=MapReducePolicy(
+                state_schema=(StateField("counts", "float64", (None,)),),
+                max_partial_state_bytes=1024,
+                reducer_ref=(
+                    "tests.support.portable_algorithms:merge_map_reduce_states"
+                ),
+                finalizer_ref=(
+                    "tests.support.portable_algorithms:finalize_map_reduce_model"
+                ),
+            ),
+        ),
         is_default=True,
     )
 

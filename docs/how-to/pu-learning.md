@@ -76,7 +76,7 @@ legacy raw-artifact export and is not a Bundle URI.
     "learning_rate": 0.001
   },
   "ray": {
-    "num_workers": 1
+    "num_workers": 2
   }
 }
 ```
@@ -84,10 +84,13 @@ legacy raw-artifact export and is not a Bundle URI.
 Pass the validated configuration to `PUTrainerImpl` and provide the Bundle
 destination separately through `BundleOutputConfig`, as shown above.
 
-```{note}
-PU training currently runs on a single worker. DDP multi-worker training is
-not yet supported; set `num_workers` to 1.
-```
+PU uses the shared DNN/PyTorch DDP kernel. Positive and unlabeled Ray Datasets
+are first split into global stratified train/validation datasets on the Driver
+and only then sharded independently by Ray Train. The class prior is globally
+resolved, risk and metrics are reduced across workers, and rank zero owns the
+checkpoint. Every resulting P/U train and validation dataset must contain
+enough rows to give each requested worker a non-empty shard; invalid input
+fails before training.
 
 ## Loss Functions
 
@@ -97,21 +100,23 @@ not yet supported; set `num_workers` to 1.
 | `upu` | Unbiased PU learning loss. Can produce negative loss values. | When prior is accurately known. |
 
 Each optimization batch must contain both confirmed-positive and unlabeled
-examples. The built-in DNN and PU trainers enforce this with a deterministic
-paired sampler. Direct callers of `PULoss` must enforce the same invariant;
-otherwise the loss fails closed instead of producing a biased partial risk.
-When validation is enabled, the input therefore needs at least two examples
-from each observed group so both training and validation retain P/U coverage.
-Set `training.val_size` to `0` when validation must be disabled for a very small
-dataset.
+examples. The canonical PU adapter enforces this through the shared DNN/PU
+kernel's deterministic paired sampler. Direct callers of `PULoss` must enforce
+the same invariant; otherwise the loss fails closed instead of producing a
+biased partial risk.
+When validation is enabled, Tributo shuffles and proportionally splits P and U
+separately before worker assignment. Both classes must therefore have enough
+rows for every worker in both resulting splits. Set `training.val_size` to `0`
+when validation must be disabled for a very small dataset.
 
 ## Class Prior
 
-Training requires `pu.class_prior` in the open interval `(0, 1)`. It is the
+An explicit `pu.class_prior` must be in the open interval `(0, 1)`. It is the
 estimated proportion of true positives in the population, not the fraction of
-currently labeled rows. Tributo deliberately does not infer it from the
-observed label frequency because labeled positives are normally a selected
-subset of all positives.
+currently labeled rows. When `class_prior_method="label_frequency"` is selected
+and the explicit value is omitted, Tributo computes the observed-label
+frequency with a global reduction. Callers should use this method only when its
+domain assumption is valid.
 
 The standalone helpers in `tributo.training.priors` can support an upstream
 estimation workflow. Their result must be reviewed and passed explicitly to

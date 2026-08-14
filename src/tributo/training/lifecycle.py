@@ -27,6 +27,7 @@ from tributo.training.results import (
     TrainingStatus,
     aggregate_hook_status,
 )
+from tributo.util.annotations import DeveloperAPI
 
 logger = logging.getLogger(__name__)
 
@@ -67,13 +68,20 @@ def _is_cancellation(error: BaseException) -> bool:
 
 
 def _load_provider_plugins(registry: Any) -> None:
-    """Load source-provider plugins into *registry*.
+    """Load first-party and extension source providers into *registry*.
 
-    Discovery runs once (cached), but classes are re-registered into every
-    fresh registry so that repeated ``.run()`` calls in the same process
-    see the full provider set.
+    First-party providers come from the internal composition root so source-only
+    Ray runtime environments do not depend on installed entry-point metadata.
+    Third-party discovery runs once (cached), but classes are re-registered into
+    every fresh registry so repeated ``.run()`` calls see the full provider set.
     """
     global _provider_plugins_cache
+    from tributo._bootstrap import first_party_source_providers
+
+    for cls in first_party_source_providers():
+        if cls.provider_id not in registry.list_all():
+            registry.register(cls)
+
     if _provider_plugins_cache is None:
         from tributo.plugin import discover_source_provider_plugins
 
@@ -84,24 +92,29 @@ def _load_provider_plugins(registry: Any) -> None:
             registry.register(cls)
 
 
-def _bind_job_identity(bundle_config: Any) -> tuple[Any, str | None]:
-    """Bind job attempt identity to a bundle config when running in Ray Jobs."""
-    run_id = os.environ.get("TRIBUTO_RUN_ID")
+def _bind_job_identity(
+    bundle_config: Any,
+    *,
+    run_id: str | None = None,
+) -> tuple[Any, str | None]:
+    """Bind an explicit algorithm or parent Ray Job identity to a Bundle."""
+    selected_run_id = run_id or os.environ.get("TRIBUTO_RUN_ID")
     attempt_id = os.environ.get("TRIBUTO_ATTEMPT_ID")
-    if not run_id:
+    if not selected_run_id:
         return bundle_config, attempt_id
 
     from tributo.exporting.models import BundleOutputConfig
 
     if not isinstance(bundle_config, BundleOutputConfig):
         return bundle_config, attempt_id
-    if bundle_config.run_id not in (None, run_id):
-        raise ValueError("Bundle run_id conflicts with TRIBUTO_RUN_ID")
-    if bundle_config.request_id not in (None, run_id):
-        raise ValueError("Bundle request_id conflicts with TRIBUTO_RUN_ID")
+    if bundle_config.run_id not in (None, selected_run_id):
+        raise ValueError("Bundle run_id conflicts with the selected run identity")
+    if bundle_config.request_id not in (None, selected_run_id):
+        raise ValueError("Bundle request_id conflicts with the selected run identity")
 
     config_data = bundle_config.model_dump()
-    config_data["run_id"] = run_id
+    config_data["request_id"] = selected_run_id
+    config_data["run_id"] = selected_run_id
     return BundleOutputConfig.model_validate(config_data), attempt_id
 
 
@@ -399,6 +412,8 @@ class TrainingLifecycle:
         checkpoint: Any,
         bundle_config: Any,
         summary: dict[str, Any],
+        *,
+        run_id: str | None = None,
     ) -> Any:
         """Route export through the new bundle pipeline.
 
@@ -410,7 +425,7 @@ class TrainingLifecycle:
         from tributo.exporting.service import BundleExportService
 
         trainer = self._trainer
-        bound_config, attempt_id = _bind_job_identity(bundle_config)
+        bound_config, attempt_id = _bind_job_identity(bundle_config, run_id=run_id)
 
         provider_registry = SourceProviderRegistry()
         _load_provider_plugins(provider_registry)
@@ -450,3 +465,32 @@ class TrainingLifecycle:
             }
         )
         return result
+
+
+@DeveloperAPI
+def publish_existing_training_result(
+    trainer: BaseTrainer,
+    result: Any,
+    *,
+    bundle_uri: str,
+    run_id: str,
+) -> dict[str, Any]:
+    """Publish an already-fitted first-party result through the Bundle path."""
+    if not isinstance(bundle_uri, str) or not bundle_uri:
+        raise ValueError("formal training requires output.bundle_uri")
+    lifecycle = TrainingLifecycle(trainer, CallbackDispatcher(()))
+    bundle_config = lifecycle._prepare_bundle_config(
+        bundle_uri,
+        None,
+        legacy_export=False,
+    )
+    summary: dict[str, Any] = {}
+    bundle_result = lifecycle._export_bundle(
+        result,
+        bundle_config,
+        summary,
+        run_id=run_id,
+    )
+    if bundle_result is None:
+        raise RuntimeError("Bundle publication returned no result")
+    return summary

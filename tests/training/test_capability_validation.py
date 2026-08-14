@@ -132,10 +132,12 @@ class TestBuiltinSpecs:
         assert get_trainer("pu").capabilities == (
             Capability.TUNABLE,
             Capability.EXPORTABLE,
+            Capability.DISTRIBUTED,
         )
         assert get_trainer("dnn").capabilities == (
             Capability.TUNABLE,
             Capability.EXPORTABLE,
+            Capability.DISTRIBUTED,
         )
 
 

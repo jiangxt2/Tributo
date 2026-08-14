@@ -700,6 +700,26 @@ class TestBundleMode:
         assert summary["wrapped"] is True
         assert summary["bundle_id"] == "b-1"
 
+    def test_first_party_source_providers_do_not_require_entry_points(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from tributo.exporting.registries import SourceProviderRegistry
+        from tributo.training import lifecycle as lifecycle_module
+
+        monkeypatch.setattr(
+            "tributo.plugin.discover_source_provider_plugins", lambda: []
+        )
+        monkeypatch.setattr(lifecycle_module, "_provider_plugins_cache", None)
+        registry = SourceProviderRegistry()
+
+        lifecycle_module._load_provider_plugins(registry)
+
+        assert registry.list_all() == [
+            "ray-dnn-v1",
+            "ray-pu-v1",
+            "ray-xgboost-v1",
+        ]
+
     def test_bundle_real_routing_contract(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -779,6 +799,21 @@ class TestBundleMode:
             "training_end",
             "run_complete",
         ]
+
+    def test_explicit_algorithm_run_identity_overrides_parent_ray_job(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from tributo.exporting.models import BundleOutputConfig
+        from tributo.training import lifecycle as lifecycle_module
+
+        monkeypatch.setenv("TRIBUTO_RUN_ID", "parent-job")
+        bound, _ = lifecycle_module._bind_job_identity(
+            BundleOutputConfig(bundle_uri="/tmp/algorithm-bundle"),
+            run_id="algorithm-run",
+        )
+
+        assert bound.request_id == "algorithm-run"
+        assert bound.run_id == "algorithm-run"
 
 
 class TestFailurePaths:

@@ -27,6 +27,8 @@ class AlgorithmSupportRecord:
     extras_group: str | None
     implementation_ids: tuple[str, ...] = ()
     runtime_topologies: tuple[str, ...] = ()
+    distribution_strategies: tuple[str, ...] = ()
+    execution_profiles: tuple[str, ...] = ()
     input_views: tuple[str, ...] = ()
     stability: str = "beta"
     limitations: tuple[str, ...] = ()
@@ -34,6 +36,7 @@ class AlgorithmSupportRecord:
     compatibility_only: bool = False
     tested: bool = False
     supported: bool = False
+    validated_execution_profiles: tuple[str, ...] = ()
     native_migration_complete: bool = False
 
     @classmethod
@@ -91,6 +94,8 @@ class AlgorithmSupportRecord:
             extras_group=base.extras_group,
             implementation_ids=record.implementation_ids,
             runtime_topologies=record.runtime_topologies,
+            distribution_strategies=record.distribution_strategies,
+            execution_profiles=record.execution_profiles,
             input_views=record.input_views,
             stability=record.stability,
             limitations=record.limitations,
@@ -98,6 +103,7 @@ class AlgorithmSupportRecord:
             compatibility_only=record.compatibility_only,
             tested=record.tested,
             supported=record.supported,
+            validated_execution_profiles=record.validated_execution_profiles,
             native_migration_complete=record.native_migration_complete,
         )
 
@@ -117,6 +123,8 @@ class AlgorithmSupportRecord:
             "extras_group": self.extras_group,
             "implementation_ids": list(self.implementation_ids),
             "runtime_topologies": list(self.runtime_topologies),
+            "distribution_strategies": list(self.distribution_strategies),
+            "execution_profiles": list(self.execution_profiles),
             "input_views": list(self.input_views),
             "stability": self.stability,
             "limitations": list(self.limitations),
@@ -124,6 +132,7 @@ class AlgorithmSupportRecord:
             "compatibility_only": self.compatibility_only,
             "tested": self.tested,
             "supported": self.supported,
+            "validated_execution_profiles": list(self.validated_execution_profiles),
             "native_migration_complete": self.native_migration_complete,
         }
 

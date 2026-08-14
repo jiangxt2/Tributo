@@ -1,4 +1,4 @@
-"""DNN 单 worker 契约和资源安全测试。
+"""DNN distributed-worker contract and resource safety tests.
 
 覆盖 DNNTrainingConfig 的 resource 预算默认值，以及 worker 内 train/val
 共享预算的超限 fail-fast。worker 级测试通过 mock
@@ -28,6 +28,52 @@ class TestDNNResourceConfig:
         assert cfg.resource.max_input_rows_per_worker is None
         assert cfg.ray.num_workers == 1
 
+    def test_distributed_resume_requires_same_world_size_and_spec(self) -> None:
+        from types import SimpleNamespace
+
+        from tributo.exceptions import JobConfigurationError
+        from tributo.training.dnn_trainer import (
+            _validate_distributed_resume_metadata,
+        )
+
+        valid = SimpleNamespace(
+            payload_metadata={
+                "world_size": 2,
+                "distribution_spec_digest": "a" * 64,
+            }
+        )
+        _validate_distributed_resume_metadata(
+            valid,
+            expected_world_size=2,
+            expected_distribution_digest="a" * 64,
+        )
+
+        with pytest.raises(JobConfigurationError, match="world_size"):
+            _validate_distributed_resume_metadata(
+                valid,
+                expected_world_size=3,
+                expected_distribution_digest="a" * 64,
+            )
+        with pytest.raises(JobConfigurationError, match="DistributionSpec"):
+            _validate_distributed_resume_metadata(
+                valid,
+                expected_world_size=2,
+                expected_distribution_digest="b" * 64,
+            )
+
+        legacy = SimpleNamespace(payload_metadata={})
+        _validate_distributed_resume_metadata(
+            legacy,
+            expected_world_size=1,
+            expected_distribution_digest=None,
+        )
+        with pytest.raises(JobConfigurationError, match="Legacy.*world_size"):
+            _validate_distributed_resume_metadata(
+                legacy,
+                expected_world_size=2,
+                expected_distribution_digest=None,
+            )
+
     def test_bundle_destination_is_distinct_from_legacy_onnx_path(self):
         from pydantic import ValidationError
 
@@ -44,13 +90,25 @@ class TestDNNResourceConfig:
         cfg = DNNTrainingConfig(output={"bundle_uri": "s3://bucket/bundles"})
         assert cfg.output.bundle_uri == "s3://bucket/bundles"
 
-    def test_num_workers_gt_one_is_rejected_by_config(self) -> None:
-        from pydantic import ValidationError
-
+    def test_num_workers_gt_one_is_supported_by_config(self) -> None:
         from tributo.training.dnn_trainer import DNNTrainingConfig
 
-        with pytest.raises(ValidationError, match="num_workers"):
-            DNNTrainingConfig.model_validate({"ray": {"num_workers": 2}})
+        config = DNNTrainingConfig.model_validate({"ray": {"num_workers": 2}})
+        assert config.ray.num_workers == 2
+
+    def test_non_collective_fallback_never_consumes_an_undeclared_gpu(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        torch = pytest.importorskip("torch")
+        import tributo.training.distributed_torch as distributed_torch
+
+        monkeypatch.setattr(distributed_torch, "collective_available", lambda: False)
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+
+        model, device = distributed_torch.prepare_model(torch.nn.Linear(2, 1))
+
+        assert device.type == "cpu"
+        assert next(model.parameters()).device.type == "cpu"
 
     def test_nnpu_requires_explicit_prior(self) -> None:
         from pydantic import ValidationError
@@ -63,6 +121,45 @@ class TestDNNResourceConfig:
                     "loss": {"type": "nnpu"},
                     "pu_learning": {"enabled": True},
                 }
+            )
+
+    def test_nnpu_public_api_routes_to_canonical_pu_trainer(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import tributo.training.pu_trainer as pu_module
+        from tributo.training.dnn_trainer import run_dnn_training_with_config
+
+        captured: dict[str, Any] = {}
+        monkeypatch.setattr(
+            pu_module,
+            "run_pu_training_with_config",
+            lambda config: captured.update(config) or {"status": "succeeded"},
+        )
+
+        result = run_dnn_training_with_config(
+            {
+                "data": {"type": "parquet", "path": "/tmp/not-opened.parquet"},
+                "loss": {"type": "nnpu"},
+                "pu_learning": {"enabled": True, "class_prior": 0.2},
+                "ray": {"num_workers": 2},
+            }
+        )
+
+        assert result == {"status": "succeeded"}
+        assert captured["pu"]["loss_type"] == "nnpu"
+        assert captured["ray"]["num_workers"] == 2
+
+    def test_nnpu_cannot_construct_a_second_dnn_trainer_path(self) -> None:
+        from tributo.exceptions import JobConfigurationError
+        from tributo.training.dnn_trainer import DNNTrainerImpl
+
+        with pytest.raises(JobConfigurationError, match="canonical 'pu'"):
+            DNNTrainerImpl(
+                datasets={},
+                config={
+                    "loss": {"type": "nnpu"},
+                    "pu_learning": {"enabled": True, "class_prior": 0.2},
+                },
             )
 
     @pytest.mark.parametrize(
@@ -126,42 +223,6 @@ class TestDNNResourceConfig:
 class TestDNNWorkerBudget:
     """worker 内预算校验（mock ray.train，无真实集群）。"""
 
-    def test_worker_rejects_multiple_workers_before_reading_data(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        pytest.importorskip("torch")
-        from types import SimpleNamespace
-
-        import ray.train
-
-        from tributo.exceptions import JobConfigurationError
-        from tributo.training.dnn_trainer import dnn_train_loop_per_worker
-
-        monkeypatch.setattr(
-            ray.train,
-            "get_context",
-            lambda: SimpleNamespace(
-                get_world_size=lambda: 2,
-                get_world_rank=lambda: 0,
-            ),
-        )
-        monkeypatch.setattr(
-            ray.train,
-            "get_dataset_shard",
-            lambda key: pytest.fail("dataset must not be opened"),
-        )
-
-        with pytest.raises(JobConfigurationError, match="world_size=2"):
-            dnn_train_loop_per_worker(
-                {
-                    "features": [],
-                    "loss": {},
-                    "pu_learning": {},
-                    "training": {},
-                    "resource": {},
-                }
-            )
-
     def test_worker_rejects_invalid_prior_before_reading_data(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -171,7 +232,7 @@ class TestDNNWorkerBudget:
         import ray.train
 
         from tributo.exceptions import JobConfigurationError
-        from tributo.training.dnn_trainer import dnn_train_loop_per_worker
+        from tributo.training.pu_trainer import pu_train_loop_per_worker
 
         monkeypatch.setattr(
             ray.train,
@@ -188,11 +249,10 @@ class TestDNNWorkerBudget:
         )
 
         with pytest.raises(JobConfigurationError, match="range \\(0, 1\\)"):
-            dnn_train_loop_per_worker(
+            pu_train_loop_per_worker(
                 {
                     "features": [],
-                    "loss": {"type": "nnpu"},
-                    "pu_learning": {"enabled": True, "class_prior": 2.0},
+                    "pu": {"loss_type": "nnpu", "class_prior": 2.0},
                     "training": {},
                     "resource": {},
                 }
@@ -210,6 +270,15 @@ class TestDNNWorkerBudget:
             lambda: SimpleNamespace(
                 get_world_size=lambda: 1,
                 get_world_rank=lambda: 0,
+            ),
+        )
+        monkeypatch.setattr(
+            ray,
+            "get_runtime_context",
+            lambda: SimpleNamespace(
+                get_assigned_resources=lambda: {"CPU": 1.0},
+                get_worker_id=lambda: "test-worker",
+                get_node_id=lambda: "test-node",
             ),
         )
 
@@ -359,6 +428,7 @@ class TestDNNWorkerBudget:
         import ray.train
 
         from tributo.training.dnn_trainer import dnn_train_loop_per_worker
+        from tributo.training.pu_trainer import pu_train_loop_per_worker
 
         n = 32
         rng = np.random.default_rng(0)
@@ -397,18 +467,34 @@ class TestDNNWorkerBudget:
                 get_world_rank=lambda: 0,
             ),
         )
+        monkeypatch.setattr(
+            ray,
+            "get_runtime_context",
+            lambda: SimpleNamespace(
+                get_assigned_resources=lambda: {"CPU": 1.0},
+                get_worker_id=lambda: "test-worker",
+                get_node_id=lambda: "test-node",
+            ),
+        )
 
         class FakeShard:
+            def __init__(self, frame: pd.DataFrame) -> None:
+                self.frame = frame
+
             def schema(self):
                 return schema
 
             def iter_batches(self, **kwargs):
-                yield df
+                yield self.frame
 
         def get_dataset_shard(key):
             if key == "val":
                 raise KeyError(key)
-            return FakeShard()
+            if key == "positive":
+                return FakeShard(df[df["label"] == 1].reset_index(drop=True))
+            if key == "unlabeled":
+                return FakeShard(df[df["label"] == 0].reset_index(drop=True))
+            return FakeShard(df)
 
         monkeypatch.setattr(ray.train, "get_dataset_shard", get_dataset_shard)
 
@@ -430,7 +516,7 @@ class TestDNNWorkerBudget:
         assert checkpoint_dirs and all(not path.exists() for path in checkpoint_dirs)
 
         reported.clear()
-        dnn_train_loop_per_worker(
+        pu_train_loop_per_worker(
             {
                 "features": [
                     {"name": "f0", "type": "dense"},
@@ -438,8 +524,7 @@ class TestDNNWorkerBudget:
                 ],
                 "label_col": "label",
                 "model": {"dnn_hidden_units": [8]},
-                "loss": {"type": "nnpu"},
-                "pu_learning": {"enabled": True, "class_prior": 0.2},
+                "pu": {"loss_type": "nnpu", "class_prior": 0.2},
                 "training": {"epochs": 1, "batch_size": 8},
                 "resource": {},
             }

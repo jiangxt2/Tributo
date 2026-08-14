@@ -4,6 +4,11 @@ Tributo discovers external plugins through standard Python entry points
 declared in ``pyproject.toml`` under the ``[project.entry-points]`` table.
 
 Discovery groups:
+    ``tributo.algorithms``
+        Entries expose one immutable ``DistributedAlgorithmDescriptor`` for a
+        trusted, pre-installed package. Tributo does not install dependencies
+        or manage plugin lifecycles.
+
     ``tributo.trainers``
         New entries expose a lightweight ``LegacyTrainerDescriptor`` through
         an explicit attribute. Module-only entries with a ``trainer_spec``
@@ -161,6 +166,92 @@ def discover_trainer_descriptors(
                 f"Trainer entry point {ep.name!r} exposes descriptor identity "
                 f"{descriptor.name!r}"
             )
+        descriptors.append(descriptor)
+    return descriptors
+
+
+def discover_algorithm_descriptors(
+    diagnostics: list[PluginLoadDiagnostic] | None = None,
+) -> list[Any]:
+    """Discover and validate constrained distributed algorithm descriptors."""
+    import importlib
+    import importlib.metadata
+
+    from packaging.specifiers import SpecifierSet
+    from packaging.version import Version
+
+    from tributo.algorithms.api import (
+        DistributedAlgorithmDescriptor,
+        DistributionStrategy,
+    )
+    from tributo.algorithms.spi import (
+        CollectiveAlgorithm,
+        FrameworkNativeAlgorithm,
+        MapReduceAlgorithm,
+    )
+
+    enabled = _get_enabled_plugins()
+    descriptors: list[Any] = []
+    for ep in _iter_entry_points("tributo.algorithms"):
+        if enabled is not None and ep.name not in enabled:
+            continue
+        try:
+            descriptor = ep.load()
+            if not isinstance(descriptor, DistributedAlgorithmDescriptor):
+                raise TypeError(
+                    "entry point does not export DistributedAlgorithmDescriptor"
+                )
+            if descriptor.name != ep.name:
+                raise ValueError(
+                    "descriptor algorithm identity does not match entry-point name"
+                )
+            installed_package_version = importlib.metadata.version(
+                descriptor.package_name
+            )
+            if Version(installed_package_version) != Version(
+                descriptor.package_version
+            ):
+                raise ValueError(
+                    "descriptor package version does not match installed metadata"
+                )
+            installed_tributo_version = importlib.metadata.version("tributo")
+            if Version(installed_tributo_version) not in SpecifierSet(
+                descriptor.tributo_version_spec
+            ):
+                raise ValueError(
+                    "installed Tributo version is outside descriptor compatibility"
+                )
+            distribution_spec = descriptor.registration.distribution_spec
+            if distribution_spec is None:
+                raise TypeError("distributed descriptor lost its DistributionSpec")
+            reference = descriptor.registration.implementation.implementation_ref
+            implementation: object = importlib.import_module(reference.module)
+            for segment in reference.qualname.split("."):
+                implementation = getattr(implementation, segment)
+            expected_base = {
+                DistributionStrategy.RAY_TRAIN_COLLECTIVE: CollectiveAlgorithm,
+                DistributionStrategy.RAY_MAP_REDUCE: MapReduceAlgorithm,
+                DistributionStrategy.FRAMEWORK_NATIVE: FrameworkNativeAlgorithm,
+            }[distribution_spec.strategy]
+            if not isinstance(implementation, type) or not issubclass(
+                implementation, expected_base
+            ):
+                raise TypeError(f"implementation must inherit {expected_base.__name__}")
+        except Exception as exc:
+            _record_diagnostic(
+                diagnostics,
+                "tributo.algorithms",
+                ep.name,
+                "Distributed algorithm descriptor failed conformance validation",
+                error_type=type(exc).__name__,
+            )
+            logger.warning(
+                "Failed to load distributed algorithm descriptor %r (%s)",
+                ep.name,
+                ep.value,
+                exc_info=True,
+            )
+            continue
         descriptors.append(descriptor)
     return descriptors
 

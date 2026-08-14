@@ -124,6 +124,8 @@ class FakeInputResolver:
         required = set(binding.feature_names)
         if binding.label_name is not None:
             required.add(binding.label_name)
+        if binding.sample_weight_name is not None:
+            required.add(binding.sample_weight_name)
         missing = sorted(required - set(payload.columns_by_name))
         if missing:
             raise AlgorithmInputError(
@@ -159,7 +161,12 @@ class FakeInputRuntimeAdapter:
         binding = plan.input_binding
         partition_count = (
             plan.runtime.worker_count
-            if plan.runtime.topology is RuntimeTopology.DATA_PARALLEL
+            if plan.runtime.topology
+            in {
+                RuntimeTopology.DATA_PARALLEL,
+                RuntimeTopology.RAY_MAP_REDUCE,
+                RuntimeTopology.RAY_TRAIN_COLLECTIVE,
+            }
             else 1
         )
         if lease.handle.row_count < partition_count:
@@ -173,6 +180,7 @@ class FakeInputRuntimeAdapter:
                 value=_partition_payload(lease.handle, rank, partition_count),
                 partition_index=rank,
                 partition_count=partition_count,
+                expected_total_rows=lease.handle.row_count,
             )
             for rank in range(partition_count)
         )

@@ -34,9 +34,17 @@ STABILITY_MAP: dict[str, str] = {
     "tributo.cli": "beta",
     # Portable algorithm execution — alpha
     "tributo.algorithms.api.context": "alpha",
+    "tributo.algorithms.api.descriptor": "alpha",
+    "tributo.algorithms.api.distribution": "alpha",
     "tributo.algorithms.api.errors": "alpha",
+    "tributo.algorithms.api.execution": "alpha",
     "tributo.algorithms.api.models": "alpha",
+    "tributo.algorithms.builtin.multinomial_nb": "alpha",
+    "tributo.algorithms.builtin.torch_collective": "alpha",
+    "tributo.algorithms.builtin.xgboost_native": "alpha",
+    "tributo.algorithms.composition": "alpha",
     "tributo.algorithms.core.builder": "alpha",
+    "tributo.algorithms.core.runtime": "alpha",
     "tributo.algorithms.spi.execution": "alpha",
     "tributo.algorithms.spi.input": "alpha",
     # Util — stable
@@ -199,6 +207,10 @@ STABILITY_MAP: dict[str, str] = {
 #: list the exceptions here.  Keys are ``module.symbol``, values are the
 #: symbol-specific stability.
 _SYMBOL_OVERRIDES: dict[str, str] = {
+    "tributo.config.AlgorithmExecutionConfig": "alpha",
+    "tributo.config.AlgorithmInputConfig": "alpha",
+    "tributo.config.AlgorithmWorkerResourcesConfig": "alpha",
+    "tributo.config.LocalRayRuntimeConfig": "alpha",
     "tributo.exceptions.ResultMaterializationError": "alpha",
     "tributo.exceptions.BundleExportError": "beta",
     "tributo.exceptions.BundleCommitBusyError": "beta",

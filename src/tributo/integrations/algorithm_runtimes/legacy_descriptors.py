@@ -110,6 +110,7 @@ def _descriptor(
     environment_dependencies: tuple[str, ...],
     framework: str,
     topology: RuntimeTopology,
+    native_mode: ExecutionMode,
     framework_parallelism: int = 1,
     limitations: tuple[str, ...] = (),
 ) -> LegacyTrainerDescriptor:
@@ -129,7 +130,9 @@ def _descriptor(
         model_family=model_family,
         data_modalities=("tabular",),
         lifecycle_kind="bounded_training",
-        allowed_execution_modes=(ExecutionMode.LEGACY_TRAINER.value,),
+        allowed_execution_modes=tuple(
+            sorted((ExecutionMode.LEGACY_TRAINER.value, native_mode.value))
+        ),
         config_contract_ref=f"tributo.algorithm-config.{name}.v1",
         input_contract_ref="tributo.algorithm-input.ray-tabular.v1",
         output_contract_ref="tributo.algorithm-result.execution-only.v1",
@@ -161,7 +164,7 @@ def _descriptor(
                 dependencies=environment_dependencies,
             ),
             runtime=runtime,
-            is_default=True,
+            is_default=False,
         ),
         trainer_ref=trainer_reference,
         config_model_ref=QualifiedReference.parse(config_model_ref),
@@ -191,11 +194,12 @@ XGBOOST_DESCRIPTOR = _descriptor(
     environment_dependencies=("ray==2.55.1", "xgboost>=2.1.0"),
     framework="xgboost",
     topology=RuntimeTopology.FRAMEWORK_MANAGED,
+    native_mode=ExecutionMode.FRAMEWORK_NATIVE,
     framework_parallelism=4,
     limitations=(
         "Compatibility adapter materializes the bounded input before constructing the legacy Trainer.",
         "The adapter constructs one legacy Trainer while that Trainer manages its own distributed Ray workers.",
-        "Native portable XGBoost execution and Bundle delivery are not complete.",
+        "The formal framework-native XGBoost registration is the default; this adapter remains compatibility-only.",
     ),
 )
 
@@ -205,7 +209,11 @@ DNN_DESCRIPTOR = _descriptor(
     config_model_ref="tributo.training.dnn_trainer:DNNTrainingConfig",
     extras_group="identity",
     problem_types=(ProblemType.BINARY_CLASSIFICATION,),
-    capabilities=(Capability.TUNABLE, Capability.EXPORTABLE),
+    capabilities=(
+        Capability.TUNABLE,
+        Capability.EXPORTABLE,
+        Capability.DISTRIBUTED,
+    ),
     data_loading=DataLoadingMode.CANONICAL_DRIVER,
     learning_paradigm="supervised",
     model_family="deep_neural_network",
@@ -224,9 +232,9 @@ DNN_DESCRIPTOR = _descriptor(
     environment_dependencies=("ray==2.55.1", "torch>=2.5.0"),
     framework="pytorch",
     topology=RuntimeTopology.SINGLE_WORKER,
+    native_mode=ExecutionMode.COLLECTIVE,
     limitations=(
-        "The first-party DNN Trainer remains single-worker.",
-        "Native portable DNN execution and Bundle delivery are not complete.",
+        "The legacy Trainer adapter remains available during the portable API migration.",
     ),
 )
 
@@ -236,7 +244,11 @@ PU_DESCRIPTOR = _descriptor(
     config_model_ref="tributo.training.pu_trainer:PUTrainingConfig",
     extras_group="identity",
     problem_types=(ProblemType.PU_LEARNING,),
-    capabilities=(Capability.TUNABLE, Capability.EXPORTABLE),
+    capabilities=(
+        Capability.TUNABLE,
+        Capability.EXPORTABLE,
+        Capability.DISTRIBUTED,
+    ),
     data_loading=DataLoadingMode.CANONICAL_TRAINER,
     learning_paradigm="positive_unlabeled",
     model_family="deep_neural_network",
@@ -254,10 +266,9 @@ PU_DESCRIPTOR = _descriptor(
     environment_dependencies=("ray==2.55.1", "torch>=2.5.0"),
     framework="pytorch",
     topology=RuntimeTopology.SINGLE_WORKER,
+    native_mode=ExecutionMode.COLLECTIVE,
     limitations=(
-        "PU remains canonical_trainer and reloads data from data.source inside its nested Trainer worker.",
-        "PU supports one Trainer worker and has not completed native portable input migration.",
-        "Bundle delivery is outside this compatibility slice.",
+        "The legacy Trainer adapter remains available during the portable API migration.",
     ),
 )
 

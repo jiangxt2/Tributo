@@ -1,0 +1,16 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tributo-test-distributed-algorithm"
+version = "0.1.0"
+requires-python = ">=3.12,<3.14"
+# Ray installs py_modules wheels into an isolated target directory. Keep this
+# fixture code-only: Tributo and sklearn are trusted runtime-image dependencies.
+
+[project.entry-points."tributo.algorithms"]
+third_party_multinomial_nb = "tributo_test_distributed_algorithm:DESCRIPTOR"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tributo_test_distributed_algorithm"]

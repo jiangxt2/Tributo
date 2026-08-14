@@ -470,11 +470,13 @@ def export_gc(
 
 def _get_tributo_version() -> str:
     """Get the current tributo version string."""
+    from importlib.metadata import PackageNotFoundError
+
     try:
         from importlib.metadata import version
 
         return version("tributo")
-    except Exception:
+    except PackageNotFoundError:
         return "0.0.0"
 
 
@@ -1272,6 +1274,9 @@ def algo_info(name: str):
     click.echo(f"Stability:      {record.stability}")
     click.echo(f"Implementations: {list(record.implementation_ids) or '-'}")
     click.echo(f"Topologies:     {list(record.runtime_topologies) or '-'}")
+    click.echo(f"Distribution:   {list(record.distribution_strategies) or '-'}")
+    click.echo(f"Profiles:       {list(record.execution_profiles) or '-'}")
+    click.echo(f"Validated:      {list(record.validated_execution_profiles) or '-'}")
     click.echo(f"Input Views:    {list(record.input_views) or '-'}")
     click.echo(f"Limitations:    {list(record.limitations) or '-'}")
     if spec is None:
@@ -1351,6 +1356,131 @@ def algo_validate(algo_name: str, config_path: str):
         sys.exit(1)
 
     click.echo(f"Config is valid for algorithm '{algo_name}'.")
+
+
+@algo.command("run")
+@click.option(
+    "--config",
+    "config_path",
+    type=click.Path(exists=True, dir_okay=False),
+    required=True,
+    help="Path to the distributed algorithm execution JSON file",
+)
+def algo_run(config_path: str) -> None:
+    """Run one formal algorithm through local[*] or an attached KubeRay job."""
+    from pydantic import ValidationError
+
+    from tributo._common.immutable import deep_thaw
+    from tributo.algorithms.api import (
+        AlgorithmRequest,
+        ExecutionRequest,
+        InputBinding,
+        WorkerResources,
+    )
+    from tributo.algorithms.composition import build_algorithm_dispatcher
+    from tributo.algorithms.core import LocalRuntimeOptions, RayRuntimeManager
+    from tributo.algorithms.spi import InputExecutionContext, InputResolutionContext
+    from tributo.config import AlgorithmExecutionConfig
+    from tributo.integrations.algorithm_inputs import (
+        INGESTION_RESOLVER_ID,
+        IngestionInputInvocation,
+    )
+
+    path = Path(config_path)
+    if path.suffix.lower() in {".yaml", ".yml"}:
+        raise click.ClickException(
+            "YAML config is not supported; use one JSON execution envelope"
+        )
+    try:
+        raw_config = json.loads(path.read_text(encoding="utf-8"))
+        execution_config = AlgorithmExecutionConfig.model_validate(raw_config)
+    except ValidationError as exc:
+        diagnostics = "; ".join(
+            f"{'.'.join(str(item) for item in error['loc'])}: {error['msg']}"
+            for error in exc.errors(include_url=False, include_input=False)
+        )
+        raise click.ClickException(
+            f"Distributed algorithm execution config is invalid: {diagnostics}"
+        ) from exc
+    except (OSError, json.JSONDecodeError) as exc:
+        raise click.ClickException(
+            f"Unable to read distributed algorithm JSON: {type(exc).__name__}"
+        ) from exc
+
+    request_key = "tributo.cli-input"
+    invocation = IngestionInputInvocation(request=execution_config.input.ingestion)
+    values = {request_key: invocation}
+    binding = InputBinding(
+        name="train",
+        resolver_id=INGESTION_RESOLVER_ID,
+        reference=request_key,
+        feature_names=tuple(execution_config.input.features),
+        label_name=execution_config.input.label,
+        sample_weight_name=execution_config.input.sample_weight,
+    )
+    resources = execution_config.resources_per_worker
+    local_runtime = execution_config.local_runtime
+    manager = RayRuntimeManager(
+        default_local_options=(
+            LocalRuntimeOptions(
+                num_cpus=local_runtime.num_cpus,
+                num_gpus=local_runtime.num_gpus,
+            )
+            if local_runtime is not None
+            else None
+        )
+    )
+    request = ExecutionRequest(
+        algorithm_request=AlgorithmRequest(
+            algorithm=execution_config.algorithm,
+            operation=execution_config.operation,
+            input_binding=binding,
+            algorithm_config=execution_config.algorithm_config,
+            implementation_id=execution_config.implementation_id,
+        ),
+        profile=execution_config.profile,
+        worker_count=execution_config.worker_count,
+        resources_per_worker=(
+            WorkerResources(
+                num_cpus=resources.num_cpus,
+                num_gpus=resources.num_gpus,
+                custom=resources.custom,
+            )
+            if resources is not None
+            else None
+        ),
+        resume_from=execution_config.resume_from,
+    )
+    dispatcher = build_algorithm_dispatcher(runtime_manager=manager)
+    try:
+        result = dispatcher.execute(
+            request,
+            InputExecutionContext(values=values),
+            resolution_context=InputResolutionContext(values=values),
+        )
+    except TributoError as exc:
+        raise click.ClickException(
+            f"Distributed algorithm execution failed: {type(exc).__name__}: {exc}"
+        ) from exc
+    receipt = result.execution_receipt
+    if receipt is None:
+        raise click.ClickException(
+            "Formal distributed execution completed without an ExecutionReceipt"
+        )
+    click.echo(
+        json.dumps(
+            {
+                "run_id": result.run_id,
+                "plan_id": result.plan_id,
+                "status": result.execution.status,
+                "metrics": deep_thaw(result.execution.metrics),
+                "outputs": deep_thaw(result.execution.outputs),
+                "execution_receipt": receipt.to_dict(),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
 
 
 # ── Tune ────────────────────────────────────────────────────────────────────────
@@ -1461,7 +1591,7 @@ def tune_run(
 ):
     """Run hyperparameter search with Ray Tune (or local trial with --local)."""
     try:
-        from tributo.training.registry import get_trainer
+        from tributo.training.registry import get_execution_registry, get_trainer
 
         # Parse config
         if Path(config).suffix.lower() in {".yaml", ".yml"}:
@@ -1474,6 +1604,20 @@ def tune_run(
             raise JobConfigurationError("Training config must be a JSON mapping")
 
         trainer_spec = get_trainer(trainer)
+        distribution_spec = None
+        try:
+            from tributo.algorithms.api import AlgorithmOperation
+
+            registration = get_execution_registry().resolve(
+                algorithm=trainer,
+                operation=AlgorithmOperation.FIT,
+                implementation_id=None,
+            )
+            distribution_spec = registration.distribution_spec
+        except TributoError:
+            # Programmatic Beta-only Trainer registrations remain compatibility
+            # paths and cannot claim formal distributed resource semantics.
+            pass
 
         # Prep order: parse → merge → validate → search check → data → runner
         from tributo.training.config import (
@@ -1554,7 +1698,11 @@ def tune_run(
             datasets = {"train": train_ds}
 
         runner = TuneRunner(
-            trainer_spec, tune_config, space_spec, effective_config=effective
+            trainer_spec,
+            tune_config,
+            space_spec,
+            effective_config=effective,
+            distribution_spec=distribution_spec,
         )
         result_grid = runner.run(
             datasets=datasets,

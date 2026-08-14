@@ -31,12 +31,13 @@ _DIGEST_CHUNK_BYTES = 1024 * 1024
 
 @PublicAPI(stability="beta")
 class ResumeConfig(StrictConfigModel):
-    """Configuration for single-worker trainer checkpoint recovery.
+    """Configuration for trainer checkpoint recovery.
 
     ``checkpoint_path`` is an explicit initial checkpoint directory.  When it
     is omitted, Ray Train supplies the latest persisted checkpoint through
     ``ray.train.get_checkpoint()`` after a worker failure.  Multi-worker
-    checkpoint coordination remains the T4-D follow-up.
+    Distributed trainers additionally validate their world size and formal
+    distribution contract before restoring mutable training state.
     """
 
     enabled: bool = False

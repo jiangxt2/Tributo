@@ -11,6 +11,7 @@ from tributo.integrations.algorithm_inputs.ingestion import (
     prepare_daft_input,
     prepare_ingestion_input,
     prepare_ray_data_input,
+    prepare_ray_train_input,
 )
 
 __all__ = [
@@ -21,4 +22,5 @@ __all__ = [
     "prepare_daft_input",
     "prepare_ingestion_input",
     "prepare_ray_data_input",
+    "prepare_ray_train_input",
 ]

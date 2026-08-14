@@ -6,7 +6,7 @@ import json
 import logging
 import shutil
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
@@ -327,6 +327,12 @@ class XGBoostTrainerImpl(BaseTrainer):
             "resource": cfg.resource.model_dump(),
             "resume": cfg.ray.resume.model_dump(),
         }
+        evidence_actor = self.run_config.get("_tributo_evidence_actor")
+        if evidence_actor is not None:
+            train_loop_config["_tributo_evidence_actor"] = evidence_actor
+            train_loop_config["_tributo_input_binding_digest"] = self.run_config.get(
+                "_tributo_input_binding_digest"
+            )
         val_ds = self.datasets.get("val")
         test_ds = self.datasets.get("test")
         if val_ds is not None and cfg.training.early_stopping_rounds:
@@ -793,6 +799,43 @@ def train_loop_per_worker(config: dict[str, Any]) -> None:
     # (no second full shard iteration)
     row_info = {f"row_count_{key}": rows for key, rows in _rows_seen.items()}
 
+    evidence_actor = config.get("_tributo_evidence_actor")
+    if evidence_actor is not None:
+        import hashlib
+
+        import ray
+
+        runtime = ray.get_runtime_context()
+        assigned = runtime.get_assigned_resources()
+        world_size = ray.train.get_context().get_world_size()
+        binding_digest = str(
+            config.get("_tributo_input_binding_digest") or "ray-train-xgboost"
+        )
+        model_digest = hashlib.sha256(
+            bytes(booster.save_raw(raw_format="ubj"))
+        ).hexdigest()
+        evidence = {
+            "worker_id": str(runtime.get_worker_id()),
+            "node_id": str(runtime.get_node_id()),
+            "rank": world_rank,
+            "world_size": world_size,
+            "shard_id": hashlib.sha256(
+                f"{binding_digest}:{world_rank}/{world_size}".encode("ascii")
+            ).hexdigest(),
+            "rows_processed": int(_rows_seen.get("train", 0)),
+            "model_state_digest": model_digest,
+            "resources": {
+                "num_cpus": float(assigned.get("CPU", 0.0)),
+                "num_gpus": float(assigned.get("GPU", 0.0)),
+                "custom": {
+                    str(name): float(value)
+                    for name, value in assigned.items()
+                    if name not in {"CPU", "GPU", "memory", "object_store_memory"}
+                },
+            },
+        }
+        ray.get(evidence_actor.record.remote(evidence))
+
     if world_rank == 0:
         from ray.train.xgboost import XGBoostCheckpoint
 
@@ -973,6 +1016,7 @@ def _build_trainer(
     test_dataset: "ray.data.Dataset | None" = None,
     num_workers: int = 4,
     use_gpu: bool = False,
+    resources_per_worker: Mapping[str, float] | None = None,
     storage_path: str | None = None,
     max_failures: int = 0,
     resume_from_checkpoint: Any | None = None,
@@ -987,6 +1031,7 @@ def _build_trainer(
         test_dataset: Test dataset, enables sklearn evaluation on the worker side.
         num_workers: Number of training workers.
         use_gpu: Whether to use GPU.
+        resources_per_worker: Optional explicit Ray resources for every worker.
         storage_path: Ray Train persistent storage path.
         max_failures: Number of automatic retries on worker failure. 0=no retry, -1=infinite retries.
             When resume is enabled, retries restore the latest retained checkpoint.
@@ -1054,6 +1099,9 @@ def _build_trainer(
         scaling_config=ScalingConfig(
             num_workers=num_workers,
             use_gpu=use_gpu,
+            resources_per_worker=(
+                dict(resources_per_worker) if resources_per_worker is not None else None
+            ),
             placement_strategy="SPREAD",
         ),
         datasets=datasets,  # type: ignore[arg-type]

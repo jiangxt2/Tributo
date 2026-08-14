@@ -21,7 +21,8 @@ Last updated: 2026-08-14.
 
 | Module | Level | Notes |
 |--------|-------|-------|
-| `tributo.config` — `JobConfig` | `stable` | Primary user-facing config |
+| `tributo.config` — `JobConfig` | `stable` | Ray Job submission config |
+| `tributo.config` — `AlgorithmExecutionConfig` and nested algorithm execution models | `alpha` | Strict JSON envelope shared by local Ray and Kubernetes-hosted Ray execution |
 | `tributo.job` — `TributoClient`, `RayJob` | `stable` | Primary user-facing API |
 | `tributo.exceptions` — core exceptions | `stable` | ``TributoError`` and 16 common subtypes |
 | `tributo.exceptions` — `ResultMaterializationError` | `alpha` | Credential-safe lazy inference action failure |
@@ -71,9 +72,17 @@ from the legacy setup-only propagation rule.
 | Module | Level | Notes |
 |--------|-------|-------|
 | `tributo.algorithms.api.models` | `alpha` | Portable registration, request, plan, result, environment, runtime, input, and artifact value objects |
+| `tributo.algorithms.api.distribution` | `alpha` | Versioned distributed strategy, profile, resource, and coordination declarations |
+| `tributo.algorithms.api.execution` | `alpha` | Formal execution request and immutable worker/node/shard receipt evidence |
+| `tributo.algorithms.api.descriptor` | `alpha` | Trusted installed-package distributed algorithm descriptor API v1 |
 | `tributo.algorithms.api.context` — `UserExecutionContext` | `alpha` | Restricted context for trusted module-qualified Worker functions |
 | `tributo.algorithms.api.errors` | `alpha` | Portable execution error taxonomy |
+| `tributo.algorithms.builtin.multinomial_nb` | `alpha` | Exact sufficient-statistics tree-MapReduce implementation of sklearn MultinomialNB |
+| `tributo.algorithms.builtin.torch_collective` | `alpha` | First-party DNN and PU Ray Train collective implementations |
+| `tributo.algorithms.builtin.xgboost_native` | `alpha` | First-party framework-native distributed XGBoost implementation |
 | `tributo.algorithms.core.builder` — `AlgorithmBuilder` | `alpha` | Provisional sklearn and Custom Ray Function registration builders |
+| `tributo.algorithms.core.runtime` | `alpha` | Owned local Ray lifecycle and fail-closed Kubernetes connection/resource preflight |
+| `tributo.algorithms.composition` | `alpha` | Default formal Dispatcher composition root |
 | `tributo.algorithms.spi.execution` | `alpha` | Provisional operation and Runtime execution protocols |
 | `tributo.algorithms.spi.input` | `alpha` | Two-stage input resolution and Driver/Worker ownership contracts |
 
@@ -156,6 +165,9 @@ from the legacy setup-only propagation rule.
 | `tributo.integrations.algorithm_inputs.ingestion` | `alpha` | Ingestion input bridge |
 | `tributo.integrations.algorithm_runtimes.legacy_descriptors` | `developer` | Internal lightweight descriptors for the bounded Trainer compatibility bridge |
 | `tributo.integrations.algorithm_runtimes.legacy_trainer` | `developer` | Internal Worker-only execution adapter; not a native first-party runtime |
+| `tributo.integrations.algorithm_runtimes.collective` | `developer` | Internal Ray Train collective runtime adapter |
+| `tributo.integrations.algorithm_runtimes.framework_native` | `developer` | Internal framework-native distributed runtime adapter |
+| `tributo.integrations.algorithm_runtimes.map_reduce` | `developer` | Internal bounded tree-MapReduce runtime adapter |
 | `tributo.integrations.exporters.*` | `beta` | Built-in exporter implementations |
 | `tributo.integrations.flavors` | `beta` | Built-in runtime flavor package |
 | `tributo.integrations.flavors.onnx_runtime` | `beta` | ONNX Runtime flavor implementation |

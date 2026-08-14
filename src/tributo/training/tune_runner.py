@@ -14,6 +14,7 @@ import logging
 import math
 import re
 from collections.abc import Mapping
+from dataclasses import dataclass
 from numbers import Real
 from typing import Any, Callable
 
@@ -25,6 +26,11 @@ from ray.tune import ResultGrid, RunConfig, Tuner
 from ray.tune.schedulers import ASHAScheduler, FIFOScheduler, HyperBandScheduler
 
 from tributo._common.immutable import deep_thaw
+from tributo.algorithms.api import (
+    DistributionSpec,
+    DistributionStrategy,
+    WorkerResources,
+)
 from tributo.exceptions import JobConfigurationError, JobExecutionError, TributoError
 from tributo.training.algorithm_spec import (
     AlgorithmSpec,
@@ -56,6 +62,14 @@ _SENSITIVE_PARAM_TOKENS = (
 _SAFE_TRIAL_ID = re.compile(r"^[A-Za-z0-9_.:+-]{1,64}$")
 _REMOTE_STORAGE_PATH = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
 _RAY_TRIAL_STORAGE_NAMESPACE = "trials"
+_DISTRIBUTION_SEARCH_PATHS = frozenset(
+    {
+        "ray.num_workers",
+        "ray.use_gpu",
+        "ray.resources_per_worker",
+        "ray.backend",
+    }
+)
 
 # Scheduler mapping (lazy instantiation to avoid unnecessary imports)
 _SCHEDULER_MAP: dict[str, Any] = {
@@ -86,6 +100,85 @@ def _get_bayesopt_search(metric: str, mode: str) -> Any:
 
 
 _SEARCH_ALG_MAP["bayesopt"] = _get_bayesopt_search
+
+
+@dataclass(frozen=True)
+class TuneTrialResourcePlan:
+    """Gang-scheduled resources for one fit-only distributed trial."""
+
+    worker_count: int
+    resources_per_worker: WorkerResources
+    placement_group_factory: Any
+
+
+def _ray_training_shape(config: Mapping[str, Any]) -> tuple[int, bool]:
+    ray_config = config.get("ray", {})
+    if not isinstance(ray_config, Mapping):
+        raise JobConfigurationError(
+            "distributed Tune trials require a mapping-valued ray config"
+        )
+    worker_count = ray_config.get("num_workers", 1)
+    use_gpu = ray_config.get("use_gpu", False)
+    if (
+        not isinstance(worker_count, int)
+        or isinstance(worker_count, bool)
+        or worker_count < 1
+    ):
+        raise JobConfigurationError(
+            "distributed Tune trial ray.num_workers must be a positive integer"
+        )
+    if not isinstance(use_gpu, bool):
+        raise JobConfigurationError(
+            "distributed Tune trial ray.use_gpu must be a boolean"
+        )
+    return worker_count, use_gpu
+
+
+def _build_distributed_trial_resource_plan(
+    distribution_spec: DistributionSpec,
+    effective_config: Mapping[str, Any],
+) -> TuneTrialResourcePlan:
+    """Build one complete placement group from the algorithm declaration."""
+    from ray.tune.execution.placement_groups import PlacementGroupFactory
+
+    worker_count, use_gpu = _ray_training_shape(effective_config)
+    if not distribution_spec.supported_worker_range.contains(worker_count):
+        raise JobConfigurationError(
+            "distributed Tune trial worker count is outside DistributionSpec: "
+            f"workers={worker_count}"
+        )
+    resources = distribution_spec.resources_per_worker
+    if use_gpu != (resources.num_gpus > 0):
+        raise JobConfigurationError(
+            "distributed Tune trial GPU choice conflicts with DistributionSpec; "
+            "GPU fallback and undeclared GPU use are forbidden"
+        )
+    resource_map = {
+        "CPU": resources.num_cpus,
+        "GPU": resources.num_gpus,
+        **dict(resources.custom),
+    }
+    placement_strategy = (
+        "SPREAD"
+        if distribution_spec.strategy
+        in {
+            DistributionStrategy.RAY_TRAIN_COLLECTIVE,
+            DistributionStrategy.FRAMEWORK_NATIVE,
+        }
+        else "PACK"
+    )
+    # Reserve a small coordinator bundle plus the complete worker group. Ray
+    # Train detects the captured trial placement group and reuses these worker
+    # bundles instead of creating a nested resource request.
+    placement_group = PlacementGroupFactory(
+        [{"CPU": 1}, *[resource_map for _ in range(worker_count)]],
+        strategy=placement_strategy,
+    )
+    return TuneTrialResourcePlan(
+        worker_count=worker_count,
+        resources_per_worker=resources,
+        placement_group_factory=placement_group,
+    )
 
 
 def _metric_value_type(value: object) -> str:
@@ -203,7 +296,7 @@ def _safe_sampled_values(sampled_values: Mapping[str, object]) -> dict[str, obje
         elif isinstance(value, Real):
             try:
                 safe_values[key] = float(value)
-            except Exception:
+            except (OverflowError, TypeError, ValueError):
                 safe_values[key] = f"<{type(value).__name__}>"
         else:
             safe_values[key] = f"<{type(value).__name__}>"
@@ -217,7 +310,7 @@ def _trial_id(ray_tune: Any) -> str:
         if isinstance(trial_id, str) and _SAFE_TRIAL_ID.fullmatch(trial_id):
             return trial_id
     except Exception:
-        pass
+        logger.debug("Ray Tune trial ID is unavailable", exc_info=True)
     return "unknown"
 
 
@@ -420,6 +513,8 @@ class TuneRunner:
         tune_config: TuneSearchConfig,
         search_space: SearchSpaceSpec,
         effective_config: dict[str, Any],
+        *,
+        distribution_spec: DistributionSpec | None = None,
     ):
         """Initialize TuneRunner.
 
@@ -428,12 +523,30 @@ class TuneRunner:
             tune_config: Search configuration.
             search_space: Search-space IR (from ``parse_search_space``).
             effective_config: Driver-merged & validated config dict.
+            distribution_spec: Optional formal algorithm distribution contract.
         """
         self._trainer_spec = trainer_spec
         self._tune_config = tune_config
         self._search_space = search_space
         self._effective_config = deep_thaw(effective_config)
         self._ray_param_space = to_ray_param_space(search_space)
+        self._distribution_spec = distribution_spec
+        self._trial_resource_plan: TuneTrialResourcePlan | None = None
+        if distribution_spec is not None:
+            forbidden = sorted(
+                parameter.path
+                for parameter in search_space.parameters
+                if parameter.path in _DISTRIBUTION_SEARCH_PATHS
+            )
+            if forbidden:
+                raise JobConfigurationError(
+                    "distributed worker topology, GPU, and backend are not ordinary "
+                    f"Tune parameters: {forbidden}"
+                )
+            self._trial_resource_plan = _build_distributed_trial_resource_plan(
+                distribution_spec,
+                self._effective_config,
+            )
 
         # Instantiate search algorithm and scheduler early to detect missing optional dependencies
         # (e.g., uninstalled BayesOpt will throw ImportError immediately)
@@ -645,6 +758,13 @@ class TuneRunner:
             output_path,
             experiment_name=experiment_name,
         )
+        if self._trial_resource_plan is not None:
+            from ray import tune as ray_tune
+
+            trainable = ray_tune.with_resources(
+                trainable,
+                self._trial_resource_plan.placement_group_factory,
+            )
 
         tuner = Tuner(
             trainable=trainable,

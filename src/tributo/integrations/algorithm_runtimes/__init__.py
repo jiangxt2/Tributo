@@ -1,3 +1,3 @@
-"""Optional Runtime and framework integrations for portable algorithms."""
+"""Optional Runtime integrations; concrete adapters remain lazy imports."""
 
 __all__: list[str] = []

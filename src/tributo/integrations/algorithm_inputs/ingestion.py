@@ -22,6 +22,7 @@ from tributo.algorithms.spi import (
     PreparedInput,
     ResolvedInputLease,
     RuntimeInputBinding,
+    TabularBatchInputView,
     WorkerInputPayload,
 )
 from tributo.data import (
@@ -42,6 +43,8 @@ _SUPPORTED_HANDLE_KINDS = frozenset({"ray_data", "daft_dataframe"})
 _MAX_MATERIALIZED_ROWS = 1_000_000
 _ADAPTER_MODULE = "tributo.integrations.algorithm_inputs.ingestion"
 _GENERIC_ADAPTER_REF = f"{_ADAPTER_MODULE}:prepare_ingestion_input"
+_RAY_BATCH_ADAPTER_REF = f"{_ADAPTER_MODULE}:prepare_ray_batch_input"
+_RAY_TRAIN_ADAPTER_REF = f"{_ADAPTER_MODULE}:prepare_ray_train_input"
 _HANDLE_ADAPTER_REFS = {
     "ray_data": f"{_ADAPTER_MODULE}:prepare_ray_data_input",
     "daft_dataframe": f"{_ADAPTER_MODULE}:prepare_daft_input",
@@ -180,9 +183,23 @@ class IngestionInputResolver:
                 "bridge_descriptor_version": _BRIDGE_DESCRIPTOR_VERSION,
                 "ingestion_descriptor": ingestion_descriptor.model_dump(mode="json"),
             },
-            compatible_worker_input_adapter_refs=(
-                _GENERIC_ADAPTER_REF,
-                _HANDLE_ADAPTER_REFS[ingestion_descriptor.handle_kind],
+            compatible_worker_input_adapter_refs=tuple(
+                sorted(
+                    {
+                        _GENERIC_ADAPTER_REF,
+                        _HANDLE_ADAPTER_REFS[ingestion_descriptor.handle_kind],
+                        *(
+                            (_RAY_BATCH_ADAPTER_REF,)
+                            if ingestion_descriptor.handle_kind == "ray_data"
+                            else ()
+                        ),
+                        *(
+                            (_RAY_TRAIN_ADAPTER_REF,)
+                            if ingestion_descriptor.handle_kind == "ray_data"
+                            else ()
+                        ),
+                    }
+                )
             ),
         )
 
@@ -335,13 +352,29 @@ class IngestionInputRuntimeAdapter:
             raise AlgorithmInputError(
                 "ingestion runtime adapter requires a typed Gateway handle"
             )
-        if plan.runtime.topology is RuntimeTopology.DATA_PARALLEL:
+        if plan.runtime.topology in {
+            RuntimeTopology.DATA_PARALLEL,
+            RuntimeTopology.RAY_MAP_REDUCE,
+        }:
             if not isinstance(lease.handle, RayDataHandle):
                 raise AlgorithmInputError(
-                    "data_parallel requires RayDataHandle; no implicit Daft-to-Ray "
+                    "distributed input requires RayDataHandle; no implicit Daft-to-Ray "
                     "conversion is permitted"
                 )
             try:
+                expected_total_rows = (
+                    lease.handle.dataset.count()
+                    if plan.runtime.topology is RuntimeTopology.RAY_MAP_REDUCE
+                    else None
+                )
+                if expected_total_rows is not None and (
+                    not isinstance(expected_total_rows, int)
+                    or isinstance(expected_total_rows, bool)
+                    or expected_total_rows < 0
+                ):
+                    raise AlgorithmInputError(
+                        "Ray Data count returned an invalid expected row count"
+                    )
                 iterators = lease.handle.dataset.streaming_split(
                     plan.runtime.worker_count,
                     equal=False,
@@ -357,6 +390,7 @@ class IngestionInputRuntimeAdapter:
                     value=_RayDataIteratorPayload(iterator),
                     partition_index=rank,
                     partition_count=plan.runtime.worker_count,
+                    expected_total_rows=expected_total_rows,
                 )
                 for rank, iterator in enumerate(iterators)
             )
@@ -371,8 +405,14 @@ class IngestionInputRuntimeAdapter:
 
 
 def _required_columns(binding: InputBinding) -> tuple[str, ...]:
-    return binding.feature_names + (
-        (binding.label_name,) if binding.label_name is not None else ()
+    return (
+        binding.feature_names
+        + ((binding.label_name,) if binding.label_name is not None else ())
+        + (
+            (binding.sample_weight_name,)
+            if binding.sample_weight_name is not None
+            else ()
+        )
     )
 
 
@@ -400,6 +440,68 @@ def _prepared_view(
         label_name=payload.binding.label_name,
     )
     return PreparedInput({payload.input_name: view})
+
+
+class _RayTabularBatchInputView:
+    """Keep one Ray Data shard streaming for bounded-state algorithms."""
+
+    def __init__(self, payload: WorkerInputPayload, batches: Any) -> None:
+        self.feature_names = payload.binding.feature_names
+        self.label_name = payload.binding.label_name
+        self._required = _required_columns(payload.binding)
+        self._batches = batches
+
+    def iter_batches(self) -> Any:
+        """Yield validated NumPy-format batches from this Worker shard."""
+        try:
+            for batch in self._batches.iter_batches(
+                batch_format="numpy",
+                prefetch_batches=0,
+            ):
+                if not isinstance(batch, Mapping):
+                    raise AlgorithmInputError("Ray Data yielded a non-columnar batch")
+                missing = [name for name in self._required if name not in batch]
+                if missing:
+                    raise AlgorithmInputError(
+                        f"Ray Data input is missing required column(s): {missing}"
+                    )
+                yield {name: batch[name] for name in self._required}
+        except AlgorithmInputError:
+            raise
+        except Exception as exc:
+            raise AlgorithmInputError(
+                f"Ray Data batch iteration failed: {type(exc).__name__}"
+            ) from exc
+
+
+@DeveloperAPI
+def prepare_ray_batch_input(payload: WorkerInputPayload) -> PreparedInput:
+    """Expose one Ray Dataset shard as a streaming batch view."""
+    batches: Any
+    if isinstance(payload.value, RayDataHandle):
+        batches = payload.value.dataset.select_columns(
+            list(_required_columns(payload.binding))
+        )
+    elif isinstance(payload.value, _RayDataIteratorPayload):
+        batches = payload.value.iterator
+    else:
+        raise AlgorithmInputError(
+            "Ray batch adapter requires RayDataHandle or a planned Ray Data shard"
+        )
+    view: TabularBatchInputView = _RayTabularBatchInputView(payload, batches)
+    return PreparedInput({payload.input_name: view})
+
+
+@DeveloperAPI
+def prepare_ray_train_input(payload: WorkerInputPayload) -> PreparedInput:
+    """Expose one canonical Ray Dataset for framework-owned worker sharding."""
+    if not isinstance(payload.value, RayDataHandle):
+        raise AlgorithmInputError(
+            "Ray Train input adapter requires an unsplit RayDataHandle"
+        )
+    required = list(_required_columns(payload.binding))
+    dataset = payload.value.dataset.select_columns(required)
+    return PreparedInput({payload.input_name: dataset})
 
 
 def _enforce_materialized_row_limit(
@@ -490,5 +592,7 @@ __all__ = [
     "IngestionRequestRef",
     "prepare_daft_input",
     "prepare_ingestion_input",
+    "prepare_ray_batch_input",
     "prepare_ray_data_input",
+    "prepare_ray_train_input",
 ]

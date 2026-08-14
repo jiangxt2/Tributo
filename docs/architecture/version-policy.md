@@ -84,6 +84,9 @@ version and the Manifest schema version.
 | `ModelFlavor` | 1 | `integrations/` |
 | Bounded-ingestion Provider descriptor | 1 | `data/provider_plugins.py` |
 | Bounded-ingestion Binding descriptor | 1 | `data/binding_plugins.py` |
+| Distributed algorithm descriptor | 1 | `algorithms/api/descriptor.py` |
+| DistributionSpec | 1 | `algorithms/api/distribution.py` |
+| ExecutionReceipt | 1 | `algorithms/api/execution.py` |
 | Trainer entry points | N/A (not versioned) | `plugin.py` |
 | Connector entry points | N/A (not versioned) | `plugin.py` |
 
@@ -101,9 +104,14 @@ version and the Manifest schema version.
   distribution version plus a Tributo version specifier. Discovery rejects a
   descriptor when either installed version disagrees, isolates the bad entry
   point, and never replaces an already registered route.
-- Other plugin authors declare compatibility range via `min_tributo_version`
-  and `max_tributo_version` (optional, for future PL1+PL2). Current non-data
-  plugins do not declare this.
+- Distributed algorithm descriptors declare an exact installed package version,
+  a Tributo package compatibility range, and an exact descriptor API version.
+  Discovery also verifies inheritance from the strategy named by
+  `DistributionSpec`; a failing package remains diagnostic-only and is not
+  partially registered.
+- Older unversioned plugin groups retain their existing behavior. They do not
+  inherit the stronger guarantees of bounded-ingestion or distributed-algorithm
+  descriptor discovery.
 
 ### Plugin Lifecycle (Current — Pre-PL1+PL2)
 

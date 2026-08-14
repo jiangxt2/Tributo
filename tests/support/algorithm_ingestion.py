@@ -30,6 +30,11 @@ class StubRayDataset:
     selected: tuple[str, ...] = ()
     row_limit: int | None = None
     streaming_split_calls: list[tuple[int, bool]] = field(default_factory=list)
+    count_calls: int = 0
+
+    def count(self) -> int:
+        self.count_calls += 1
+        return len(next(iter(self.columns.values())))
 
     def select_columns(self, columns: list[str]) -> StubRayDataset:
         missing = sorted(set(columns) - set(self.columns))

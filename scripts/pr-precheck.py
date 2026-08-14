@@ -12,8 +12,8 @@ Layered architecture (Ray/Daft-style):
   Layer 5:  Run Changed Tests — pytest on changed test files
   Layer 5.5: CI-parity Suite — dev-only environment runs the CI unit suite
              (catches optional-dependency imports and runtime failures)
-  Layer 5.6: Docs Spelling — runs the CI docs spelling build when the docs
-             environment is available
+  Layer 5.6: Docs CI Parity — prepares the locked docs environment and runs
+             static contracts, strict build, and spelling for docs CI changes
 
 Usage:
     uv run --locked --no-sync python scripts/pr-precheck.py
@@ -81,6 +81,25 @@ PUBLIC_ENV_CONTRACTS: dict[str, frozenset[str]] = {
     )
 }
 PUBLIC_ENV_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$")
+
+# Keep these paths in sync with the ``docs`` filter in
+# ``.github/workflows/pr-test-suite.yml``.  Source files are included because
+# public API annotations and docstrings participate in the Sphinx build.
+DOCS_CI_EXACT_PATHS = frozenset(
+    {
+        ".readthedocs.yaml",
+        "Makefile",
+        "pyproject.toml",
+        "requirements-doc.in",
+        "requirements-doc.lock",
+        "tests/integration/test_docs_reference.py",
+        "tools/__init__.py",
+        "tools/check_docs.py",
+        "tools/generate_algorithm_support_matrix.py",
+        "uv.lock",
+        ".github/workflows/docs-deploy.yml",
+    }
+)
 
 # =============================================================================
 # Utilities
@@ -1163,31 +1182,130 @@ def check_ci_parity_suite(root: str) -> list[str]:
         shutil.rmtree(venv_dir, ignore_errors=True)
 
 
-def check_docs_spelling(root: str) -> list[str]:
-    """Run the CI docs spelling check when a docs environment is available."""
-    makefile = os.path.join(root, "Makefile")
+def docs_ci_affected(changed_files: list[str]) -> bool:
+    """Return whether the changed paths trigger the CI documentation job."""
+    for path in changed_files:
+        if path in DOCS_CI_EXACT_PATHS:
+            return True
+        if path.startswith("docs/") or path.startswith("tests/docs/"):
+            return True
+        if path.startswith("src/tributo/") and path.endswith(".py"):
+            return True
+    return False
+
+
+def _command_output_tail(
+    result: subprocess.CompletedProcess[str], *, lines: int = 40
+) -> str:
+    output = "\n".join(part for part in (result.stdout, result.stderr) if part)
+    return "\n".join(output.splitlines()[-lines:])
+
+
+def prepare_docs_environment(root: str, *, allow_network: bool) -> list[str]:
+    """Prepare the CI-equivalent locked documentation environment."""
+    docs_python = os.path.join(root, ".docs-venv", "bin", "python")
     sphinx_build = os.path.join(root, ".docs-venv", "bin", "sphinx-build")
-    if not os.path.exists(makefile) or not os.path.exists(sphinx_build):
+    network_args = [] if allow_network else ["--offline"]
+
+    try:
+        if not os.path.exists(docs_python):
+            create = subprocess.run(
+                [
+                    "uv",
+                    "venv",
+                    ".docs-venv",
+                    "--python",
+                    "3.12",
+                    *network_args,
+                ],
+                capture_output=True,
+                text=True,
+                cwd=root,
+                timeout=120,
+            )
+            if create.returncode != 0:
+                return [
+                    "FAIL: docs environment creation failed. "
+                    "Re-run with --allow-network if Python 3.12 is not cached:\n"
+                    + _command_output_tail(create)
+                ]
+
+        install = subprocess.run(
+            [
+                "uv",
+                "pip",
+                "install",
+                "--python",
+                docs_python,
+                "--requirement",
+                "requirements-doc.lock",
+                *network_args,
+            ],
+            capture_output=True,
+            text=True,
+            cwd=root,
+            timeout=300,
+        )
+        if install.returncode != 0:
+            return [
+                "FAIL: locked docs dependency installation failed. "
+                "Re-run with --allow-network if the uv cache is incomplete:\n"
+                + _command_output_tail(install)
+            ]
+    except subprocess.TimeoutExpired as exc:
+        return [f"FAIL: docs environment preparation timed out: {exc}"]
+
+    if not os.path.exists(sphinx_build):
         return [
-            "WARN: .docs-venv not found — docs spelling check skipped "
-            "(run the docs build locally or rely on the CI docs job)"
+            "FAIL: locked docs dependency installation completed without "
+            ".docs-venv/bin/sphinx-build"
         ]
-    result = subprocess.run(
-        ["make", "spelling", f"SPHINXBUILD={sphinx_build}"],
-        capture_output=True,
-        text=True,
-        cwd=root,
-        timeout=300,
+    return []
+
+
+def check_docs_ci(
+    root: str,
+    changed_files: list[str],
+    *,
+    allow_network: bool,
+) -> list[str]:
+    """Run the same static, strict, and spelling gates as the CI docs job."""
+    if not docs_ci_affected(changed_files):
+        return []
+
+    environment_issues = prepare_docs_environment(root, allow_network=allow_network)
+    if environment_issues:
+        return environment_issues
+
+    docs_python = os.path.join(root, ".docs-venv", "bin", "python")
+    sphinx_build = os.path.join(root, ".docs-venv", "bin", "sphinx-build")
+    checks = (
+        (
+            "static documentation contracts",
+            [docs_python, "tools/check_docs.py", "--static-only"],
+        ),
+        (
+            "strict documentation build",
+            ["make", "strict", f"SPHINXBUILD={sphinx_build}"],
+        ),
+        (
+            "documentation spelling",
+            ["make", "spelling", f"SPHINXBUILD={sphinx_build}"],
+        ),
     )
-    if result.returncode != 0:
-        lines = [
-            line.strip()
-            for line in result.stdout.splitlines()
-            if "Spell check" in line or "misspelled" in line
-        ]
-        issues = ["FAIL: docs spelling found unknown words:"]
-        issues.extend(lines[:10])
-        return issues
+    for label, command in checks:
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                cwd=root,
+                timeout=300,
+            )
+        except subprocess.TimeoutExpired as exc:
+            return [f"FAIL: {label} timed out: {exc}"]
+        if result.returncode != 0:
+            return [f"FAIL: {label} failed:\n{_command_output_tail(result)}"]
     return []
 
 
@@ -1213,7 +1331,8 @@ def main():
         action="store_true",
         help=(
             "Run the optional cross-platform dependency resolver against "
-            "package indexes; the default check is offline"
+            "package indexes and allow docs environment bootstrap; the "
+            "default check is offline"
         ),
     )
     args = parser.parse_args()
@@ -1331,12 +1450,21 @@ def main():
     print(f"  {'PASS' if not l55 else 'ISSUES'} — {len(l55)} issue(s)\n")
 
     # Layer 5.6
-    print("=== Layer 5.6: Docs Spelling ===")
-    l56 = check_docs_spelling(root)
-    all_issues.extend(l56)
-    for issue in l56:
-        print(f"  {issue}")
-    print(f"  {'PASS' if not l56 else 'ISSUES'} — {len(l56)} issue(s)\n")
+    docs_affected = docs_ci_affected(changed_files)
+    if docs_affected:
+        print("=== Layer 5.6: Docs CI Parity ===")
+        l56 = check_docs_ci(
+            root,
+            changed_files,
+            allow_network=args.allow_network,
+        )
+        all_issues.extend(l56)
+        for issue in l56:
+            print(f"  {issue}")
+        print(f"  {'PASS' if not l56 else 'ISSUES'} — {len(l56)} issue(s)\n")
+    else:
+        l56 = []
+        print("=== Layer 5.6: Docs CI Parity (SKIPPED) ===\n")
 
     errors = [i for i in all_issues if i.startswith("FAIL")]
     warns = [i for i in all_issues if i.startswith("WARN")]
@@ -1356,7 +1484,13 @@ def main():
             f"  Layer 5 (Tests):         {'PASS' if not l5 else f'{len(l5)} issue(s)'}"
         )
     print(f"  Layer 5.5 (CI-parity):   {'PASS' if not l55 else f'{len(l55)} issue(s)'}")
-    print(f"  Layer 5.6 (Docs):        {'PASS' if not l56 else f'{len(l56)} issue(s)'}")
+    if docs_affected:
+        print(
+            f"  Layer 5.6 (Docs):        "
+            f"{'PASS' if not l56 else f'{len(l56)} issue(s)'}"
+        )
+    else:
+        print("  Layer 5.6 (Docs):        SKIPPED")
     print()
 
     if errors:
