@@ -79,19 +79,15 @@ class CsvDataConnector(DataConnector):
                 "CSV does not support APPEND mode. "
                 "Use OVERWRITE or write to a new path."
             )
-        if cfg.path.startswith("s3://"):
-            import pyarrow.fs as pafs
+        from tributo.data.writing.compatibility import execute_ray_connector_write
 
-            from tributo.data._s3 import to_pyarrow_s3_kwargs
-
-            fs = pafs.S3FileSystem(**to_pyarrow_s3_kwargs(cfg.s3))
-            path = cfg.path.removeprefix("s3://")
-            dataset.write_csv(path, filesystem=fs)
-        else:
-            from pathlib import Path
-
-            Path(cfg.path).parent.mkdir(parents=True, exist_ok=True)
-            dataset.write_csv(cfg.path)
+        execute_ray_connector_write(
+            dataset=dataset,
+            target_kind="csv",
+            target=cfg.path,
+            runtime_options={"s3": cfg.s3} if cfg.s3 is not None else {},
+            mode=cfg.mode,
+        )
         logger.info("CSV written to %s", cfg.path)
 
 

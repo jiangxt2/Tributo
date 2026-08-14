@@ -121,71 +121,35 @@ class TestIcebergDataConnector:
         assert source.row_filter == "id > 1"
         assert source.selected_fields == ["id", "name"]
 
-    @patch("tributo.data.iceberg._load_catalog")
-    def test_write_overwrite(self, mock_load_catalog):
-        """write() OVERWRITE 模式应调用 table.overwrite(arrow_table)。"""
-        mock_table = MagicMock()
-        mock_catalog = MagicMock()
-        mock_catalog.load_table.return_value = mock_table
-        mock_load_catalog.return_value = mock_catalog
-
-        mock_ds = MagicMock()
-        mock_arrow = MagicMock()
-        mock_ds.to_arrow.return_value = mock_arrow
-
+    @patch("tributo.data.writing.compatibility.execute_ray_connector_write")
+    def test_write_delegates_to_native_gateway(self, mock_execute):
+        """write() preserves configuration while delegating to Ray native API."""
         connector = IcebergDataConnector()
         connector.write(
-            mock_ds, table_identifier="db.test", catalog_properties={"type": "rest"}
+            MagicMock(),
+            table_identifier="db.test",
+            catalog_properties={"type": "rest"},
         )
 
-        mock_table.overwrite.assert_called_once_with(mock_arrow)
+        mock_execute.assert_called_once()
+        call = mock_execute.call_args.kwargs
+        assert call["target_kind"] == "iceberg"
+        assert call["target"] == "db.test"
+        assert call["runtime_options"]["catalog_properties"] == {"type": "rest"}
+        assert call["runtime_options"]["table_identifier"] == "db.test"
+        assert call["mode"] == WriteMode.OVERWRITE
 
-    @patch("tributo.data.iceberg._load_catalog")
-    def test_write_creates_table_if_not_exists(self, mock_load_catalog):
-        """write() 表不存在时应自动建表。"""
-        mock_table = MagicMock()
-        mock_catalog = MagicMock()
-        mock_catalog.load_table.side_effect = NoSuchTableError("db.test")
-        mock_catalog.create_table.return_value = mock_table
-        mock_load_catalog.return_value = mock_catalog
-
-        mock_ds = MagicMock()
-        mock_arrow = MagicMock()
-        mock_ds.to_arrow.return_value = mock_arrow
-
+    @patch("tributo.data.writing.compatibility.execute_ray_connector_write")
+    def test_write_preserves_append_mode_in_request(self, mock_execute):
         connector = IcebergDataConnector()
         connector.write(
-            mock_ds, table_identifier="db.test", catalog_properties={"type": "rest"}
-        )
-
-        mock_catalog.create_table.assert_called_once_with(
-            identifier="db.test",
-            schema=mock_arrow.schema,
-            location=None,
-        )
-        mock_table.overwrite.assert_called_once_with(mock_arrow)
-
-    @patch("tributo.data.iceberg._load_catalog")
-    def test_write_append(self, mock_load_catalog):
-        """write() APPEND 模式应调用 table.append(arrow_table)。"""
-        mock_table = MagicMock()
-        mock_catalog = MagicMock()
-        mock_catalog.load_table.return_value = mock_table
-        mock_load_catalog.return_value = mock_catalog
-
-        mock_ds = MagicMock()
-        mock_arrow = MagicMock()
-        mock_ds.to_arrow.return_value = mock_arrow
-
-        connector = IcebergDataConnector()
-        connector.write(
-            mock_ds,
+            MagicMock(),
             table_identifier="db.test",
             catalog_properties={"type": "rest"},
             mode=WriteMode.APPEND,
         )
 
-        mock_table.append.assert_called_once_with(mock_arrow)
+        assert mock_execute.call_args.kwargs["mode"] == WriteMode.APPEND
 
     @patch("tributo.data.iceberg._load_catalog")
     def test_exists_returns_true(self, mock_load_catalog):

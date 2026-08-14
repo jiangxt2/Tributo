@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-import pyarrow.fs as pafs
 import ray.data
 from pydantic import BaseModel, Field
 
@@ -79,29 +78,18 @@ class ParquetDataConnector(DataConnector):
                 "Use OVERWRITE or write to a new path."
             )
 
-        if cfg.path.startswith("s3://"):
-            self._write_s3(dataset, cfg.path, cfg.compression, cfg.s3)
-        else:
-            from pathlib import Path
+        from tributo.data.writing.compatibility import execute_ray_connector_write
 
-            Path(cfg.path).parent.mkdir(parents=True, exist_ok=True)
-            dataset.write_parquet(cfg.path, compression=cfg.compression)
+        execute_ray_connector_write(
+            dataset=dataset,
+            target_kind="parquet",
+            target=cfg.path,
+            options={"compression": cfg.compression},
+            runtime_options={"s3": cfg.s3} if cfg.s3 is not None else {},
+            mode=cfg.mode,
+        )
 
         logger.info("Parquet written to %s", cfg.path)
-
-    def _write_s3(
-        self,
-        dataset: ray.data.Dataset,
-        s3_path: str,
-        compression: str,
-        s3_config: S3Config | None,
-    ) -> None:
-        """Write Parquet to S3."""
-        from tributo.data._s3 import to_pyarrow_s3_kwargs
-
-        fs = pafs.S3FileSystem(**to_pyarrow_s3_kwargs(s3_config))
-        path = s3_path.removeprefix("s3://")
-        dataset.write_parquet(path, filesystem=fs, compression=compression)
 
 
 # ── Built-in registration ──

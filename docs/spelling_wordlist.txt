@@ -136,6 +136,7 @@ Kafka
 Kubernetes
 kwargs
 Lance
+pylance
 labelled
 Lifecycle
 lifecycle

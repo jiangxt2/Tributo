@@ -8,11 +8,11 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from tributo.data.ingestion import (
+from tributo.data.contracts.handles import (
     DaftDataFrameHandle,
-    IngestionOpenResult,
     RayDataHandle,
 )
+from tributo.data.ingestion import IngestionOpenResult
 from tributo.util.annotations import PublicAPI
 
 

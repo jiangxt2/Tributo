@@ -1,8 +1,9 @@
-"""Local-Parquet dual-engine integration test for the Docker Ray cluster.
+"""Dual-engine ingestion and native-write integration test for Docker Ray.
 
 Run inside ``ray-head`` with ``TRIBUTO_DOCKER_RAY_TEST=1``. The test path is
 under the cluster's shared writable work mount so Ray and Daft workers see the
-same Parquet file, while every node imports from one read-only source snapshot.
+same files, while every node imports from one read-only source snapshot. The
+MinIO case also exercises native Parquet, CSV, and Iceberg writes over S3.
 """
 
 from __future__ import annotations
@@ -48,9 +49,13 @@ from tributo.data import (
     S3Config,
     SelectColumns,
     TransformPipeline,
+    WriteMode,
+    WriteRequest,
+    default_write_gateway,
     open_ingestion,
     ray_worker_distribution_probe,
 )
+from tributo.data.writing.native_bindings import RayLanceWriteBinding
 
 if pytest is not None:
     pytestmark = pytest.mark.integration
@@ -294,6 +299,219 @@ def _assert_empty_isin_conformance(source: ParquetSourceConfig) -> None:
         )
 
 
+def _assert_native_write_conformance() -> None:
+    """Exercise every built-in Ray/Daft writer on the shared Ray cluster."""
+    from pyiceberg.catalog import load_catalog
+
+    output_root = Path("/workspace/tributo-work") / (
+        f"tributo-write-tests-{uuid.uuid4().hex}"
+    )
+    output_root.mkdir(parents=True, exist_ok=True)
+    gateway = default_write_gateway()
+    rows = [{"id": 1, "category": "a"}, {"id": 2, "category": "b"}]
+
+    for engine in ("ray", "daft"):
+        for target_kind in ("parquet", "csv"):
+            target = output_root / f"{engine}-{target_kind}"
+            handle = (
+                RayDataHandle(ray.data.from_items(rows))
+                if engine == "ray"
+                else DaftDataFrameHandle(daft.from_pylist(rows))
+            )
+            receipt = gateway.execute(
+                WriteRequest(
+                    engine=engine,
+                    target_kind=target_kind,
+                    target=str(target),
+                    mode=WriteMode.OVERWRITE,
+                    options=(
+                        {"compression": "zstd"} if target_kind == "parquet" else {}
+                    ),
+                ),
+                handle,
+            )
+            assert receipt.committed is True
+            assert list(target.rglob("*." + target_kind))
+
+        if engine == "ray" and not RayLanceWriteBinding.is_available():
+            print("Ray Lance native binding unavailable; skipping Ray Lance only")
+        else:
+            lance_target = output_root / f"{engine}-lance"
+            handle = (
+                RayDataHandle(ray.data.from_items(rows))
+                if engine == "ray"
+                else DaftDataFrameHandle(daft.from_pylist(rows))
+            )
+            receipt = gateway.execute(
+                WriteRequest(
+                    engine=engine,
+                    target_kind="lance",
+                    target=str(lance_target),
+                    mode=WriteMode.OVERWRITE,
+                ),
+                handle,
+            )
+            assert receipt.committed is True
+            assert lance_target.exists()
+
+        print(f"{engine} Iceberg native write")
+        catalog_name = f"{engine}-write-catalog"
+        catalog_uri = f"sqlite:///{output_root / f'{engine}-iceberg.db'}"
+        warehouse = output_root / f"{engine}-iceberg-warehouse"
+        catalog = load_catalog(
+            catalog_name,
+            type="sql",
+            uri=catalog_uri,
+            warehouse=warehouse.as_uri(),
+        )
+        catalog.create_namespace("default")
+        table_identifier = "default.events"
+        handle = (
+            RayDataHandle(ray.data.from_items(rows))
+            if engine == "ray"
+            else DaftDataFrameHandle(daft.from_pylist(rows))
+        )
+        receipt = gateway.execute(
+            WriteRequest(
+                engine=engine,
+                target_kind="iceberg",
+                target=table_identifier,
+                mode=WriteMode.OVERWRITE,
+                runtime_options={
+                    "catalog_name": catalog_name,
+                    "catalog_properties": {
+                        "type": "sql",
+                        "uri": catalog_uri,
+                        "warehouse": warehouse.as_uri(),
+                    },
+                    "table_identifier": table_identifier,
+                },
+            ),
+            handle,
+        )
+        assert receipt.committed is True
+        assert catalog.load_table(table_identifier).scan().to_arrow().num_rows == 2
+
+
+def _assert_native_s3_write_conformance(s3: S3Config) -> None:
+    """Exercise native Ray/Daft Parquet, CSV, and Iceberg writes on MinIO."""
+    from pyiceberg.catalog import load_catalog
+
+    from tributo.data._s3 import merge_iceberg_properties
+
+    endpoint = s3.endpoint
+    access_key = s3.access_key_id
+    secret_key = s3.secret_access_key
+    assert endpoint and access_key and secret_key
+    parsed_endpoint = endpoint.removeprefix("http://").removeprefix("https://")
+    filesystem = pafs.S3FileSystem(
+        access_key=access_key,
+        secret_key=secret_key,
+        allow_bucket_creation=True,
+        allow_bucket_deletion=True,
+        endpoint_override=parsed_endpoint,
+        scheme="http" if endpoint.startswith("http://") else "https",
+        region=s3.region or "us-east-1",
+    )
+    bucket = f"tributo-write-{uuid.uuid4().hex}"
+    filesystem.create_dir(bucket)
+    gateway = default_write_gateway()
+    rows = [{"id": 1, "category": "a"}, {"id": 2, "category": "b"}]
+
+    def assert_files(prefix: str) -> None:
+        infos = filesystem.get_file_info(pafs.FileSelector(prefix, recursive=True))
+        assert any(info.type == pafs.FileType.File for info in infos), prefix
+
+    try:
+        for engine in ("ray", "daft"):
+            for target_kind in ("parquet", "csv"):
+                prefix = f"{bucket}/{engine}-{target_kind}"
+                handle = (
+                    RayDataHandle(ray.data.from_items(rows))
+                    if engine == "ray"
+                    else DaftDataFrameHandle(daft.from_pylist(rows))
+                )
+                receipt = gateway.execute(
+                    WriteRequest(
+                        engine=engine,
+                        target_kind=target_kind,
+                        target=f"s3://{prefix}",
+                        mode=WriteMode.OVERWRITE,
+                        options=(
+                            {"compression": "zstd"} if target_kind == "parquet" else {}
+                        ),
+                        runtime_options={"s3": s3},
+                    ),
+                    handle,
+                )
+                assert receipt.committed is True
+                assert_files(prefix)
+
+            if engine == "ray" and not RayLanceWriteBinding.is_available():
+                print("Ray Lance native binding unavailable; skipping Ray Lance only")
+            else:
+                lance_prefix = f"{bucket}/{engine}-lance"
+                handle = (
+                    RayDataHandle(ray.data.from_items(rows))
+                    if engine == "ray"
+                    else DaftDataFrameHandle(daft.from_pylist(rows))
+                )
+                receipt = gateway.execute(
+                    WriteRequest(
+                        engine=engine,
+                        target_kind="lance",
+                        target=f"s3://{lance_prefix}",
+                        mode=WriteMode.OVERWRITE,
+                        runtime_options={"s3": s3},
+                    ),
+                    handle,
+                )
+                assert receipt.committed is True
+                assert_files(lance_prefix)
+
+            print(f"{engine} Iceberg native S3 write")
+            catalog_name = f"{engine}-s3-write-catalog"
+            catalog_uri = (
+                f"sqlite:////workspace/tributo-work/{engine}-s3-{uuid.uuid4().hex}.db"
+            )
+            warehouse = f"s3://{bucket}/{engine}-iceberg-warehouse"
+            catalog_properties = {
+                "type": "sql",
+                "uri": catalog_uri,
+                "warehouse": warehouse,
+            }
+            catalog = load_catalog(
+                catalog_name,
+                **merge_iceberg_properties(catalog_properties, source=s3),
+            )
+            catalog.create_namespace("default")
+            table_identifier = "default.events"
+            handle = (
+                RayDataHandle(ray.data.from_items(rows))
+                if engine == "ray"
+                else DaftDataFrameHandle(daft.from_pylist(rows))
+            )
+            receipt = gateway.execute(
+                WriteRequest(
+                    engine=engine,
+                    target_kind="iceberg",
+                    target=table_identifier,
+                    mode=WriteMode.OVERWRITE,
+                    runtime_options={
+                        "catalog_name": catalog_name,
+                        "catalog_properties": catalog_properties,
+                        "table_identifier": table_identifier,
+                        "s3": s3,
+                    },
+                ),
+                handle,
+            )
+            assert receipt.committed is True
+            assert catalog.load_table(table_identifier).scan().to_arrow().num_rows == 2
+    finally:
+        filesystem.delete_dir(bucket)
+
+
 def test_local_parquet_conformance_on_ray_cluster() -> None:
     shared_dir = Path("/workspace/tributo-work/tributo-ingestion-tests")
     shared_dir.mkdir(parents=True, exist_ok=True)
@@ -309,6 +527,7 @@ def test_local_parquet_conformance_on_ray_cluster() -> None:
         _assert_not_equal_null_conformance(source)
         _assert_empty_isin_conformance(source)
         _assert_empty_conformance(ParquetSourceConfig(path=str(empty_path)))
+        _assert_native_write_conformance()
     finally:
         parquet_path.unlink(missing_ok=True)
         empty_path.unlink(missing_ok=True)
@@ -343,6 +562,14 @@ def test_s3_parquet_conformance_on_ray_cluster_and_minio() -> None:
                     secret_access_key=secret_key,
                     region="us-east-1",
                 ),
+            )
+        )
+        _assert_native_s3_write_conformance(
+            S3Config(
+                endpoint=endpoint,
+                access_key_id=access_key,
+                secret_access_key=secret_key,
+                region="us-east-1",
             )
         )
     finally:

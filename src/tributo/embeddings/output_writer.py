@@ -1,10 +1,9 @@
-"""Automatic output format detection and distributed writing.
+"""Automatic output format selection through the native write Gateway.
 
-Routes datasets containing vector columns to Lance (distributed
-two-phase commit) and scalar datasets to Parquet + ZSTD.
-
-Lance utility functions (``_has_vector_column``, ``_write_lance_distributed``,
-etc.) reuse the implementations in ``data/lance.py`` to avoid code duplication.
+Routes datasets containing vector columns to the native Ray Lance writer and
+scalar datasets to the native Ray Parquet writer with ZSTD compression.  The
+format-selection policy is business-specific, while execution is shared with
+all other bounded data writers.
 """
 
 from __future__ import annotations
@@ -12,9 +11,11 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from tributo.data._s3 import to_lance_storage_options
 from tributo.data.base import WriteMode
-from tributo.data.lance import _has_vector_column, _write_lance_distributed
+from tributo.data.contracts.handles import RayDataHandle
+from tributo.data.writing.builtins import default_write_gateway
+from tributo.data.writing.contracts import WriteRequest
+from tributo.data.writing.policy import has_vector_column
 
 if TYPE_CHECKING:
     import ray.data
@@ -29,24 +30,38 @@ def write_dataset(
 ) -> None:
     """Write a Ray Dataset, automatically choosing the best format.
 
-    - Contains vector columns → **Lance** (distributed two-phase commit)
+    - Contains vector columns → native **Lance** writer
     - No vector columns → **Parquet + ZSTD**
 
     Args:
         ds: The dataset to write.
         output_path: Destination URI or path. For Lance, should end with
             ``.lance`` or be a directory URI.
-        mode: Lance write mode. Default APPEND (appends if exists, creates if not).
+        mode: Lance write mode. Default APPEND.
 
     Raises:
-        ImportError: If ``pylance`` is required but not installed.
+        WriteCapabilityError: If the selected native writer is unavailable or
+            does not support the requested mode.
     """
     schema = ds.schema()
     arrow_schema = schema.base_schema if hasattr(schema, "base_schema") else schema
-    if _has_vector_column(arrow_schema):
+    if has_vector_column(arrow_schema):
         logger.info("Vector columns detected → writing Lance: %s", output_path)
-        storage_options = to_lance_storage_options(None)
-        _write_lance_distributed(ds, output_path, storage_options, mode)
+        target_kind = "lance"
     else:
         logger.info("No vector columns → writing Parquet + ZSTD: %s", output_path)
-        ds.write_parquet(output_path, compression="zstd")
+        target_kind = "parquet"
+
+    default_write_gateway().execute(
+        WriteRequest(
+            engine="ray",
+            target_kind=target_kind,
+            target=output_path,
+            mode=mode,
+            options={"compression": "zstd"} if target_kind == "parquet" else {},
+        ),
+        RayDataHandle(ds),
+    )
+
+
+_has_vector_column = has_vector_column

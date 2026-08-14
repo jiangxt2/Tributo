@@ -9,7 +9,10 @@ from typing import Any, ClassVar, Protocol
 from urllib.parse import unquote, urlsplit
 
 from tributo._common.storage_profiles import StorageProfile, StorageProfileResolver
-from tributo.data.base import S3Config
+from tributo.data.base import S3Config, WriteMode
+from tributo.data.contracts.handles import RayDataHandle
+from tributo.data.writing.builtins import default_write_gateway
+from tributo.data.writing.contracts import WriteRequest
 from tributo.exceptions import ResultMaterializationError, ResultWriteError
 from tributo.inference._credential_safety import safe_exception_summary
 from tributo.inference.contracts import (
@@ -27,7 +30,7 @@ class _StorageProfileResolverLike(Protocol):
 
 @PublicAPI(stability="alpha")
 class ParquetResultSink:
-    """Write a Ray Dataset through its public ``write_parquet`` API.
+    """Write a Ray Dataset through the shared native write Gateway.
 
     Ray's public API does not return ``WriteResult.num_rows``.  P0 therefore
     returns ``rows_written=None`` and never launches a second ``count()`` job
@@ -51,18 +54,12 @@ class ParquetResultSink:
         plan_digest: str,
     ) -> ResultSinkReceipt:
         """Stream predictions to Parquet and return a credential-free receipt."""
-        write_kwargs: dict[str, Any] = {"compression": request.compression}
-        if request.min_rows_per_file is not None:
-            write_kwargs["min_rows_per_file"] = request.min_rows_per_file
         output_path = request.uri
         output_filesystem: Any | None = None
         parsed = urlsplit(request.uri)
         scheme = parsed.scheme.lower()
+        runtime_options: dict[str, Any] = {}
         if scheme == "s3":
-            import pyarrow.fs as pafs
-
-            from tributo.data._s3 import to_pyarrow_s3_kwargs
-
             profile = self._storage_resolver.resolve(request.storage_profile)
             if profile.profile_name is not None:
                 raise ResultWriteError(
@@ -83,21 +80,42 @@ class ParquetResultSink:
                 access_key_id=profile.access_key_id,
                 secret_access_key=profile.secret_access_key,
             )
-            output_filesystem = pafs.S3FileSystem(**to_pyarrow_s3_kwargs(s3_config))
-            write_kwargs["filesystem"] = output_filesystem
+            runtime_options["s3"] = s3_config
+            if request.max_bytes is not None:
+                import pyarrow.fs as pafs
+
+                from tributo.data._s3 import to_pyarrow_s3_kwargs
+
+                output_filesystem = pafs.S3FileSystem(**to_pyarrow_s3_kwargs(s3_config))
             output_path = f"{parsed.netloc}{parsed.path}"
         elif scheme == "file":
             output_path = unquote(parsed.path)
 
         try:
-            dataset.write_parquet(output_path, **write_kwargs)
+            options: dict[str, Any] = {"compression": request.compression}
+            if request.min_rows_per_file is not None:
+                options["min_rows_per_file"] = request.min_rows_per_file
+            default_write_gateway().execute(
+                WriteRequest(
+                    engine="ray",
+                    target_kind="parquet",
+                    target=request.uri,
+                    mode=WriteMode.APPEND,
+                    options=options,
+                    runtime_options=runtime_options,
+                ),
+                RayDataHandle(dataset),
+            )
         except Exception as exc:
+            source_error_type = getattr(exc, "source_error_type", None)
             logger.warning(
                 "Parquet result materialization failed (%s): %s",
-                type(exc).__name__,
+                source_error_type or type(exc).__name__,
                 safe_exception_summary(exc),
             )
-            raise ResultMaterializationError(type(exc).__name__) from None
+            raise ResultMaterializationError(
+                source_error_type or type(exc).__name__
+            ) from None
 
         if request.max_bytes is not None:
             actual_bytes = _output_bytes(output_path, output_filesystem)

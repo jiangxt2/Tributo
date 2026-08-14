@@ -9,7 +9,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tributo.data.base import WriteMode
+from tributo.data.base import DataConnector, WriteMode
+from tributo.data.csv import CsvDataConnector
 from tributo.data.parquet import (
     ParquetDataConnector,
     ParquetReadConfig,
@@ -48,19 +49,21 @@ class TestParquetDataConnector:
         with pytest.raises(ValueError, match="path must not be empty"):
             connector.read(path="")
 
-    def test_write_append_raises(self):
-        """APPEND 模式应被 ParquetDataConnector.write 拒绝。"""
-        connector = ParquetDataConnector()
-        # 用 mock 避免创建真实 Ray Dataset
-        from unittest.mock import MagicMock
-
-        mock_ds = MagicMock()
-        with pytest.raises(ValueError, match="does not support APPEND"):
-            connector.write(mock_ds, path="/tmp/out", mode=WriteMode.APPEND)
-
     def test_exists_returns_false(self):
         connector = ParquetDataConnector()
         assert connector.exists(path="/nonexistent") is False
+
+
+class TestCompatibilityConnectorModes:
+    """Legacy format facades preserve their mode restrictions."""
+
+    @pytest.mark.parametrize("connector_type", [ParquetDataConnector, CsvDataConnector])
+    def test_file_connectors_reject_append(
+        self, connector_type: type[DataConnector]
+    ) -> None:
+        """APPEND is rejected before the compatibility facade reaches Gateway."""
+        with pytest.raises(ValueError, match="does not support APPEND"):
+            connector_type().write(MagicMock(), path="/tmp/out", mode=WriteMode.APPEND)
 
 
 class TestParquetS3Glob:

@@ -18,6 +18,7 @@ prototypes.
 | ORC and Hive external-table reads | Not implemented | Locked Ray/Daft versions expose no validated public reader |
 | Third-party ingestion Provider/Binding SPI | Implemented | Installed packages use `tributo.ingestion_providers` plus `tributo.ingestion_bindings`; bad plugins are isolated, duplicate routes never replace built-ins, and Binding selection can constrain filesystem, catalog, and storage format |
 | Lance output | Implemented for embedding workflows | Not a generic inference sink |
+| Native bounded writes | Basic local/S3 native round-trips verified for Ray/Daft Parquet, CSV, and Iceberg plus Daft Lance through `WriteGateway`; Ray Lance is capability-gated in the current pylance combination. Legacy Parquet/CSV `DataConnector` facades reject `APPEND`, while explicit native Gateway consumers may use it. Broader target-lifecycle and native-failure matrices remain gated | Tributo owns control-plane validation only; engine-native APIs own data-plane writes |
 | Embedding canonical input | Implemented | Submit host performs credential-safe serialization only; the cluster resolves the explicit Ray/Daft engine, with Daft-to-Ray conversion at the consumer boundary |
 | Database inference sinks | Extension point | No built-in ClickHouse or Doris sink |
 | Ray/Daft transform compiler | Alpha | Portable bounded ETL subset with dual-engine Conformance |

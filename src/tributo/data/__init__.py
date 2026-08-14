@@ -98,6 +98,25 @@ from tributo.data.transform_ir import (
     TransformPipeline,
     transform_ir_digest,
 )
+from tributo.data.writing import (
+    GenericWriteTargetProvider,
+    LogicalWritePlan,
+    WriteBinding,
+    WriteBindingError,
+    WriteBindingRegistry,
+    WriteCapability,
+    WriteCapabilityError,
+    WriteDescriptor,
+    WriteError,
+    WriteExecutionContext,
+    WriteGateway,
+    WriteHandle,
+    WriteReceipt,
+    WriteRequest,
+    WriteTargetProvider,
+    WriteTargetRegistry,
+    default_write_gateway,
+)
 from tributo.exceptions import JobConfigurationError
 from tributo.plugin import discover_connector_plugins
 
@@ -205,6 +224,24 @@ __all__ = [
     "SqlPartitioning",
     "source_projection",
     "apply_source_projection",
+    # Native-engine writing control plane
+    "WriteBinding",
+    "WriteBindingError",
+    "WriteCapability",
+    "WriteBindingRegistry",
+    "WriteCapabilityError",
+    "WriteDescriptor",
+    "WriteError",
+    "WriteExecutionContext",
+    "WriteGateway",
+    "default_write_gateway",
+    "WriteHandle",
+    "WriteReceipt",
+    "WriteRequest",
+    "GenericWriteTargetProvider",
+    "LogicalWritePlan",
+    "WriteTargetProvider",
+    "WriteTargetRegistry",
 ]
 
 # Auto-discover third-party connector plugins via entry_points
