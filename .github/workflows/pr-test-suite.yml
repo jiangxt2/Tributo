@@ -28,6 +28,7 @@ jobs:
       trainer_bundle: ${{ github.event_name == 'merge_group' || steps.filter.outputs.trainer_bundle == 'true' }}
       docs: ${{ github.event_name == 'merge_group' || steps.filter.outputs.docs == 'true' }}
       data_ingestion: ${{ github.event_name == 'merge_group' || steps.filter.outputs.data_ingestion == 'true' }}
+      lance_vector: ${{ github.event_name == 'merge_group' || steps.filter.outputs.lance_vector == 'true' }}
       inference: ${{ github.event_name == 'merge_group' || steps.filter.outputs.inference == 'true' }}
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
@@ -95,6 +96,26 @@ jobs:
               - "tests/integrations/docker-compose.data-ingestion.yml"
               - "tests/integrations/runtime-profiles.json"
               - "scripts/run_data_ingestion_it.sh"
+              - "tools/tributo_it.py"
+              - "pyproject.toml"
+              - "uv.lock"
+              - ".github/workflows/it-runtime-image.yml"
+              - ".github/workflows/pr-test-suite.yml"
+            lance_vector:
+              - "src/tributo/vector_index/**"
+              - "src/tributo/cli.py"
+              - "src/tributo/job.py"
+              - "src/tributo/_common/runtime_env.py"
+              - "src/tributo/_common/storage.py"
+              - "src/tributo/_common/storage_profiles.py"
+              - "src/tributo/data/_s3.py"
+              - "tests/vector_index/**"
+              - "tests/integrations/test_lance_vector_index.py"
+              - "tests/integrations/Dockerfile.data-ingestion"
+              - "tests/integrations/Dockerfile.data-ingestion.dockerignore"
+              - "tests/integrations/docker-compose.data-ingestion.yml"
+              - "tests/integrations/runtime-profiles.json"
+              - "scripts/run_lance_vector_index_it.sh"
               - "tools/tributo_it.py"
               - "pyproject.toml"
               - "uv.lock"
@@ -576,6 +597,61 @@ jobs:
           test -z "$(docker volume ls --quiet \
             --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}")"
 
+  lance-vector-distributed:
+    name: Lance Vector Index Distributed (Docker Ray + MinIO)
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
+    needs: [paths-filter, lint]
+    if: needs.paths-filter.outputs.lance_vector == 'true'
+    permissions:
+      contents: read
+      packages: read
+    env:
+      COMPOSE_PROJECT_NAME: tributo-lance-vector-${{ github.run_id }}-${{ github.run_attempt }}
+      TRIBUTO_IT_ALLOW_LOCAL_BUILD: ${{ github.event_name == 'push' && '0' || '1' }}
+      TRIBUTO_IT_RUNTIME_REGISTRY: ghcr.io/jiangxt2/tributo-it-runtime
+      TRIBUTO_IT_RUNTIME_REGISTRY_WAIT_SECONDS: ${{ github.event_name == 'push' && '2100' || '0' }}
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+
+      - name: Authenticate to GHCR for the published runtime
+        if: github.event_name == 'push'
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Run isolated distributed Lance vector gate
+        run: ./scripts/run_lance_vector_index_it.sh
+
+      - name: Upload Lance vector integration logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: lance-vector-distributed-logs
+          path: |
+            /tmp/tributo-it-logs/${{ env.COMPOSE_PROJECT_NAME }}-test.log
+            /tmp/tributo-it-logs/${{ env.COMPOSE_PROJECT_NAME }}-services.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Stop isolated Lance vector infrastructure
+        if: always()
+        env:
+          TRIBUTO_IT_MINIO_IMAGE: tributo-cleanup-placeholder:unused
+          TRIBUTO_IT_RUNTIME_IMAGE: tributo-cleanup-placeholder:unused
+          TRIBUTO_IT_SOURCE_ROOT: ${{ github.workspace }}
+          TRIBUTO_IT_TOOL_IMAGE: tributo-cleanup-placeholder:unused
+        run: |
+          docker compose \
+            --file tests/integrations/docker-compose.data-ingestion.yml \
+            down --volumes --remove-orphans --timeout 30
+          test -z "$(docker ps --all --quiet \
+            --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}")"
+          test -z "$(docker network ls --quiet \
+            --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}")"
+          test -z "$(docker volume ls --quiet \
+            --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}")"
+
   inference-distributed:
     name: Inference Distributed (Docker Ray + MLflow + MinIO)
     runs-on: ubuntu-latest
@@ -715,6 +791,7 @@ jobs:
       - ray-runtime-env
       - data-ingestion-conformance
       - data-ingestion-distributed
+      - lance-vector-distributed
       - inference-distributed
       - build
       - core-walking-skeleton
@@ -736,6 +813,8 @@ jobs:
           DATA_INGESTION: ${{ needs.paths-filter.outputs.data_ingestion }}
           DATA_INGESTION_RESULT: ${{ needs.data-ingestion-conformance.result }}
           DATA_INGESTION_DISTRIBUTED_RESULT: ${{ needs.data-ingestion-distributed.result }}
+          LANCE_VECTOR: ${{ needs.paths-filter.outputs.lance_vector }}
+          LANCE_VECTOR_RESULT: ${{ needs.lance-vector-distributed.result }}
           INFERENCE: ${{ needs.paths-filter.outputs.inference }}
           INFERENCE_DISTRIBUTED_RESULT: ${{ needs.inference-distributed.result }}
           BUILD_RESULT: ${{ needs.build.result }}
@@ -787,6 +866,12 @@ jobs:
           else
             require_skipped data-ingestion-conformance "$DATA_INGESTION_RESULT"
             require_skipped data-ingestion-distributed "$DATA_INGESTION_DISTRIBUTED_RESULT"
+          fi
+
+          if [ "$LANCE_VECTOR" = "true" ]; then
+            require_success lance-vector-distributed "$LANCE_VECTOR_RESULT"
+          else
+            require_skipped lance-vector-distributed "$LANCE_VECTOR_RESULT"
           fi
 
           if [ "$INFERENCE" = "true" ]; then

@@ -18,10 +18,9 @@ try:
     import lance
     import pyarrow as pa
     import pyarrow.fs as pafs
+    from pyiceberg.catalog.sql import SqlCatalog
 except ModuleNotFoundError:
     pytest.skip("requires the data and data-daft extras", allow_module_level=True)
-import pytest
-from pyiceberg.catalog.sql import SqlCatalog
 
 from tests.data.ingestion_conformance import assert_dual_engine_conformance
 from tributo.data import (

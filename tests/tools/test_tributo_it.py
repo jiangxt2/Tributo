@@ -505,47 +505,141 @@ def test_run_data_ingestion_cli_dispatches_without_platform_argument(
     assert called == [profile]
 
 
-def test_image_has_repo_digests_detects_pulled_references(
+def test_container_states_capture_ownership_diagnostics(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    container_id = "a" * 64
+    unlabeled_id = "b" * 64
+    output = (
+        f"{container_id}\trunning\tray-head\ttributo-other-run\n"
+        f"{unlabeled_id}\texited\tstandalone\t\n"
+    )
     monkeypatch.setattr(
         tributo_it,
         "_run",
-        lambda args, **_kwargs: subprocess.CompletedProcess(
-            args, 0, '["ghcr.io/example/runtime@sha256:' + "a" * 64 + '"]', ""
+        lambda args, **_kwargs: subprocess.CompletedProcess(args, 0, output, ""),
+    )
+
+    assert tributo_it._container_states() == {
+        container_id: tributo_it.ContainerSnapshot(
+            state="running",
+            name="ray-head",
+            compose_project="tributo-other-run",
         ),
-    )
-    assert tributo_it._image_has_repo_digests("sha256:" + "b" * 64)
+        unlabeled_id: tributo_it.ContainerSnapshot(
+            state="exited",
+            name="standalone",
+            compose_project="",
+        ),
+    }
 
 
-def test_image_has_repo_digests_is_false_for_build_leftovers(
+def test_container_diagnostic_baseline_failure_is_advisory(
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
+    def fail() -> dict[str, tributo_it.ContainerSnapshot]:
+        raise tributo_it.TributoITError("diagnostic unavailable")
+
+    monkeypatch.setattr(tributo_it, "_container_states", fail)
+
+    assert tributo_it._capture_container_diagnostic_baseline() is None
+    assert "owned-project checks remain authoritative" in capsys.readouterr().err
+
+
+def test_external_container_activity_is_reported_without_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    container_id = "c" * 64
+    before = {
+        container_id: tributo_it.ContainerSnapshot(
+            state="created",
+            name="other-ray-worker",
+            compose_project="tributo-other-run",
+        )
+    }
     monkeypatch.setattr(
         tributo_it,
-        "_run",
-        lambda args, **_kwargs: subprocess.CompletedProcess(args, 0, "[]", ""),
+        "_container_states",
+        lambda: {
+            container_id: tributo_it.ContainerSnapshot(
+                state="running",
+                name="other-ray-worker",
+                compose_project="tributo-other-run",
+            )
+        },
     )
-    assert not tributo_it._image_has_repo_digests("sha256:" + "b" * 64)
+
+    tributo_it._report_external_container_activity(
+        "tributo-lance-vector-current",
+        before,
+    )
+
+    diagnostic = capsys.readouterr().err
+    assert "Concurrent external Docker activity detected and ignored" in diagnostic
+    assert "tributo-other-run" in diagnostic
+    assert "tributo-lance-vector-current" in diagnostic
 
 
-def test_image_has_repo_digests_tolerates_inspect_failure(
+def test_new_external_container_is_reported_without_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    new_id = "e" * 64
+    monkeypatch.setattr(
+        tributo_it,
+        "_container_states",
+        lambda: {
+            new_id: tributo_it.ContainerSnapshot(
+                state="running",
+                name="unrelated-service",
+                compose_project="another-project",
+            )
+        },
+    )
+
+    tributo_it._report_external_container_activity(
+        "tributo-lance-vector-current",
+        {},
+    )
+
+    diagnostic = capsys.readouterr().err
+    assert new_id in diagnostic
+    assert '"before": "<missing>"' in diagnostic
+    assert "another-project" in diagnostic
+
+
+def test_external_container_diagnostic_failure_does_not_fail_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    before = {
+        "d" * 64: tributo_it.ContainerSnapshot(
+            state="running",
+            name="other-service",
+            compose_project="tributo-other-run",
+        )
+    }
+
+    def fail() -> dict[str, tributo_it.ContainerSnapshot]:
+        raise tributo_it.TributoITError("diagnostic unavailable")
+
+    monkeypatch.setattr(tributo_it, "_container_states", fail)
+
+    tributo_it._report_external_container_activity(
+        "tributo-lance-vector-current",
+        before,
+    )
+
+    assert "owned-project checks remain authoritative" in capsys.readouterr().err
+
+
+def test_image_diagnostics_exclude_pulled_digest_only_references(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def failing_run(
-        args: list[str], **_kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
-        raise tributo_it.TributoITError(f"command failed: {args}")
-
-    monkeypatch.setattr(tributo_it, "_run", failing_run)
-    assert not tributo_it._image_has_repo_digests("sha256:" + "b" * 64)
-
-
-def test_image_baseline_skips_digest_only_references(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    none_id = "sha256:" + "c" * 64
-    dangling_id = "sha256:" + "d" * 64
+    dangling_id = "sha256:" + "1" * 64
+    pulled_id = "sha256:" + "2" * 64
 
     def fake_run(
         args: list[str], **_kwargs: object
@@ -554,35 +648,99 @@ def test_image_baseline_skips_digest_only_references(
             return subprocess.CompletedProcess(args, 0, f"{dangling_id}\n", "")
         if "inspect" in args:
             return subprocess.CompletedProcess(
-                args, 0, '["ghcr.io/example/runtime@sha256:' + "a" * 64 + '"]', ""
+                args,
+                0,
+                '["example/runtime@sha256:' + "3" * 64 + '"]',
+                "",
             )
         return subprocess.CompletedProcess(
-            args, 0, f"ghcr.io/example/runtime\t<none>\t{none_id}\n", ""
+            args,
+            0,
+            f"example/runtime\t<none>\t{pulled_id}\n",
+            "",
         )
 
     monkeypatch.setattr(tributo_it, "_run", fake_run)
 
-    baseline = tributo_it._image_baseline()
-    assert none_id not in baseline
-    assert dangling_id in baseline
+    assert tributo_it._diagnostic_image_ids() == {dangling_id}
 
 
-def test_image_baseline_keeps_none_tag_without_repo_digests(
+def test_new_image_artifacts_are_advisory(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    new_id = "sha256:" + "4" * 64
+    monkeypatch.setattr(
+        tributo_it,
+        "_diagnostic_image_ids",
+        lambda: {new_id},
+    )
+
+    tributo_it._report_new_image_artifacts(
+        "tributo-lance-vector-current",
+        set(),
+    )
+
+    diagnostic = capsys.readouterr().err
+    assert "detected and ignored" in diagnostic
+    assert new_id in diagnostic
+
+
+def test_image_diagnostic_failures_are_advisory(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def fail() -> set[str]:
+        raise tributo_it.TributoITError("diagnostic unavailable")
+
+    monkeypatch.setattr(tributo_it, "_diagnostic_image_ids", fail)
+
+    assert tributo_it._capture_image_diagnostic_baseline() is None
+    tributo_it._report_new_image_artifacts(
+        "tributo-lance-vector-current",
+        set(),
+    )
+    diagnostic = capsys.readouterr().err
+    assert diagnostic.count("owned-project checks remain authoritative") == 2
+
+
+def test_project_resources_are_queried_by_exact_compose_label(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    leftover_id = "sha256:" + "e" * 64
+    commands: list[list[str]] = []
 
     def fake_run(
         args: list[str], **_kwargs: object
     ) -> subprocess.CompletedProcess[str]:
-        if "dangling=true" in args:
-            return subprocess.CompletedProcess(args, 0, "", "")
-        if "inspect" in args:
-            return subprocess.CompletedProcess(args, 0, "[]", "")
-        return subprocess.CompletedProcess(
-            args, 0, f"repo\t<none>\t{leftover_id}\n", ""
-        )
+        commands.append(args)
+        return subprocess.CompletedProcess(args, 0, "owned-resource-id\n", "")
 
     monkeypatch.setattr(tributo_it, "_run", fake_run)
 
-    assert leftover_id in tributo_it._image_baseline()
+    assert tributo_it._project_resource_ids("tributo-lance-vector-current") == {
+        "containers": ["owned-resource-id"],
+        "networks": ["owned-resource-id"],
+        "volumes": ["owned-resource-id"],
+    }
+    assert len(commands) == 3
+    assert all(
+        "label=com.docker.compose.project=tributo-lance-vector-current" in command
+        for command in commands
+    )
+
+
+def test_owned_project_residue_remains_a_cleanup_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        tributo_it,
+        "_project_resource_ids",
+        lambda _project: {
+            "containers": [],
+            "networks": ["owned-network-id"],
+            "volumes": [],
+        },
+    )
+
+    with pytest.raises(tributo_it.TributoITError, match="still owns resources"):
+        tributo_it._assert_project_absent("tributo-lance-vector-current")

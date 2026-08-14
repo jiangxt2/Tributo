@@ -106,6 +106,11 @@ STABILITY_MAP: dict[str, str] = {
     "tributo.data.writing.contracts": "alpha",
     "tributo.data.writing.gateway": "alpha",
     "tributo.data.writing": "alpha",
+    # Distributed Lance vector indexing — alpha
+    "tributo.vector_index.contracts": "alpha",
+    "tributo.vector_index.index_job": "alpha",
+    "tributo.vector_index.maintenance": "alpha",
+    "tributo.vector_index.search": "alpha",
     # Exporting — beta
     "tributo.exporting.service": "beta",
     "tributo.exporting.models": "beta",

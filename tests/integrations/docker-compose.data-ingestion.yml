@@ -19,6 +19,7 @@ x-ray-common: &ray-common
     XDG_CACHE_HOME: /workspace/tributo-work/cache
     TRIBUTO_RAY_DASHBOARD_URL: http://127.0.0.1:8265
     TRIBUTO_RAY_MINIO_ENDPOINT: http://minio:9000
+    TRIBUTO_STORAGE_PROFILE_VECTOR_IT: '{"endpoint":"http://minio:9000","region":"us-east-1","access_key_id":"minioadmin","secret_access_key":"minioadmin123","use_ssl":false,"path_style":true}'
     MLFLOW_TRACKING_URI: http://mlflow:5000
     PYTHON_VERSION: ${PYTHON_VERSION}
     RAY_VERSION: ${RAY_VERSION}

@@ -60,6 +60,12 @@ data = [
 data-daft = [
     "daft[lance,ray]>=0.7.0,<0.8.0",
 ]
+vector-index = [
+    "tributo[s3]",
+    "lance-ray==0.5.0",
+    "pyarrow==19.0.1",
+    "pylance==9.0.0",
+]
 postgresql = [
     "psycopg[binary]>=3.2,<4",
     "SQLAlchemy>=2.0,<3",

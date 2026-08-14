@@ -1,42 +1,19 @@
-"""Ray runtime_env builder.
+"""Ray runtime environment builder.
 
-Handles the `/venv` vs. anaconda dual-environment separation in official
-Ray images by providing automated runtime_env configuration that ensures
-dependencies are correctly loaded when submitting via the Jobs API.
+Ships application code through Ray-managed ``working_dir`` and ``py_modules``.
+Python package dependencies remain owned by the cluster image or an explicit
+Ray runtime environment instead of being merged from unrelated environments.
 """
 
 from __future__ import annotations
 
 import logging
-import os
-import sys
 from pathlib import Path
 from typing import Any
 
 from tributo.util.annotations import DeveloperAPI
 
 logger = logging.getLogger(__name__)
-
-# Standard anaconda site-packages path in official Ray images
-_PY_VER = f"python{sys.version_info.major}.{sys.version_info.minor}"
-DOCKER_PYTHONPATH = (
-    f"/venv/lib/{_PY_VER}/site-packages:/home/ray/anaconda3/lib/{_PY_VER}/site-packages"
-)
-
-# Local dev environment uses the current Python's site-packages
-
-
-def _default_pythonpath() -> str:
-    """Auto-detect: anaconda path for Docker, current venv for local."""
-    if os.path.isdir("/home/ray/anaconda3"):
-        return DOCKER_PYTHONPATH
-    sp = os.path.join(
-        sys.prefix,
-        "lib",
-        f"python{sys.version_info.major}.{sys.version_info.minor}",
-        "site-packages",
-    )
-    return str(sp)
 
 
 # Directories and files excluded by default from working_dir archive
@@ -88,12 +65,14 @@ def build_runtime_env(
 ) -> dict[str, Any]:
     """Build a runtime_env dict suitable for the Ray Jobs API.
 
-    Core mechanism (addressing the Ray official image dual-environment pitfall):
+    Core mechanism:
     1. ``py_modules`` uploads the latest package code, taking priority over the
        older version baked into the image;
     2. ``working_dir`` uploads the project root, providing entrypoint scripts;
-    3. ``env_vars.PYTHONPATH`` points to anaconda site-packages, allowing the
-       ``/venv`` Python to find packages (e.g., ``ray``) only installed in anaconda.
+
+    Package dependencies must be installed in the cluster image or supplied by
+    an explicit Ray runtime environment. The builder never derives package paths
+    from the submitting process or combines unrelated ``site-packages`` trees.
 
     Args:
         project_root: Project root directory. When ``None``, walks up to find
@@ -102,8 +81,9 @@ def build_runtime_env(
             ``tributo``.
         extra_excludes: Additional directories/files to exclude (glob patterns).
         env_vars: Additional environment variables.
-        pythonpath: PYTHONPATH default, includes both ``/venv`` and anaconda
-            site-packages. Adjust if the cluster uses a different Python version.
+        pythonpath: Optional cluster-visible ``PYTHONPATH`` to append to an
+            explicitly supplied value. ``None`` leaves ``PYTHONPATH`` untouched.
+            Do not pass paths derived from the submitting host.
 
     Returns:
         A dict that can be passed directly to
@@ -137,14 +117,14 @@ def build_runtime_env(
     if env_vars:
         merged_env_vars.update(env_vars)
 
-    # Ensure PYTHONPATH includes both /venv and anaconda site-packages
-    pythonpath = pythonpath or _default_pythonpath()
-    existing_pythonpath = merged_env_vars.get("PYTHONPATH", "")
-    if pythonpath not in existing_pythonpath:
-        if existing_pythonpath:
-            merged_env_vars["PYTHONPATH"] = f"{existing_pythonpath}:{pythonpath}"
-        else:
-            merged_env_vars["PYTHONPATH"] = pythonpath
+    if pythonpath is not None:
+        existing_paths = merged_env_vars.get("PYTHONPATH", "").split(":")
+        requested_paths = pythonpath.split(":")
+        paths = list(
+            dict.fromkeys(path for path in (*existing_paths, *requested_paths) if path)
+        )
+        if paths:
+            merged_env_vars["PYTHONPATH"] = ":".join(paths)
 
     runtime_env: dict[str, Any] = {
         "working_dir": str(root),
