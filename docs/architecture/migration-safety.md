@@ -128,9 +128,9 @@ Ray/Daft typed handle → native Dataset/DataFrame writer
 ```
 
 `DataConnector.write()` remains a compatibility adapter and keeps its historical
-`None` return shape. Internal bounded writers, Embedding output, and the
-Parquet inference sink use `WriteGateway`; they do not call `DataConnector.write()`
-or a format-specific private helper. The Gateway carries only credential-free
+`None` return shape. Internal bounded writers and Parquet/Lance inference sinks
+use `WriteGateway`; they do not call `DataConnector.write()` or a
+format-specific private helper. The Gateway carries only credential-free
 request/digest/descriptor/receipt data. Engine-native runtime configuration is
 resolved inside the binding and is passed to Ray or Daft according to that
 engine's supported worker/runtime mechanism.
@@ -139,14 +139,15 @@ Current exit-gate status:
 
 - [x] Ray/Daft Parquet and CSV native bindings and compatibility facades are
   covered by contract tests and Docker cluster/MinIO IT.
-- [x] Iceberg and Daft Lance use native engine data-plane writers; PyIceberg
+- [x] Iceberg and Ray/Daft Lance use native engine data-plane writers; PyIceberg
   usage in Tributo is limited to catalog/table control-plane preflight and
   `exists()` compatibility checks.
 - [x] Static boundaries reject Tributo-owned Lance fragment/commit and other
   direct storage data-plane markers.
-- [ ] Ray Lance is not supported by the current locked Ray/pylance API
-  combination; the binding fails closed until the dependency contract is
-  satisfied. This is an explicit capability gap, not a fallback permission.
+- [x] Ray Lance is delegated by `tributo.ray.lance` to the official
+  `lance_ray.write_lance(stream=False)` integration with locked Lance-Ray and
+  PyLance versions. Consumers depend only on the Binding contract, so a future
+  `Dataset.write_lance` switch does not change their APIs or architecture.
 - [ ] Legacy `DataConnector.write()` removal remains a separate future change
   after its compatibility window, call audit, and deprecation evidence are
   complete.

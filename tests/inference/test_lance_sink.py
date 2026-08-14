@@ -7,13 +7,13 @@ from unittest.mock import patch
 
 import pyarrow as pa
 import pytest
-import ray.data
 
 from tests.inference.conformance.test_result_sink_contract import (
     assert_result_sink_conformance,
 )
-from tributo._common.lance_write import LanceWriteConfigurationError
 from tributo._common.storage_profiles import StorageProfile
+from tributo.data.base import WriteMode
+from tributo.data.writing.contracts import WriteBindingError, WriteCapabilityError
 from tributo.exceptions import ResultMaterializationError, ResultWriteError
 from tributo.inference.contracts import (
     LanceResultSinkRequest,
@@ -43,7 +43,6 @@ class _Dataset:
     def __init__(self, schema: pa.Schema, error: Exception | None = None) -> None:
         self._schema = schema
         self.error = error
-        self.write_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
         self.map_calls: list[tuple[object, dict[str, object]]] = []
 
     def schema(self) -> pa.Schema:
@@ -52,11 +51,6 @@ class _Dataset:
     def map_batches(self, fn: Any, **kwargs: Any) -> _Dataset:
         self.map_calls.append((fn, kwargs))
         return self
-
-    def write_lance(self, *args: Any, **kwargs: Any) -> None:
-        self.write_calls.append((args, kwargs))
-        if self.error is not None:
-            raise self.error
 
 
 class _Profiles:
@@ -83,37 +77,39 @@ def _request(**kwargs: Any) -> LanceResultSinkRequest:
 
 def test_lance_sink_runs_result_sink_conformance() -> None:
     dataset = _Dataset(_vector_schema())
-    with (
-        patch("tributo.integrations.sinks.lance.write_lance_dataset") as write_lance,
-        patch("tributo.integrations.sinks.lance._dataset_version", return_value=7),
-    ):
+    with patch(
+        "tributo.integrations.sinks.lance.default_write_gateway"
+    ) as default_gateway:
         assert_result_sink_conformance(
             LanceResultSink(), request=_request(), dataset=dataset
         )
 
-    write_lance.assert_called()
-    assert write_lance.call_args.kwargs["mode"] == ray.data.SaveMode.CREATE.value
-    assert write_lance.call_args.kwargs["data_storage_version"] is None
+    request, handle = default_gateway.return_value.execute.call_args.args
+    assert request.binding_id == "tributo.ray.lance"
+    assert request.mode == WriteMode.CREATE
+    assert "data_storage_version" not in request.options
+    assert handle.dataset is dataset
     assert dataset.map_calls
 
 
 def test_lance_sink_is_explicit_and_returns_schema_metadata() -> None:
     dataset = _Dataset(_vector_schema())
     request = _request(mode="overwrite", data_storage_version="2.1")
-    with (
-        patch("tributo.integrations.sinks.lance.write_lance_dataset") as write_lance,
-        patch("tributo.integrations.sinks.lance._dataset_version", return_value=12),
-    ):
+    with patch(
+        "tributo.integrations.sinks.lance.default_write_gateway"
+    ) as default_gateway:
         receipt = LanceResultSink().write(
             dataset, request, run_id="run-1", plan_digest="a" * 64
         )
 
-    call = write_lance.call_args
-    assert call.kwargs["uri"] == "/tmp/results.lance"
-    assert call.kwargs["mode"] == ray.data.SaveMode.OVERWRITE.value
-    assert call.kwargs["data_storage_version"] == "2.1"
+    gateway_request, handle = default_gateway.return_value.execute.call_args.args
+    assert gateway_request.target == "file:///tmp/results.lance"
+    assert gateway_request.mode == WriteMode.OVERWRITE
+    assert gateway_request.options["data_storage_version"] == "2.1"
+    assert handle.dataset is dataset
     assert receipt.metadata["format"] == "lance"
-    assert receipt.metadata["dataset_version"] == "12"
+    assert "dataset_version" not in receipt.metadata
+    assert receipt.metadata["data_storage_version"] == "2.1"
     assert len(receipt.metadata["schema_fingerprint"]) == 64
 
 
@@ -181,11 +177,13 @@ def test_lance_sink_sanitizes_materialization_failure(
     )
     with (
         patch(
-            "tributo.integrations.sinks.lance.write_lance_dataset",
-            side_effect=RuntimeError("permission denied at /Users/example/output"),
-        ),
+            "tributo.integrations.sinks.lance.default_write_gateway"
+        ) as default_gateway,
         pytest.raises(ResultMaterializationError) as error,
     ):
+        default_gateway.return_value.execute.side_effect = RuntimeError(
+            "permission denied at /Users/example/output"
+        )
         LanceResultSink().write(
             dataset, _request(), run_id="run-1", plan_digest="a" * 64
         )
@@ -198,11 +196,13 @@ def test_lance_sink_sanitizes_materialization_failure(
 def test_lance_sink_classifies_backend_value_error_as_materialization_failure() -> None:
     with (
         patch(
-            "tributo.integrations.sinks.lance.write_lance_dataset",
-            side_effect=ValueError("dataset not found at /private/result"),
-        ),
+            "tributo.integrations.sinks.lance.default_write_gateway"
+        ) as default_gateway,
         pytest.raises(ResultMaterializationError) as error,
     ):
+        default_gateway.return_value.execute.side_effect = ValueError(
+            "dataset not found at /private/result"
+        )
         LanceResultSink().write(
             _Dataset(_vector_schema()),
             _request(mode="append"),
@@ -214,14 +214,16 @@ def test_lance_sink_classifies_backend_value_error_as_materialization_failure() 
     assert error.value.__cause__ is None
 
 
-def test_lance_sink_classifies_writer_configuration_error_as_write_failure() -> None:
+def test_lance_sink_classifies_gateway_capability_error_as_sink_failure() -> None:
     with (
         patch(
-            "tributo.integrations.sinks.lance.write_lance_dataset",
-            side_effect=LanceWriteConfigurationError("unsupported storage version"),
-        ),
-        pytest.raises(ResultWriteError, match="unsupported storage version"),
+            "tributo.integrations.sinks.lance.default_write_gateway"
+        ) as default_gateway,
+        pytest.raises(ResultWriteError) as error,
     ):
+        default_gateway.return_value.execute.side_effect = WriteCapabilityError(
+            "missing binding at /private/result"
+        )
         LanceResultSink().write(
             _Dataset(_vector_schema()),
             _request(),
@@ -229,27 +231,46 @@ def test_lance_sink_classifies_writer_configuration_error_as_write_failure() -> 
             plan_digest="a" * 64,
         )
 
+    assert str(error.value) == (
+        "Lance result sink cannot satisfy the requested write capability"
+    )
+    assert error.value.__cause__ is None
+
+
+def test_lance_sink_preserves_native_source_error_classification() -> None:
+    with (
+        patch(
+            "tributo.integrations.sinks.lance.default_write_gateway"
+        ) as default_gateway,
+        pytest.raises(ResultMaterializationError) as error,
+    ):
+        default_gateway.return_value.execute.side_effect = WriteBindingError(
+            "native write failed", source_error_type="ValueError"
+        )
+        LanceResultSink().write(
+            _Dataset(_vector_schema()),
+            _request(),
+            run_id="run-1",
+            plan_digest="a" * 64,
+        )
+    assert error.value.source_error_type == "ValueError"
+
 
 def test_lance_sink_uses_only_the_sink_storage_profile() -> None:
     dataset = _Dataset(_vector_schema())
     with patch(
-        "tributo.integrations.sinks.lance.to_lance_storage_options",
-        return_value={"endpoint": "http://minio:9000"},
-    ) as options:
-        with (
-            patch(
-                "tributo.integrations.sinks.lance.write_lance_dataset"
-            ) as write_lance,
-            patch("tributo.integrations.sinks.lance._dataset_version", return_value=1),
-        ):
-            LanceResultSink(_Profiles()).write(
-                dataset,
-                _request(uri="s3://bucket/results"),
-                run_id="run-1",
-                plan_digest="a" * 64,
-            )
+        "tributo.integrations.sinks.lance.default_write_gateway"
+    ) as default_gateway:
+        LanceResultSink(_Profiles()).write(
+            dataset,
+            _request(uri="s3://bucket/results"),
+            run_id="run-1",
+            plan_digest="a" * 64,
+        )
 
-    options.assert_called_once()
-    assert write_lance.call_args.kwargs["storage_options"] == {
-        "endpoint": "http://minio:9000"
-    }
+    gateway_request = default_gateway.return_value.execute.call_args.args[0]
+    profile = gateway_request.runtime_options["s3"]
+    assert profile.endpoint == "http://minio:9000"
+    assert profile.access_key_id == "sink-key"
+    assert "sink-key" not in gateway_request.model_dump_json()
+    assert "sink-secret" not in gateway_request.model_dump_json()

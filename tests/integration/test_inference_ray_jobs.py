@@ -630,7 +630,7 @@ def test_lance_result_sink_create_append_overwrite_minio(
         plan_digest="9" * 64,
     )
 
-    append = sink.write(
+    sink.write(
         ray.data.from_arrow(
             pa.table(
                 {
@@ -658,13 +658,11 @@ def test_lance_result_sink_create_append_overwrite_minio(
     )
     table = lance.dataset(output_uri, storage_options=storage_options).to_table()
     assert create.metadata["format"] == "lance"
-    assert int(append.metadata["dataset_version"]) > int(
-        create.metadata["dataset_version"]
-    )
+    assert "dataset_version" not in create.metadata
     assert table.num_rows == 3
     assert table.column_names == ["id", "vector"]
 
-    overwrite = sink.write(
+    sink.write(
         ray.data.from_arrow(
             pa.table(
                 {
@@ -687,9 +685,6 @@ def test_lance_result_sink_create_append_overwrite_minio(
         plan_digest="7" * 64,
     )
     table = lance.dataset(output_uri, storage_options=storage_options).to_table()
-    assert int(overwrite.metadata["dataset_version"]) > int(
-        append.metadata["dataset_version"]
-    )
     assert table["id"].to_pylist() == [9]
 
 

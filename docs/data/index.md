@@ -60,13 +60,18 @@ does not imply an inference output sink.
 
 ## Lance output compatibility
 
-`LanceDataConnector` is a beta compatibility adapter over the same distributed
-Lance writer used by inference. It always writes Lance and never infers an
-output format from vector-like columns. Older releases wrote Parquet with ZSTD
-when no floating-point list column was present; callers that require Parquet
-must now select `ParquetDataConnector` or a Parquet ResultSink explicitly.
+`LanceDataConnector` is a beta compatibility adapter over `WriteGateway`, the
+same control-plane boundary used by inference. It always writes Lance and never
+infers an output format from vector-like columns. Older releases wrote Parquet
+with ZSTD when no floating-point list column was present; callers that require
+Parquet must now select `ParquetDataConnector` or a Parquet ResultSink
+explicitly.
 
-Lance save modes are fail-closed: `create` is an atomic create-only operation,
-`append` requires an existing target, and `overwrite` creates or replaces the
-target. Empty create/overwrite inputs still materialize the declared schema;
-an empty append preserves the existing dataset version.
+The stable Ray Binding currently delegates to the official Lance-Ray
+`write_lance(..., stream=False)` API; the Daft Binding delegates to
+`DataFrame.write_lance`. Tributo forwards `create`, `append`, and `overwrite`
+without rewriting target state and does not add guarantees for empty writes,
+schema compatibility or evolution, exclusive creation, fragment counts, or a
+post-write dataset version. Both Bindings remain data-plane replaceable: once
+the locked Ray/PyLance combination is compatible, adopting
+`Dataset.write_lance` changes only the Ray Binding.

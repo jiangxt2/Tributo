@@ -54,17 +54,16 @@ dev = [
     "pre-commit>=4.6.1",
 ]
 data = [
-    "pylance>=4.0.0",
+    "lance-ray==0.5.0",
     "pyiceberg>=0.11.1,<0.12.0",
+    "pylance==9.0.0",
 ]
 data-daft = [
     "daft[lance,ray]>=0.7.0,<0.8.0",
 ]
 vector-index = [
-    "tributo[s3]",
-    "lance-ray==0.5.0",
+    "tributo[data,s3]",
     "pyarrow==19.0.1",
-    "pylance==9.0.0",
 ]
 postgresql = [
     "psycopg[binary]>=3.2,<4",

@@ -5,7 +5,6 @@ from __future__ import annotations
 import sys
 from unittest.mock import MagicMock, patch
 
-import pyarrow as pa
 import pytest
 from pydantic import ValidationError
 
@@ -92,31 +91,43 @@ class TestLanceDataConnector:
         assert source.uri == "s3://bucket/dataset.lance"
         assert source.options["s3"]["endpoint"] == "http://minio:9000"
 
-    @patch("tributo.data.lance.write_lance_dataset")
-    def test_write_delegates_to_shared_distributed_lance_writer(
-        self, write_lance: MagicMock
+    @patch("tributo.data.lance.default_write_gateway")
+    def test_write_delegates_to_native_write_gateway(
+        self, default_gateway: MagicMock
     ) -> None:
         dataset = MagicMock()
-        dataset.schema.return_value = pa.schema(
-            [pa.field("id", pa.int64(), nullable=False)]
+        gateway = default_gateway.return_value
+        s3 = S3Config(
+            endpoint="http://minio:9000",
+            access_key_id="access-key",
+            secret_access_key="secret-key",
         )
 
         LanceDataConnector().write(
             dataset,
-            path="/data/output",
+            path="s3://bucket/output",
             mode=WriteMode.APPEND,
+            s3=s3,
             min_rows_per_file=10,
             max_rows_per_file=20,
             data_storage_version="2.1",
         )
 
-        write_lance.assert_called_once()
-        assert write_lance.call_args.args[0] is dataset
-        assert write_lance.call_args.kwargs["uri"] == "/data/output"
-        assert write_lance.call_args.kwargs["mode"] == "append"
-        assert write_lance.call_args.kwargs["min_rows_per_file"] == 10
-        assert write_lance.call_args.kwargs["max_rows_per_file"] == 20
-        assert write_lance.call_args.kwargs["data_storage_version"] == "2.1"
+        request, handle = gateway.execute.call_args.args
+        assert request.engine == "tributo.ray_data"
+        assert request.target_kind == "lance"
+        assert request.target == "s3://bucket/output"
+        assert request.binding_id == "tributo.ray.lance"
+        assert request.mode == WriteMode.APPEND
+        assert dict(request.options) == {
+            "min_rows_per_file": 10,
+            "max_rows_per_file": 20,
+            "data_storage_version": "2.1",
+        }
+        assert request.runtime_options["s3"] is s3
+        assert "access-key" not in request.model_dump_json()
+        assert "secret-key" not in request.model_dump_json()
+        assert handle.dataset is dataset
 
 
 if __name__ == "__main__":

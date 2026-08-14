@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import subprocess
+import tomllib
 from pathlib import Path
 from types import ModuleType
 
@@ -28,6 +29,14 @@ def _write_component_contract(root: Path, content: str) -> None:
     destination = root / COMPONENT_VERSIONS_RELATIVE
     destination.parent.mkdir(parents=True)
     destination.write_text(content)
+
+
+def test_changed_test_filter_matches_the_default_ci_suite() -> None:
+    precheck = _load_precheck()
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    addopts = project["tool"]["pytest"]["ini_options"]["addopts"]
+
+    assert addopts == f"-m '{precheck.CHANGED_TEST_MARKER_FILTER}'"
 
 
 def test_public_component_version_contract_is_allowed(tmp_path: Path) -> None:

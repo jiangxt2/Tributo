@@ -1,4 +1,4 @@
-"""Lance data connector backed by the shared distributed Lance writer."""
+"""Lance data connector backed by Tributo's native write Gateway."""
 
 from __future__ import annotations
 
@@ -8,9 +8,11 @@ from typing import Any, Optional
 import ray.data
 from pydantic import BaseModel, Field, model_validator
 
-from tributo._common.lance_write import write_lance_dataset
 from tributo.data.base import DataConnector, S3Config, WriteMode
+from tributo.data.contracts.handles import RayDataHandle
 from tributo.data.registry import register_connector
+from tributo.data.writing.builtins import default_write_gateway
+from tributo.data.writing.contracts import WriteRequest
 from tributo.util.annotations import PublicAPI
 
 logger = logging.getLogger(__name__)
@@ -45,8 +47,8 @@ class LanceDataConnector(DataConnector):
     """Lance data connector.
 
     The compatibility write path retains the historical connector shape while
-    sharing Tributo's distributed Ray Data/Lance transaction writer and strict
-    save-mode semantics with inference.
+    delegating data-plane work to the same Ray Lance Binding used by inference.
+    Save-mode behavior is owned by the selected native provider.
     """
 
     def read(self, **kwargs: Any) -> ray.data.Dataset:
@@ -86,19 +88,26 @@ class LanceDataConnector(DataConnector):
         cfg = LanceWriteConfig(**kwargs)
 
         logger.info("Writing Lance dataset: %s", cfg.path)
-        from tributo.data._s3 import to_lance_storage_options
-
-        schema = dataset.schema()
-        arrow_schema = schema.base_schema if hasattr(schema, "base_schema") else schema
-        write_lance_dataset(
-            dataset,
-            uri=cfg.path,
-            schema=arrow_schema,
-            mode=cfg.mode.value,
-            min_rows_per_file=cfg.min_rows_per_file,
-            max_rows_per_file=cfg.max_rows_per_file,
-            data_storage_version=cfg.data_storage_version,
-            storage_options=to_lance_storage_options(cfg.s3),
+        options: dict[str, Any] = {
+            "min_rows_per_file": cfg.min_rows_per_file,
+            "max_rows_per_file": cfg.max_rows_per_file,
+        }
+        if cfg.data_storage_version is not None:
+            options["data_storage_version"] = cfg.data_storage_version
+        runtime_options: dict[str, Any] = {}
+        if cfg.s3 is not None:
+            runtime_options["s3"] = cfg.s3
+        default_write_gateway().execute(
+            WriteRequest(
+                engine="ray",
+                target_kind="lance",
+                target=cfg.path,
+                binding_id="tributo.ray.lance",
+                mode=cfg.mode,
+                options=options,
+                runtime_options=runtime_options,
+            ),
+            RayDataHandle(dataset),
         )
 
 

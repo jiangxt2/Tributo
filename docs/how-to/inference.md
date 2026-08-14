@@ -134,19 +134,28 @@ contract is approved.
 
 `output_format="lance"` selects a generic Lance ResultSink. Declare
 `output_vector_columns` when fixed-size floating-point vector validation is
-required. Ray Data owns distributed repartitioning and fragment tasks, while
-Lance owns the atomic transaction commit. This shared writer records the
-resulting dataset version and schema fingerprint and does not build an ANN
-index. A Lance table may contain ordinary columns as well as user-produced
-vectors.
+required. The sink builds a credential-safe `WriteRequest` and selects the
+stable `tributo.ray.lance` Binding. That Binding currently delegates all
+data-plane work to `lance_ray.write_lance(stream=False)` and records the schema
+fingerprint in the sink receipt; it does not probe a post-write dataset version
+or build an ANN index. A Lance table may contain ordinary columns as well as
+user-produced vectors.
 
-Direct `LanceResultSinkRequest` construction defaults to fail-closed `create`.
+Direct `LanceResultSinkRequest` construction defaults to provider-native `create`.
 The legacy `InferenceConfig.output_mode` remains `overwrite` to preserve its
-historical output behavior. `create` rejects an existing dataset and permits
-only one concurrent creator; `append` requires an existing dataset; and
-`overwrite` may create or replace a dataset. Empty `create` and `overwrite`
-operations materialize a schema-bearing dataset, while an empty `append` is a
-version-preserving no-op.
+historical output behavior. Tributo forwards `create`, `append`, and
+`overwrite` without inspecting or rewriting target state. Empty-input,
+concurrent-create, fragment-count, and version behavior therefore follows the
+locked Lance-Ray provider rather than a stronger Tributo contract.
+
+`LanceResultSink` and `LanceDataConnector` never import Lance-Ray directly;
+both enter `WriteGateway`. The exposed request options are limited to the
+intersection needed by Lance-Ray and Ray Data: mode, URI, storage options,
+minimum/maximum rows per file, and Lance data-storage version. A future switch
+to `Dataset.write_lance` changes only `RayLanceWriteBinding` and its dependency
+declaration. Empty-input behavior, schema compatibility or evolution,
+concurrent-create semantics, fragment layout, and post-write dataset versions
+remain provider-owned behavior rather than Tributo guarantees.
 
 `LanceDataConnector.write` now always writes Lance. Earlier beta releases
 silently wrote Parquet with ZSTD when no floating-point list column was

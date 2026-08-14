@@ -49,7 +49,7 @@ DataConnector.write(**legacy kwargs)
   └─ compatibility normalizer
        └─ WriteRequest(engine="ray", target_kind, target, mode)
 
-Embedding output policy / ParquetResultSink
+ParquetResultSink / LanceResultSink / compatibility DataConnector
   └─ explicit WriteRequest
 
 Any entry above
@@ -60,7 +60,7 @@ WriteBindingRegistry → credential-free capability negotiation
   ↓
 WriteGateway.execute(typed RayDataHandle or DaftDataFrameHandle)
   ↓
-RayWriteBinding → ray.data.Dataset.write_*
+RayWriteBinding → ray.data.Dataset.write_* or official Lance-Ray writer
 DaftWriteBinding → daft.DataFrame.write_*
   ↓
 WriteReceipt / compatibility return shape
@@ -71,7 +71,10 @@ credential-free receipts, and error redaction. Ray Data or Daft owns the
 distributed data plane and native file/table commit. Iceberg catalog loading or
 table creation in a binding is control-plane preflight only. No Tributo
 consumer may bypass the Gateway with `to_arrow()`, a PyIceberg data mutation,
-or a Lance fragment/commit helper.
+or a Lance fragment/commit helper. The current Ray Lance implementation is
+isolated in `RayLanceWriteBinding`, which calls
+`lance_ray.write_lance(stream=False)`. Switching that one Binding to
+`Dataset.write_lance` must not change any consumer in this call chain.
 
 **Canonical ingestion implementation**:
 - `data/transform_ir.py` — versioned engine-neutral ETL contract.

@@ -46,7 +46,8 @@ UV_RUN = ("uv", "run", "--locked", "--no-sync", "--offline")
 # in-process Moto service and are safe here; MinIO and Ray runtime-env tests
 # require external infrastructure and belong to their dedicated CI jobs.
 CHANGED_TEST_MARKER_FILTER = (
-    "not integration and not slow and not minio_compat and not ray_runtime_env"
+    "not slow and not distributed and not minio_compat and not ray_runtime_env "
+    "and not integration"
 )
 
 MERGE_CONFLICT_MARKER_PATTERN = re.compile(

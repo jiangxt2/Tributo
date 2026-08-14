@@ -7,18 +7,17 @@ import json
 import logging
 from functools import partial
 from typing import TYPE_CHECKING, Any, ClassVar, Protocol
-from urllib.parse import unquote, urlsplit
+from urllib.parse import urlsplit
 
 import pyarrow as pa
 import pyarrow.compute as pc
 
-from tributo._common.lance_write import (
-    LanceWriteConfigurationError,
-    write_lance_dataset,
-)
 from tributo._common.storage_profiles import StorageProfile, StorageProfileResolver
-from tributo.data._s3 import to_lance_storage_options
+from tributo.data.base import WriteMode
+from tributo.data.contracts.handles import RayDataHandle
 from tributo.data.refs import schema_fingerprint
+from tributo.data.writing.builtins import default_write_gateway
+from tributo.data.writing.contracts import WriteCapabilityError, WriteRequest
 from tributo.exceptions import ResultMaterializationError, ResultWriteError
 from tributo.util.annotations import PublicAPI
 
@@ -38,15 +37,14 @@ class _StorageProfileResolverLike(Protocol):
 
 @PublicAPI(stability="alpha")
 class LanceResultSink:
-    """Write a Ray Dataset through the shared distributed Lance writer.
+    """Write a Ray Dataset through the shared native write Gateway.
 
     The sink is deliberately explicit: it always writes Lance, regardless of
     whether the output contains a vector column.  Vector schema checks apply
     only to columns declared by ``request.vector_columns``; model semantics
-    remain the responsibility of the caller's Predictor.  Ray Data owns
-    repartitioning and distributed fragment tasks, while Lance owns the atomic
-    transaction commit.  The same writer is shared with the compatibility
-    Connector so save-mode and empty-input semantics cannot drift.
+    remain the responsibility of the caller's Predictor.  The Gateway selects
+    the stable Ray Lance Binding; the selected provider owns all data-plane and
+    save-mode behavior.  The compatibility Connector uses the same boundary.
     """
 
     api_version: ClassVar[int] = 1
@@ -77,40 +75,54 @@ class LanceResultSink:
             )
         arrow_schema = _arrow_schema(dataset.schema())
         _validate_vector_schema(arrow_schema, request)
-        storage_options = _storage_options(
+        runtime_s3 = _runtime_s3(
             self._storage_resolver, request.storage_profile, request.uri
         )
-        output_path = _output_path(request.uri)
         try:
             if request.vector_columns:
                 dataset = dataset.map_batches(
                     partial(validate_vector_batch, request=request),
                     batch_format="pyarrow",
                 )
-            write_lance_dataset(
-                dataset,
-                uri=output_path,
-                schema=arrow_schema,
-                mode=request.mode,
-                min_rows_per_file=request.min_rows_per_file,
-                max_rows_per_file=request.max_rows_per_file,
-                data_storage_version=request.data_storage_version,
-                storage_options=storage_options,
+            options: dict[str, Any] = {
+                "min_rows_per_file": request.min_rows_per_file,
+                "max_rows_per_file": request.max_rows_per_file,
+            }
+            if request.data_storage_version is not None:
+                options["data_storage_version"] = request.data_storage_version
+            runtime_options: dict[str, Any] = {}
+            if runtime_s3 is not None:
+                runtime_options["s3"] = runtime_s3
+            default_write_gateway().execute(
+                WriteRequest(
+                    engine="ray",
+                    target_kind="lance",
+                    target=request.uri,
+                    binding_id="tributo.ray.lance",
+                    mode=WriteMode(request.mode),
+                    options=options,
+                    runtime_options=runtime_options,
+                ),
+                RayDataHandle(dataset),
             )
-            version = _dataset_version(output_path, storage_options)
         except ResultWriteError:
             raise
-        except LanceWriteConfigurationError as exc:
-            raise ResultWriteError(str(exc)) from None
+        except WriteCapabilityError:
+            raise ResultWriteError(
+                "Lance result sink cannot satisfy the requested write capability"
+            ) from None
         except Exception as exc:
             from tributo.inference._credential_safety import safe_exception_summary
 
+            source_error_type = getattr(exc, "source_error_type", None)
             logger.warning(
                 "Lance result materialization failed (%s): %s",
-                type(exc).__name__,
+                source_error_type or type(exc).__name__,
                 safe_exception_summary(exc),
             )
-            raise ResultMaterializationError(type(exc).__name__) from None
+            raise ResultMaterializationError(
+                source_error_type or type(exc).__name__
+            ) from None
 
         fingerprint = schema_fingerprint(arrow_schema)
         result_id = _result_id(
@@ -122,7 +134,6 @@ class LanceResultSink:
         metadata = {
             "format": "lance",
             "mode": request.mode,
-            "dataset_version": str(version),
             "schema_fingerprint": fingerprint,
         }
         if request.data_storage_version is not None:
@@ -143,11 +154,11 @@ def _arrow_schema(schema: Any) -> pa.Schema:
     return base_schema
 
 
-def _storage_options(
+def _runtime_s3(
     resolver: _StorageProfileResolverLike,
     profile_name: str | None,
     uri: str,
-) -> dict[str, str] | None:
+) -> StorageProfile | None:
     if urlsplit(uri).scheme.lower() != "s3":
         return None
     profile = resolver.resolve(profile_name)
@@ -157,22 +168,7 @@ def _storage_options(
             f"TRIBUTO_STORAGE_PROFILE_{profile.profile_name.upper()} or use the "
             "default IAM/environment chain"
         )
-    return to_lance_storage_options(profile)
-
-
-def _output_path(uri: str) -> str:
-    parsed = urlsplit(uri)
-    if parsed.scheme.lower() == "file":
-        return unquote(parsed.path)
-    return uri
-
-
-def _dataset_version(uri: str, storage_options: dict[str, str] | None) -> int:
-    import lance
-
-    dataset = lance.dataset(uri, storage_options=storage_options)
-    version: int = dataset.version
-    return version
+    return profile
 
 
 def _validate_vector_schema(schema: pa.Schema, request: LanceResultSinkRequest) -> None:

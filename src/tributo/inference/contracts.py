@@ -298,9 +298,11 @@ class LanceResultSinkRequest(_FrozenContract):
 
     Tributo validates only the Arrow schema contract declared here.  It does
     not infer model task semantics, pooling, normalization, or vector metadata.
-    Direct requests default to fail-closed ``create``.  The legacy
+    Direct requests default to provider-native ``create``.  The legacy
     ``InferenceConfig`` pipeline separately retains its historical
-    ``overwrite`` default for compatibility.
+    ``overwrite`` default for compatibility.  Tributo does not add stricter
+    create, empty-input, schema-evolution, fragment-count, or dataset-version
+    guarantees.
     """
 
     sink_id: Literal["lance-v1"] = "lance-v1"

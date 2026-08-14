@@ -55,6 +55,18 @@ def test_production_writers_do_not_reimplement_data_plane_commit() -> None:
     assert violations == []
 
 
+def test_only_native_binding_calls_lance_ray_writer() -> None:
+    """Keep the replaceable Lance-Ray dependency behind one Binding."""
+    allowed = WRITING_ROOT / "native_bindings.py"
+    marker = "lance_ray.write_lance("
+    callers = tuple(
+        path for path in sorted(SOURCE_ROOT.rglob("*.py")) if marker in path.read_text()
+    )
+
+    assert callers == (allowed,)
+    assert not (SOURCE_ROOT / "_common" / "lance_write.py").exists()
+
+
 def _data_handle_to_arrow_calls(path: Path) -> tuple[str, ...]:
     """Find data-handle materialization calls without banning schema conversion."""
     tree = ast.parse(path.read_text(), filename=str(path))

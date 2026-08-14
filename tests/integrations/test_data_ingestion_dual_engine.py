@@ -3,7 +3,7 @@
 Run inside ``ray-head`` with ``TRIBUTO_DOCKER_RAY_TEST=1``. The test path is
 under the cluster's shared writable work mount so Ray and Daft workers see the
 same files, while every node imports from one read-only source snapshot. The
-MinIO case also exercises native Parquet, CSV, and Iceberg writes over S3.
+MinIO case also exercises native Parquet, CSV, Iceberg, and Lance writes over S3.
 """
 
 from __future__ import annotations
@@ -55,7 +55,6 @@ from tributo.data import (
     open_ingestion,
     ray_worker_distribution_probe,
 )
-from tributo.data.writing.native_bindings import RayLanceWriteBinding
 
 if pytest is not None:
     pytestmark = pytest.mark.integration
@@ -333,26 +332,23 @@ def _assert_native_write_conformance() -> None:
             assert receipt.committed is True
             assert list(target.rglob("*." + target_kind))
 
-        if engine == "ray" and not RayLanceWriteBinding.is_available():
-            print("Ray Lance native binding unavailable; skipping Ray Lance only")
-        else:
-            lance_target = output_root / f"{engine}-lance"
-            handle = (
-                RayDataHandle(ray.data.from_items(rows))
-                if engine == "ray"
-                else DaftDataFrameHandle(daft.from_pylist(rows))
-            )
-            receipt = gateway.execute(
-                WriteRequest(
-                    engine=engine,
-                    target_kind="lance",
-                    target=str(lance_target),
-                    mode=WriteMode.OVERWRITE,
-                ),
-                handle,
-            )
-            assert receipt.committed is True
-            assert lance_target.exists()
+        lance_target = output_root / f"{engine}-lance"
+        handle = (
+            RayDataHandle(ray.data.from_items(rows))
+            if engine == "ray"
+            else DaftDataFrameHandle(daft.from_pylist(rows))
+        )
+        receipt = gateway.execute(
+            WriteRequest(
+                engine=engine,
+                target_kind="lance",
+                target=str(lance_target),
+                mode=WriteMode.OVERWRITE,
+            ),
+            handle,
+        )
+        assert receipt.committed is True
+        assert lance_target.exists()
 
         print(f"{engine} Iceberg native write")
         catalog_name = f"{engine}-write-catalog"
@@ -394,7 +390,7 @@ def _assert_native_write_conformance() -> None:
 
 
 def _assert_native_s3_write_conformance(s3: S3Config) -> None:
-    """Exercise native Ray/Daft Parquet, CSV, and Iceberg writes on MinIO."""
+    """Exercise native Ray/Daft Parquet, CSV, Iceberg, and Lance on MinIO."""
     from pyiceberg.catalog import load_catalog
 
     from tributo.data._s3 import merge_iceberg_properties
@@ -447,27 +443,24 @@ def _assert_native_s3_write_conformance(s3: S3Config) -> None:
                 assert receipt.committed is True
                 assert_files(prefix)
 
-            if engine == "ray" and not RayLanceWriteBinding.is_available():
-                print("Ray Lance native binding unavailable; skipping Ray Lance only")
-            else:
-                lance_prefix = f"{bucket}/{engine}-lance"
-                handle = (
-                    RayDataHandle(ray.data.from_items(rows))
-                    if engine == "ray"
-                    else DaftDataFrameHandle(daft.from_pylist(rows))
-                )
-                receipt = gateway.execute(
-                    WriteRequest(
-                        engine=engine,
-                        target_kind="lance",
-                        target=f"s3://{lance_prefix}",
-                        mode=WriteMode.OVERWRITE,
-                        runtime_options={"s3": s3},
-                    ),
-                    handle,
-                )
-                assert receipt.committed is True
-                assert_files(lance_prefix)
+            lance_prefix = f"{bucket}/{engine}-lance"
+            handle = (
+                RayDataHandle(ray.data.from_items(rows))
+                if engine == "ray"
+                else DaftDataFrameHandle(daft.from_pylist(rows))
+            )
+            receipt = gateway.execute(
+                WriteRequest(
+                    engine=engine,
+                    target_kind="lance",
+                    target=f"s3://{lance_prefix}",
+                    mode=WriteMode.OVERWRITE,
+                    runtime_options={"s3": s3},
+                ),
+                handle,
+            )
+            assert receipt.committed is True
+            assert_files(lance_prefix)
 
             print(f"{engine} Iceberg native S3 write")
             catalog_name = f"{engine}-s3-write-catalog"

@@ -138,6 +138,7 @@ Kubernetes
 kwargs
 Lance
 pylance
+PyLance
 LanceResultSinkRequest
 LanceVectorColumnSpec
 labelled
