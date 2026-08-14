@@ -393,7 +393,7 @@ before pytest starts; infrastructure images use the immutable digests recorded
 in `tests/integrations/inference-it-versions.conf`.
 
 Each invocation uses a unique Compose project without host ports or fixed
-container names. On success, failure, interrupt, or CI cancellation, the
+container names. On success, failure, interrupt, or operator cancellation, the
 runner captures logs and removes only that project's containers, network, and
 volumes. It verifies that no project-labelled resource remains and that every
 container which existed before the test still exists in the same state. The

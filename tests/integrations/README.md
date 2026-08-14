@@ -1,28 +1,33 @@
 # Tributo Integration Tests
 
-Model-export integration tests run in an isolated Docker Compose project and
-submit work through the Ray Jobs API. They never reuse a host Ray runtime, an
-existing MLflow server, or a pre-existing container.
+External integration tests run through lifecycle-owned entry points and, when
+required, submit work through the Ray Jobs API in an isolated Docker Compose
+project. They never reuse a host Ray runtime, an existing MLflow server, or a
+pre-existing container. `ci/test-suites.json` owns their impact rules and
+reports required evidence, but no GitHub Actions event executes these suites.
 
 ---
 
 ## Test List
 
-| Test | File | Coverage | Prerequisites |
-|------|------|----------|---------------|
-| Model-export golden path | `../integration/test_walking_skeleton.py` | Ray Data Parquet → XGBoost → ONNX + UBJ S3 Bundle → BundleReader → batch inference → Ray Serve HTTP, plus MLflow provenance | Docker only; the runner creates all infrastructure |
-| First-party export conformance | `../training/exporters/test_first_party_conformance.py` | XGBoost, Torch, Hugging Face, quantizer, validator, and checkpoint-source contracts in the pinned Linux image | Docker only; executed by the model-export runner |
-| S3/MinIO contract | `../integration/test_export_s3.py`, `../integration/test_minio_compat.py` | Manifest-last publication, Lease/CAS, alias, GC, path-style access, and conditional writes against the run-owned MinIO service | Isolated model-export runner |
-| MLflow Hook | `test_e2e_mlflow.py` | Committed Bundle upload, replay deduplication, explicit run reuse, and failure semantics | Isolated model-export runner |
-| ClickHouse E2E | `test_e2e_clickhouse.py` | ClickHouse table → Daft OLAP Binding → explicit Daft-to-Ray adapter → XGBoost distributed training → MLflow → ONNX | Ray + Daft + `daft-olap-connectors` + ClickHouse + MLflow |
-| Dual-engine Docker | `test_data_ingestion_dual_engine.py` | Local Parquet, full ETL chain, typed handles, worker-version evidence | Docker Ray cluster + Daft |
-| Lance vector index | `test_lance_vector_index.py` | Distributed IVF_FLAT/IVF_PQ build, append coverage, global Top-K, fallback, optimization, compaction, Ray Jobs, and S3 result delivery | Docker Ray cluster + Lance-Ray + MinIO |
-| File conformance | `../integration/test_data_ingestion_conformance.py` | Local/MinIO Parquet and CSV through Ray Data and Daft | Local Ray runtime + MinIO |
-| Table conformance | `../integration/test_table_format_ingestion.py` | Local/MinIO Iceberg and Lance through Ray Data and Daft | Local Ray runtime + MinIO |
-| PostgreSQL conformance | `../integration/test_postgresql_ingestion.py` | Structured table read through Ray Data and Daft | Local Ray runtime + PostgreSQL |
-| Inference Ray Jobs | `../integration/test_inference_ray_jobs.py`, `../integration/test_lance_result_sink_ray.py` | Bundle, real post-training inline/detached inference, MLflow import, external artifacts, retry identity, credential domains, empty/NaN inference behavior, Lance-Ray local/S3 create/append/overwrite, and vector schemas | Isolated version-locked Docker Ray + Lance-Ray + MLflow + MinIO |
-| Streaming | `test_e2e_streaming.py` | Streaming inference service | TBD |
-| Tune trial correctness | `../integration/test_tune_ray_cluster.py` | Ray Jobs → two concurrent XGBoost Tune trials, strict target metric, isolated checkpoints, ResultGrid, and zero Bundle publication | Isolated version-locked Docker Ray cluster via `run_tune_it.sh` |
+| Test | File | Tier | Coverage | Prerequisites |
+|------|------|------|----------|---------------|
+| Model-export golden path | `../integration/test_walking_skeleton.py` | `manual_external` | Ray Data Parquet → XGBoost → ONNX + UBJ S3 Bundle → BundleReader → batch inference → Ray Serve HTTP, plus MLflow provenance | Docker only; the runner creates all infrastructure |
+| First-party export conformance | `../training/exporters/test_first_party_conformance.py` | `manual_external` | XGBoost, Torch, Hugging Face, quantizer, validator, and checkpoint-source contracts in the pinned Linux image | Docker only; executed by the model-export runner |
+| S3/MinIO contract | `../integration/test_export_s3.py`, `../integration/test_minio_compat.py` | `ci_fast` Moto / `manual_external` MinIO | Manifest-last publication, Lease/CAS, alias, GC, path-style access, and conditional writes | Ephemeral Moto in CI; run-owned MinIO externally |
+| MLflow Hook | `test_e2e_mlflow.py` | `manual_external` | Committed Bundle upload, replay deduplication, explicit run reuse, and failure semantics | Isolated model-export runner |
+| ClickHouse E2E | `test_e2e_clickhouse.py` | `quarantine` | ClickHouse table → Daft OLAP Binding → explicit Daft-to-Ray adapter → XGBoost distributed training → MLflow → ONNX | Lifecycle and ownership contract pending |
+| Dual-engine Docker | `test_data_ingestion_dual_engine.py` | `manual_external` | Local Parquet, full ETL chain, typed handles, worker-version evidence | Docker Ray cluster + Daft |
+| Lance vector index | `test_lance_vector_index.py` | `manual_external` | Distributed IVF_FLAT/IVF_PQ build, append coverage, global Top-K, fallback, optimization, compaction, Ray Jobs, and S3 result delivery | Docker Ray cluster + Lance-Ray + MinIO |
+| File conformance | `../integration/test_data_ingestion_conformance.py` | `manual_external` | Local/MinIO Parquet and CSV through Ray Data and Daft | Local Ray runtime + MinIO |
+| Table conformance | `../integration/test_table_format_ingestion.py` | `manual_external` | Local/MinIO Iceberg and Lance through Ray Data and Daft | Local Ray runtime + MinIO |
+| PostgreSQL conformance | `../integration/test_postgresql_ingestion.py` | `manual_external` | Structured table read through Ray Data and Daft | Local Ray runtime + PostgreSQL |
+| Inference Ray Jobs | `../integration/test_inference_ray_jobs.py`, `../integration/test_lance_result_sink_ray.py` | `manual_external` | Bundle, real post-training inline/detached inference, MLflow import, external artifacts, retry identity, credential domains, empty/NaN behavior, Lance-Ray local/S3 create/append/overwrite, and vector schemas | Isolated version-locked Docker Ray + Lance-Ray + MLflow + MinIO |
+| Streaming | `test_e2e_streaming.py` | `quarantine` | Streaming inference service | Model and service lifecycle pending |
+| Tune trial correctness | `../integration/test_tune_ray_cluster.py` | `manual_external` | Ray Jobs → two concurrent XGBoost Tune trials, strict target metric, isolated checkpoints, ResultGrid, and zero Bundle publication | Isolated version-locked Docker Ray cluster via `run_tune_it.sh` |
+| Explainability Ray Jobs | `../integration/test_explainability_ray_jobs.py` | `manual_external` | Explanation submission, distributed execution, and output evidence | Lifecycle-owned Ray Jobs runner |
+| Distributed algorithms | `../integration/test_distributed_algorithm_local.py` | `manual_external` | Collective and MapReduce execution, sharding, receipts, and Bundle atomicity | Isolated multi-worker Ray environment |
+| Ray runtime environment | `../integration/test_ray_runtime_env.py` | `manual_external` | uv runtime-environment propagation into Ray workers | Host capable of starting the required Ray runtime |
 
 ---
 
@@ -42,14 +47,14 @@ host ports, and runs pytest inside `ray-head`. The locked `lance-ray` and
 so model actors execute on the independent worker.
 
 An EXIT/INT/TERM trap captures logs and executes project-scoped `down
---volumes --remove-orphans`. CI repeats the same exact-project cleanup with an
-`always()` step. Both paths verify that project-labelled resources are gone;
-no prune, global deletion, or shared-image cleanup is permitted. Test and
-service logs remain under `/tmp/<compose-project>-*.log` after cleanup.
+--volumes --remove-orphans`. The runner verifies that project-labelled
+resources are gone; no prune, global deletion, or shared-image cleanup is
+permitted. Test and service logs remain under
+`/tmp/<compose-project>-*.log` after cleanup.
 
 ---
 
-## Tune Integration Gate
+## Tune External Validation Gate
 
 Run the Tune-only Gate from the repository root:
 
@@ -80,9 +85,9 @@ Compose project after logs have been captured.
 
 ---
 
-## Model-Export Integration Gate
+## Model-Export External Validation Gate
 
-Run the required CI subset from the repository root:
+Run the bounded named subset from the repository root:
 
 ```bash
 ./scripts/run_model_export_it.sh --suite ci
@@ -98,11 +103,12 @@ also required:
 ```
 
 Calling the runner without `--suite` remains equivalent to `--suite full` for
-backward compatibility; CI always names its suite explicitly.
+backward compatibility. The historical `ci` suite name describes its bounded
+contents and does not authorize execution in GitHub Actions.
 
 The script creates a unique project named
 `tributo-model-export-it-<timestamp>-<pid>` (or accepts a unique
-`tributo-model-export-*` project from CI), prepares the same content-addressed
+`tributo-model-export-*` project from an external operator), prepares the same content-addressed
 dependency runtime used by the ingestion gate, starts one Ray head, one
 independent Ray worker, MinIO, and MLflow, and stores traceable logs under
 `/tmp/<project-name>/`. The checkout is copied into a run-scoped source volume
@@ -129,15 +135,14 @@ The runner never calls `docker stop`, `docker restart`, `docker rm`, or a prune
 command against an unscoped target. It does not publish host ports or assign
 fixed container names.
 
-The default workflow invokes the same runner with a run-specific
-`COMPOSE_PROJECT_NAME`, uploads its test and service logs, and performs a
-defensive repeat of the same scoped `down --volumes --remove-orphans` operation
-under `if: always()`.
+The CI impact planner reports this suite when relevant paths change. Execution,
+log retention, and cleanup remain the responsibility of the external
+lifecycle-owned runner.
 
 ## Pinned Component Contract
 
 `component-versions.env` is authoritative for the shared integration-test
-components used by the model-export and ingestion CI gates:
+components used by the model-export and ingestion external validations:
 
 | Component | Version |
 |-----------|---------|
@@ -172,7 +177,7 @@ service.
 
 ---
 
-## Required Data Ingestion Gate
+## Data Ingestion External Validation Gate
 
 Run the complete Data Ingestion Docker gate from the repository root:
 
@@ -182,8 +187,8 @@ Run the complete Data Ingestion Docker gate from the repository root:
 
 This is the only supported lifecycle entry for
 `test_data_ingestion_dual_engine.py`. It computes a dependency-only runtime
-key from the runtime profile, Dockerfile, `pyproject.toml`, `uv.lock`, version
-contract, and Docker platform. A matching
+key from the runtime profile, Dockerfile, effective Docker ignore file,
+`pyproject.toml`, `uv.lock`, version contract, and Docker platform. A matching
 `tributo-it-runtime:data-ingestion-<runtime-key>` image is validated and reused;
 when missing, exactly one process builds it through a profile/key/platform/
 daemon-scoped file lock and a single `docker buildx build --load` output.
@@ -213,16 +218,14 @@ For a source-only change, the runtime key remains unchanged and the existing
 runtime is reused. Set `TRIBUTO_IT_RUNTIME_REGISTRY` to an immutable GHCR
 repository to prefer a published runtime before the local Buildx fallback.
 
-The PR workflow runs two required ingestion gates. The semantic gate executes
-the file, table-format, and PostgreSQL Conformance files with locked `data`,
-`data-daft`, and `postgresql` extras. The distributed gate obtains one
+The CI impact planner reports the ingestion suite when its source, contracts,
+runtime definition, or runner changes. The external runner obtains one
 content-addressed runtime, starts one Ray head, one Ray worker, and MinIO with
-`docker-compose.data-ingestion.yml`, freezes the checked-out source in a
-run-scoped read-only volume, then runs this module with the Daft Ray runner and
-mandatory Driver/Worker version and snapshot evidence. Both jobs feed
-`core-gate`; infrastructure absence is a failure rather than a passing skip.
+`docker-compose.data-ingestion.yml`, freezes the checkout in a run-scoped
+read-only volume, and requires Driver/Worker version and snapshot evidence.
+Infrastructure absence cannot be represented as passing evidence.
 
-## Required Lance Vector Index Gate
+## Lance Vector Index External Validation Gate
 
 Run the complete distributed Lance vector gate from the repository root:
 

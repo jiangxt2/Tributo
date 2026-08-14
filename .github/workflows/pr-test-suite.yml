@@ -12,133 +12,54 @@ concurrency:
   group: pr-tests-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
-  # Detect code and documentation scopes independently
-  # while keeping DCO always running on every PR.
-  paths-filter:
-    name: Paths Filter
+  test-plan:
+    name: Test Impact Plan
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
-      # Merge queue runs have no pull_request path context; execute the full
-      # PR matrix so required checks cannot remain pending or be skipped.
-      code: ${{ github.event_name == 'merge_group' || steps.filter.outputs.code == 'true' }}
-      # model_export is a subset of code: the export-contract job runs
-      # only when the export framework or its tests changed.
-      model_export: ${{ github.event_name == 'merge_group' || steps.filter.outputs.model_export == 'true' }}
-      trainer_bundle: ${{ github.event_name == 'merge_group' || steps.filter.outputs.trainer_bundle == 'true' }}
-      docs: ${{ github.event_name == 'merge_group' || steps.filter.outputs.docs == 'true' }}
-      data_ingestion: ${{ github.event_name == 'merge_group' || steps.filter.outputs.data_ingestion == 'true' }}
-      lance_vector: ${{ github.event_name == 'merge_group' || steps.filter.outputs.lance_vector == 'true' }}
-      inference: ${{ github.event_name == 'merge_group' || steps.filter.outputs.inference == 'true' }}
+      run_unit: ${{ steps.plan.outputs.run_unit }}
+      run_docs: ${{ steps.plan.outputs.run_docs }}
+      run_matrix: ${{ steps.plan.outputs.run_matrix }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      manual_count: ${{ steps.plan.outputs.manual_count }}
+      quarantine_count: ${{ steps.plan.outputs.quarantine_count }}
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36
-        id: filter
-        if: github.event_name != 'merge_group'
         with:
-          filters: |
-            code:
-              - "src/**"
-              - "tests/**"
-              - "docs/**/*.py"
-              - "pyproject.toml"
-              - "uv.lock"
-              - ".github/actions/**"
-              - ".github/workflows/**"
-              - "scripts/**"
-              - "tools/**"
-            model_export:
-              - "src/tributo/exporting/**"
-              - "src/tributo/integrations/**"
-              - "tests/training/exporters/**"
-              - "tests/integration/test_export*"
-              - "tests/integration/test_walking_skeleton.py"
-              - "tests/integrations/component-versions.env"
-              - "tests/integrations/Dockerfile.data-ingestion"
-              - "tests/integrations/docker-compose.data-ingestion.yml"
-              - "pyproject.toml"
-            trainer_bundle:
-              - "src/tributo/exporting/**"
-              - "src/tributo/integrations/**"
-              - "src/tributo/training/**"
-              - "tests/training/**"
-              - "tests/integration/test_export*"
-              - "pyproject.toml"
-            docs:
-              - ".readthedocs.yaml"
-              - "Makefile"
-              - "pyproject.toml"
-              - "requirements-doc.in"
-              - "requirements-doc.lock"
-              - "docs/**"
-              - "src/tributo/**/*.py"
-              - "tests/docs/**"
-              - "tests/integration/test_docs_reference.py"
-              - "tools/__init__.py"
-              - "tools/check_docs.py"
-              - "tools/generate_algorithm_support_matrix.py"
-              - "uv.lock"
-              - ".github/workflows/docs-deploy.yml"
-              - ".github/workflows/pr-test-suite.yml"
-            data_ingestion:
-              - "src/tributo/data/**"
-              - "src/tributo/training/data_loader.py"
-              - "src/tributo/training/local_runner.py"
-              - "src/tributo/inference/pipeline.py"
-              - "src/tributo/inference/**"
-              - "src/tributo/integrations/sinks/**"
-              - "tests/data/**"
-              - "tests/integration/test_data_ingestion_conformance.py"
-              - "tests/integration/test_postgresql_ingestion.py"
-              - "tests/integration/test_table_format_ingestion.py"
-              - "tests/integrations/test_data_ingestion_dual_engine.py"
-              - "tests/integrations/Dockerfile.data-ingestion"
-              - "tests/integrations/Dockerfile.data-ingestion.dockerignore"
-              - "tests/integrations/docker-compose.data-ingestion.yml"
-              - "tests/integrations/runtime-profiles.json"
-              - "scripts/run_data_ingestion_it.sh"
-              - "tools/tributo_it.py"
-              - "pyproject.toml"
-              - "uv.lock"
-              - ".github/workflows/it-runtime-image.yml"
-              - ".github/workflows/pr-test-suite.yml"
-            lance_vector:
-              - "src/tributo/vector_index/**"
-              - "src/tributo/cli.py"
-              - "src/tributo/job.py"
-              - "src/tributo/_common/runtime_env.py"
-              - "src/tributo/_common/storage.py"
-              - "src/tributo/_common/storage_profiles.py"
-              - "src/tributo/data/_s3.py"
-              - "tests/vector_index/**"
-              - "tests/integrations/test_lance_vector_index.py"
-              - "tests/integrations/Dockerfile.data-ingestion"
-              - "tests/integrations/Dockerfile.data-ingestion.dockerignore"
-              - "tests/integrations/docker-compose.data-ingestion.yml"
-              - "tests/integrations/runtime-profiles.json"
-              - "scripts/run_lance_vector_index_it.sh"
-              - "tools/tributo_it.py"
-              - "pyproject.toml"
-              - "uv.lock"
-              - ".github/workflows/it-runtime-image.yml"
-              - ".github/workflows/pr-test-suite.yml"
-            inference:
-              - "src/tributo/inference/**"
-              - "src/tributo/data/**"
-              - "src/tributo/_common/**"
-              - "src/tributo/exporting/**"
-              - "src/tributo/integrations/flavors/**"
-              - "src/tributo/integrations/model_importers/**"
-              - "src/tributo/integrations/sinks/**"
-              - "tests/inference/**"
-              - "tests/integration/test_inference_ray_jobs.py"
-              - "tests/integration/jobs/post_training_inference_job.py"
-              - "tests/integrations/*inference*"
-              - "tests/support/mlflow_service.py"
-              - "scripts/run_inference_it.sh"
-              - "pyproject.toml"
-              - "uv.lock"
-              - ".github/workflows/pr-test-suite.yml"
+          fetch-depth: 0
+
+      - name: Audit declarative test policy
+        run: python3 scripts/ci_test_plan.py audit
+
+      - name: Build CI-safe matrix and external validation report
+        id: plan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
+          PLAN_JSON: ${{ runner.temp }}/tributo-ci-test-plan.json
+        run: >-
+          python3 scripts/ci_test_plan.py plan
+          --event "$EVENT_NAME"
+          --mode pr
+          --base "$BASE_SHA"
+          --head "$HEAD_SHA"
+          --github-output "$GITHUB_OUTPUT"
+          --summary "$GITHUB_STEP_SUMMARY"
+          --json-output "$PLAN_JSON"
+
+      - name: Upload test impact plan
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: test-impact-plan
+          path: ${{ runner.temp }}/tributo-ci-test-plan.json
+          if-no-files-found: error
+          retention-days: 7
 
   dco:
     name: DCO Check
@@ -152,12 +73,9 @@ jobs:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
         with:
           fetch-depth: 0
+
       - name: Check Signed-off-by
         run: |
-          # merge_group.head_sha is a synthetic queue commit and may be a
-          # squash commit without a DCO trailer. The required pull_request
-          # check has already validated its contributing commits before the
-          # PR can enter the merge queue, so publish a pass-through result.
           if [ "$EVENT_NAME" = "merge_group" ]; then
             echo "DCO was validated on pull_request before queue admission"
             exit 0
@@ -168,52 +86,56 @@ jobs:
           COMMITS=$(git log --format='%H' "$BASE_SHA..$HEAD_SHA")
           for commit in $COMMITS; do
             if ! git log -1 --format='%B' "$commit" | grep -qE "^Signed-off-by: [^<]+ <[^>]+>$"; then
-              echo "❌ Commit $commit is missing Signed-off-by"
+              echo "Commit $commit is missing Signed-off-by"
               FAIL=1
             fi
           done
           if [ "$FAIL" -eq 1 ]; then
-            echo ""
             echo "All commits must have a Signed-off-by line."
-            echo "Run: git commit --amend -s"
-            echo "Or set up the auto-signoff hook: cp scripts/prepare-commit-msg .git/hooks/"
             exit 1
           fi
-          echo "✅ All commits have Signed-off-by"
+          echo "All commits have Signed-off-by"
 
   lint:
     name: Lint
     runs-on: ubuntu-latest
-    needs: paths-filter
-    if: needs.paths-filter.outputs.code == 'true'
+    timeout-minutes: 15
+    needs: test-plan
+    if: needs.test-plan.outputs.run_unit == 'true'
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
 
       - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
+        with:
+          python-version: "3.12"
 
-      # uv.lock is the single source of truth for dependency and tool
-      # versions; fail the PR when pyproject.toml changed without
-      # regenerating it.
       - name: Check lockfile freshness
         run: uv lock --check
 
       - name: Install dependencies
         run: uv sync --extra dev --locked
 
-      - name: Lint (ruff)
+      - name: Lint
         run: >-
           uv run --locked --no-sync ruff check
-          src/ tests/ tools/ docs/conf.py docs/_ext/
+          src/ tests/ tools/ scripts/ci_test_plan.py scripts/pr-precheck.py
+          docs/conf.py docs/_ext/
 
-      - name: Format check (ruff)
+      - name: Format check
         run: >-
           uv run --locked --no-sync ruff format --check
-          src/ tests/ tools/ docs/conf.py docs/_ext/
+          src/ tests/ tools/ scripts/ci_test_plan.py scripts/pr-precheck.py
+          docs/conf.py docs/_ext/
+
+      - name: Type check
+        run: uv run --locked --no-sync mypy src/tributo
+
+      - name: Check public API annotations
+        run: uv run --locked --no-sync python tools/check_public_api_annotations.py
 
       - name: Verify generated protobuf sources
         run: |
           proto_check_dir="$(mktemp -d)"
-          trap 'rm -rf "$proto_check_dir"' EXIT
           PROTO_OUTPUT_DIR="$proto_check_dir" \
             bash src/tributo/serving/proto/compile.sh
           diff -u \
@@ -223,12 +145,55 @@ jobs:
             src/tributo/serving/proto/inference_pb2_grpc.py \
             "$proto_check_dir/tributo/serving/proto/inference_pb2_grpc.py"
 
+  unit-tests:
+    name: Unit Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [test-plan, lint]
+    if: needs.test-plan.outputs.run_unit == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+
+      - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Run manifest-owned unit suite
+        # The runner applies every manifest-owned marker exclusion.
+        run: python3 scripts/ci_test_plan.py run --suite unit --prepare
+
+  ci-safe-integration:
+    name: CI-safe integration (${{ matrix.suite }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: test-plan
+    if: needs.test-plan.outputs.run_matrix == 'true'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.test-plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+
+      - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
+        with:
+          python-version: "3.12"
+
+      - name: Run budgeted manifest suite
+        run: >-
+          python3 scripts/ci_test_plan.py run
+          --suite "${{ matrix.suite }}"
+          --prepare
+
   docs-build:
     name: Documentation Build
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    needs: paths-filter
-    if: needs.paths-filter.outputs.docs == 'true'
+    needs: test-plan
+    if: needs.test-plan.outputs.run_docs == 'true'
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
 
@@ -247,6 +212,9 @@ jobs:
           uv pip install \
             --python .docs-venv/bin/python \
             --requirement requirements-doc.lock
+
+      - name: Verify README examples
+        run: python3 scripts/verify_readme_examples.py
 
       - name: Check static documentation contracts
         run: .docs-venv/bin/python tools/check_docs.py --static-only
@@ -268,8 +236,8 @@ jobs:
     name: Documentation API Integration
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs: [paths-filter, docs-build]
-    if: needs.paths-filter.outputs.docs == 'true'
+    needs: [test-plan, docs-build]
+    if: needs.test-plan.outputs.run_docs == 'true'
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
 
@@ -298,34 +266,24 @@ jobs:
             BUILDDIR=docs/_build-real \
             HTMLDIR=docs/_build-real/html
 
-      - name: Run documentation API and CLI integration tests
+      - name: Run documentation API integration tests
         run: |
           .venv/bin/python tools/generate_algorithm_support_matrix.py --check
-          .venv/bin/python -m pytest \
-            tests/integration/test_docs_reference.py \
-            -o "addopts=" -m integration \
-            -v --tb=short --timeout=300
+          python3 scripts/ci_test_plan.py run --suite documentation-api
 
-  # Remote sites can fail transiently. Keep link health visible without
-  # weakening the strict internal-reference and real-import gates.
   docs-linkcheck:
     name: Documentation External Links
     runs-on: ubuntu-latest
     timeout-minutes: 10
     continue-on-error: true
-    needs: [paths-filter, docs-build]
-    if: needs.paths-filter.outputs.docs == 'true'
+    needs: [test-plan, docs-build]
+    if: needs.test-plan.outputs.run_docs == 'true'
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
 
       - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
         with:
           python-version: "3.12"
-
-      - name: Install spelling system dependency
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes enchant-2
 
       - name: Install documentation dependencies
         run: |
@@ -337,360 +295,12 @@ jobs:
       - name: Check external links
         run: make linkcheck SPHINXBUILD=.docs-venv/bin/sphinx-build
 
-  unit-tests:
-    name: Unit Tests (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
-    needs: [paths-filter, lint]
-    if: needs.paths-filter.outputs.code == 'true'
-    strategy:
-      matrix:
-        python-version: ["3.12", "3.13"]
-    steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-
-      - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Install dependencies
-        run: uv sync --extra dev --locked
-
-      - name: Type check (mypy)
-        run: uv run --locked --no-sync mypy src/tributo
-
-      - name: Verify README examples
-        run: uv run --locked --no-sync python scripts/verify_readme_examples.py
-
-      - name: Check public API annotations
-        run: uv run --locked --no-sync python tools/check_public_api_annotations.py
-
-      - name: Run unit tests
-        run: |
-          uv run --locked --no-sync python -m pytest tests/ \
-            -m "not integration and not slow and not distributed and not minio_compat and not ray_runtime_env" \
-            -v --tb=short --timeout=180
-
-  # Domain gate for the export framework (plan: export-contract job).
-  # Runs the exporter-agnostic contract tests (models/registries/planner/
-  # manager/manifest/publisher/hooks) without heavy optional deps —
-  # ``uv sync --extra dev --locked`` has none of xgboost/torch/onnxmltools.
-  export-contract:
-    name: Export Contract (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
-    needs: [paths-filter, lint]
-    if: needs.paths-filter.outputs.model_export == 'true'
-    strategy:
-      matrix:
-        python-version: ["3.12", "3.13"]
-    steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-
-      - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Install dependencies
-        run: uv sync --extra dev --locked
-
-      - name: Run export contract tests
-        # YAML plain scalars fold newlines into spaces, which turns the
-        # trailing backslash into a literal argument - use a literal block.
-        run: |
-          uv run --locked --no-sync python -m pytest tests/training/exporters/ \
-            -v --tb=short --timeout=180
-
-  trainer-bundle-it:
-    name: Trainer Bundle IT (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    needs: [paths-filter, lint]
-    if: needs.paths-filter.outputs.trainer_bundle == 'true'
-    strategy:
-      matrix:
-        python-version: ["3.12", "3.13"]
-    env:
-      # Keep native XGBoost execution deterministic on CI workers.
-      OMP_NUM_THREADS: "1"
-    steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-
-      - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Install integration dependencies
-        run: >-
-          uv sync --extra dev --extra training --extra model-export-torch
-          --extra model-export-hf --locked
-
-      - name: Verify optional integration dependencies
-        run: |
-          uv run --locked --no-sync python -c \
-            "import onnxmltools, onnxscript, torch, transformers, xgboost"
-
-      - name: Run local trainer bundle integration tests
-        run: |
-          # Clear repository addopts so this explicit list runs the slow
-          # vertical slices; unrelated MinIO and runtime-env suites are not
-          # selected here.
-          uv run --locked --no-sync python -m pytest \
-            tests/integration/test_export_vertical_slice.py \
-            tests/integration/test_export_review_fixes.py \
-            tests/integration/test_export_trainer_bundle_vertical_slice.py \
-            tests/training/exporters/test_trainer_bundle_contract.py \
-            tests/training/test_pu_trainer.py \
-            -o "addopts=" \
-            -v --tb=short --timeout=600
-
-  export-s3:
-    name: Export S3 Integration (MinIO)
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    needs: [paths-filter, lint]
-    if: needs.paths-filter.outputs.code == 'true'
-    steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-
-      - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
-        with:
-          python-version: "3.12"
-
-      - name: Install dependencies
-        run: uv sync --extra dev --locked
-
-      - name: Run S3 export integration tests
-        run: |
-          uv run --locked --no-sync python -m pytest \
-            tests/integration/test_export_s3.py \
-            tests/integration/test_minio_compat.py \
-            tests/data/test_ds_parquet_csv.py \
-            -m "s3_contract or minio_compat" \
-            -v --tb=short --timeout=180
-        env:
-          AWS_ACCESS_KEY_ID: minioadmin
-          AWS_SECRET_ACCESS_KEY: minioadmin123
-
-  ray-runtime-env:
-    name: Ray Runtime Environment
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    needs: [paths-filter, lint]
-    if: needs.paths-filter.outputs.code == 'true'
-    steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-
-      - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
-        with:
-          python-version: "3.12"
-
-      - name: Install dependencies
-        run: uv sync --extra dev --locked
-
-      - name: Run Ray runtime-environment contract test
-        env:
-          RAY_ENABLE_UV_RUN_RUNTIME_ENV: "1"
-        run: |
-          uv run --locked --no-sync python -m pytest tests/integration/test_ray_runtime_env.py \
-            -m ray_runtime_env -v --tb=short --timeout=180
-
-  data-ingestion-conformance:
-    name: Data Ingestion Conformance (Files + Tables + PostgreSQL)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    needs: [paths-filter, lint]
-    if: needs.paths-filter.outputs.data_ingestion == 'true'
-    env:
-      RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO: "0"
-      AWS_ACCESS_KEY_ID: minioadmin
-      AWS_SECRET_ACCESS_KEY: minioadmin123
-      TRIBUTO_POSTGRESQL_HOST: 127.0.0.1
-      TRIBUTO_POSTGRESQL_PORT: "5432"
-      TRIBUTO_POSTGRESQL_DB: tributo
-      TRIBUTO_POSTGRESQL_USER: tributo
-      TRIBUTO_POSTGRESQL_PASSWORD: tributo-test
-    services:
-      postgres:
-        image: postgres:17.6@sha256:00bc86618629af00d2937fdc5a5d63db3ff8450acf52f0636ec813c7f4902929
-        env:
-          POSTGRES_DB: tributo
-          POSTGRES_USER: tributo
-          POSTGRES_PASSWORD: tributo-test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U tributo -d tributo"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
-    steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-
-      - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
-        with:
-          python-version: "3.12"
-
-      - name: Install locked Ray and Daft test dependencies
-        run: uv sync --extra dev --extra data --extra data-daft --extra postgresql --locked
-
-      - name: Run required dual-engine conformance
-        run: |
-          uv run --locked --no-sync python -m pytest \
-            tests/integration/test_data_ingestion_conformance.py \
-            tests/integration/test_postgresql_ingestion.py \
-            tests/integration/test_table_format_ingestion.py \
-            -m ingestion_conformance -o "addopts=" \
-            -v --tb=short --timeout=900
-
-  data-ingestion-distributed:
-    name: Data Ingestion Distributed (Docker Ray + MinIO)
-    runs-on: ubuntu-latest
-    timeout-minutes: 80
-    needs: [paths-filter, lint]
-    if: needs.paths-filter.outputs.data_ingestion == 'true'
-    permissions:
-      contents: read
-      packages: read
-    env:
-      COMPOSE_PROJECT_NAME: tributo-ingestion-${{ github.run_id }}-${{ github.run_attempt }}
-      TRIBUTO_IT_ALLOW_LOCAL_BUILD: ${{ github.event_name == 'push' && '0' || '1' }}
-      TRIBUTO_IT_RUNTIME_REGISTRY: ghcr.io/jiangxt2/tributo-it-runtime
-      TRIBUTO_IT_RUNTIME_REGISTRY_WAIT_SECONDS: ${{ github.event_name == 'push' && '2100' || '0' }}
-    steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-
-      - name: Authenticate to GHCR for the published runtime
-        if: github.event_name == 'push'
-        env:
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-
-      - name: Run isolated reusable-runtime ingestion gate
-        run: ./scripts/run_data_ingestion_it.sh
-
-      - name: Upload distributed ingestion logs
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: data-ingestion-distributed-logs
-          path: |
-            /tmp/tributo-it-logs/${{ env.COMPOSE_PROJECT_NAME }}-test.log
-            /tmp/tributo-it-logs/${{ env.COMPOSE_PROJECT_NAME }}-services.log
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: Stop isolated Ray ingestion infrastructure
-        if: always()
-        env:
-          # Compose resolves required image variables before `down`; these
-          # placeholders are never pulled or used to create containers.
-          TRIBUTO_IT_MINIO_IMAGE: tributo-cleanup-placeholder:unused
-          TRIBUTO_IT_RUNTIME_IMAGE: tributo-cleanup-placeholder:unused
-          TRIBUTO_IT_SOURCE_ROOT: ${{ github.workspace }}
-          TRIBUTO_IT_TOOL_IMAGE: tributo-cleanup-placeholder:unused
-        run: |
-          docker compose \
-            --file tests/integrations/docker-compose.data-ingestion.yml \
-            down --volumes --remove-orphans --timeout 30
-          test -z "$(docker ps --all --quiet \
-            --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}")"
-          test -z "$(docker network ls --quiet \
-            --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}")"
-          test -z "$(docker volume ls --quiet \
-            --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}")"
-
-  lance-vector-distributed:
-    name: Lance Vector Index Distributed (Docker Ray + MinIO)
-    runs-on: ubuntu-latest
-    timeout-minutes: 80
-    needs: [paths-filter, lint]
-    if: needs.paths-filter.outputs.lance_vector == 'true'
-    permissions:
-      contents: read
-      packages: read
-    env:
-      COMPOSE_PROJECT_NAME: tributo-lance-vector-${{ github.run_id }}-${{ github.run_attempt }}
-      TRIBUTO_IT_ALLOW_LOCAL_BUILD: ${{ github.event_name == 'push' && '0' || '1' }}
-      TRIBUTO_IT_RUNTIME_REGISTRY: ghcr.io/jiangxt2/tributo-it-runtime
-      TRIBUTO_IT_RUNTIME_REGISTRY_WAIT_SECONDS: ${{ github.event_name == 'push' && '2100' || '0' }}
-    steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-
-      - name: Authenticate to GHCR for the published runtime
-        if: github.event_name == 'push'
-        env:
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-
-      - name: Run isolated distributed Lance vector gate
-        run: ./scripts/run_lance_vector_index_it.sh
-
-      - name: Upload Lance vector integration logs
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: lance-vector-distributed-logs
-          path: |
-            /tmp/tributo-it-logs/${{ env.COMPOSE_PROJECT_NAME }}-test.log
-            /tmp/tributo-it-logs/${{ env.COMPOSE_PROJECT_NAME }}-services.log
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: Stop isolated Lance vector infrastructure
-        if: always()
-        env:
-          TRIBUTO_IT_MINIO_IMAGE: tributo-cleanup-placeholder:unused
-          TRIBUTO_IT_RUNTIME_IMAGE: tributo-cleanup-placeholder:unused
-          TRIBUTO_IT_SOURCE_ROOT: ${{ github.workspace }}
-          TRIBUTO_IT_TOOL_IMAGE: tributo-cleanup-placeholder:unused
-        run: |
-          docker compose \
-            --file tests/integrations/docker-compose.data-ingestion.yml \
-            down --volumes --remove-orphans --timeout 30
-          test -z "$(docker ps --all --quiet \
-            --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}")"
-          test -z "$(docker network ls --quiet \
-            --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}")"
-          test -z "$(docker volume ls --quiet \
-            --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}")"
-
-  inference-distributed:
-    name: Inference Distributed (Docker Ray + MLflow + MinIO)
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    needs: [paths-filter, lint]
-    if: needs.paths-filter.outputs.inference == 'true'
-    env:
-      COMPOSE_PROJECT_NAME: tributo-inference-${{ github.run_id }}-${{ github.run_attempt }}
-      TRIBUTO_INFERENCE_IMAGE_TAG: ${{ github.run_id }}-${{ github.run_attempt }}
-    steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-
-      - name: Run isolated version-locked inference integration tests
-        run: scripts/run_inference_it.sh
-
-      - name: Upload inference integration logs
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: inference-distributed-logs
-          path: /tmp/tributo-inference-${{ github.run_id }}-${{ github.run_attempt }}-*.log
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: Defensively stop only this inference Compose project
-        if: always()
-        run: >-
-          docker compose
-          --project-name "$COMPOSE_PROJECT_NAME"
-          --env-file tests/integrations/inference-it-versions.conf
-          --file tests/integrations/docker-compose.inference.yml
-          down --volumes --remove-orphans
-
   build:
     name: Package Build & Smoke Test
     runs-on: ubuntu-latest
-    needs: [paths-filter, lint]
-    if: needs.paths-filter.outputs.code == 'true'
+    timeout-minutes: 10
+    needs: [test-plan, lint]
+    if: needs.test-plan.outputs.run_unit == 'true'
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
 
@@ -701,128 +311,39 @@ jobs:
       - name: Build wheel and sdist
         run: uv build
 
-      - name: Smoke test (install wheel and run CLI)
+      - name: Smoke test
         run: |
           uv venv /tmp/smoke-venv --python 3.12
           uv pip install --python /tmp/smoke-venv/bin/python dist/*.whl
           /tmp/smoke-venv/bin/tributo --help
 
-  # O1 Core: this job is the required PR walking-skeleton gate.  It is
-  # controlled by paths-filter at job level, never by workflow-level path
-  # filters, so the core-gate aggregator can always report a terminal result.
-  core-walking-skeleton:
-    name: Core Walking Skeleton
-    runs-on: ubuntu-latest
-    timeout-minutes: 65
-    needs: paths-filter
-    if: needs.paths-filter.outputs.code == 'true'
-    permissions:
-      contents: read
-      packages: read
-    env:
-      COMPOSE_PROJECT_NAME: tributo-model-export-${{ github.run_id }}-${{ github.run_attempt }}
-      TRIBUTO_IT_ALLOW_LOCAL_BUILD: ${{ github.event_name == 'push' && '0' || '1' }}
-      TRIBUTO_IT_RUNTIME_REGISTRY: ghcr.io/jiangxt2/tributo-it-runtime
-      TRIBUTO_IT_RUNTIME_REGISTRY_WAIT_SECONDS: ${{ github.event_name == 'push' && '2100' || '0' }}
-      OMP_NUM_THREADS: "1"
-      RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO: "0"
-    steps:
-      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
-
-      - name: Authenticate to GHCR for the published runtime
-        if: github.event_name == 'push'
-        env:
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: echo "$GHCR_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-
-      - name: Run isolated reusable-runtime model-export CI suite
-        run: ./scripts/run_model_export_it.sh --suite ci
-
-      - name: Upload model-export logs
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: model-export-services-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            /tmp/${{ env.COMPOSE_PROJECT_NAME }}/tests.log
-            /tmp/${{ env.COMPOSE_PROJECT_NAME }}/services.log
-            /tmp/${{ env.COMPOSE_PROJECT_NAME }}/image-prepare.log
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: Stop isolated model-export infrastructure
-        if: always()
-        env:
-          # The runner performs this exact-project cleanup itself. These
-          # placeholders let Compose parse a defensive second `down` only.
-          TRIBUTO_IT_MINIO_IMAGE: tributo-cleanup-placeholder:unused
-          TRIBUTO_IT_RUNTIME_IMAGE: tributo-cleanup-placeholder:unused
-          TRIBUTO_IT_SOURCE_ROOT: ${{ github.workspace }}
-          TRIBUTO_IT_TOOL_IMAGE: tributo-cleanup-placeholder:unused
-        run: |
-          docker compose \
-            --env-file tests/integrations/component-versions.env \
-            --file tests/integrations/docker-compose.data-ingestion.yml \
-            --profile model-export \
-            down --volumes --remove-orphans --timeout 30
-          test -z "$(docker ps --all --quiet \
-            --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}")"
-          test -z "$(docker network ls --quiet \
-            --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}")"
-          test -z "$(docker volume ls --quiet \
-            --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}")"
-
-  # Keep this aggregator independent from DCO.  DCO is a separate required
-  # check, runs on pull_request/merge_group, and remains skipped on push/master.
-  # The shell assertions make failure/cancelled terminal states fail the gate;
-  # skipped is accepted only when the corresponding paths-filter output says
-  # that the job is not applicable.
+  # DCO remains an independent required Ruleset check. This gate owns only
+  # the test-plan-dependent jobs whose skipped/success states it evaluates.
   core-gate:
     name: core-gate
     runs-on: ubuntu-latest
     timeout-minutes: 5
     if: always()
     needs:
-      - paths-filter
+      - test-plan
       - lint
       - unit-tests
-      - export-contract
-      - trainer-bundle-it
-      - export-s3
-      - ray-runtime-env
-      - data-ingestion-conformance
-      - data-ingestion-distributed
-      - lance-vector-distributed
-      - inference-distributed
-      - build
-      - core-walking-skeleton
+      - ci-safe-integration
       - docs-build
       - docs-api-it
+      - build
     steps:
       - name: Validate required job outcomes
         env:
-          PATHS_RESULT: ${{ needs.paths-filter.result }}
-          CODE: ${{ needs.paths-filter.outputs.code }}
-          MODEL_EXPORT: ${{ needs.paths-filter.outputs.model_export }}
-          TRAINER_BUNDLE: ${{ needs.paths-filter.outputs.trainer_bundle }}
+          PLAN_RESULT: ${{ needs.test-plan.result }}
+          RUN_UNIT: ${{ needs.test-plan.outputs.run_unit }}
+          RUN_DOCS: ${{ needs.test-plan.outputs.run_docs }}
           LINT_RESULT: ${{ needs.lint.result }}
           UNIT_RESULT: ${{ needs.unit-tests.result }}
-          EXPORT_CONTRACT_RESULT: ${{ needs.export-contract.result }}
-          TRAINER_BUNDLE_RESULT: ${{ needs.trainer-bundle-it.result }}
-          EXPORT_S3_RESULT: ${{ needs.export-s3.result }}
-          RAY_RUNTIME_RESULT: ${{ needs.ray-runtime-env.result }}
-          DATA_INGESTION: ${{ needs.paths-filter.outputs.data_ingestion }}
-          DATA_INGESTION_RESULT: ${{ needs.data-ingestion-conformance.result }}
-          DATA_INGESTION_DISTRIBUTED_RESULT: ${{ needs.data-ingestion-distributed.result }}
-          LANCE_VECTOR: ${{ needs.paths-filter.outputs.lance_vector }}
-          LANCE_VECTOR_RESULT: ${{ needs.lance-vector-distributed.result }}
-          INFERENCE: ${{ needs.paths-filter.outputs.inference }}
-          INFERENCE_DISTRIBUTED_RESULT: ${{ needs.inference-distributed.result }}
-          BUILD_RESULT: ${{ needs.build.result }}
-          WALKING_RESULT: ${{ needs.core-walking-skeleton.result }}
-          DOCS: ${{ needs.paths-filter.outputs.docs }}
+          CI_SAFE_RESULT: ${{ needs.ci-safe-integration.result }}
           DOCS_BUILD_RESULT: ${{ needs.docs-build.result }}
           DOCS_API_RESULT: ${{ needs.docs-api-it.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
         run: |
           set -eu
 
@@ -843,57 +364,20 @@ jobs:
             [ "$result" = "skipped" ] || fail "$name was expected to skip but finished with $result"
           }
 
-          [ "$PATHS_RESULT" = "success" ] || fail "paths-filter finished with $PATHS_RESULT"
+          require_success test-plan "$PLAN_RESULT"
+          require_success ci-safe-integration "$CI_SAFE_RESULT"
 
-          if [ "$CODE" = "true" ]; then
+          if [ "$RUN_UNIT" = "true" ]; then
             require_success lint "$LINT_RESULT"
             require_success unit-tests "$UNIT_RESULT"
-            require_success export-s3 "$EXPORT_S3_RESULT"
-            require_success ray-runtime-env "$RAY_RUNTIME_RESULT"
             require_success build "$BUILD_RESULT"
-            require_success core-walking-skeleton "$WALKING_RESULT"
           else
             require_skipped lint "$LINT_RESULT"
             require_skipped unit-tests "$UNIT_RESULT"
-            require_skipped export-s3 "$EXPORT_S3_RESULT"
-            require_skipped ray-runtime-env "$RAY_RUNTIME_RESULT"
             require_skipped build "$BUILD_RESULT"
-            require_skipped core-walking-skeleton "$WALKING_RESULT"
           fi
 
-          if [ "$DATA_INGESTION" = "true" ]; then
-            require_success data-ingestion-conformance "$DATA_INGESTION_RESULT"
-            require_success data-ingestion-distributed "$DATA_INGESTION_DISTRIBUTED_RESULT"
-          else
-            require_skipped data-ingestion-conformance "$DATA_INGESTION_RESULT"
-            require_skipped data-ingestion-distributed "$DATA_INGESTION_DISTRIBUTED_RESULT"
-          fi
-
-          if [ "$LANCE_VECTOR" = "true" ]; then
-            require_success lance-vector-distributed "$LANCE_VECTOR_RESULT"
-          else
-            require_skipped lance-vector-distributed "$LANCE_VECTOR_RESULT"
-          fi
-
-          if [ "$INFERENCE" = "true" ]; then
-            require_success inference-distributed "$INFERENCE_DISTRIBUTED_RESULT"
-          else
-            require_skipped inference-distributed "$INFERENCE_DISTRIBUTED_RESULT"
-          fi
-
-          if [ "$MODEL_EXPORT" = "true" ]; then
-            require_success export-contract "$EXPORT_CONTRACT_RESULT"
-          else
-            require_skipped export-contract "$EXPORT_CONTRACT_RESULT"
-          fi
-
-          if [ "$TRAINER_BUNDLE" = "true" ]; then
-            require_success trainer-bundle-it "$TRAINER_BUNDLE_RESULT"
-          else
-            require_skipped trainer-bundle-it "$TRAINER_BUNDLE_RESULT"
-          fi
-
-          if [ "$DOCS" = "true" ]; then
+          if [ "$RUN_DOCS" = "true" ]; then
             require_success docs-build "$DOCS_BUILD_RESULT"
             require_success docs-api-it "$DOCS_API_RESULT"
           else
@@ -901,4 +385,4 @@ jobs:
             require_skipped docs-api-it "$DOCS_API_RESULT"
           fi
 
-          echo "core-gate: all applicable jobs completed successfully"
+          echo "core-gate: all applicable CI-safe jobs completed successfully"

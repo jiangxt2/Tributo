@@ -277,11 +277,25 @@ def docker_platform() -> str:
     return normalize_platform(value)
 
 
+def _effective_dockerignore(profile: RuntimeProfile) -> tuple[str, bytes]:
+    """Return the Docker-selected ignore file identity and content."""
+    dockerfile_specific = profile.dockerfile.with_name(
+        f"{profile.dockerfile.name}.dockerignore"
+    )
+    root_ignore = profile.root / ".dockerignore"
+    for candidate in (dockerfile_specific, root_ignore):
+        if candidate.is_file():
+            relative_path = candidate.relative_to(profile.root).as_posix()
+            return relative_path, candidate.read_bytes()
+    return "<none>", b""
+
+
 def runtime_identity(profile: RuntimeProfile, platform: str) -> RuntimeIdentity:
     """Compute the content identity for a runtime without source-tree inputs."""
     platform = normalize_platform(platform)
     lock_content = (profile.root / "uv.lock").read_bytes()
     contract_content = _canonical_json(profile.version_contract)
+    ignore_path, ignore_content = _effective_dockerignore(profile)
     runtime_definition = {
         key: profile.definition[key]
         for key in (
@@ -293,9 +307,10 @@ def runtime_identity(profile: RuntimeProfile, platform: str) -> RuntimeIdentity:
         )
     }
     parts = [
-        ("schema", b"tributo-it-runtime-v1"),
+        ("schema", b"tributo-it-runtime-v2"),
         ("profile", _canonical_json(runtime_definition)),
         ("dockerfile", profile.dockerfile.read_bytes()),
+        (f"dockerignore:{ignore_path}", ignore_content),
         ("pyproject.toml", (profile.root / "pyproject.toml").read_bytes()),
         ("uv.lock", lock_content),
         ("platform", platform.encode("utf-8")),

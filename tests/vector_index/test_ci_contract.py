@@ -1,4 +1,4 @@
-"""Static guardrails for the distributed Lance vector integration gate."""
+"""Static guardrails for external distributed Lance vector validation."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from tools import tributo_it
 
 _ROOT = Path(__file__).resolve().parents[2]
 _WORKFLOW = _ROOT / ".github" / "workflows" / "pr-test-suite.yml"
+_MANIFEST = _ROOT / "ci" / "test-suites.json"
 _DOCKERFILE = _ROOT / "tests" / "integrations" / "Dockerfile.data-ingestion"
 _PROFILE = _ROOT / "tests" / "integrations" / "runtime-profiles.json"
 _COMPOSE = _ROOT / "tests" / "integrations" / "docker-compose.data-ingestion.yml"
@@ -16,27 +17,28 @@ _SCRIPT = _ROOT / "scripts" / "run_lance_vector_index_it.sh"
 _RUNNER = _ROOT / "tools" / "tributo_it.py"
 
 
-def test_vector_gate_is_required_when_vector_paths_change() -> None:
+def test_vector_validation_is_reported_but_never_executed_in_ci() -> None:
     workflow = _WORKFLOW.read_text(encoding="utf-8")
-    assert "lance_vector:" in workflow
+    payload = json.loads(_MANIFEST.read_text(encoding="utf-8"))
+    suite = next(
+        item for item in payload["suites"] if item["id"] == "lance-vector-cluster"
+    )
+
+    assert suite["tier"] == "manual_external"
+    assert suite["workflow"] == "external"
+    assert suite["entrypoint"] == ["./scripts/run_lance_vector_index_it.sh"]
     for path in (
         "src/tributo/vector_index/**",
         "src/tributo/_common/storage.py",
         "tests/vector_index/**",
         "tests/integrations/test_lance_vector_index.py",
-        "tests/integrations/Dockerfile.data-ingestion",
-        "tests/integrations/Dockerfile.data-ingestion.dockerignore",
+        "tests/integrations/Dockerfile.data-ingestion*",
         "scripts/run_lance_vector_index_it.sh",
         "tools/tributo_it.py",
     ):
-        assert f'"{path}"' in workflow
-    assert "lance-vector-distributed:" in workflow
-    assert "Lance Vector Index Distributed (Docker Ray + MinIO)" in workflow
-    assert "timeout-minutes: 80" in workflow
-    assert "if: needs.paths-filter.outputs.lance_vector == 'true'" in workflow
-    assert "LANCE_VECTOR_RESULT" in workflow
-    assert 'require_success lance-vector-distributed "$LANCE_VECTOR_RESULT"' in workflow
-    assert 'require_skipped lance-vector-distributed "$LANCE_VECTOR_RESULT"' in workflow
+        assert path in suite["trigger_paths"]
+    assert "lance-vector-distributed:" not in workflow
+    assert "run_lance_vector_index_it.sh" not in workflow
 
 
 def test_vector_gate_reuses_the_owned_ray_minio_lifecycle() -> None:

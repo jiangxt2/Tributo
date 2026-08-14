@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import re
 import subprocess
 import tomllib
 from pathlib import Path
@@ -31,12 +32,19 @@ def _write_component_contract(root: Path, content: str) -> None:
     destination.write_text(content)
 
 
+def _excluded_markers(expression: str) -> set[str]:
+    return set(re.findall(r"\bnot\s+(\w+)", expression))
+
+
 def test_changed_test_filter_matches_the_default_ci_suite() -> None:
     precheck = _load_precheck()
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())
     addopts = project["tool"]["pytest"]["ini_options"]["addopts"]
+    unit_filter = precheck.ci_unit_marker_filter(str(ROOT))
 
-    assert addopts == f"-m '{precheck.CHANGED_TEST_MARKER_FILTER}'"
+    # The manifest-owned unit suite must never select tests excluded by the
+    # repository default; the unit expression is the superset of exclusions.
+    assert _excluded_markers(addopts) <= _excluded_markers(unit_filter)
 
 
 def test_public_component_version_contract_is_allowed(tmp_path: Path) -> None:
@@ -72,6 +80,8 @@ def test_unrelated_env_file_remains_rejected(tmp_path: Path) -> None:
     "path",
     [
         "docs/index.md",
+        "README.md",
+        ".github/workflows/pr-test-suite.yml",
         "src/tributo/training/dnn_trainer.py",
         "tests/docs/test_public_api.py",
         "requirements-doc.lock",
@@ -88,6 +98,94 @@ def test_docs_ci_ignores_unrelated_paths() -> None:
     precheck = _load_precheck()
 
     assert precheck.docs_ci_affected(["tests/test_cli.py"]) is False
+
+
+def test_changed_test_filter_excludes_every_non_ci_tier() -> None:
+    precheck = _load_precheck()
+    marker_filter = precheck.ci_unit_marker_filter(str(ROOT))
+
+    for expression in (
+        "not distributed",
+        "not ci_safe",
+        "not s3_contract",
+        "not manual_it",
+        "not quarantine",
+    ):
+        assert expression in marker_filter
+
+
+def test_ci_unit_pytest_args_come_entirely_from_manifest() -> None:
+    precheck = _load_precheck()
+
+    args = precheck.ci_unit_pytest_args(str(ROOT))
+
+    assert args[0] == "tests/"
+    assert args.count("--ignore=tests/test_ci_test_plan.py") == 1
+    marker_index = args.index("-m")
+    assert args[marker_index + 1] == precheck.ci_unit_marker_filter(str(ROOT))
+
+
+def test_ci_parity_no_collection_is_a_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    precheck = _load_precheck()
+    commands: list[list[str]] = []
+
+    def no_tests(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        returncode = 0 if command[:2] == ["uv", "sync"] else 5
+        return subprocess.CompletedProcess(
+            command,
+            returncode,
+            stdout="no tests collected",
+            stderr="",
+        )
+
+    monkeypatch.setattr(precheck.subprocess, "run", no_tests)
+
+    issues = precheck.check_ci_parity_suite(str(ROOT))
+
+    assert issues == [
+        "FAIL: CI-parity suite collected no tests; the manifest unit selection "
+        "is not valid evidence"
+    ]
+    assert len(commands) == 2
+    assert commands[1][1:3] == ["-m", "pytest"]
+    assert tuple(commands[1][3:]) == precheck.ci_unit_pytest_args(str(ROOT))
+
+
+def test_ci_test_policy_audit_is_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    precheck = _load_precheck()
+    planner = tmp_path / "scripts" / "ci_test_plan.py"
+    planner.parent.mkdir(parents=True)
+    planner.write_text("raise SystemExit(1)\n")
+    commands: list[list[str]] = []
+
+    def fail_audit(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        return subprocess.CompletedProcess(
+            command,
+            1,
+            stdout="",
+            stderr="suite exceeds budget",
+        )
+
+    monkeypatch.setattr(precheck.subprocess, "run", fail_audit)
+
+    issues = precheck.check_ci_test_policy(str(tmp_path))
+
+    assert issues == ["FAIL: CI test policy audit failed:\nsuite exceeds budget"]
+    assert commands == [
+        [
+            precheck.sys.executable,
+            str(planner),
+            "--root",
+            str(tmp_path),
+            "audit",
+        ]
+    ]
 
 
 def test_docs_environment_failure_is_fail_closed(

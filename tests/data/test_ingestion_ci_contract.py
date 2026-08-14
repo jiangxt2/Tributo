@@ -1,4 +1,4 @@
-"""Static guardrails for the required distributed ingestion CI gate."""
+"""Static guardrails for the external distributed ingestion validation."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from tests.support.it_versions import load_it_component_versions
 
 _ROOT = Path(__file__).resolve().parents[2]
 _WORKFLOW = _ROOT / ".github" / "workflows" / "pr-test-suite.yml"
+_MANIFEST = _ROOT / "ci" / "test-suites.json"
 _COMPOSE = _ROOT / "tests" / "integrations" / "docker-compose.data-ingestion.yml"
 _DOCKERFILE = _ROOT / "tests" / "integrations" / "Dockerfile.data-ingestion"
 _PROFILE = _ROOT / "tests" / "integrations" / "runtime-profiles.json"
@@ -18,21 +19,24 @@ _RUNTIME_WORKFLOW = _ROOT / ".github" / "workflows" / "it-runtime-image.yml"
 _MODEL_EXPORT_RUNNER = _ROOT / "scripts" / "run_model_export_it.sh"
 
 
-def test_distributed_ingestion_is_a_required_core_gate() -> None:
-    workflow = _WORKFLOW.read_text(encoding="utf-8")
+def _suite(suite_id: str) -> dict[str, object]:
+    payload = json.loads(_MANIFEST.read_text(encoding="utf-8"))
+    return next(suite for suite in payload["suites"] if suite["id"] == suite_id)
 
-    assert "data-ingestion-distributed:" in workflow
-    assert "Data Ingestion Distributed (Docker Ray + MinIO)" in workflow
-    assert "test_data_ingestion_dual_engine.py" in workflow
-    assert "DATA_INGESTION_DISTRIBUTED_RESULT" in workflow
+
+def test_distributed_ingestion_is_external_and_absent_from_ci() -> None:
+    workflow = _WORKFLOW.read_text(encoding="utf-8")
+    suite = _suite("data-ingestion-cluster")
+
+    assert suite["tier"] == "manual_external"
+    assert suite["workflow"] == "external"
+    assert suite["entrypoint"] == ["./scripts/run_data_ingestion_it.sh"]
     assert (
-        "require_success data-ingestion-distributed "
-        '"$DATA_INGESTION_DISTRIBUTED_RESULT"'
-    ) in workflow
-    assert (
-        "require_skipped data-ingestion-distributed "
-        '"$DATA_INGESTION_DISTRIBUTED_RESULT"'
-    ) in workflow
+        "tests/integrations/test_data_ingestion_dual_engine.py" in suite["test_paths"]
+    )
+    assert "data-ingestion-distributed:" not in workflow
+    assert "run_data_ingestion_it.sh" not in workflow
+    assert "docker compose" not in workflow
 
 
 def test_distributed_ingestion_uses_isolated_ray_and_minio_services() -> None:
@@ -60,7 +64,7 @@ def test_distributed_ingestion_runs_from_the_project_import_root() -> None:
 
     script = _SCRIPT.read_text(encoding="utf-8")
 
-    assert "./scripts/run_data_ingestion_it.sh" in workflow
+    assert "./scripts/run_data_ingestion_it.sh" not in workflow
     assert "tools/tributo_it.py run-data-ingestion" in script
     assert (
         "python /opt/tributo/tests/integrations/test_data_ingestion_dual_engine.py"
@@ -152,35 +156,18 @@ def test_runtime_publish_workflow_is_trusted_and_immutable() -> None:
     assert ":latest" not in workflow
 
 
-def test_registry_runtime_consumers_authenticate_only_on_trusted_pushes() -> None:
+def test_pr_workflow_never_pulls_or_executes_external_runtime() -> None:
     workflow = _WORKFLOW.read_text(encoding="utf-8")
-    job_boundaries = (
-        ("  data-ingestion-distributed:", "  inference-distributed:", 80),
-        ("  core-walking-skeleton:", "  core-gate:", 65),
-    )
 
-    for start, end, timeout_minutes in job_boundaries:
-        job = workflow.split(start, 1)[1].split(end, 1)[0]
-        assert "packages: read" in job
-        assert "Authenticate to GHCR for the published runtime" in job
-        assert "if: github.event_name == 'push'" in job
-        assert "secrets.GITHUB_TOKEN" in job
-        assert "docker login ghcr.io" in job
-        assert f"timeout-minutes: {timeout_minutes}" in job
-        assert (
-            "TRIBUTO_IT_RUNTIME_REGISTRY_WAIT_SECONDS: "
-            "${{ github.event_name == 'push' && '2100' || '0' }}"
-        ) in job
+    assert "packages: read" not in workflow
+    assert "docker login ghcr.io" not in workflow
+    assert "TRIBUTO_IT_RUNTIME_REGISTRY" not in workflow
+    assert "prepare-runtime" not in workflow
 
 
-def test_model_export_ci_executes_mlflow_contract_and_waits_for_minio() -> None:
+def test_model_export_external_suite_owns_mlflow_contract_and_minio_lifecycle() -> None:
     workflow = _WORKFLOW.read_text(encoding="utf-8")
-    core_job = workflow.split("  core-walking-skeleton:", 1)[1].split(
-        "  core-gate:", 1
-    )[0]
-    trainer_bundle_filter = workflow.split("            trainer_bundle:", 1)[1].split(
-        "            docs:", 1
-    )[0]
+    suite = _suite("model-export-cluster")
     compose = _COMPOSE.read_text(encoding="utf-8")
 
     runner = _MODEL_EXPORT_RUNNER.read_text(encoding="utf-8")
@@ -190,7 +177,10 @@ def test_model_export_ci_executes_mlflow_contract_and_waits_for_minio() -> None:
     full_block, separator, _ = full_tail.partition("\nfi")
     assert separator
 
-    assert "./scripts/run_model_export_it.sh --suite ci" in core_job
+    assert suite["tier"] == "manual_external"
+    assert suite["entrypoint"] == ["./scripts/run_model_export_it.sh"]
+    assert "tests/integrations/test_e2e_mlflow.py" in suite["test_paths"]
+    assert "run_model_export_it.sh" not in workflow
     assert "tests/integrations/test_e2e_mlflow.py" in runner
     for full_only_path in (
         "tests/training/exporters/test_trainer_bundle_contract.py",
@@ -201,17 +191,19 @@ def test_model_export_ci_executes_mlflow_contract_and_waits_for_minio() -> None:
         assert full_block.count(full_only_path) == 1
         assert runner.count(full_only_path) == 1
     assert '-m "s3_contract or minio_compat"' in full_block
-    assert "tests/integrations/test_e2e_mlflow.py" not in trainer_bundle_filter
-    assert "tests/integration/test_walking_skeleton.py" not in trainer_bundle_filter
-    assert "tests/integrations/component-versions.env" not in trainer_bundle_filter
     assert "http://minio:9000/minio/health/live" in compose
 
 
-def test_postgresql_ci_service_uses_the_pinned_component_image() -> None:
+def test_postgresql_external_contract_keeps_an_immutable_component_pin() -> None:
     workflow = _WORKFLOW.read_text(encoding="utf-8")
     versions = load_it_component_versions()
 
-    assert f"image: {versions['POSTGRES_IMAGE']}" in workflow
+    assert versions["POSTGRES_IMAGE"].startswith("postgres:17.6@sha256:")
+    assert versions["POSTGRES_IMAGE"] not in workflow
+    assert (
+        "tests/integration/test_postgresql_ingestion.py"
+        in _suite("data-ingestion-cluster")["test_paths"]
+    )
 
 
 def test_model_export_runner_is_isolated_and_cleans_its_own_project() -> None:
