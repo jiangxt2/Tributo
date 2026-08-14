@@ -9,6 +9,7 @@ checkpoint handling, and bundle export.
 
 ../how-to/training
 ../how-to/pu-learning
+../how-to/custom-distributed-algorithms
 ```
 
 Use the training guide for distributed XGBoost and DNN workflows. PU learning

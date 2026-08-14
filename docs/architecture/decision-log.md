@@ -72,6 +72,7 @@ the declared single-worker safe capacity.
 | Date | Decision | Evidence | Decider |
 |------|----------|----------|---------|
 | 2026-08-02 | **NO-GO** | No reported OOM; no multi-GPU user requirement documented | @jiangxt2 |
+| 2026-08-13 | **GO** | Maintainer changed product requirements: Tributo now provides local and Kubernetes Ray execution, real DNN/PU multi-worker training, framework-native XGBoost, and constrained MapReduce/collective/framework-native algorithm extension. This later, more specific decision supersedes the blocking effect of the 2026-08-02 entry while preserving its historical rationale. | @jiangxt2 |
 
 ### Plugin Platform (PL1+PL2)
 

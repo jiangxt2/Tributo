@@ -11,11 +11,11 @@ Tributo is a **Ray-native ML Framework/SDK** — not a multi-tenant ML Platform.
 
 | Aspect | In Scope (Framework/SDK) | Out of Scope (Platform) |
 |--------|--------------------------|------------------------|
-| Runtime | Ray (Train, Data, Serve, Tune) | Kubernetes control plane, custom scheduler |
+| Runtime | Ray local runtime and Kubernetes-hosted Ray (Train, Data, Serve, Tune) | Kubernetes control plane, custom scheduler, Ray Standalone management |
 | Configuration | Strict typed validation models; JSON is the built-in persisted format | Web UI, managed YAML pipelines, drag-and-drop |
 | Model artifacts | Bundle (Manifest + files), `BundleReader` | Model Registry with approval workflows |
 | Multi-tenancy | Not in this cycle | Project/Quota/RBAC, tenant isolation, audit |
-| Training | XGBoost, DNN, PU Learning on Ray Train | AutoML, managed notebooks, experiment tracking UI |
+| Training | Distributed XGBoost, DNN, PU Learning, constrained algorithm SPI, and selected sklearn MapReduce adapters | AutoML, managed notebooks, experiment tracking UI |
 | Inference | Batch (Ray Data) + Online (Ray Serve/gRPC) | A/B testing, canary, shadow, auto-rollback |
 | Data | Explicit Ray Data / Daft bounded ingestion; `StreamSource` for unbounded | Managed ETL, data catalog, schema registry |
 | Observability | Framework-level metrics, logs, trace IDs | Centralized dashboard, alerting, cost attribution |
@@ -39,6 +39,8 @@ carry their own integrity and provenance.
 4. **Establish Framework-level contracts**: Error model, version policy, API
    stability tiers, benchmark protocol, migration safety rules.
 5. **Build CI gates**: End-to-end `training → bundle → inference → serving` in CI.
+6. **Provide Ray-native training profiles**: The same constrained algorithm can
+   run against an owned local Ray runtime or a Kubernetes-hosted Ray cluster.
 
 ## Non-Goals (Explicitly Deferred)
 
@@ -54,7 +56,7 @@ when that trigger fires.
 | Unify all DAG DSLs (`_common.dag`, `pipeline.Pipeline`, `exporting.planner`) | Each serves a different domain; premature unification creates coupling | Two or more DSLs converge on identical semantics |
 | Full PluginManager with lifecycle | A descriptor-only ingestion SPI does not require a platform manager | Third-party extensions require shared lifecycle, isolation, or dependency management |
 | Complete streaming semantics (at-least-once, backpressure, dead-letter) | No production Kafka workload | Kafka source runs continuously ≥ 24 hours in production |
-| Multi-worker / DDP for all trainers | No real dataset exceeds single-worker capacity | A training task OOMs on single worker or multi-GPU requested |
+| Automatic distributed conversion of arbitrary Trainer or sklearn estimators | Distribution requires algorithm-specific state semantics | A new algorithm implements and proves one supported distribution strategy |
 | TransformCompiler pushdown | No production Provider with benchmarked pushdown path | D1+D2 merged AND pushdown shows ≥ 20% improvement on ≥ 10 GB |
 
 ## Bounded Ingestion Boundary

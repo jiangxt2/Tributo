@@ -40,11 +40,14 @@ Prefer workload identity or environment-based credentials. If a storage
 profile is required, ensure it is available to the Ray workers. Dataset
 references and bundle manifests must remain credential-free.
 
-## PU training rejects multiple workers
+## PU training rejects a distributed configuration
 
-The current PU trainer loads the complete dataset in each worker and therefore
-requires `num_workers=1`. Use the DNN trainer with a PU loss extension when a
-multi-worker execution path is required.
+The formal `pu` algorithm uses the same Ray Train/PyTorch DDP kernel as DNN and
+accepts multiple workers. It fails closed when a shard cannot provide both
+positive and unlabeled observations for globally coordinated PU batches, when
+the requested resources are unavailable, or when multi-worker BatchNorm is
+enabled. Reduce the worker count, provide enough examples of both observed
+classes, or disable `model.use_batch_norm`.
 
 ## A bundle cannot be loaded
 
