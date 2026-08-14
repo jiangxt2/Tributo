@@ -7,7 +7,11 @@ import threading
 from dataclasses import dataclass
 from typing import Any
 
-from tributo.algorithms.api import AlgorithmRegistration, AlgorithmResolutionError
+from tributo.algorithms.api import (
+    AlgorithmRegistration,
+    AlgorithmResolutionError,
+    DistributedAlgorithmDescriptor,
+)
 from tributo.algorithms.core import AlgorithmRegistrationRegistry
 from tributo.exceptions import JobConfigurationError
 from tributo.exporting.models import PluginLoadDiagnostic
@@ -34,6 +38,7 @@ class AlgorithmRegistryEntry:
     compatibility_only: bool
     tested: bool
     supported: bool
+    validated_execution_profiles: tuple[str, ...]
     native_migration_complete: bool
     limitations: tuple[str, ...]
 
@@ -86,6 +91,7 @@ class TrainingAlgorithmRegistry:
     def __init__(self) -> None:
         self._execution_registry = AlgorithmRegistrationRegistry()
         self._descriptors: dict[str, LegacyTrainerDescriptor] = {}
+        self._distributed_descriptors: dict[str, DistributedAlgorithmDescriptor] = {}
         self._compatibility_entry_points: dict[str, Any] = {}
         self._hydrated_specs: dict[str, AlgorithmSpec] = {}
         self._diagnostics: tuple[PluginLoadDiagnostic, ...] = ()
@@ -98,13 +104,25 @@ class TrainingAlgorithmRegistry:
         with self._lock:
             if self._bootstrapped:
                 return
-            from tributo.plugin import discover_trainer_descriptors
+            from tributo.algorithms.builtin import (
+                DNN_DESCRIPTOR,
+                MULTINOMIAL_NB_DESCRIPTOR,
+                PU_DESCRIPTOR,
+                XGBOOST_DESCRIPTOR,
+            )
+            from tributo.plugin import (
+                discover_algorithm_descriptors,
+                discover_trainer_descriptors,
+            )
 
             diagnostics: list[PluginLoadDiagnostic] = []
             compatibility_entry_points: list[Any] = []
             discovered = discover_trainer_descriptors(
                 diagnostics=diagnostics,
                 compatibility_entry_points=compatibility_entry_points,
+            )
+            discovered_algorithms = discover_algorithm_descriptors(
+                diagnostics=diagnostics
             )
             descriptors: dict[str, LegacyTrainerDescriptor] = {}
             for descriptor in (*BUILTIN_LEGACY_DESCRIPTORS, *discovered):
@@ -142,15 +160,47 @@ class TrainingAlgorithmRegistry:
                     f"legacy compatibility registrations conflict with descriptors: {conflicts}"
                 )
 
-            self._execution_registry.register_many(
-                tuple(
-                    descriptor.registration
-                    for descriptor in sorted(
-                        descriptors.values(), key=lambda item: item.name
+            distributed_descriptors: dict[str, DistributedAlgorithmDescriptor] = {}
+            for descriptor in (
+                DNN_DESCRIPTOR,
+                PU_DESCRIPTOR,
+                MULTINOMIAL_NB_DESCRIPTOR,
+                XGBOOST_DESCRIPTOR,
+                *discovered_algorithms,
+            ):
+                key = descriptor.registration.implementation.implementation_id
+                distributed_existing = distributed_descriptors.get(key)
+                if (
+                    distributed_existing is not None
+                    and distributed_existing != descriptor
+                ):
+                    raise AlgorithmResolutionError(
+                        f"distributed implementation {key!r} has conflicting descriptors"
                     )
+                distributed_descriptors[key] = descriptor
+
+            self._execution_registry.register_many(
+                (
+                    *tuple(
+                        descriptor.registration
+                        for descriptor in sorted(
+                            descriptors.values(), key=lambda item: item.name
+                        )
+                    ),
+                    *tuple(
+                        descriptor.registration
+                        for descriptor in sorted(
+                            distributed_descriptors.values(),
+                            key=lambda item: (
+                                item.name,
+                                item.registration.implementation.implementation_id,
+                            ),
+                        )
+                    ),
                 )
             )
             self._descriptors = descriptors
+            self._distributed_descriptors = distributed_descriptors
             self._compatibility_entry_points = compatibility
             self._diagnostics = tuple(diagnostics)
             self._bootstrapped = True
@@ -176,6 +226,7 @@ class TrainingAlgorithmRegistry:
                 {
                     *compatibility,
                     *self._descriptors,
+                    *(item.name for item in self._distributed_descriptors.values()),
                     *self._compatibility_entry_points,
                 }
             )
@@ -244,6 +295,7 @@ class TrainingAlgorithmRegistry:
                 {
                     *compatibility,
                     *self._descriptors,
+                    *(item.name for item in self._distributed_descriptors.values()),
                     *self._compatibility_entry_points,
                 }
             )
@@ -271,6 +323,7 @@ class TrainingAlgorithmRegistry:
                 {
                     *compatibility,
                     *self._descriptors,
+                    *(item.name for item in self._distributed_descriptors.values()),
                     *self._compatibility_entry_points,
                 }
             )
@@ -295,21 +348,58 @@ class TrainingAlgorithmRegistry:
             )
         with self._lock:
             descriptors = dict(self._descriptors)
+            distributed = tuple(self._distributed_descriptors.values())
             compatibility_names = tuple(self._compatibility_entry_points)
         entries: list[AlgorithmRegistryEntry] = []
+        distributed_by_name = {item.name: item for item in distributed}
         for name, descriptor in descriptors.items():
+            native = distributed_by_name.get(name)
             entries.append(
                 AlgorithmRegistryEntry(
                     name=name,
                     spec=descriptor.registration.spec,
                     registrations=tuple(registrations_by_name.get(name, ())),
-                    stability=descriptor.stability,
+                    stability=native.stability if native else descriptor.stability,
                     available=True,
                     compatibility_only=False,
-                    tested=descriptor.tested,
-                    supported=descriptor.supported,
-                    native_migration_complete=descriptor.native_migration_complete,
-                    limitations=descriptor.limitations,
+                    tested=native.tested if native else descriptor.tested,
+                    supported=native.supported if native else descriptor.supported,
+                    validated_execution_profiles=(
+                        tuple(
+                            profile.value
+                            for profile in native.validated_execution_profiles
+                        )
+                        if native
+                        else ()
+                    ),
+                    native_migration_complete=native is not None,
+                    limitations=(
+                        native.limitations if native else descriptor.limitations
+                    ),
+                )
+            )
+        legacy_names = set(descriptors)
+        for distributed_descriptor in distributed:
+            if distributed_descriptor.name in legacy_names:
+                continue
+            entries.append(
+                AlgorithmRegistryEntry(
+                    name=distributed_descriptor.name,
+                    spec=distributed_descriptor.registration.spec,
+                    registrations=tuple(
+                        registrations_by_name.get(distributed_descriptor.name, ())
+                    ),
+                    stability=distributed_descriptor.stability,
+                    available=True,
+                    compatibility_only=False,
+                    tested=distributed_descriptor.tested,
+                    supported=distributed_descriptor.supported,
+                    validated_execution_profiles=tuple(
+                        profile.value
+                        for profile in distributed_descriptor.validated_execution_profiles
+                    ),
+                    native_migration_complete=True,
+                    limitations=distributed_descriptor.limitations,
                 )
             )
         for name, spec in compatibility_specs.items():
@@ -323,6 +413,7 @@ class TrainingAlgorithmRegistry:
                     compatibility_only=True,
                     tested=False,
                     supported=False,
+                    validated_execution_profiles=(),
                     native_migration_complete=False,
                     limitations=(
                         "Programmatic Beta Trainer registration has no portable descriptor.",
@@ -340,6 +431,7 @@ class TrainingAlgorithmRegistry:
                     compatibility_only=True,
                     tested=False,
                     supported=False,
+                    validated_execution_profiles=(),
                     native_migration_complete=False,
                     limitations=(
                         "Legacy Trainer entry point has no lightweight portable descriptor.",
@@ -381,4 +473,15 @@ def list_trainers() -> list[str]:
     return _registry.list()
 
 
-__all__ = ["get_trainer", "list_trainers", "register"]
+@DeveloperAPI
+def get_execution_registry() -> AlgorithmRegistrationRegistry:
+    """Return the sole formal/compatibility execution Registry."""
+    return _registry.execution_registry()
+
+
+__all__ = [
+    "get_execution_registry",
+    "get_trainer",
+    "list_trainers",
+    "register",
+]

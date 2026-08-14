@@ -81,6 +81,8 @@ def test_snapshot_json_projection_contains_every_cli_support_field() -> None:
             "extras_group": "causal",
             "implementation_ids": [],
             "runtime_topologies": [],
+            "distribution_strategies": [],
+            "execution_profiles": [],
             "input_views": [],
             "stability": "beta",
             "limitations": [],
@@ -88,12 +90,13 @@ def test_snapshot_json_projection_contains_every_cli_support_field() -> None:
             "compatibility_only": False,
             "tested": False,
             "supported": False,
+            "validated_execution_profiles": [],
             "native_migration_complete": False,
         }
     ]
 
 
-def test_unified_snapshot_does_not_upgrade_legacy_adapters_to_supported() -> None:
+def test_unified_snapshot_exposes_native_first_party_support() -> None:
     from tributo.training.catalog import get_algorithm_catalog
 
     snapshot = build_algorithm_support_snapshot(get_algorithm_catalog().list_records())
@@ -104,10 +107,16 @@ def test_unified_snapshot_does_not_upgrade_legacy_adapters_to_supported() -> Non
     assert all(
         not by_name[name].compatibility_only for name in ("dnn", "pu", "xgboost")
     )
-    assert all(not by_name[name].tested for name in ("dnn", "pu", "xgboost"))
-    assert all(not by_name[name].supported for name in ("dnn", "pu", "xgboost"))
-    assert all(by_name[name].stability == "beta" for name in ("dnn", "pu", "xgboost"))
+    assert all(by_name[name].tested for name in ("dnn", "pu", "xgboost"))
+    assert all(by_name[name].supported for name in ("dnn", "pu", "xgboost"))
     assert all(
-        not by_name[name].native_migration_complete for name in ("dnn", "pu", "xgboost")
+        by_name[name].validated_execution_profiles == ("local",)
+        for name in ("dnn", "pu", "xgboost")
     )
-    assert "canonical_trainer" in " ".join(by_name["pu"].limitations)
+    assert all(by_name[name].stability == "alpha" for name in ("dnn", "pu", "xgboost"))
+    assert all(
+        by_name[name].native_migration_complete for name in ("dnn", "pu", "xgboost")
+    )
+    assert by_name["dnn"].distribution_strategies == ("ray_train_collective",)
+    assert by_name["pu"].distribution_strategies == ("ray_train_collective",)
+    assert by_name["xgboost"].distribution_strategies == ("framework_native",)

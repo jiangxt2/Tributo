@@ -460,13 +460,21 @@ class TestGetAlgorithmCatalog:
 
         assert record.available is True
         assert record.compatibility_only is False
-        assert record.tested is False
-        assert record.supported is False
-        assert record.native_migration_complete is False
-        assert record.implementation_ids == ("tributo.xgboost.legacy_trainer",)
-        assert record.runtime_topologies == ("framework_managed",)
+        assert record.tested is True
+        assert record.supported is True
+        assert record.native_migration_complete is True
+        assert record.implementation_ids == (
+            "tributo.xgboost.framework_native",
+            "tributo.xgboost.legacy_trainer",
+        )
+        assert record.runtime_topologies == (
+            "framework_managed",
+            "framework_native",
+        )
+        assert record.distribution_strategies == ("framework_native",)
+        assert record.execution_profiles == ("kubernetes", "local")
         assert record.input_views == ("ray_data",)
-        assert record.stability == "beta"
+        assert record.stability == "alpha"
 
     def test_explicit_compatibility_access_reuses_hydrated_spec(self) -> None:
         catalog = get_algorithm_catalog()

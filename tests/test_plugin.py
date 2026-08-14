@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import importlib
+import importlib.metadata
+from dataclasses import replace
+from pathlib import Path
 from typing import Any, ClassVar
 
 import pytest
@@ -303,3 +307,96 @@ def test_non_trainer_entry_points_keep_name_order(
     ordered = list(plugin._iter_entry_points("tributo.exporters"))
 
     assert [item.name for item in ordered] == ["alpha", "zeta"]
+
+
+def test_independent_distributed_algorithm_package_passes_conformance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture_src = (
+        Path(__file__).parent / "fixtures" / "distributed_algorithm_plugin" / "src"
+    )
+    monkeypatch.syspath_prepend(str(fixture_src))
+    fixture = importlib.import_module("tributo_test_distributed_algorithm")
+    entry_point = _TrainerEntryPoint(
+        "third_party_multinomial_nb",
+        "tributo_test_distributed_algorithm:DESCRIPTOR",
+        fixture.DESCRIPTOR,
+    )
+    _set_entry_points(monkeypatch, entry_point)
+    real_version = importlib.metadata.version
+
+    def package_version(name: str) -> str:
+        if name == "tributo-test-distributed-algorithm":
+            return "0.1.0"
+        return real_version(name)
+
+    monkeypatch.setattr(importlib.metadata, "version", package_version)
+    diagnostics = []
+
+    descriptors = plugin.discover_algorithm_descriptors(diagnostics=diagnostics)
+
+    assert descriptors == [fixture.DESCRIPTOR]
+    assert diagnostics == []
+    assert fixture.DESCRIPTOR.registration.is_default is True
+    assert fixture.DESCRIPTOR.registration.distribution_spec is not None
+    assert (
+        fixture.DESCRIPTOR.registration.distribution_spec.strategy.value
+        == "ray_map_reduce"
+    )
+
+
+def test_distributed_algorithm_discovery_rejects_wrong_strategy_base(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tributo.algorithms.api import QualifiedReference
+    from tributo.algorithms.builtin import DNN_DESCRIPTOR
+
+    invalid_implementation = replace(
+        DNN_DESCRIPTOR.registration.implementation,
+        implementation_ref=QualifiedReference.parse("tests.test_plugin:_Hook"),
+    )
+    invalid_descriptor = replace(
+        DNN_DESCRIPTOR,
+        registration=replace(
+            DNN_DESCRIPTOR.registration,
+            implementation=invalid_implementation,
+        ),
+    )
+    _set_entry_points(
+        monkeypatch,
+        _TrainerEntryPoint(
+            "dnn",
+            "tests.test_plugin:INVALID_DESCRIPTOR",
+            invalid_descriptor,
+        ),
+    )
+    diagnostics = []
+
+    assert plugin.discover_algorithm_descriptors(diagnostics=diagnostics) == []
+    assert diagnostics[0].entry_point_name == "dnn"
+    assert diagnostics[0].error_type == "TypeError"
+
+
+def test_distributed_algorithm_discovery_rejects_package_version_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tributo.algorithms.builtin import DNN_DESCRIPTOR
+
+    _set_entry_points(
+        monkeypatch,
+        _TrainerEntryPoint(
+            "dnn",
+            "tributo.algorithms.builtin.torch_collective:DNN_DESCRIPTOR",
+            DNN_DESCRIPTOR,
+        ),
+    )
+    real_version = importlib.metadata.version
+
+    def package_version(name: str) -> str:
+        return "1.0.1" if name == "tributo" else real_version(name)
+
+    monkeypatch.setattr(importlib.metadata, "version", package_version)
+    diagnostics = []
+
+    assert plugin.discover_algorithm_descriptors(diagnostics=diagnostics) == []
+    assert diagnostics[0].error_type == "ValueError"

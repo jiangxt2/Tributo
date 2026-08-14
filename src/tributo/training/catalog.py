@@ -40,12 +40,15 @@ class AlgorithmCatalogRecord:
     spec: AlgorithmSpec | None
     implementation_ids: tuple[str, ...]
     runtime_topologies: tuple[str, ...]
+    distribution_strategies: tuple[str, ...]
+    execution_profiles: tuple[str, ...]
     input_views: tuple[str, ...]
     stability: str
     available: bool
     compatibility_only: bool
     tested: bool
     supported: bool
+    validated_execution_profiles: tuple[str, ...]
     native_migration_complete: bool
     limitations: tuple[str, ...]
 
@@ -190,8 +193,31 @@ class AlgorithmCatalog:
                     runtime_topologies=tuple(
                         sorted(
                             {
-                                registration.runtime.topology.value
+                                (
+                                    registration.runtime.topology.value
+                                    if registration.runtime is not None
+                                    else registration.distribution_spec.strategy.value
+                                )
                                 for registration in entry.registrations
+                            }
+                        )
+                    ),
+                    distribution_strategies=tuple(
+                        sorted(
+                            {
+                                registration.distribution_spec.strategy.value
+                                for registration in entry.registrations
+                                if registration.distribution_spec is not None
+                            }
+                        )
+                    ),
+                    execution_profiles=tuple(
+                        sorted(
+                            {
+                                profile.value
+                                for registration in entry.registrations
+                                if registration.distribution_spec is not None
+                                for profile in registration.distribution_spec.supported_execution_profiles
                             }
                         )
                     ),
@@ -209,6 +235,7 @@ class AlgorithmCatalog:
                     compatibility_only=entry.compatibility_only,
                     tested=entry.tested,
                     supported=entry.supported,
+                    validated_execution_profiles=entry.validated_execution_profiles,
                     native_migration_complete=entry.native_migration_complete,
                     limitations=entry.limitations,
                 )
@@ -224,12 +251,15 @@ class AlgorithmCatalog:
                     spec=spec,
                     implementation_ids=(),
                     runtime_topologies=(),
+                    distribution_strategies=(),
+                    execution_profiles=(),
                     input_views=(),
                     stability="beta",
                     available=False,
                     compatibility_only=True,
                     tested=False,
                     supported=False,
+                    validated_execution_profiles=(),
                     native_migration_complete=False,
                     limitations=(
                         "Generic Beta Registry entry has no executable portable descriptor.",

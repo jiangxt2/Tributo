@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
@@ -51,20 +53,27 @@ class TestAlgoList:
             "distributed",
         ]
         assert by_name["xgboost"]["data_loading"] == "canonical_driver"
-        assert by_name["xgboost"]["stability"] == "beta"
+        assert by_name["xgboost"]["stability"] == "alpha"
         assert by_name["xgboost"]["available"] is True
         assert by_name["xgboost"]["compatibility_only"] is False
-        assert by_name["xgboost"]["tested"] is False
-        assert by_name["xgboost"]["supported"] is False
-        assert by_name["xgboost"]["native_migration_complete"] is False
+        assert by_name["xgboost"]["tested"] is True
+        assert by_name["xgboost"]["supported"] is True
+        assert by_name["xgboost"]["native_migration_complete"] is True
         assert by_name["xgboost"]["implementation_ids"] == [
-            "tributo.xgboost.legacy_trainer"
+            "tributo.xgboost.framework_native",
+            "tributo.xgboost.legacy_trainer",
         ]
+        assert by_name["xgboost"]["distribution_strategies"] == ["framework_native"]
+        assert by_name["xgboost"]["execution_profiles"] == [
+            "kubernetes",
+            "local",
+        ]
+        assert by_name["xgboost"]["validated_execution_profiles"] == ["local"]
 
         if "dnn" in by_name:
-            assert "distributed" not in by_name["dnn"]["capabilities"]
+            assert "distributed" in by_name["dnn"]["capabilities"]
         if "pu" in by_name:
-            assert "distributed" not in by_name["pu"]["capabilities"]
+            assert "distributed" in by_name["pu"]["capabilities"]
 
     def test_list_filter_family(self, runner) -> None:
         result = runner.invoke(main, ["algo", "list", "--family", "classification"])
@@ -103,8 +112,11 @@ class TestAlgoInfo:
         assert "Execution Kind" in result.output
         assert "Capabilities" in result.output
         assert "distributed" in result.output
-        assert "Stability:      beta" in result.output
-        assert "Implementations: ['tributo.xgboost.legacy_trainer']" in result.output
+        assert "Stability:      alpha" in result.output
+        assert "tributo.xgboost.framework_native" in result.output
+        assert "Distribution:   ['framework_native']" in result.output
+        assert "Profiles:       ['kubernetes', 'local']" in result.output
+        assert "Validated:      ['local']" in result.output
 
     def test_info_unknown_algorithm(self, runner) -> None:
         result = runner.invoke(main, ["algo", "info", "nonexistent_algo_xyz"])
@@ -247,3 +259,118 @@ class TestAlgoValidate:
             ],
         )
         assert result.exit_code != 0
+
+
+class TestAlgoRun:
+    def test_run_builds_one_formal_request_from_json(self, runner, tmp_path) -> None:
+        from tributo.algorithms.api import (
+            AlgorithmExecutionResult,
+            DistributionStrategy,
+            ExecutionProfile,
+            ExecutionReceipt,
+            StateCoordination,
+            StateCoordinationEvidence,
+            WorkerExecutionEvidence,
+            WorkerResources,
+        )
+
+        config_file = tmp_path / "execution.json"
+        config_file.write_text(
+            json.dumps(
+                {
+                    "algorithm": "multinomial_nb",
+                    "profile": "local",
+                    "worker_count": 1,
+                    "input": {
+                        "ingestion": {
+                            "source": {"type": "parquet", "path": "/tmp/data.parquet"},
+                            "engine": "ray",
+                        },
+                        "features": ["f1", "f2"],
+                        "label": "label",
+                    },
+                    "algorithm_config": {"output": {"bundle_uri": "/tmp/bundles"}},
+                    "local_runtime": {"num_cpus": 1, "num_gpus": 0},
+                }
+            )
+        )
+        receipt = ExecutionReceipt(
+            run_id="run-1",
+            plan_id="a" * 64,
+            requested_algorithm="multinomial_nb",
+            canonical_algorithm="multinomial_nb",
+            profile=ExecutionProfile.LOCAL,
+            strategy=DistributionStrategy.RAY_MAP_REDUCE,
+            requested_worker_count=1,
+            distributed_min_workers=2,
+            requested_resources_per_worker=WorkerResources(),
+            workers=(
+                WorkerExecutionEvidence(
+                    worker_id="worker-0",
+                    node_id="node-0",
+                    rank=0,
+                    world_size=1,
+                    shard_id="shard-0",
+                    resources=WorkerResources(),
+                    rows_processed=2,
+                ),
+            ),
+            input_complete=True,
+            state=StateCoordinationEvidence(
+                coordination=StateCoordination.ASSOCIATIVE_REDUCE,
+                synchronized=True,
+                bounded=True,
+                global_model_digest="b" * 64,
+            ),
+        )
+        fake_result = SimpleNamespace(
+            run_id="run-1",
+            plan_id="a" * 64,
+            execution=AlgorithmExecutionResult(
+                status="succeeded",
+                metrics={"row_count": 2},
+                outputs={"bundle_uri": "/tmp/bundles/bundle"},
+            ),
+            execution_receipt=receipt,
+        )
+        fake_dispatcher = SimpleNamespace(execute=lambda *args, **kwargs: fake_result)
+
+        with patch(
+            "tributo.algorithms.composition.build_algorithm_dispatcher",
+            return_value=fake_dispatcher,
+        ) as build_dispatcher:
+            result = runner.invoke(main, ["algo", "run", "--config", str(config_file)])
+
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.stdout)
+        assert payload["status"] == "succeeded"
+        assert payload["execution_receipt"]["execution_profile"] == "local"
+        manager = build_dispatcher.call_args.kwargs["runtime_manager"]
+        assert manager._default_local_options.num_cpus == 1.0
+
+    def test_run_rejects_local_runtime_for_kubernetes(self, runner, tmp_path) -> None:
+        config_file = tmp_path / "execution.json"
+        config_file.write_text(
+            json.dumps(
+                {
+                    "algorithm": "multinomial_nb",
+                    "profile": "kubernetes",
+                    "worker_count": 2,
+                    "input": {
+                        "ingestion": {
+                            "source": {"type": "parquet", "path": "/tmp/data.parquet"},
+                            "engine": "ray",
+                        },
+                        "features": ["f1"],
+                        "label": "label",
+                    },
+                    "algorithm_config": {},
+                    "local_runtime": {"num_cpus": 2},
+                }
+            )
+        )
+
+        result = runner.invoke(main, ["algo", "run", "--config", str(config_file)])
+
+        assert result.exit_code == 1
+        assert "local_runtime is valid only" in result.output

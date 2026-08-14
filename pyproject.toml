@@ -149,6 +149,12 @@ dnn = "tributo.integrations.algorithm_runtimes.legacy_descriptors:DNN_DESCRIPTOR
 pu = "tributo.integrations.algorithm_runtimes.legacy_descriptors:PU_DESCRIPTOR"
 xgboost = "tributo.integrations.algorithm_runtimes.legacy_descriptors:XGBOOST_DESCRIPTOR"
 
+[project.entry-points."tributo.algorithms"]
+dnn = "tributo.algorithms.builtin.torch_collective:DNN_DESCRIPTOR"
+multinomial_nb = "tributo.algorithms.builtin.multinomial_nb:MULTINOMIAL_NB_DESCRIPTOR"
+pu = "tributo.algorithms.builtin.torch_collective:PU_DESCRIPTOR"
+xgboost = "tributo.algorithms.builtin.xgboost_native:XGBOOST_DESCRIPTOR"
+
 [project.entry-points."tributo.models"]
 bge_small_zh = "tributo.embeddings.registry"
 
