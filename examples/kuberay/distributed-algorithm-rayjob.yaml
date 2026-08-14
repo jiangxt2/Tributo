@@ -1,0 +1,46 @@
+apiVersion: ray.io/v1
+kind: RayJob
+metadata:
+  name: tributo-distributed-algorithm
+spec:
+  shutdownAfterJobFinishes: true
+  entrypoint: tributo algo run --config /opt/tributo/execution.json
+  runtimeEnvYAML: |
+    env_vars:
+      PYTHONUNBUFFERED: "1"
+  rayClusterSpec:
+    rayVersion: "2.55.1"
+    headGroupSpec:
+      rayStartParams:
+        num-cpus: "0"
+      template:
+        spec:
+          containers:
+            - name: ray-head
+              image: your-registry/tributo-ray:1.0.0
+              resources:
+                requests:
+                  cpu: "1"
+                  memory: 2Gi
+                limits:
+                  cpu: "1"
+                  memory: 2Gi
+    workerGroupSpecs:
+      - groupName: cpu-workers
+        replicas: 2
+        minReplicas: 2
+        maxReplicas: 2
+        rayStartParams:
+          num-cpus: "2"
+        template:
+          spec:
+            containers:
+              - name: ray-worker
+                image: your-registry/tributo-ray:1.0.0
+                resources:
+                  requests:
+                    cpu: "2"
+                    memory: 4Gi
+                  limits:
+                    cpu: "2"
+                    memory: 4Gi

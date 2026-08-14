@@ -1,0 +1,12 @@
+*
+!pyproject.toml
+!README.md
+!src/
+!src/**
+!tests/
+!tests/training/
+!tests/training/jobs/
+!tests/training/jobs/distributed_algorithm_gate_job.py
+!tests/fixtures/
+!tests/fixtures/distributed_algorithm_plugin/
+!tests/fixtures/distributed_algorithm_plugin/**
