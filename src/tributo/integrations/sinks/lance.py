@@ -170,7 +170,9 @@ def _output_path(uri: str) -> str:
 def _dataset_version(uri: str, storage_options: dict[str, str] | None) -> int:
     import lance
 
-    return lance.dataset(uri, storage_options=storage_options).version
+    dataset = lance.dataset(uri, storage_options=storage_options)
+    version: int = dataset.version
+    return version
 
 
 def _validate_vector_schema(schema: pa.Schema, request: LanceResultSinkRequest) -> None:
