@@ -32,7 +32,11 @@ install every extra by default in a production image.
 
 The Ray worker environment is distinct from the submitting process. Include
 the package and runtime dependencies in the Ray `runtime_env`, or build them
-into the cluster image. Avoid passing credentials in URIs or log messages.
+into the cluster image. Tributo's shared runtime environment builder does not
+derive `site-packages` paths from the submitting host or implicitly combine
+multiple Python environments through `PYTHONPATH`. An explicitly configured,
+cluster-visible `PYTHONPATH` remains supported for compatibility. Avoid passing
+credentials in URIs or log messages.
 
 ## S3 access fails
 

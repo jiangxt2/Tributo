@@ -1,7 +1,7 @@
 """Training job submission wrapper via Ray Jobs API.
 
-Automatically handles runtime_env configuration (py_modules + working_dir + PYTHONPATH),
-abstracting away the underlying differences between /venv and anaconda environments in the official Ray image.
+Builds the Ray-managed code distribution environment. Package dependencies
+remain owned by the cluster image or an explicit Ray runtime environment.
 """
 
 from __future__ import annotations
@@ -141,7 +141,7 @@ def submit_training_job(
     Automatically builds the correct ``runtime_env``, ensuring:
     - The latest ``tributo`` code is uploaded to the cluster via ``py_modules``;
     - The entrypoint script is provided via ``working_dir``;
-    - ``ray`` and other anaconda-exclusive packages are visible to ``/venv`` via ``PYTHONPATH``.
+    - Package dependencies are not implicitly mixed across Python environments.
 
     Args:
         entrypoint: Entrypoint command, e.g. ``"python examples/xgboost_s3_training.py"``.
