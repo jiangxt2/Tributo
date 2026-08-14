@@ -20,7 +20,7 @@ existing MLflow server, or a pre-existing container.
 | File conformance | `../integration/test_data_ingestion_conformance.py` | Local/MinIO Parquet and CSV through Ray Data and Daft | Local Ray runtime + MinIO |
 | Table conformance | `../integration/test_table_format_ingestion.py` | Local/MinIO Iceberg and Lance through Ray Data and Daft | Local Ray runtime + MinIO |
 | PostgreSQL conformance | `../integration/test_postgresql_ingestion.py` | Structured table read through Ray Data and Daft | Local Ray runtime + PostgreSQL |
-| Inference Ray Jobs | `../integration/test_inference_ray_jobs.py` | Bundle, real post-training inline/detached inference, MLflow import, external artifacts, retry identity, credential domains, empty/NaN behavior | Isolated version-locked Docker Ray + MLflow + MinIO |
+| Inference Ray Jobs | `../integration/test_inference_ray_jobs.py`, `../integration/test_lance_result_sink_ray.py` | Bundle, real post-training inline/detached inference, MLflow import, external artifacts, retry identity, credential domains, empty/NaN inference behavior, Lance-Ray local/S3 create/append/overwrite, and vector schemas | Isolated version-locked Docker Ray + Lance-Ray + MLflow + MinIO |
 | Streaming | `test_e2e_streaming.py` | Streaming inference service | TBD |
 | Tune trial correctness | `../integration/test_tune_ray_cluster.py` | Ray Jobs → two concurrent XGBoost Tune trials, strict target metric, isolated checkpoints, ResultGrid, and zero Bundle publication | Isolated version-locked Docker Ray cluster via `run_tune_it.sh` |
 
@@ -37,8 +37,9 @@ Use only the lifecycle-owned runner:
 Do not invoke `test_inference_ray_jobs.py` against a developer Ray cluster.
 The test module fails when the Compose ownership marker is absent. The runner
 uses `inference-it-versions.conf`, creates a unique Compose project, exposes no
-host ports, and runs pytest inside `ray-head`; the head has zero Ray CPUs so
-model actors execute on the independent worker.
+host ports, and runs pytest inside `ray-head`. The locked `lance-ray` and
+`pylance` versions are verified before the suite. The head has zero Ray CPUs,
+so model actors execute on the independent worker.
 
 An EXIT/INT/TERM trap captures logs and executes project-scoped `down
 --volumes --remove-orphans`. CI repeats the same exact-project cleanup with an

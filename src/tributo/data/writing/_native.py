@@ -8,7 +8,6 @@ operations remain owned by the selected Ray or Daft writer API.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
@@ -81,6 +80,14 @@ def native_path(target: str) -> str:
 
 def daft_path(target: str) -> str:
     """Preserve S3 URIs for Daft and decode local file URIs."""
+    parsed = urlsplit(target)
+    if parsed.scheme.lower() == "file":
+        return unquote(parsed.path)
+    return target
+
+
+def lance_path(target: str) -> str:
+    """Preserve object-store URIs and decode local file URIs for Lance."""
     parsed = urlsplit(target)
     if parsed.scheme.lower() == "file":
         return unquote(parsed.path)
@@ -193,12 +200,3 @@ def ray_mode(mode: WriteMode) -> Any:
     from ray.data import SaveMode
 
     return SaveMode(mode.value)
-
-
-def target_exists_locally(target: str) -> bool | None:
-    """Return local target state; remote state remains native-binding-specific."""
-    parsed = urlsplit(target)
-    if parsed.scheme.lower() == "s3":
-        return None
-    path = native_path(target)
-    return Path(path).exists()

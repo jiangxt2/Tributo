@@ -1,7 +1,7 @@
 """tributo.pipeline — Multi-step training workflow orchestration.
 
 Provides a lightweight in-process DAG executor for composing training
-steps (e.g. Embedding → Graph Features → Classifier for user profiling).
+steps (e.g. Encoder → Graph Features → Classifier for user profiling).
 
 Usage::
 

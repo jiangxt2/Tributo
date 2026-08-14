@@ -18,6 +18,7 @@ from tributo.inference._credential_safety import safe_exception_summary
 from tributo.inference.contracts import (
     ParquetResultSinkRequest,
     ResultSinkReceipt,
+    ResultSinkRequest,
 )
 from tributo.util.annotations import PublicAPI
 
@@ -48,12 +49,16 @@ class ParquetResultSink:
     def write(
         self,
         dataset: Any,
-        request: ParquetResultSinkRequest,
+        request: ResultSinkRequest,
         *,
         run_id: str,
         plan_digest: str,
     ) -> ResultSinkReceipt:
         """Stream predictions to Parquet and return a credential-free receipt."""
+        if not isinstance(request, ParquetResultSinkRequest):
+            raise ResultWriteError(
+                f"Parquet result sink cannot write {request.sink_id!r}"
+            )
         output_path = request.uri
         output_filesystem: Any | None = None
         parsed = urlsplit(request.uri)

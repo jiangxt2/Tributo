@@ -16,11 +16,13 @@ Runtime, PyArrow, pandas, and S3 filesystem support.
 
 | Workload | Installation |
 | --- | --- |
-| Ray Data table formats | `python -m pip install "tributo[data]"` |
+| Ray Data table formats, including Lance-Ray writes | `python -m pip install "tributo[data]"` |
 | Daft ingestion | `python -m pip install "tributo[data,data-daft]"` |
 | PostgreSQL ingestion | `python -m pip install "tributo[postgresql]"` |
 | Distributed training | `python -m pip install "tributo[training]"` |
-| Embeddings | `python -m pip install "tributo[embeddings]"` |
+| User-provided Hugging Face model dependencies | `python -m pip install "tributo[hf]"` |
+| Hugging Face ONNX export | `python -m pip install "tributo[model-export-hf]"` |
+| LLM streaming service | `python -m pip install "tributo[streaming]"` |
 | Torch model export | `python -m pip install "tributo[model-export-torch]"` |
 | MLflow registry | `python -m pip install "tributo[registry]"` |
 | gRPC serving | `python -m pip install "tributo[grpc]"` |
@@ -29,7 +31,8 @@ Runtime, PyArrow, pandas, and S3 filesystem support.
 Optional extras install dependencies; they do not imply that every protocol or
 reserved problem type has a concrete implementation. Check the
 [support matrix](reference/support-matrix.md) before selecting a production
-path.
+path. The `data` extra locks the current Lance-Ray/PyLance compatibility pair;
+`vector-index` reuses that data dependency instead of owning a second copy.
 
 ## Source checkout
 

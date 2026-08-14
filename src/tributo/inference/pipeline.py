@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import warnings
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlsplit, urlunsplit
 
 if TYPE_CHECKING:
@@ -34,6 +34,7 @@ from tributo.data.source_config import (
 )
 from tributo.exceptions import JobConfigurationError
 from tributo.inference._credential_safety import credential_paths
+from tributo.inference.contracts import LanceResultSinkRequest, LanceVectorColumnSpec
 from tributo.util.annotations import PublicAPI
 
 logger = logging.getLogger(__name__)
@@ -137,6 +138,10 @@ class InferenceConfig(BaseModel):
     num_gpus_per_actor: float = 0.0
     output_compression: str = "zstd"
     min_rows_per_file: int | None = None
+    output_format: Literal["parquet", "lance"] = "parquet"
+    output_mode: Literal["create", "append", "overwrite"] = "overwrite"
+    output_data_storage_version: str | None = None
+    output_vector_columns: list[LanceVectorColumnSpec] = Field(default_factory=list)
     s3_config: dict[str, str] = Field(default_factory=dict)
 
     # ClickHouse-specific fields
@@ -198,6 +203,10 @@ class _JsonOutputSection(_StrictJsonSection):
     compression: str = "zstd"
     min_rows_per_file: int | None = None
     storage_profile: str | None = None
+    format: Literal["parquet", "lance"] = "parquet"
+    mode: Literal["create", "append", "overwrite"] = "overwrite"
+    data_storage_version: str | None = None
+    vector_columns: list[LanceVectorColumnSpec] = Field(default_factory=list)
 
 
 class _JsonRaySection(_StrictJsonSection):
@@ -401,9 +410,16 @@ def run_batch_inference(
     Data flow:
     1. IngestionGateway opens an explicit Ray request and returns a typed handle;
     2. map_batches + ActorPoolStrategy for distributed inference;
-    3. write_parquet streams results back to S3.
+    3. the selected ResultSink streams results to Parquet or Lance.
 
     The Driver never holds actual data, it only orchestrates tasks.
+
+    ``predictor_cls`` is the explicit first-phase extension point for a
+    caller-owned model, including a Hugging Face model.  The non-Bundle path
+    receives ``(model_uri, predictor_config)``; the Bundle path receives the
+    existing six-argument Bundle constructor shape.  The formal
+    ``InferenceRequest`` executor is a separate Bundle-backed path and does
+    not import arbitrary Predictor modules.
 
     Args:
         config: Inference task configuration.
@@ -417,7 +433,7 @@ def run_batch_inference(
     from tributo.inference.batch_predictor import XGBoostONNXPredictor
     from tributo.inference.contracts import ParquetResultSinkRequest
     from tributo.inference.input_resolver import IngestionGatewayInputResolver
-    from tributo.integrations.sinks import ParquetResultSink
+    from tributo.integrations.sinks import LanceResultSink, ParquetResultSink
 
     if predictor_cls is None:
         predictor_cls = XGBoostONNXPredictor
@@ -534,23 +550,47 @@ def run_batch_inference(
         logger.info(
             "Writing predictions to %s", _credential_free_uri(config.output_uri)
         )
-        sink: ParquetResultSink
+        sink: ParquetResultSink | LanceResultSink
         sink_profile = config.output_storage_profile
-        if sink_profile is None and legacy_s3_config:
+        request: LanceResultSinkRequest | ParquetResultSinkRequest
+        if config.output_format == "lance":
+            if sink_profile is None and legacy_s3_config:
+                sink_profile = "legacy-flat-s3-config"
+                sink = LanceResultSink(
+                    storage_resolver=_LegacyStorageProfileResolver(legacy_s3_config)
+                )
+            else:
+                sink = LanceResultSink()
+            request = LanceResultSinkRequest(
+                uri=config.output_uri,
+                mode=config.output_mode,
+                storage_profile=sink_profile,
+                data_storage_version=config.output_data_storage_version,
+                min_rows_per_file=config.min_rows_per_file or 1024 * 1024,
+                vector_columns=tuple(config.output_vector_columns),
+            )
+        elif sink_profile is None and legacy_s3_config:
             sink_profile = "legacy-flat-s3-config"
             sink = ParquetResultSink(
                 storage_resolver=_LegacyStorageProfileResolver(legacy_s3_config)
             )
-        else:
-            sink = ParquetResultSink()
-        receipt = sink.write(
-            ds,
-            ParquetResultSinkRequest(
+            request = ParquetResultSinkRequest(
                 uri=config.output_uri,
                 storage_profile=sink_profile,
                 compression=config.output_compression,
                 min_rows_per_file=config.min_rows_per_file,
-            ),
+            )
+        else:
+            sink = ParquetResultSink()
+            request = ParquetResultSinkRequest(
+                uri=config.output_uri,
+                storage_profile=sink_profile,
+                compression=config.output_compression,
+                min_rows_per_file=config.min_rows_per_file,
+            )
+        receipt = sink.write(
+            ds,
+            request,
             run_id="legacy-inference",
             plan_digest="0" * 64,
         )
@@ -741,6 +781,10 @@ def run_inference_from_json(config_path: str) -> dict[str, Any]:
             num_gpus_per_actor=ray_cfg.get("num_gpus_per_actor", 0.0),
             output_compression=output_cfg.get("compression", "zstd"),
             min_rows_per_file=output_cfg.get("min_rows_per_file"),
+            output_format=output_cfg.get("format", "parquet"),
+            output_mode=output_cfg.get("mode", "overwrite"),
+            output_data_storage_version=output_cfg.get("data_storage_version"),
+            output_vector_columns=output_cfg.get("vector_columns", []),
         )
     except (ValidationError, ValueError) as e:
         detail = _validation_message(e) if isinstance(e, ValidationError) else str(e)

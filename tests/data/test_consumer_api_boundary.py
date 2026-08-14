@@ -15,7 +15,6 @@ _CONSUMER_PATHS = (
     _SOURCE_ROOT / "algorithms",
     _SOURCE_ROOT / "training",
     _SOURCE_ROOT / "inference",
-    _SOURCE_ROOT / "embeddings",
     _SOURCE_ROOT / "data" / "graph.py",
 )
 _FORBIDDEN_MODULE_PREFIXES = (

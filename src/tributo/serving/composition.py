@@ -8,17 +8,17 @@ the output of one runner feeds into the input of the next.
     from tributo.serving.composition import ModelRunner, depends
 
     # Declare a 2-stage pipeline
-    embedder = ModelRunner("embedding", load_fn=load_bge_model, predict_fn=bge_predict)
+    encoder = ModelRunner("encoder", load_fn=load_model, predict_fn=predict)
     classifier = ModelRunner(
         "classifier",
         load_fn=lambda: XGBoostFlavor.load("classifier.json"),
         predict_fn=lambda m, inp: m.predict(inp),
     )
 
-    # classifier depends on embedder → embedder runs first
-    classifier.depends(embedder)
+    # classifier depends on encoder → encoder runs first
+    classifier.depends(encoder)
 
-    # Topo-sorted execution: embedder → classifier
+    # Topo-sorted execution: encoder → classifier
     result = classifier.run(input_text="Hello world")
 """
 
@@ -140,11 +140,11 @@ def depends(*upstream: ModelRunner) -> Callable[[ModelRunner], ModelRunner]:
 
     Usage::
 
-        @depends(embedder)
+        @depends(encoder)
         def classifier_runner():
             return ModelRunner("classifier", ...)
 
-        # Equivalent to: classifier_runner().depends(embedder)
+        # Equivalent to: classifier_runner().depends(encoder)
     """
 
     def _decorator(runner_or_fn: Any) -> ModelRunner:

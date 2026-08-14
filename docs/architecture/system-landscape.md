@@ -14,7 +14,7 @@ The main flow runs from top to bottom:
 - Users and applications use the CLI or Python API. Persisted configuration
   uses strict JSON, while `TributoClient` wraps submission, status, logs, and
   stop operations over the Ray Jobs API.
-- Scenario workloads cover training and tuning, embeddings, batch inference,
+- Scenario workloads cover training and tuning, custom batch inference,
   online serving, and streaming input. Their stability is not uniform: legacy
   trainers remain Beta compatibility paths, portable algorithm execution is
   Alpha, and Kafka is an Alpha `StreamSource` rather than a complete service

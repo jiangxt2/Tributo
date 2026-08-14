@@ -98,13 +98,6 @@ class TestBackwardCompatibility:
             if isinstance(node, ast.ImportFrom) and node.module is not None
         }
 
-    def test_embeddings_uses_data_module(self):
-        src_root = Path(__file__).resolve().parents[2] / "src"
-        source = (src_root / "tributo" / "embeddings" / "batch_job.py").read_text()
-        modules = self._get_import_from_targets(source)
-        assert "tributo._common.io" not in modules
-        assert "tributo.data" in modules
-
     def test_inference_uses_data_module(self):
         src_root = Path(__file__).resolve().parents[2] / "src"
         source = (src_root / "tributo" / "inference" / "pipeline.py").read_text()

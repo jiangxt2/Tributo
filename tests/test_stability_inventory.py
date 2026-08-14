@@ -158,6 +158,7 @@ STABILITY_MAP: dict[str, str] = {
     "tributo.integrations.storage": "beta",
     "tributo.integrations.hooks": "beta",
     "tributo.integrations.sinks.parquet": "alpha",
+    "tributo.integrations.sinks.lance": "alpha",
     # Inference — beta
     "tributo.inference.base": "beta",
     "tributo.inference.batch_predictor": "beta",
@@ -183,11 +184,6 @@ STABILITY_MAP: dict[str, str] = {
     "tributo.serving.streaming_deployment": "alpha",
     # Serving — developer (generated)
     "tributo.serving.proto": "developer",
-    # Embeddings — beta
-    "tributo.embeddings.job_runner": "beta",
-    "tributo.embeddings.serve_runner": "beta",
-    "tributo.embeddings.registry": "beta",
-    "tributo.embeddings.schema": "beta",
     # Streaming — beta
     "tributo.streaming.protocol": "beta",
     # Streaming — alpha

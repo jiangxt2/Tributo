@@ -22,6 +22,7 @@ import pyarrow as pa
 import pyarrow.dataset as pads
 import pyarrow.parquet as pq
 import pytest
+import ray.data
 from ray.job_submission import JobStatus, JobSubmissionClient
 
 from tests.serving.bundle_fixtures import build_test_bundle
@@ -33,8 +34,10 @@ from tests.support.object_storage import (
 )
 from tributo._common import DEFAULT_DASHBOARD_URL, build_runtime_env
 from tributo._common.storage import get_boto3_client
+from tributo._common.storage_profiles import StorageProfileResolver
 from tributo._common.submission_id import generate_submission_id
 from tributo.data import IngestionRequest
+from tributo.data._s3 import to_lance_storage_options
 from tributo.data.source_config import ParquetSourceConfig
 from tributo.exceptions import JobConfigurationError
 from tributo.exporting.bundle_reader import BundleReader
@@ -589,6 +592,100 @@ def test_source_model_and_sink_use_independent_minio_profiles(
     table = pads.dataset(output_dir, format="parquet").to_table()
     assert table.num_rows == 4
     assert table.column_names == ["entity_id", "prediction", "score"]
+
+
+def test_lance_result_sink_create_append_overwrite_minio(
+    minio_assets: _S3Assets,
+) -> None:
+    import lance
+
+    from tributo.inference.contracts import (
+        LanceResultSinkRequest,
+        LanceVectorColumnSpec,
+    )
+    from tributo.integrations.sinks.lance import LanceResultSink
+
+    output_uri = f"s3://{minio_assets.bucket}/results/lance-{uuid.uuid4().hex}"
+    sink = LanceResultSink()
+    create = sink.write(
+        ray.data.from_arrow(
+            pa.table(
+                {
+                    "id": pa.array([1, 2], type=pa.int64()),
+                    "vector": pa.array(
+                        [[1.0, 2.0], [3.0, 4.0]],
+                        type=pa.list_(pa.float32(), 2),
+                    ),
+                }
+            )
+        ),
+        LanceResultSinkRequest(
+            uri=output_uri,
+            storage_profile="sink_domain",
+            mode="create",
+            min_rows_per_file=1,
+            vector_columns=(LanceVectorColumnSpec(name="vector", dimension=2),),
+        ),
+        run_id="inference-it-lance-s3",
+        plan_digest="9" * 64,
+    )
+
+    sink.write(
+        ray.data.from_arrow(
+            pa.table(
+                {
+                    "id": pa.array([3], type=pa.int64()),
+                    "vector": pa.array(
+                        [[5.0, 6.0]],
+                        type=pa.list_(pa.float32(), 2),
+                    ),
+                }
+            )
+        ),
+        LanceResultSinkRequest(
+            uri=output_uri,
+            storage_profile="sink_domain",
+            mode="append",
+            min_rows_per_file=1,
+            vector_columns=(LanceVectorColumnSpec(name="vector", dimension=2),),
+        ),
+        run_id="inference-it-lance-s3-append",
+        plan_digest="8" * 64,
+    )
+
+    storage_options = to_lance_storage_options(
+        StorageProfileResolver().resolve("sink_domain")
+    )
+    table = lance.dataset(output_uri, storage_options=storage_options).to_table()
+    assert create.metadata["format"] == "lance"
+    assert "dataset_version" not in create.metadata
+    assert table.num_rows == 3
+    assert table.column_names == ["id", "vector"]
+
+    sink.write(
+        ray.data.from_arrow(
+            pa.table(
+                {
+                    "id": pa.array([9], type=pa.int64()),
+                    "vector": pa.array(
+                        [[9.0, 9.0]],
+                        type=pa.list_(pa.float32(), 2),
+                    ),
+                }
+            )
+        ),
+        LanceResultSinkRequest(
+            uri=output_uri,
+            storage_profile="sink_domain",
+            mode="overwrite",
+            min_rows_per_file=1,
+            vector_columns=(LanceVectorColumnSpec(name="vector", dimension=2),),
+        ),
+        run_id="inference-it-lance-s3-overwrite",
+        plan_digest="7" * 64,
+    )
+    table = lance.dataset(output_uri, storage_options=storage_options).to_table()
+    assert table["id"].to_pylist() == [9]
 
 
 def test_external_xgboost_artifact_is_normalized_before_ray_job(

@@ -37,7 +37,7 @@ body:
       description: Which Tributo modules would this touch?
       options:
         - label: Training
-        - label: Embeddings
+        - label: Custom inference or vector data
         - label: Serving / Inference
         - label: Data / Storage
         - label: Registry / MLflow

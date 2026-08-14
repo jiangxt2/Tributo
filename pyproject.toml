@@ -54,17 +54,16 @@ dev = [
     "pre-commit>=4.6.1",
 ]
 data = [
-    "pylance>=4.0.0",
+    "lance-ray==0.5.0",
     "pyiceberg>=0.11.1,<0.12.0",
+    "pylance==9.0.0",
 ]
 data-daft = [
     "daft[lance,ray]>=0.7.0,<0.8.0",
 ]
 vector-index = [
-    "tributo[s3]",
-    "lance-ray==0.5.0",
+    "tributo[data,s3]",
     "pyarrow==19.0.1",
-    "pylance==9.0.0",
 ]
 postgresql = [
     "psycopg[binary]>=3.2,<4",
@@ -92,6 +91,13 @@ model-export-torch = [
     "safetensors>=0.4.3",
     "onnxscript>=0.1.0",
 ]
+hf = [
+    "transformers>=4.40.0",
+    "tokenizers>=0.19.0",
+]
+model-export-hf = [
+    "tributo[model-export-torch,hf]",
+]
 training = [
     "tributo[clickhouse,data,data-daft,model-export,mysql,postgresql,s3]",
     "xgboost>=2.1.0",
@@ -102,20 +108,14 @@ explainability = [
     "shap>=0.52.0,<0.53.0",
     "numpy>=2.0.0,<3.0.0",
 ]
-embeddings = [
-    "tributo[data,data-daft,model-export,s3]",
-    "torch>=2.5.0",
-    "transformers>=4.40.0",
-    "optimum-onnx[onnxruntime]>=0.1.0",
-    "tokenizers>=0.19.0",
-]
 identity = [
     "tributo[data,model-export]",
     "torch>=2.5.0",
     "onnxruntime>=1.20.0",
 ]
 streaming = [
-    "tributo[embeddings]",
+    "tributo[hf]",
+    "torch>=2.5.0",
     "accelerate>=0.20.0",
 ]
 grpc = [
@@ -160,9 +160,6 @@ dnn = "tributo.algorithms.builtin.torch_collective:DNN_DESCRIPTOR"
 multinomial_nb = "tributo.algorithms.builtin.multinomial_nb:MULTINOMIAL_NB_DESCRIPTOR"
 pu = "tributo.algorithms.builtin.torch_collective:PU_DESCRIPTOR"
 xgboost = "tributo.algorithms.builtin.xgboost_native:XGBOOST_DESCRIPTOR"
-
-[project.entry-points."tributo.models"]
-bge_small_zh = "tributo.embeddings.registry"
 
 [project.entry-points."tributo.exporters"]
 xgboost-onnx-v1 = "tributo.integrations.exporters.xgboost_onnx:XGBoostONNXExporter"

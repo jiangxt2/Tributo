@@ -29,7 +29,7 @@ Current exit-gate status:
 - [x] Representative compatibility comparisons show that canonical and legacy
   inputs enter the same Gateway and produce equivalent Ray Data results. The
   new public path returns an `IngestionOpenResult` with a typed native handle.
-- [x] Training, inference, and embeddings all route through the new Provider
+- [x] Training and inference route through the new Provider
   (verified by code audit, not just test coverage).
 - [ ] Legacy input adapters have completed their documented compatibility
   window. They remain available and keep their `FutureWarning`; only the
@@ -48,16 +48,16 @@ reader code.
 Migration impact:
 
 - `InferenceConfig.source` is the canonical input for new callers.
-- Legacy `input_uri`, flat ClickHouse fields, `data.uri`, `data.input`, and
-  embedding `--input`/`s3_input_path` remain compatibility inputs.
+- Legacy `input_uri`, flat ClickHouse fields, `data.uri`, and `data.input`
+  remain compatibility inputs.
 - Feature and text column selection is expressed through provider-native
   projection.
 - Output sinks are unchanged.
 
 Compatibility:
 
-- Legacy inference and embedding input forms remain accepted during their
-  deprecation windows.
+- Legacy inference input forms remain accepted during their deprecation
+  windows.
 - Legacy local-runner `val_path` and `test_path` remain relative to the caller
   working directory during that window; canonical source objects use the
   shared project-root path policy.
@@ -76,11 +76,6 @@ Compatibility:
   credential-free migration error. Built-in execution supports structured
   table/projection/partitioning requests; Tributo does not restore an arbitrary
   SQL reader.
-- Embedding submission validates and transports a credential-free source but
-  does not resolve Providers, Bindings, or optional dependencies on the submit
-  host. The Ray job performs that validation in its cluster image. Its engine
-  remains explicit; Daft input reaches the Ray-only embedding consumer through
-  the recorded Daft-to-Ray adapter.
 
 Deprecation window:
 
@@ -133,9 +128,9 @@ Ray/Daft typed handle → native Dataset/DataFrame writer
 ```
 
 `DataConnector.write()` remains a compatibility adapter and keeps its historical
-`None` return shape. Internal bounded writers, Embedding output, and the
-Parquet inference sink use `WriteGateway`; they do not call `DataConnector.write()`
-or a format-specific private helper. The Gateway carries only credential-free
+`None` return shape. Internal bounded writers and Parquet/Lance inference sinks
+use `WriteGateway`; they do not call `DataConnector.write()` or a
+format-specific private helper. The Gateway carries only credential-free
 request/digest/descriptor/receipt data. Engine-native runtime configuration is
 resolved inside the binding and is passed to Ray or Daft according to that
 engine's supported worker/runtime mechanism.
@@ -144,14 +139,15 @@ Current exit-gate status:
 
 - [x] Ray/Daft Parquet and CSV native bindings and compatibility facades are
   covered by contract tests and Docker cluster/MinIO IT.
-- [x] Iceberg and Daft Lance use native engine data-plane writers; PyIceberg
+- [x] Iceberg and Ray/Daft Lance use native engine data-plane writers; PyIceberg
   usage in Tributo is limited to catalog/table control-plane preflight and
   `exists()` compatibility checks.
 - [x] Static boundaries reject Tributo-owned Lance fragment/commit and other
   direct storage data-plane markers.
-- [ ] Ray Lance is not supported by the current locked Ray/pylance API
-  combination; the binding fails closed until the dependency contract is
-  satisfied. This is an explicit capability gap, not a fallback permission.
+- [x] Ray Lance is delegated by `tributo.ray.lance` to the official
+  `lance_ray.write_lance(stream=False)` integration with locked Lance-Ray and
+  PyLance versions. Consumers depend only on the Binding contract, so a future
+  `Dataset.write_lance` switch does not change their APIs or architecture.
 - [ ] Legacy `DataConnector.write()` removal remains a separate future change
   after its compatibility window, call audit, and deprecation evidence are
   complete.

@@ -27,6 +27,8 @@ def main() -> None:
 
     packages = {
         "ray": _expected("TRIBUTO_EXPECTED_RAY_VERSION"),
+        "lance-ray": _expected("TRIBUTO_EXPECTED_LANCE_RAY_VERSION"),
+        "pylance": _expected("TRIBUTO_EXPECTED_PYLANCE_VERSION"),
         "mlflow": _expected("TRIBUTO_EXPECTED_MLFLOW_VERSION"),
         "onnx": _expected("TRIBUTO_EXPECTED_ONNX_VERSION"),
         "onnxruntime": _expected("TRIBUTO_EXPECTED_ONNXRUNTIME_VERSION"),

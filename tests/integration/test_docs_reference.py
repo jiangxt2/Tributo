@@ -86,7 +86,6 @@ def test_generated_sidebar_contains_global_navigation() -> None:
         "../training/",
         "../model-lifecycle/",
         "../inference/",
-        "../embeddings/",
         "../reference/",
         "../ray-jobs/",
         "../operations/",

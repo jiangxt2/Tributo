@@ -1,7 +1,7 @@
 """Generic thread-safe registry for plugin-style extensibility.
 
 Eliminates the duplicated ``dict + threading.Lock`` pattern shared by
-``training/registry.py``, ``data/registry.py``, and ``embeddings/registry.py``.
+``training/registry.py`` and ``data/registry.py``.
 """
 
 from __future__ import annotations

@@ -20,7 +20,7 @@ training, model bundles, and batch or online inference.
 | Training | Local/Kubernetes Ray profiles; distributed XGBoost, DNN, PU and constrained algorithm SPI; Ray Tune integration |
 | Model lifecycle | Validated multi-format bundles with local or S3 publication |
 | Inference | Ray Data batch inference and Ray Serve HTTP/gRPC endpoints |
-| Embeddings | Ray Jobs batch processing and online serving |
+| Generic inference | Ray Data batch execution and Ray Jobs/Serve lifecycle |
 
 See the [support matrix](reference/support-matrix.md) for maturity levels and
 known boundaries. An enum, protocol, or prototype alone is not treated as an
@@ -57,7 +57,6 @@ Data <data/index>
 Training <training/index>
 Model Lifecycle <model-lifecycle/index>
 Inference <inference/index>
-Embeddings <embeddings/index>
 Reference <reference/index>
 Ray Jobs and Clusters <ray-jobs/index>
 Monitoring and Troubleshooting <operations/index>

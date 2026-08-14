@@ -49,7 +49,7 @@ DataConnector.write(**legacy kwargs)
   └─ compatibility normalizer
        └─ WriteRequest(engine="ray", target_kind, target, mode)
 
-Embedding output policy / ParquetResultSink
+ParquetResultSink / LanceResultSink / compatibility DataConnector
   └─ explicit WriteRequest
 
 Any entry above
@@ -60,7 +60,7 @@ WriteBindingRegistry → credential-free capability negotiation
   ↓
 WriteGateway.execute(typed RayDataHandle or DaftDataFrameHandle)
   ↓
-RayWriteBinding → ray.data.Dataset.write_*
+RayWriteBinding → ray.data.Dataset.write_* or official Lance-Ray writer
 DaftWriteBinding → daft.DataFrame.write_*
   ↓
 WriteReceipt / compatibility return shape
@@ -71,7 +71,10 @@ credential-free receipts, and error redaction. Ray Data or Daft owns the
 distributed data plane and native file/table commit. Iceberg catalog loading or
 table creation in a binding is control-plane preflight only. No Tributo
 consumer may bypass the Gateway with `to_arrow()`, a PyIceberg data mutation,
-or a Lance fragment/commit helper.
+or a Lance fragment/commit helper. The current Ray Lance implementation is
+isolated in `RayLanceWriteBinding`, which calls
+`lance_ray.write_lance(stream=False)`. Switching that one Binding to
+`Dataset.write_lance` must not change any consumer in this call chain.
 
 **Canonical ingestion implementation**:
 - `data/transform_ir.py` — versioned engine-neutral ETL contract.
@@ -194,39 +197,7 @@ The flat `s3_config` field warns and remains only inside this adapter.
 ordinary `InferenceRequest`; no Trainer or in-memory model crosses the domain
 boundary.
 
-### 3. Embedding Data Loading
-
-**Primary entry**: `embeddings/job_runner.py`
-
-```
-CLI / Python API
-  ↓
-submit_embedding_job(source=... or s3_input_path=...)
-  ↓
-IngestionRequest(source, explicit engine)
-  ↓
-credential-safe source serialization + deterministic submission identity
-  (no Provider/Binding resolution on the submit host)
-  ↓
-Ray Job submission (entrypoint script runs inside Ray cluster)
-  ↓
-embeddings.batch_job._resolve_embedding_source()
-  ↓
-IngestionGateway.open(explicit engine)
-  ↓
-RayDataHandle.dataset, or explicit DaftDataFrameHandle → Ray adapter
-  ↓
-Ray Data → model inference → output writer
-```
-
-Ray Job entrypoints carry only source configuration accepted by
-`IngestionRequest.source_json_for_remote_transport()`; credentials are resolved
-from the cluster environment, IAM, or a storage profile. Optional Provider,
-Binding, and Connector dependencies are resolved inside the cluster, never on
-the submit host. Embeddings never calls Provider normalization or a registry
-directly and never performs automatic engine fallback.
-
-### 4. CLI Data Entry
+### 3. CLI Data Entry
 
 **Primary entry**: `cli.py`
 
@@ -238,7 +209,7 @@ CLI parses JSON → builds JobConfig / TrainingConfig
 submits to Ray Job API or calls local runner
 ```
 
-### 5. Plugin and Optional Data Connectors
+### 4. Plugin and Optional Data Connectors
 
 **Discovery**: `plugin.py::discover_connector_plugins()`
 
@@ -425,7 +396,7 @@ Plugin groups also discovered:
 
 | Issue | Location | Impact |
 |-------|----------|--------|
-| Existing downstream consumers still expect Ray Dataset values | Training / local runner / inference / embeddings | Their compatibility functions explicitly select Ray and delegate the same Gateway; native Daft consumption requires a later consumer capability change |
+| Existing downstream consumers still expect Ray Dataset values | Training / local runner / inference | Their compatibility functions explicitly select Ray and delegate the same Gateway; native Daft consumption requires a later consumer capability change |
 | A Ray-only consumer intentionally selects a Daft-only source | Consumer boundary | `adapt_daft_result_to_ray()` calls Daft's public adapter and records conversion evidence; the Gateway never performs this conversion implicitly |
 | External model importers use explicit IDs and normalize to BundleRef | `inference/importers.py`, `integrations/model_importers/` | MLflow and typed ONNX/XGBoost artifacts pass Conformance and real-service IT |
 | Raw-artifact compatibility still exists | `BaseTrainer.run(..., legacy_export=True)` | Removal waits for the documented compatibility window and a separate E4 change |

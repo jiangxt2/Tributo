@@ -85,7 +85,8 @@ jobs:
               - "src/tributo/training/data_loader.py"
               - "src/tributo/training/local_runner.py"
               - "src/tributo/inference/pipeline.py"
-              - "src/tributo/embeddings/**"
+              - "src/tributo/inference/**"
+              - "src/tributo/integrations/sinks/**"
               - "tests/data/**"
               - "tests/integration/test_data_ingestion_conformance.py"
               - "tests/integration/test_postgresql_ingestion.py"
@@ -420,7 +421,7 @@ jobs:
       - name: Install integration dependencies
         run: >-
           uv sync --extra dev --extra training --extra model-export-torch
-          --extra embeddings --locked
+          --extra model-export-hf --locked
 
       - name: Verify optional integration dependencies
         run: |

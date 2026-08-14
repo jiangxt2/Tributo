@@ -9,8 +9,7 @@
         "test-integration",
         "training",
         "registry",
-        "model-export-torch",
-        "embeddings",
+        "model-export-hf",
         "data-daft",
         "vector-index"
       ],

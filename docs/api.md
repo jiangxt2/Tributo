@@ -121,6 +121,24 @@ switches engines.
 ```{autofunction} tributo.inference.run_batch_inference
 ```
 
+`run_batch_inference(config, predictor_cls=...)` is the first-phase extension
+point for user-owned models, including Hugging Face models. The Predictor owns
+tokenization, task semantics, output interpretation, pooling, normalization,
+and metadata. The formal `InferenceRequest` path remains Bundle-backed and
+does not import arbitrary user modules.
+
+```{autoclass} tributo.inference.BasePredictor
+:members:
+```
+
+```{autoclass} tributo.inference.LanceResultSinkRequest
+:members:
+```
+
+```{autoclass} tributo.inference.LanceVectorColumnSpec
+:members:
+```
+
 The bundle-aware API is alpha. It accepts credential-free intent, pins a model
 Bundle and bounded-ingestion binding, and executes named tensor bindings through
 Ray Data.
@@ -163,15 +181,6 @@ Bundles before inference.
 
 ```{autoclass} tributo.integrations.model_importers.MLflowModelImporter
 :members:
-```
-
-## Embedding and serving API
-
-```{autoclass} tributo.embeddings.ModelSpec
-:members:
-```
-
-```{autofunction} tributo.embeddings.submit_embedding_job
 ```
 
 ```{autofunction} tributo.serving.start_serving

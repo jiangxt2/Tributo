@@ -15,14 +15,14 @@ class TestGenerateSubmissionId:
 
     def test_deterministic(self):
         """相同输入必须产生相同的 ID。"""
-        id1 = generate_submission_id("embed", "bge-small-zh", "s3://a/in.parquet")
-        id2 = generate_submission_id("embed", "bge-small-zh", "s3://a/in.parquet")
+        id1 = generate_submission_id("custom", "model-a", "s3://a/in.parquet")
+        id2 = generate_submission_id("custom", "model-a", "s3://a/in.parquet")
         assert id1 == id2
 
     def test_unique_per_input(self):
         """不同输入产生不同 ID。"""
-        id1 = generate_submission_id("embed", "bge-small-zh", "s3://a/in.parquet")
-        id2 = generate_submission_id("embed", "bge-small-zh", "s3://b/in.parquet")
+        id1 = generate_submission_id("custom", "model-a", "s3://a/in.parquet")
+        id2 = generate_submission_id("custom", "model-a", "s3://b/in.parquet")
         assert id1 != id2
 
     def test_prefix_included(self):
@@ -33,8 +33,8 @@ class TestGenerateSubmissionId:
     def test_length_within_limit(self):
         """ID 长度应远低于 Ray 的 64 字符限制。"""
         sid = generate_submission_id(
-            "embed",
-            "bge-small-zh",
+            "custom",
+            "model-a",
             "s3://bucket/path/input.parquet",
             "s3://bucket/path/output.lance",
         )
@@ -42,7 +42,7 @@ class TestGenerateSubmissionId:
 
     def test_different_prefixes_different_ids(self):
         """相同组件但不同 prefix 应产生不同 ID。"""
-        id1 = generate_submission_id("embed", "a", "b")
+        id1 = generate_submission_id("custom", "a", "b")
         id2 = generate_submission_id("train", "a", "b")
         assert id1 != id2
 
@@ -54,144 +54,6 @@ class TestGenerateSubmissionId:
 
 class TestJobRunnerSubmissionId:
     """Integration tests for submission_id parameter passing."""
-
-    def test_embedding_job_passes_submission_id(self):
-        """embeddings/job_runner 应将 submission_id 传给 Ray API。"""
-        mock_client = MagicMock()
-        mock_client.submit_job.return_value = "job-123"
-
-        with patch(
-            "tributo.embeddings.job_runner.JobSubmissionClient",
-            return_value=mock_client,
-        ):
-            from tributo.embeddings.job_runner import submit_embedding_job
-
-            submit_embedding_job(
-                s3_input_path="s3://bucket/in.parquet",
-                s3_output_path="s3://bucket/out.lance",
-                model_name="bge-small-zh",
-                batch_size=64,
-                concurrency=4,
-            )
-
-        call_kwargs = mock_client.submit_job.call_args.kwargs
-        assert "submission_id" in call_kwargs
-        assert call_kwargs["submission_id"].startswith("tributo-embed-")
-
-    def test_canonical_source_with_inline_credentials_is_rejected(self):
-        """Ray entrypoints must never carry inline source credentials."""
-        from tributo.embeddings.job_runner import submit_embedding_job
-
-        mock_client = MagicMock()
-        with patch(
-            "tributo.embeddings.job_runner.JobSubmissionClient",
-            return_value=mock_client,
-        ):
-            with pytest.raises(ValueError, match="environment variables"):
-                submit_embedding_job(
-                    source={
-                        "provider": "tributo.clickhouse",
-                        "uri": "clickhouse://host/db",
-                        "options": {
-                            "sql": "SELECT * FROM events",
-                            "password": "inline-secret",
-                        },
-                    },
-                    s3_output_path="s3://bucket/out.lance",
-                )
-
-        mock_client.submit_job.assert_not_called()
-
-    def test_canonical_source_identity_does_not_resolve_driver_bindings(self):
-        """Submission validation must not depend on driver-installed bindings."""
-        mock_client = MagicMock()
-        mock_client.submit_job.return_value = "job-canonical"
-        with patch(
-            "tributo.embeddings.job_runner.JobSubmissionClient",
-            return_value=mock_client,
-        ):
-            from tributo.embeddings.job_runner import submit_embedding_job
-
-            job_id = submit_embedding_job(
-                source={"provider": "tributo.parquet", "uri": "data.parquet"},
-                s3_output_path="s3://bucket/out.lance",
-            )
-
-        assert job_id == "job-canonical"
-        kwargs = mock_client.submit_job.call_args.kwargs
-        assert kwargs["submission_id"].startswith("tributo-embed-")
-        assert "--engine tributo.ray_data" in kwargs["entrypoint"]
-
-    def test_canonical_raw_sql_migration_error_is_deferred_to_cluster(self):
-        """The submit host serializes safely; cluster Providers validate plans."""
-        from tributo.embeddings.job_runner import submit_embedding_job
-
-        mock_client = MagicMock()
-        mock_client.submit_job.return_value = "job-raw-sql"
-        with patch(
-            "tributo.embeddings.job_runner.JobSubmissionClient",
-            return_value=mock_client,
-        ):
-            job_id = submit_embedding_job(
-                source={
-                    "provider": "tributo.clickhouse",
-                    "uri": "clickhouse://host/db",
-                    "options": {"sql": "SELECT password FROM users"},
-                },
-                engine="daft",
-                s3_output_path="s3://bucket/out.lance",
-            )
-
-        assert job_id == "job-raw-sql"
-        assert (
-            "--engine tributo.daft"
-            in (mock_client.submit_job.call_args.kwargs["entrypoint"])
-        )
-
-    def test_canonical_source_with_credential_params_is_rejected(self):
-        """Parameterized credentials must not enter the Ray entrypoint."""
-        from tributo.embeddings.job_runner import submit_embedding_job
-
-        mock_client = MagicMock()
-        with patch(
-            "tributo.embeddings.job_runner.JobSubmissionClient",
-            return_value=mock_client,
-        ):
-            with pytest.raises(ValueError, match="environment variables"):
-                submit_embedding_job(
-                    source={
-                        "provider": "tributo.clickhouse",
-                        "uri": "clickhouse://host/db",
-                        "options": {
-                            "sql": "SELECT * FROM users WHERE id = {id}",
-                            "params": {"password": "inline-secret"},
-                        },
-                    },
-                    s3_output_path="s3://bucket/out.lance",
-                )
-
-        mock_client.submit_job.assert_not_called()
-
-    def test_canonical_source_with_uri_userinfo_is_rejected(self):
-        """URI userinfo must not enter the Ray entrypoint."""
-        from tributo.embeddings.job_runner import submit_embedding_job
-
-        mock_client = MagicMock()
-        with patch(
-            "tributo.embeddings.job_runner.JobSubmissionClient",
-            return_value=mock_client,
-        ):
-            with pytest.raises(ValueError, match="environment variables"):
-                submit_embedding_job(
-                    source={
-                        "provider": "tributo.clickhouse",
-                        "uri": "clickhouse://user:pass@host/db",
-                        "options": {"sql": "SELECT 1"},
-                    },
-                    s3_output_path="s3://bucket/out.lance",
-                )
-
-        mock_client.submit_job.assert_not_called()
 
     def test_training_job_passes_submission_id(self):
         """training/job_submitter 应将 submission_id 传给 Ray API。"""

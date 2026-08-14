@@ -39,6 +39,7 @@ _EXEMPT_NAMES: set[str] = {
     "SourceInput",
     "TrainerSpec",
     "CanonicalSourceInput",
+    "ResultSinkRequest",
     # Deprecated alias — resolves to the annotated ExportSourceProvider.
     "SourceProvider",
     # Native bounded-data handle aliases — type aliases cannot be decorated;

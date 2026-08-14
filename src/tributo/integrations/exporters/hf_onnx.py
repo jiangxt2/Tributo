@@ -1,7 +1,7 @@
 """HuggingFace transformer → ONNX exporter — ``ModelExporter`` protocol.
 
-Uses ``optimum.onnxruntime.ORTModel`` or ``transformers.onnx.export``
-to export a HuggingFace model to ONNX format.
+Uses the ``transformers.onnx`` or ``torch.onnx.export`` APIs to export a
+HuggingFace model to ONNX format.
 """
 
 from __future__ import annotations
@@ -43,8 +43,7 @@ logger = logging.getLogger(__name__)
 class HuggingFaceONNXExporter:
     """Export a HuggingFace transformer model to ONNX.
 
-    Uses ``optimum.onnxruntime`` when available (preferred),
-    falling back to ``transformers.onnx`` + ``torch.onnx.export``.
+    Uses the public ``transformers.onnx`` and ``torch.onnx.export`` APIs.
     """
 
     api_version: ClassVar[int] = 2
@@ -87,7 +86,10 @@ class HuggingFaceONNXExporter:
             return SupportResult(
                 supported=False,
                 code="MISSING_DEPENDENCY",
-                reason=f"{'/'.join(requirements[name] for name in missing)} required",
+                reason=(
+                    f"{'/'.join(requirements[name] for name in missing)} required; "
+                    "install tributo[model-export-hf]"
+                ),
                 missing_dependencies=tuple(missing),
             )
         return SupportResult(supported=True, code="OK")

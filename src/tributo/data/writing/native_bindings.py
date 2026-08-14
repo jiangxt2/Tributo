@@ -8,7 +8,6 @@ manifest, or snapshot data-plane logic itself.
 
 from __future__ import annotations
 
-import inspect
 from typing import Any, Literal, cast
 
 from tributo.data.contracts.handles import DaftDataFrameHandle, RayDataHandle
@@ -19,11 +18,11 @@ from tributo.data.writing._native import (
     descriptor,
     ensure_iceberg_table,
     iceberg_context,
+    lance_path,
     lance_storage_options,
     native_path,
     ray_filesystem,
     ray_mode,
-    target_exists_locally,
     write_receipt,
 )
 from tributo.data.writing.capabilities import WriteCapability
@@ -46,7 +45,7 @@ def _ray_descriptor(
     dependencies: tuple[str, ...] = (
         ("pyiceberg",)
         if target_kind == "iceberg"
-        else ("pylance",)
+        else ("lance-ray", "pylance")
         if target_kind == "lance"
         else ()
     )
@@ -66,7 +65,7 @@ def _daft_descriptor(
     dependencies: tuple[str, ...] = (
         ("pyiceberg",)
         if target_kind == "iceberg"
-        else ("pylance",)
+        else ("pylance", "daft-lance")
         if target_kind == "lance"
         else ()
     )
@@ -81,8 +80,12 @@ def _daft_descriptor(
 
 
 _FILE_MODES = frozenset({WriteMode.APPEND, WriteMode.OVERWRITE})
+_LANCE_MODES = frozenset({WriteMode.CREATE, WriteMode.APPEND, WriteMode.OVERWRITE})
 _PARQUET_OPTIONS = frozenset({"compression", "min_rows_per_file"})
 _ICEBERG_OPTIONS = frozenset({"snapshot_properties"})
+_LANCE_OPTIONS = frozenset(
+    {"min_rows_per_file", "max_rows_per_file", "data_storage_version"}
+)
 
 
 class RayParquetWriteBinding:
@@ -230,28 +233,15 @@ class RayIcebergWriteBinding:
 
 
 class RayLanceWriteBinding:
-    """Delegate Lance writes to ``ray.data.Dataset.write_lance``."""
+    """Delegate Lance writes to the official Lance-Ray integration."""
 
     binding_id = "tributo.ray.lance"
-
-    @staticmethod
-    def is_available() -> bool:
-        """Return whether Ray's Lance sink matches the installed pylance API."""
-        try:
-            from lance.fragment import write_fragments
-
-            return (
-                "storage_options_provider"
-                in inspect.signature(write_fragments).parameters
-            )
-        except (ImportError, TypeError, ValueError):
-            return False
-
     _descriptor = _ray_descriptor(
         "lance",
         binding_id,
         WriteCapability(
-            supported_modes=_FILE_MODES,
+            supported_modes=_LANCE_MODES,
+            supported_options=_LANCE_OPTIONS,
             distributed=True,
             native_metrics=False,
             can_create_target=True,
@@ -271,23 +261,29 @@ class RayLanceWriteBinding:
         context: WriteExecutionContext,
     ) -> WriteReceipt:
         input_handle = _require_ray(plan, input_handle, "lance")
-        mode = ray_mode(plan.mode)
-        if (
-            target_exists_locally(plan.target) is False
-            and plan.mode == WriteMode.APPEND
-        ):
-            from ray.data import SaveMode
+        import lance_ray
 
-            mode = SaveMode.CREATE
-        input_handle.dataset.write_lance(
-            native_path(plan.target),
-            mode=mode,
-            storage_options=lance_storage_options(context.runtime_options),
+        kwargs: dict[str, Any] = {
+            "mode": cast(Literal["create", "append", "overwrite"], plan.mode.value),
+            "storage_options": lance_storage_options(context.runtime_options),
+            "stream": False,
+        }
+        for option in (
+            "min_rows_per_file",
+            "max_rows_per_file",
+            "data_storage_version",
+        ):
+            if option in plan.options:
+                kwargs[option] = plan.options[option]
+        lance_ray.write_lance(
+            input_handle.dataset,
+            lance_path(plan.target),
+            **kwargs,
         )
         return write_receipt(
             plan=plan,
             binding_id=self.binding_id,
-            native_api="ray.data.Dataset.write_lance",
+            native_api="lance_ray.write_lance",
         )
 
 
@@ -436,7 +432,7 @@ class DaftLanceWriteBinding:
         "lance",
         binding_id,
         WriteCapability(
-            supported_modes=_FILE_MODES,
+            supported_modes=_LANCE_MODES,
             distributed=True,
             native_metrics=False,
             can_create_target=True,
@@ -456,15 +452,11 @@ class DaftLanceWriteBinding:
         context: WriteExecutionContext,
     ) -> WriteReceipt:
         input_handle = _require_daft(plan, input_handle, "lance")
-        exists = target_exists_locally(plan.target)
-        mode = plan.mode.value
-        if exists is False:
-            mode = "create"
-        elif exists is None and plan.mode == WriteMode.APPEND:
-            mode = "append"
         input_handle.dataframe.write_lance(
-            plan.target,
-            mode=cast(Literal["create", "append", "overwrite", "merge"], mode),
+            daft_path(plan.target),
+            mode=cast(
+                Literal["create", "append", "overwrite", "merge"], plan.mode.value
+            ),
             io_config=daft_io_config(
                 context.runtime_options,
                 required=plan.target.lower().startswith("s3://"),
@@ -484,11 +476,6 @@ def _require_ray(
         raise WriteCapabilityError("Ray write binding received an incompatible plan")
     if not isinstance(handle, RayDataHandle):
         raise WriteCapabilityError("Ray write binding requires a RayDataHandle")
-    if target_kind == "lance" and not RayLanceWriteBinding.is_available():
-        raise WriteCapabilityError(
-            "Ray Lance writer is unavailable: the installed pylance API does not "
-            "support Ray's storage_options_provider integration"
-        )
     return handle
 
 

@@ -15,7 +15,7 @@ pip install tributo
 
 # Or with extras
 pip install tributo[training]      # XGBoost training + ONNX export
-pip install tributo[embeddings]    # BGE text embeddings
+pip install tributo[hf]            # User-provided Hugging Face Predictor dependencies
 pip install tributo[data]          # Lance / Iceberg connectors
 ```
 
@@ -103,6 +103,6 @@ uv run tributo serve stop
 ## Next Steps
 
 - [Distributed Training](how-to/training.md) — configure XGBoost/DNN training jobs
-- [Batch Embedding](how-to/embeddings.md) — embed millions of text records
+- [Batch inference](how-to/inference.md) — run user-provided Predictors over Ray Data
 - [PU Learning](how-to/pu-learning.md) — train with positive + unlabeled data
 - [CLI Reference](cli.md) — all available commands

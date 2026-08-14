@@ -84,30 +84,6 @@ class TestRetryWithExponentialBackoff:
 class TestJobRunnerRetryIntegration:
     """Integration tests for retry in job submission paths."""
 
-    def test_embedding_job_runner_retries_connection(self):
-        """embeddings/job_runner 连接失败时触发重试。"""
-        client_mock = MagicMock()
-        client_mock.submit_job.return_value = "job-123"
-
-        import tributo.embeddings.job_runner as ejr
-
-        with patch.object(
-            ejr,
-            "JobSubmissionClient",
-            side_effect=[
-                ConnectionError("timeout"),
-                ConnectionError("timeout"),
-                client_mock,
-            ],
-        ) as mock_jsc:
-            job_id = ejr.submit_embedding_job(
-                s3_input_path="s3://bucket/in.parquet",
-                s3_output_path="s3://bucket/out.lance",
-            )
-
-        assert job_id == "job-123"
-        assert mock_jsc.call_count == 3
-
     def test_training_job_submitter_retries_connection(self):
         """training/job_submitter 连接失败时触发重试。"""
         client_mock = MagicMock()

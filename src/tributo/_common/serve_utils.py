@@ -1,6 +1,6 @@
 """Ray Serve lifecycle management utilities.
 
-Shared by ``serving/serve_runner.py`` and ``embeddings/serve_runner.py``
+Shared by the generic serving and inference lifecycle helpers.
 to eliminate duplicated start/stop/status logic.
 """
 

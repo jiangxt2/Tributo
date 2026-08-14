@@ -2896,43 +2896,6 @@ wheels = [
 ]
 
 [[package]]
-name = "optimum"
-version = "2.1.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "huggingface-hub" },
-    { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'" },
-    { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' or sys_platform != 'darwin'" },
-    { name = "packaging" },
-    { name = "torch" },
-    { name = "transformers" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/f0/69/e1e9fe4d54f6b1b90cc278d6da74dd90eb4d9fd9228882886d7c275712e2/optimum-2.1.0.tar.gz", hash = "sha256:0a2a13f91500e41d34863ffdb08fcb886b3ce68a84a386e59653e3064a45dd4b", size = 125896, upload-time = "2025-12-19T10:47:18.571Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/4a/98/c409ed937331839fdadc03cef6ebd19982bf3834711134db8898eeb31585/optimum-2.1.0-py3-none-any.whl", hash = "sha256:bc3af32e1236a9b2c2ca1d27ed9d3ab1b6591e24c6bcd47f9671a8198a30ea88", size = 161231, upload-time = "2025-12-19T10:47:17.054Z" },
-]
-
-[[package]]
-name = "optimum-onnx"
-version = "0.1.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "onnx", version = "1.19.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13'" },
-    { name = "onnx", version = "1.22.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13'" },
-    { name = "optimum" },
-    { name = "transformers" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/08/da/3a0073af8f436d72c1e4d9c655c00628b857bd1d9ccc101d35301d5bb2df/optimum_onnx-0.1.0.tar.gz", hash = "sha256:182c54b25eddaded1618af7b58516da34749393a987ec7111f74677f249676f9", size = 165531, upload-time = "2025-12-23T14:20:18.97Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/41/89/4be9d226bc74fd0eb405d1efea62e86d6f0f31841dae9c5898ee12eb482f/optimum_onnx-0.1.0-py3-none-any.whl", hash = "sha256:0301ec7a6ec5c77a57581e9970d380a6dc104bdb8f15b282e05af40d829c2eda", size = 194155, upload-time = "2025-12-23T14:20:17.741Z" },
-]
-
-[package.optional-dependencies]
-onnxruntime = [
-    { name = "onnxruntime" },
-]
-
-[[package]]
 name = "osqp"
 version = "1.1.3"
 source = { registry = "https://pypi.org/simple" }
@@ -4515,6 +4478,7 @@ clickhouse = [
     { name = "clickhouse-connect" },
 ]
 data = [
+    { name = "lance-ray" },
     { name = "pyiceberg" },
     { name = "pylance" },
 ]
@@ -4532,20 +4496,6 @@ dev = [
     { name = "pytest-timeout" },
     { name = "ruff" },
     { name = "types-pyyaml" },
-]
-embeddings = [
-    { name = "boto3" },
-    { name = "daft", extra = ["lance", "ray"] },
-    { name = "ml-dtypes" },
-    { name = "onnx", version = "1.19.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13'" },
-    { name = "onnx", version = "1.22.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13'" },
-    { name = "onnxruntime" },
-    { name = "optimum-onnx", extra = ["onnxruntime"] },
-    { name = "pyiceberg" },
-    { name = "pylance" },
-    { name = "tokenizers" },
-    { name = "torch" },
-    { name = "transformers" },
 ]
 explainability = [
     { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'" },
@@ -4567,8 +4517,13 @@ graph = [
 grpc = [
     { name = "grpcio" },
 ]
+hf = [
+    { name = "tokenizers" },
+    { name = "transformers" },
+]
 identity = [
     { name = "boto3" },
+    { name = "lance-ray" },
     { name = "ml-dtypes" },
     { name = "onnx", version = "1.19.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13'" },
     { name = "onnx", version = "1.22.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13'" },
@@ -4583,6 +4538,19 @@ model-export = [
     { name = "onnx", version = "1.19.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13'" },
     { name = "onnx", version = "1.22.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13'" },
     { name = "onnxruntime" },
+]
+model-export-hf = [
+    { name = "boto3" },
+    { name = "ml-dtypes" },
+    { name = "onnx", version = "1.19.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13'" },
+    { name = "onnx", version = "1.22.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13'" },
+    { name = "onnxruntime" },
+    { name = "onnxscript", version = "0.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13'" },
+    { name = "onnxscript", version = "0.7.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13'" },
+    { name = "safetensors" },
+    { name = "tokenizers" },
+    { name = "torch" },
+    { name = "transformers" },
 ]
 model-export-torch = [
     { name = "boto3" },
@@ -4611,15 +4579,6 @@ s3 = [
 ]
 streaming = [
     { name = "accelerate" },
-    { name = "boto3" },
-    { name = "daft", extra = ["lance", "ray"] },
-    { name = "ml-dtypes" },
-    { name = "onnx", version = "1.19.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13'" },
-    { name = "onnx", version = "1.22.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13'" },
-    { name = "onnxruntime" },
-    { name = "optimum-onnx", extra = ["onnxruntime"] },
-    { name = "pyiceberg" },
-    { name = "pylance" },
     { name = "tokenizers" },
     { name = "torch" },
     { name = "transformers" },
@@ -4632,6 +4591,7 @@ test-integration = [
     { name = "boto3" },
     { name = "clickhouse-connect" },
     { name = "daft", extra = ["lance", "ray"] },
+    { name = "lance-ray" },
     { name = "ml-dtypes" },
     { name = "mlflow" },
     { name = "onnx", version = "1.19.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13'" },
@@ -4653,6 +4613,7 @@ training = [
     { name = "boto3" },
     { name = "clickhouse-connect" },
     { name = "daft", extra = ["lance", "ray"] },
+    { name = "lance-ray" },
     { name = "ml-dtypes" },
     { name = "onnx", version = "1.19.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13'" },
     { name = "onnx", version = "1.22.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13'" },
@@ -4671,6 +4632,7 @@ vector-index = [
     { name = "boto3" },
     { name = "lance-ray" },
     { name = "pyarrow" },
+    { name = "pyiceberg" },
     { name = "pylance" },
 ]
 
@@ -4705,7 +4667,7 @@ requires-dist = [
     { name = "econml", marker = "extra == 'causal'", specifier = ">=0.15.0" },
     { name = "grpcio", marker = "extra == 'grpc'", specifier = ">=1.60.0" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.25.0" },
-    { name = "lance-ray", marker = "extra == 'vector-index'", specifier = "==0.5.0" },
+    { name = "lance-ray", marker = "extra == 'data'", specifier = "==0.5.0" },
     { name = "ml-dtypes", marker = "extra == 'model-export'", specifier = ">=0.5.0" },
     { name = "mlflow", marker = "extra == 'registry'", specifier = ">=2.18.0,<3.0.0" },
     { name = "moto", extras = ["server"], marker = "extra == 'dev'", specifier = ">=5.1.0" },
@@ -4717,7 +4679,6 @@ requires-dist = [
     { name = "onnxruntime", marker = "extra == 'identity'", specifier = ">=1.20.0" },
     { name = "onnxruntime", marker = "extra == 'model-export'", specifier = ">=1.20.0" },
     { name = "onnxscript", marker = "extra == 'model-export-torch'", specifier = ">=0.1.0" },
-    { name = "optimum-onnx", extras = ["onnxruntime"], marker = "extra == 'embeddings'", specifier = ">=0.1.0" },
     { name = "packaging", specifier = ">=24.0" },
     { name = "pandas", specifier = ">=2.0.0" },
     { name = "pandas-stubs", marker = "extra == 'dev'", specifier = "~=2.1.4" },
@@ -4727,8 +4688,7 @@ requires-dist = [
     { name = "pyarrow", marker = "extra == 'vector-index'", specifier = "==19.0.1" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pyiceberg", marker = "extra == 'data'", specifier = ">=0.11.1,<0.12.0" },
-    { name = "pylance", marker = "extra == 'data'", specifier = ">=4.0.0" },
-    { name = "pylance", marker = "extra == 'vector-index'", specifier = "==9.0.0" },
+    { name = "pylance", marker = "extra == 'data'", specifier = "==9.0.0" },
     { name = "pymysql", marker = "extra == 'mysql'", specifier = ">=1.1.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
     { name = "pytest", marker = "extra == 'test-integration'", specifier = ">=7.0.0" },
@@ -4745,25 +4705,25 @@ requires-dist = [
     { name = "skl2onnx", marker = "extra == 'training'", specifier = ">=1.17.0" },
     { name = "sqlalchemy", marker = "extra == 'postgresql'", specifier = ">=2.0,<3" },
     { name = "sqlglot", marker = "extra == 'postgresql'", specifier = "<30.9.0" },
-    { name = "tokenizers", marker = "extra == 'embeddings'", specifier = ">=0.19.0" },
-    { name = "torch", marker = "extra == 'embeddings'", specifier = ">=2.5.0" },
+    { name = "tokenizers", marker = "extra == 'hf'", specifier = ">=0.19.0" },
     { name = "torch", marker = "extra == 'identity'", specifier = ">=2.5.0" },
     { name = "torch", marker = "extra == 'model-export-torch'", specifier = ">=2.5.0" },
+    { name = "torch", marker = "extra == 'streaming'", specifier = ">=2.5.0" },
     { name = "torch-geometric", marker = "extra == 'graph'", specifier = ">=2.5.0" },
-    { name = "transformers", marker = "extra == 'embeddings'", specifier = ">=4.40.0" },
+    { name = "transformers", marker = "extra == 'hf'", specifier = ">=4.40.0" },
     { name = "tributo", extras = ["clickhouse", "data", "data-daft", "model-export", "mysql", "postgresql", "s3"], marker = "extra == 'training'" },
-    { name = "tributo", extras = ["data", "data-daft", "model-export", "s3"], marker = "extra == 'embeddings'" },
     { name = "tributo", extras = ["data", "model-export"], marker = "extra == 'identity'" },
-    { name = "tributo", extras = ["embeddings"], marker = "extra == 'streaming'" },
+    { name = "tributo", extras = ["data", "s3"], marker = "extra == 'vector-index'" },
+    { name = "tributo", extras = ["hf"], marker = "extra == 'streaming'" },
     { name = "tributo", extras = ["model-export"], marker = "extra == 'model-export-torch'" },
     { name = "tributo", extras = ["model-export-torch"], marker = "extra == 'graph'" },
+    { name = "tributo", extras = ["model-export-torch", "hf"], marker = "extra == 'model-export-hf'" },
     { name = "tributo", extras = ["registry", "training"], marker = "extra == 'test-integration'" },
     { name = "tributo", extras = ["s3"], marker = "extra == 'model-export'" },
-    { name = "tributo", extras = ["s3"], marker = "extra == 'vector-index'" },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.12.20250516" },
     { name = "xgboost", marker = "extra == 'training'", specifier = ">=2.1.0" },
 ]
-provides-extras = ["dev", "data", "data-daft", "vector-index", "postgresql", "clickhouse", "mysql", "s3", "model-export", "model-export-torch", "training", "explainability", "embeddings", "identity", "streaming", "grpc", "registry", "graph", "causal", "streaming-inference", "test-integration"]
+provides-extras = ["dev", "data", "data-daft", "vector-index", "postgresql", "clickhouse", "mysql", "s3", "model-export", "model-export-torch", "hf", "model-export-hf", "training", "explainability", "identity", "streaming", "grpc", "registry", "graph", "causal", "streaming-inference", "test-integration"]
 
 [package.metadata.requires-dev]
 dev = [

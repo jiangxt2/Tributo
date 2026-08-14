@@ -21,7 +21,7 @@ Ray-only loaders are compatibility adapters over this same path.
 `IngestionGateway`, typed handles, receipts, and explicit handle adapters.
 `scan_plan`, `engine_binding`, Provider registries, and native Connector plans
 are Developer SPI for ingestion extensions and must not be imported by
-Training, Inference, Embeddings, or graph algorithms. Historical beta Provider
+Training, Inference, or graph algorithms. Historical beta Provider
 exports remain only for their documented compatibility window.
 
 New bounded sources use `ProviderSourceConfig(provider, uri, options)` and may
@@ -57,3 +57,21 @@ Credentials belong to runtime configuration. They must not appear in dataset
 identifiers, logical plans, receipts, logs, or public errors. Bounded providers
 and unbounded stream sources remain separate contracts, and an input Connector
 does not imply an inference output sink.
+
+## Lance output compatibility
+
+`LanceDataConnector` is a beta compatibility adapter over `WriteGateway`, the
+same control-plane boundary used by inference. It always writes Lance and never
+infers an output format from vector-like columns. Older releases wrote Parquet
+with ZSTD when no floating-point list column was present; callers that require
+Parquet must now select `ParquetDataConnector` or a Parquet ResultSink
+explicitly.
+
+The stable Ray Binding currently delegates to the official Lance-Ray
+`write_lance(..., stream=False)` API; the Daft Binding delegates to
+`DataFrame.write_lance`. Tributo forwards `create`, `append`, and `overwrite`
+without rewriting target state and does not add guarantees for empty writes,
+schema compatibility or evolution, exclusive creation, fragment counts, or a
+post-write dataset version. Both Bindings remain data-plane replaceable: once
+the locked Ray/PyLance combination is compatible, adopting
+`Dataset.write_lance` changes only the Ray Binding.
