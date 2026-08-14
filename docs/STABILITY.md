@@ -117,6 +117,15 @@ from the legacy setup-only propagation rule.
 | `tributo.data.provider_registry` | `beta` | Data source provider registry |
 | `tributo.data.refs` | `beta` | Data reference value objects |
 
+### Distributed Lance vector indexing (tributo.vector_index.*)
+
+| Module | Level | Notes |
+|--------|-------|-------|
+| `tributo.vector_index.contracts` | `alpha` | Credential-free build, search, maintenance, result-delivery, and receipt contracts |
+| `tributo.vector_index.index_job` | `alpha` | Planning-baseline distributed index build orchestration and coverage evidence |
+| `tributo.vector_index.search` | `alpha` | Fixed-version Lance-Ray Top-K query orchestration |
+| `tributo.vector_index.maintenance` | `alpha` | Lance-Ray index optimization and distributed compaction orchestration |
+
 ### Exporting / Bundle (tributo.exporting.*)
 
 | Module | Level | Notes |

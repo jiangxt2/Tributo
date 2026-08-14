@@ -1656,6 +1656,22 @@ wheels = [
 ]
 
 [[package]]
+name = "lance-ray"
+version = "0.5.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "lance-namespace" },
+    { name = "packaging" },
+    { name = "pyarrow" },
+    { name = "pylance" },
+    { name = "ray", extra = ["data"] },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/48/5c/7eaeace1eff30543873bc191e4bf0d1a8ffc5b604168b7ad3e652c3d8e7e/lance_ray-0.5.0.tar.gz", hash = "sha256:9e90530e4fa6560fc69c9179373f1f92d837650d0f9bb2b72aa98456059a0121", size = 89875, upload-time = "2026-07-24T23:30:24.171Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/95/ba/32d66fbd8bc90372f4185c3d0fe90a9d4cba3b22cde5edb79d1c22b0fa6b/lance_ray-0.5.0-py3-none-any.whl", hash = "sha256:fe7ba364063defd209bbaba0f8abef54b6ddaae2665ab887b281d571cc122575", size = 58921, upload-time = "2026-07-24T23:30:23.229Z" },
+]
+
+[[package]]
 name = "lazy-object-proxy"
 version = "1.12.0"
 source = { registry = "https://pypi.org/simple" }
@@ -4651,6 +4667,12 @@ training = [
     { name = "sqlglot" },
     { name = "xgboost" },
 ]
+vector-index = [
+    { name = "boto3" },
+    { name = "lance-ray" },
+    { name = "pyarrow" },
+    { name = "pylance" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -4683,6 +4705,7 @@ requires-dist = [
     { name = "econml", marker = "extra == 'causal'", specifier = ">=0.15.0" },
     { name = "grpcio", marker = "extra == 'grpc'", specifier = ">=1.60.0" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.25.0" },
+    { name = "lance-ray", marker = "extra == 'vector-index'", specifier = "==0.5.0" },
     { name = "ml-dtypes", marker = "extra == 'model-export'", specifier = ">=0.5.0" },
     { name = "mlflow", marker = "extra == 'registry'", specifier = ">=2.18.0,<3.0.0" },
     { name = "moto", extras = ["server"], marker = "extra == 'dev'", specifier = ">=5.1.0" },
@@ -4701,9 +4724,11 @@ requires-dist = [
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.6.1" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'postgresql'", specifier = ">=3.2,<4" },
     { name = "pyarrow", specifier = ">=15.0.0" },
+    { name = "pyarrow", marker = "extra == 'vector-index'", specifier = "==19.0.1" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pyiceberg", marker = "extra == 'data'", specifier = ">=0.11.1,<0.12.0" },
     { name = "pylance", marker = "extra == 'data'", specifier = ">=4.0.0" },
+    { name = "pylance", marker = "extra == 'vector-index'", specifier = "==9.0.0" },
     { name = "pymysql", marker = "extra == 'mysql'", specifier = ">=1.1.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
     { name = "pytest", marker = "extra == 'test-integration'", specifier = ">=7.0.0" },
@@ -4734,10 +4759,11 @@ requires-dist = [
     { name = "tributo", extras = ["model-export-torch"], marker = "extra == 'graph'" },
     { name = "tributo", extras = ["registry", "training"], marker = "extra == 'test-integration'" },
     { name = "tributo", extras = ["s3"], marker = "extra == 'model-export'" },
+    { name = "tributo", extras = ["s3"], marker = "extra == 'vector-index'" },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.12.20250516" },
     { name = "xgboost", marker = "extra == 'training'", specifier = ">=2.1.0" },
 ]
-provides-extras = ["dev", "data", "data-daft", "postgresql", "clickhouse", "mysql", "s3", "model-export", "model-export-torch", "training", "explainability", "embeddings", "identity", "streaming", "grpc", "registry", "graph", "causal", "streaming-inference", "test-integration"]
+provides-extras = ["dev", "data", "data-daft", "vector-index", "postgresql", "clickhouse", "mysql", "s3", "model-export", "model-export-torch", "training", "explainability", "embeddings", "identity", "streaming", "grpc", "registry", "graph", "causal", "streaming-inference", "test-integration"]
 
 [package.metadata.requires-dev]
 dev = [

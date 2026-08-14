@@ -21,6 +21,7 @@ from tributo.exceptions import (
     TributoError,
 )
 from tributo.job import TributoClient
+from tributo.vector_index.cli import vector as vector_group
 
 logger = logging.getLogger(__name__)
 
@@ -1883,6 +1884,9 @@ def registry_delete_model(ctx: click.Context, name: str):
         sys.exit(1)
     except Exception as e:
         _handle_registry_error(e)
+
+
+main.add_command(vector_group)
 
 
 if __name__ == "__main__":

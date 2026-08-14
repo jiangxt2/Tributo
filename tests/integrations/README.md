@@ -16,6 +16,7 @@ existing MLflow server, or a pre-existing container.
 | MLflow Hook | `test_e2e_mlflow.py` | Committed Bundle upload, replay deduplication, explicit run reuse, and failure semantics | Isolated model-export runner |
 | ClickHouse E2E | `test_e2e_clickhouse.py` | ClickHouse table → Daft OLAP Binding → explicit Daft-to-Ray adapter → XGBoost distributed training → MLflow → ONNX | Ray + Daft + `daft-olap-connectors` + ClickHouse + MLflow |
 | Dual-engine Docker | `test_data_ingestion_dual_engine.py` | Local Parquet, full ETL chain, typed handles, worker-version evidence | Docker Ray cluster + Daft |
+| Lance vector index | `test_lance_vector_index.py` | Distributed IVF_FLAT/IVF_PQ build, append coverage, global Top-K, fallback, optimization, compaction, Ray Jobs, and S3 result delivery | Docker Ray cluster + Lance-Ray + MinIO |
 | File conformance | `../integration/test_data_ingestion_conformance.py` | Local/MinIO Parquet and CSV through Ray Data and Daft | Local Ray runtime + MinIO |
 | Table conformance | `../integration/test_table_format_ingestion.py` | Local/MinIO Iceberg and Lance through Ray Data and Daft | Local Ray runtime + MinIO |
 | PostgreSQL conformance | `../integration/test_postgresql_ingestion.py` | Structured table read through Ray Data and Daft | Local Ray runtime + PostgreSQL |
@@ -219,6 +220,37 @@ content-addressed runtime, starts one Ray head, one Ray worker, and MinIO with
 run-scoped read-only volume, then runs this module with the Daft Ray runner and
 mandatory Driver/Worker version and snapshot evidence. Both jobs feed
 `core-gate`; infrastructure absence is a failure rather than a passing skip.
+
+## Required Lance Vector Index Gate
+
+Run the complete distributed Lance vector gate from the repository root:
+
+```bash
+./scripts/run_lance_vector_index_it.sh
+```
+
+The runner reuses the same content-addressed dependency runtime and isolated
+Ray head, worker, and MinIO lifecycle as the ingestion gate. It invokes only
+the public Lance-Ray build, search, optimize, and compaction entry points from
+production code. The test-only coordinator appends a real Lance fragment after
+Lance-Ray freezes its fragment batches, proving that Tributo reports partial
+coverage instead of claiming a fixed build snapshot. The suite also verifies
+global Top-K against a brute-force baseline, IVF_PQ recall, unindexed fallback,
+fast search, S3 Parquet delivery, Ray Jobs receipts, and post-compaction
+fail-closed coverage evidence.
+
+Ray Job requests use the Ray control plane as a trusted administrative
+boundary. The complete serialized request is limited to 64 KiB; this is
+separate from the 65,536-dimension limit for direct in-process search calls.
+The query vector is excluded from ordinary Tributo logs and receipts, but Ray
+administrators who can inspect Job runtime environments can view the encoded
+request and therefore must be treated as trusted operators.
+
+Inline search delivery is bounded by both `inline_max_rows` and
+`inline_max_bytes` (1 MiB by default). Larger results must use materialized
+Parquet delivery. S3 materialization uses a conditional create and refuses to
+replace an existing object, including when two jobs race for the same output
+URI.
 
 ## Redis Stream Message Format (Protocol v2.0)
 
