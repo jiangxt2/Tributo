@@ -7,6 +7,8 @@ adding technology-specific branches to the CLI or pipelines.
 Review the [architecture guide](../architecture/index.md) before changing
 framework boundaries, and the [security guide](../security/index.md) before
 changing credentials, artifacts, streaming, or publication behavior.
+The [test execution policy](testing.md) defines CI-safe, scheduled, external,
+and quarantined suites.
 
 ## Local checks
 
@@ -19,8 +21,7 @@ uv sync --extra dev --locked
 Run the normal unit suite:
 
 ```bash
-uv run --locked --no-sync python -m pytest tests/ \
-  -m "not integration and not slow and not minio_compat and not ray_runtime_env"
+python3 scripts/ci_test_plan.py run --suite unit
 ```
 
 ## Documentation environment
@@ -56,3 +57,10 @@ make linkcheck SPHINXBUILD=.docs-venv/bin/sphinx-build
 Python examples are syntax-checked in CI. Examples that submit work require a
 reachable Ray cluster and are covered by the existing project integration
 procedures rather than executed during an unprivileged RTD build.
+
+```{toctree}
+:hidden:
+:maxdepth: 1
+
+testing
+```

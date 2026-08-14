@@ -1,15 +1,24 @@
-"""Static guardrails for the required isolated inference IT gate."""
+"""Static guardrails for the external isolated inference validation."""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[2]
 _WORKFLOW = _ROOT / ".github" / "workflows" / "pr-test-suite.yml"
+_MANIFEST = _ROOT / "ci" / "test-suites.json"
 _COMPOSE = _ROOT / "tests" / "integrations" / "docker-compose.inference.yml"
 _DOCKERFILE = _ROOT / "tests" / "integrations" / "Dockerfile.inference"
 _VERSIONS = _ROOT / "tests" / "integrations" / "inference-it-versions.conf"
 _RUNNER = _ROOT / "scripts" / "run_inference_it.sh"
+
+
+def _inference_suite() -> dict[str, object]:
+    payload = json.loads(_MANIFEST.read_text(encoding="utf-8"))
+    return next(
+        suite for suite in payload["suites"] if suite["id"] == "inference-cluster"
+    )
 
 
 def test_inference_it_versions_are_explicit_and_immutable() -> None:
@@ -70,32 +79,27 @@ def test_inference_runner_always_performs_exact_scoped_cleanup() -> None:
     assert "docker rm" not in runner
 
 
-def test_inference_distributed_job_is_required_by_core_gate() -> None:
+def test_inference_cluster_is_external_and_absent_from_ci() -> None:
     workflow = _WORKFLOW.read_text(encoding="utf-8")
+    suite = _inference_suite()
 
-    assert "inference-distributed:" in workflow
-    assert "scripts/run_inference_it.sh" in workflow
-    assert "INFERENCE_DISTRIBUTED_RESULT" in workflow
-    assert (
-        'require_success inference-distributed "$INFERENCE_DISTRIBUTED_RESULT"'
-    ) in workflow
-    assert (
-        'require_skipped inference-distributed "$INFERENCE_DISTRIBUTED_RESULT"'
-    ) in workflow
+    assert suite["tier"] == "manual_external"
+    assert suite["workflow"] == "external"
+    assert suite["entrypoint"] == ["./scripts/run_inference_it.sh"]
+    assert "tests/integration/test_inference_ray_jobs.py" in suite["test_paths"]
+    assert "inference-distributed:" not in workflow
+    assert "run_inference_it.sh" not in workflow
 
 
-def test_inference_path_filter_includes_all_direct_domain_dependencies() -> None:
-    workflow = _WORKFLOW.read_text(encoding="utf-8")
-    inference_filter = workflow.split("            inference:\n", 1)[1].split(
-        "\n\n", 1
-    )[0]
+def test_inference_impact_rule_includes_all_direct_domain_dependencies() -> None:
+    trigger_paths = _inference_suite()["trigger_paths"]
 
     for path in (
-        '"src/tributo/inference/**"',
-        '"src/tributo/data/**"',
-        '"src/tributo/_common/**"',
-        '"src/tributo/exporting/**"',
-        '"src/tributo/integrations/model_importers/**"',
-        '"src/tributo/integrations/sinks/**"',
+        "src/tributo/inference/**",
+        "src/tributo/data/**",
+        "src/tributo/_common/**",
+        "src/tributo/exporting/**",
+        "src/tributo/integrations/model_importers/**",
+        "src/tributo/integrations/sinks/**",
     ):
-        assert path in inference_filter
+        assert path in trigger_paths

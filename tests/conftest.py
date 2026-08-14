@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts.ci_test_plan import load_manifest, markers_for_test_path
 from tests.support.object_storage import S3InfrastructureUnavailable, S3Service
 
 # Skip test files that import optional dependencies not installed in the
@@ -34,6 +35,21 @@ _OPTIONAL_IMPORTS = {
 }
 
 collect_ignore: list[str] = []
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Apply the manifest-owned execution tier before marker deselection."""
+    root = Path(__file__).resolve().parents[1]
+    manifest = load_manifest(root)
+    for item in items:
+        path = Path(str(item.path)).resolve()
+        try:
+            relative_path = path.relative_to(root).as_posix()
+        except ValueError:
+            continue
+        for marker in markers_for_test_path(manifest, relative_path):
+            item.add_marker(marker)
 
 
 def _marker_selects_integration(expression: str) -> bool:

@@ -31,6 +31,8 @@ def _write_profile(root: Path) -> tributo_it.RuntimeProfile:
     dockerfile.write_text(
         f"FROM example:1@sha256:{digest_a}\nRUN uv sync --extra data-daft\n"
     )
+    (root / ".dockerignore").write_text("root-only\n")
+    dockerfile.with_name(f"{dockerfile.name}.dockerignore").write_text("src/**\n")
     definition = {
         "base_image": f"example:1@sha256:{digest_a}",
         "dockerfile": "tests/integrations/Dockerfile.data-ingestion",
@@ -79,9 +81,20 @@ def test_runtime_key_ignores_source_but_tracks_dependency_inputs(
     source_changed = tributo_it.runtime_identity(profile, "linux/amd64")
     assert source_changed.runtime_key == original.runtime_key
 
+    (tmp_path / ".dockerignore").write_text("root-changed\n")
+    unused_root_ignore_changed = tributo_it.runtime_identity(profile, "linux/amd64")
+    assert unused_root_ignore_changed.runtime_key == original.runtime_key
+
+    dockerfile_ignore = profile.dockerfile.with_name(
+        f"{profile.dockerfile.name}.dockerignore"
+    )
+    dockerfile_ignore.write_text("src/**\ntests/**\n")
+    ignore_changed = tributo_it.runtime_identity(profile, "linux/amd64")
+    assert ignore_changed.runtime_key != original.runtime_key
+
     (tmp_path / "uv.lock").write_text("version = 2\n")
     dependency_changed = tributo_it.runtime_identity(profile, "linux/amd64")
-    assert dependency_changed.runtime_key != original.runtime_key
+    assert dependency_changed.runtime_key != ignore_changed.runtime_key
 
     profile.definition["minio_image"] = "example:3@sha256:changed"
     infrastructure_changed = tributo_it.runtime_identity(profile, "linux/amd64")

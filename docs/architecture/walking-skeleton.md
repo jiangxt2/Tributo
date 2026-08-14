@@ -1,6 +1,6 @@
 # Walking Skeleton
 
-The required walking skeleton is a real distributed integration gate for the
+The walking skeleton is a real distributed external validation for the
 model-export architecture:
 
 ```text
@@ -62,19 +62,22 @@ Compose configuration bypasses that contract.
 The IT environment never installs a floating dependency and never inherits a
 host package version as test evidence.
 
-## CI Gate
+## External Validation Gate
 
-`.github/workflows/pr-test-suite.yml` runs the walking skeleton for relevant
-code changes. It creates a run-specific Compose project, executes the pinned
-component check and first-party conformance suites, submits the Ray Job, saves
-service logs, and invokes the explicit CI suite:
+`ci/test-suites.json` reports this validation when relevant code changes. No
+GitHub Actions event runs it. From an approved Docker environment, the
+lifecycle-owned runner creates a unique Compose project, executes the pinned
+component check and first-party conformance suites, submits the Ray Job, and
+saves service logs:
 
 ```bash
 ./scripts/run_model_export_it.sh --suite ci
 ```
 
-The CI suite includes the component-version contract, first-party conformance,
-real MLflow Hook contract, and distributed walking skeleton. It always runs:
+The historically named `ci` subset includes the component-version contract,
+first-party conformance, real MLflow Hook contract, and distributed walking
+skeleton. The name describes its bounded contents and does not make it a CI
+job. The runner always performs exact-project cleanup equivalent to:
 
 ```bash
 docker compose \
@@ -86,10 +89,10 @@ docker compose \
 
 The cleanup command is scoped by the run-specific `COMPOSE_PROJECT_NAME`.
 
-## Independent Full-Flow Verification
+## Full-Flow External Verification
 
 The same lifecycle-owned runner exposes a release-oriented full suite that is
-intentionally not selected by the default CI workflow:
+also excluded from every GitHub Actions workflow:
 
 ```bash
 ./scripts/run_model_export_it.sh --suite full
@@ -99,7 +102,7 @@ It performs prerequisites checks, snapshots the ID and state of every existing
 container, uses a unique Compose project and the validated content-addressed
 data-ingestion runtime image, writes pytest and service logs to
 `/tmp/<project-name>/`, and installs an `EXIT` trap before any container is
-started. In addition to the CI suite, full mode runs the trainer Bundle contract
+started. In addition to the bounded subset, full mode runs the trainer Bundle contract
 and complete S3/MinIO contract suites. The trap always removes only that
 project's containers, volumes, network, and orphans. It then fails if an owned
 container remains or reports if concurrent host activity changed a pre-existing
@@ -109,7 +112,7 @@ container.
 
 | Excluded | Boundary |
 |----------|----------|
-| GPU training | The required gate is CPU-only. |
+| GPU training | The external validation is CPU-only. |
 | DNN/PU full training | Their Bundle vertical slices and exporter/source conformance are separate integration tests. |
 | Streaming | Streaming has a separate lifecycle and is not part of model-export publication. |
 | MLflow Model Version/Alias | This cycle provides Bundle provenance only. |

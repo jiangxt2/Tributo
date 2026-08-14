@@ -248,6 +248,9 @@ filterwarnings = [
     "ignore:lance is not fork-safe:UserWarning",
 ]
 markers = [
+    "ci_safe: marks bounded integration contracts allowed in GitHub Actions",
+    "manual_it: marks external integration tests that must not run in GitHub Actions",
+    "quarantine: marks tests excluded from automation pending reliability or ownership fixes",
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "s3_contract: marks S3-compatible contract tests (default backend: Moto)",
     "minio_compat: marks tests that require real MinIO compatibility",
@@ -257,7 +260,7 @@ markers = [
     "ingestion_conformance: validates Ray Data and Daft ingestion semantics",
     "distributed: marks explicit multi-Worker or multi-node Ray tests that are excluded from default CI",
 ]
-addopts = "-m 'not slow and not distributed and not minio_compat and not ray_runtime_env and not integration'"
+addopts = "-m 'not slow and not distributed and not minio_compat and not ray_runtime_env and not integration and not manual_it and not quarantine'"
 
 [tool.coverage.run]
 source = ["src/tributo"]

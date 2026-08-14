@@ -38,7 +38,9 @@ carry their own integrity and provenance.
    No silent "training succeeded but ONNX is missing".
 4. **Establish Framework-level contracts**: Error model, version policy, API
    stability tiers, benchmark protocol, migration safety rules.
-5. **Build CI gates**: End-to-end `training → bundle → inference → serving` in CI.
+5. **Build validation gates**: Keep bounded contracts in CI and validate
+   end-to-end `training → bundle → inference → serving` through an owned
+   external environment.
 6. **Provide Ray-native training profiles**: The same constrained algorithm can
    run against an owned local Ray runtime or a Kubernetes-hosted Ray cluster.
 

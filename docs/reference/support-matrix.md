@@ -3,6 +3,27 @@
 This page distinguishes implemented paths from extension contracts and
 prototypes.
 
+Capability status is independent from GitHub Actions placement. A real
+environment Gate may provide support evidence while remaining an external
+validation; `ci/test-suites.json` is authoritative for execution tier and
+automation eligibility.
+
+## Validation evidence
+
+| Area | Implementation and configuration | Bounded CI evidence | External environment evidence |
+| --- | --- | --- | --- |
+| Bounded ingestion | Data Gateway, Provider/Binding descriptors, and engine options | `unit`, `unit-integration-contracts`, and the ephemeral `s3-contract` suite | `data-ingestion-cluster` |
+| Model export and Bundle publication | Export planner, exporters, validators, publisher, and storage profiles | `unit`, `unit-integration-contracts`, and `s3-contract` | `model-export-cluster` |
+| Batch and online inference | Inference plans, model flavors, sinks, and serving configuration | `unit` and `unit-integration-contracts` | `inference-cluster` |
+| Lance vector index | Vector-index API, storage profiles, and Ray Jobs request contract | `unit` contracts | `lance-vector-cluster` |
+| Tune and explainability | Capability declarations and typed job configuration | `unit` contracts | `tune-cluster` and `explainability-cluster` |
+| Distributed algorithms | Algorithm descriptors, execution profiles, and portable receipts | `unit` and `unit-integration-contracts` | `distributed-algorithm-cluster` |
+
+External suite names describe required evidence, not GitHub Actions jobs.
+Quarantined MLflow, serving, streaming, and legacy standalone tests do not
+count as capability evidence until their lifecycle and reliability conditions
+are repaired.
+
 For distributed algorithms, compatible profiles are declared by the static
 contract. Validated profiles have additionally passed the corresponding real
 environment Gate. The project-wide distributed algorithm Gate uses Ray Jobs on

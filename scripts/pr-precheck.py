@@ -4,6 +4,7 @@
 Layered architecture (Ray/Daft-style):
   Layer 0:  Format & Lint — ruff check + ruff format + mypy
   Layer 0.5: Dependency Resolution — cross-platform uv pip compile
+  Layer 0.75: CI Test Policy — manifest, inventory, budgets, and workflows
   Layer 1:  API Stability — @PublicAPI annotation coverage
   Layer 2:  Python Safety — inline imports, error swallowing, None-safety
   Layer 2.5: Warning Suppressions — reject new type: ignore / noqa comments
@@ -27,12 +28,14 @@ from __future__ import annotations
 
 import argparse
 import ast
+import importlib.util
 import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+from types import ModuleType
 
 DEFAULT_WORKTREE = None  # Auto-detect from git
 
@@ -41,14 +44,7 @@ DEFAULT_WORKTREE = None  # Auto-detect from git
 # access PyPI even when the project is already provisioned.
 UV_RUN = ("uv", "run", "--locked", "--no-sync", "--offline")
 
-# Keep this in sync with the unit-test job in
-# ``.github/workflows/pr-test-suite.yml``.  S3 contract tests use the
-# in-process Moto service and are safe here; MinIO and Ray runtime-env tests
-# require external infrastructure and belong to their dedicated CI jobs.
-CHANGED_TEST_MARKER_FILTER = (
-    "not slow and not distributed and not minio_compat and not ray_runtime_env "
-    "and not integration"
-)
+_CI_PLANNERS: dict[str, ModuleType] = {}
 
 MERGE_CONFLICT_MARKER_PATTERN = re.compile(
     r"^(<<<<<<<|=======|>>>>>>>)(?:[ \t].*)?\r?$", re.MULTILINE
@@ -83,28 +79,47 @@ PUBLIC_ENV_CONTRACTS: dict[str, frozenset[str]] = {
 }
 PUBLIC_ENV_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$")
 
-# Keep these paths in sync with the ``docs`` filter in
-# ``.github/workflows/pr-test-suite.yml``.  Source files are included because
-# public API annotations and docstrings participate in the Sphinx build.
-DOCS_CI_EXACT_PATHS = frozenset(
-    {
-        ".readthedocs.yaml",
-        "Makefile",
-        "pyproject.toml",
-        "requirements-doc.in",
-        "requirements-doc.lock",
-        "tests/integration/test_docs_reference.py",
-        "tools/__init__.py",
-        "tools/check_docs.py",
-        "tools/generate_algorithm_support_matrix.py",
-        "uv.lock",
-        ".github/workflows/docs-deploy.yml",
-    }
-)
-
 # =============================================================================
 # Utilities
 # =============================================================================
+
+
+def _load_ci_planner(root: str) -> ModuleType:
+    """Load the target worktree's planner without relying on import paths."""
+    planner_path = os.path.realpath(os.path.join(root, "scripts", "ci_test_plan.py"))
+    cached = _CI_PLANNERS.get(planner_path)
+    if cached is not None:
+        return cached
+    module_name = f"_tributo_ci_test_plan_{len(_CI_PLANNERS)}"
+    spec = importlib.util.spec_from_file_location(module_name, planner_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load CI test planner: {planner_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(module_name, None)
+        raise
+    _CI_PLANNERS[planner_path] = module
+    return module
+
+
+def ci_unit_pytest_args(root: str) -> tuple[str, ...]:
+    """Return the controlled unit-suite pytest arguments from the manifest."""
+    planner = _load_ci_planner(root)
+    manifest = planner.load_manifest(root)
+    suite = manifest.suite("unit")
+    if suite.entrypoint != planner.CI_PYTEST_ENTRYPOINT:
+        raise ValueError("CI unit suite does not use the controlled pytest entrypoint")
+    return tuple(suite.args)
+
+
+def ci_unit_marker_filter(root: str) -> str:
+    """Return the unit marker expression from the declarative manifest."""
+    args = ci_unit_pytest_args(root)
+    marker_index = args.index("-m")
+    return str(args[marker_index + 1])
 
 
 def detect_worktree() -> str | None:
@@ -471,6 +486,31 @@ def check_dependency_resolution(root: str, allow_network: bool = False) -> list[
         issues.append(f"WARN: dependency check failed: {e}")
 
     return issues
+
+
+# =============================================================================
+# Layer 0.75: CI Test Policy
+# =============================================================================
+
+
+def check_ci_test_policy(root: str) -> list[str]:
+    """Fail closed when the declarative CI inventory or workflow drifts."""
+    planner = os.path.join(root, "scripts", "ci_test_plan.py")
+    if not os.path.isfile(planner):
+        return ["FAIL: scripts/ci_test_plan.py is missing"]
+    try:
+        result = subprocess.run(
+            [sys.executable, planner, "--root", root, "audit"],
+            capture_output=True,
+            text=True,
+            cwd=root,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return [f"FAIL: CI test policy audit timed out: {exc}"]
+    if result.returncode == 0:
+        return []
+    return ["FAIL: CI test policy audit failed:\n" + _command_output_tail(result)]
 
 
 # =============================================================================
@@ -1048,6 +1088,11 @@ def check_run_tests(root: str, changed_files: list[str]) -> list[str]:
         return issues
 
     try:
+        marker_filter = ci_unit_marker_filter(root)
+    except (ImportError, OSError, RuntimeError, ValueError) as exc:
+        return [f"FAIL: cannot load CI unit marker policy: {exc}"]
+
+    try:
         result = run_project_command(
             root,
             ["python", "-c", "import tributo"],
@@ -1078,7 +1123,7 @@ def check_run_tests(root: str, changed_files: list[str]) -> list[str]:
                     "-q",
                     "--tb=short",
                     "-m",
-                    CHANGED_TEST_MARKER_FILTER,
+                    marker_filter,
                 ],
                 timeout=180,
             )
@@ -1126,6 +1171,10 @@ def check_ci_parity_suite(root: str) -> list[str]:
     classes are caught before push.
     """
     issues: list[str] = []
+    try:
+        unit_args = ci_unit_pytest_args(root)
+    except (ImportError, OSError, RuntimeError, ValueError) as exc:
+        return [f"FAIL: cannot load CI unit suite policy: {exc}"]
     venv_dir = tempfile.mkdtemp(prefix="tributo-ci-parity-")
     try:
         sync = subprocess.run(
@@ -1148,12 +1197,7 @@ def check_ci_parity_suite(root: str) -> list[str]:
                 python,
                 "-m",
                 "pytest",
-                "tests/",
-                "-q",
-                "--tb=short",
-                "--timeout=180",
-                "-m",
-                CHANGED_TEST_MARKER_FILTER,
+                *unit_args,
             ],
             capture_output=True,
             text=True,
@@ -1161,8 +1205,10 @@ def check_ci_parity_suite(root: str) -> list[str]:
             timeout=600,
         )
         if suite.returncode == 5:
-            # Exit 5 = no tests collected; the marker filter deselected
-            # everything — not a failure.
+            issues.append(
+                "FAIL: CI-parity suite collected no tests; the manifest unit "
+                "selection is not valid evidence"
+            )
             return issues
         if suite.returncode != 0:
             failures = [
@@ -1183,16 +1229,23 @@ def check_ci_parity_suite(root: str) -> list[str]:
         shutil.rmtree(venv_dir, ignore_errors=True)
 
 
-def docs_ci_affected(changed_files: list[str]) -> bool:
-    """Return whether the changed paths trigger the CI documentation job."""
-    for path in changed_files:
-        if path in DOCS_CI_EXACT_PATHS:
-            return True
-        if path.startswith("docs/") or path.startswith("tests/docs/"):
-            return True
-        if path.startswith("src/tributo/") and path.endswith(".py"):
-            return True
-    return False
+def docs_ci_affected(changed_files: list[str], root: str | None = None) -> bool:
+    """Return the planner's documentation decision for the changed paths."""
+    if not changed_files:
+        return False
+    repository = root or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    try:
+        planner = _load_ci_planner(repository)
+        manifest = planner.load_manifest(repository)
+        plan = planner.build_plan(
+            manifest,
+            event="pull_request",
+            mode="pr",
+            changed_paths=changed_files,
+        )
+    except (ImportError, OSError, RuntimeError, ValueError):
+        return True
+    return bool(plan["run_docs"])
 
 
 def _command_output_tail(
@@ -1271,7 +1324,7 @@ def check_docs_ci(
     allow_network: bool,
 ) -> list[str]:
     """Run the same static, strict, and spelling gates as the CI docs job."""
-    if not docs_ci_affected(changed_files):
+    if not docs_ci_affected(changed_files, root):
         return []
 
     environment_issues = prepare_docs_environment(root, allow_network=allow_network)
@@ -1382,6 +1435,14 @@ def main():
         print(f"  {issue}")
     print(f"  {'PASS' if not l05 else 'ISSUES'} — {len(l05)} issue(s)\n")
 
+    # Layer 0.75
+    print("=== Layer 0.75: CI Test Policy ===")
+    l075 = check_ci_test_policy(root)
+    all_issues.extend(l075)
+    for issue in l075:
+        print(f"  {issue}")
+    print(f"  {'PASS' if not l075 else 'ISSUES'} — {len(l075)} issue(s)\n")
+
     # Layer 1
     print("=== Layer 1: API Stability ===")
     l1 = check_api_stability(root)
@@ -1451,7 +1512,7 @@ def main():
     print(f"  {'PASS' if not l55 else 'ISSUES'} — {len(l55)} issue(s)\n")
 
     # Layer 5.6
-    docs_affected = docs_ci_affected(changed_files)
+    docs_affected = docs_ci_affected(changed_files, root)
     if docs_affected:
         print("=== Layer 5.6: Docs CI Parity ===")
         l56 = check_docs_ci(
@@ -1473,6 +1534,9 @@ def main():
     print("=== Summary ===")
     print(f"  Layer 0 (Format):        {'PASS' if not l0 else f'{len(l0)} issue(s)'}")
     print(f"  Layer 0.5 (Deps):        {'PASS' if not l05 else f'{len(l05)} issue(s)'}")
+    print(
+        f"  Layer 0.75 (CI policy):  {'PASS' if not l075 else f'{len(l075)} issue(s)'}"
+    )
     print(f"  Layer 1 (API):           {'PASS' if not l1 else f'{len(l1)} issue(s)'}")
     print(f"  Layer 2 (Safety):        {'PASS' if not l2 else f'{len(l2)} issue(s)'}")
     print(f"  Layer 2.5 (Suppress):    {'PASS' if not l25 else f'{len(l25)} issue(s)'}")

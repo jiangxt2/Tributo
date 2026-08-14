@@ -11,7 +11,7 @@ reference this protocol.
 |----------|-------|-----|
 | Python | 3.12.x (latest patch) | Matches `requires-python` lower bound |
 | Ray | 2.55.1 | Pinned in `pyproject.toml` |
-| OS | macOS 15.x (arm64) for dev; Linux x86_64 for CI | Record which was used |
+| OS | macOS 15.x (arm64) for dev; Linux x86_64 for external reference runs | Record which was used |
 | Hardware | Record CPU model, core count, RAM | Required for cross-run comparison |
 | Tributo commit | Full SHA | Baseline and candidate commits must be recorded |
 | Dependencies | Locked via `uv.lock` | No floating dependencies |
@@ -24,7 +24,7 @@ reference this protocol.
 | Size | ≥ 1 GB for training benchmarks; ≥ 100 MB for export benchmarks |
 | Schema | Fixed schema documented in benchmark script header |
 | Generation | Script in `tests/benchmark/generate_data.py` — deterministic seed |
-| Location | Local filesystem for dev; S3/MinIO for CI |
+| Location | Local filesystem for dev; S3/MinIO for external reference runs |
 
 ## Measurement Rules
 
@@ -129,13 +129,17 @@ if __name__ == "__main__":
     ray.shutdown()
 ```
 
-## CI Integration (O1)
+## Test-Tier Integration
 
-O1 Core converts this protocol into a runnable CI gate. The CI benchmark:
+Small deterministic contracts for benchmark result parsing may run in the
+budgeted scheduled tier. A benchmark that uses the reference dataset, starts a
+Ray cluster, requires S3/MinIO, or can exceed the scheduled suite budget is an
+external validation. It is never selected by a GitHub Actions event.
 
-- Runs on the same commit as the PR test suite.
-- Compares against a stored baseline (updated on merge to master).
-- Fails the gate if thresholds are exceeded on two consecutive runs.
-- Is allowed to be **nightly-only** if runtime exceeds 15 minutes.
+An external benchmark records the exact baseline and candidate commits,
+environment, dataset identity, and result log in the validation ledger. It
+compares against the approved stored baseline and applies the thresholds above.
+A threshold-triggered repeat follows the long-running-test rerun rules; it is
+not an automatic nightly retry.
 
 <!-- END -->
