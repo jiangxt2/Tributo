@@ -41,6 +41,7 @@ from tributo.algorithms.spi import (
     ResolvedInputLease,
     RuntimeExecutionEnvelope,
     RuntimeInputBinding,
+    WorkerInputPayload,
 )
 
 from .conftest import function_registration, request_for
@@ -57,6 +58,15 @@ class _SuccessfulRuntime:
             execution=AlgorithmExecutionResult(status="succeeded"),
             actual_versions={},
         )
+
+
+class _RunIdentityRuntime(_SuccessfulRuntime):
+    def __init__(self) -> None:
+        self.run_id: str | None = None
+
+    def execute(self, envelope: RuntimeExecutionEnvelope) -> WorkerExecutionResult:
+        self.run_id = envelope.run_id
+        return super().execute(envelope)
 
 
 class _FailingRuntime(_SuccessfulRuntime):
@@ -208,6 +218,21 @@ def test_coordinator_closes_lease_once_on_success(
     assert calls == ["closed"]
 
 
+def test_coordinator_uses_one_run_identity_for_runtime_and_result(
+    binary_columns: dict[str, tuple[object, ...]],
+) -> None:
+    runtime = _RunIdentityRuntime()
+
+    result = _dispatcher(runtime).execute(
+        request_for("external_function", AlgorithmOperation.FIT),
+        InputExecutionContext(
+            {"binary-fixture": FakeInputInvocation(FakeTabularPayload(binary_columns))}
+        ),
+    )
+
+    assert runtime.run_id == result.run_id
+
+
 def test_coordinator_cancels_lease_and_preserves_primary_failure(
     binary_columns: dict[str, tuple[object, ...]],
 ) -> None:
@@ -341,6 +366,10 @@ def test_fake_data_parallel_binding_partitions_every_row_once(
     try:
         assert [payload.partition_index for payload in binding.payloads] == [0, 1]
         assert all(payload.partition_count == 2 for payload in binding.payloads)
+        assert all(
+            payload.expected_total_rows == len(binary_columns["x0"])
+            for payload in binding.payloads
+        )
         shards = [
             cast(FakeTabularPayload, payload.value).columns_by_name["x0"]
             for payload in binding.payloads
@@ -351,3 +380,42 @@ def test_fake_data_parallel_binding_partitions_every_row_once(
     finally:
         binding.close()
         lease.close()
+
+
+def test_runtime_binding_rejects_inconsistent_expected_total_rows() -> None:
+    input_binding = request_for(
+        "external_function", AlgorithmOperation.FIT
+    ).input_binding
+
+    with pytest.raises(AlgorithmInputError, match="expected total rows"):
+        RuntimeInputBinding(
+            (
+                WorkerInputPayload(
+                    "train",
+                    input_binding,
+                    object(),
+                    partition_index=0,
+                    partition_count=2,
+                    expected_total_rows=4,
+                ),
+                WorkerInputPayload(
+                    "train",
+                    input_binding,
+                    object(),
+                    partition_index=1,
+                    partition_count=2,
+                    expected_total_rows=3,
+                ),
+            )
+        )
+
+
+@pytest.mark.parametrize("value", (-1, True, 1.5))
+def test_worker_payload_rejects_invalid_expected_total_rows(value: object) -> None:
+    with pytest.raises(AlgorithmInputError, match="expected_total_rows"):
+        WorkerInputPayload(
+            "train",
+            request_for("external_function", AlgorithmOperation.FIT).input_binding,
+            object(),
+            expected_total_rows=cast(int, value),
+        )

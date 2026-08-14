@@ -1,0 +1,284 @@
+"""Runtime Adapter for framework-owned distributed training implementations."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any
+
+import ray
+
+from tributo.algorithms.api import (
+    AlgorithmConfigurationError,
+    AlgorithmExecutionError,
+    AlgorithmExecutionResult,
+    DistributionStrategy,
+    FrameworkNativePolicy,
+    QualifiedReference,
+    ResultPolicy,
+    StateCoordination,
+    StateCoordinationEvidence,
+    WorkerExecutionEvidence,
+    WorkerExecutionResult,
+    WorkerResources,
+)
+from tributo.algorithms.core.worker import (
+    _actual_environment_versions,
+    _load_reference,
+    _validate_module_digest,
+)
+from tributo.algorithms.spi import (
+    FrameworkNativeAlgorithm,
+    PreparedInput,
+    RuntimeExecutionEnvelope,
+)
+from tributo.util.annotations import DeveloperAPI
+
+FRAMEWORK_NATIVE_RUNTIME_ID = "tributo.framework_native"
+
+
+def _validated_framework_evidence(
+    evidence: Mapping[str, Any],
+    *,
+    worker_count: int,
+    resources_per_worker: WorkerResources,
+    expected_training_rows: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Validate observed framework facts before any Bundle is published."""
+    raw_workers = evidence.get("workers")
+    raw_state = evidence.get("state")
+    if not isinstance(raw_workers, (list, tuple)) or not isinstance(raw_state, Mapping):
+        raise AlgorithmExecutionError(
+            "framework-native evidence is missing workers or state"
+        )
+    if len(raw_workers) != worker_count:
+        raise AlgorithmExecutionError(
+            "framework-native evidence did not report every requested worker"
+        )
+    workers: list[WorkerExecutionEvidence] = []
+    try:
+        for value in raw_workers:
+            if not isinstance(value, Mapping):
+                raise TypeError("worker evidence must be a mapping")
+            workers.append(WorkerExecutionEvidence.from_dict(value))
+        state = StateCoordinationEvidence.from_dict(raw_state)
+    except (AlgorithmConfigurationError, KeyError, TypeError, ValueError) as exc:
+        raise AlgorithmExecutionError(
+            "framework-native execution evidence is malformed"
+        ) from exc
+    if (
+        {worker.rank for worker in workers} != set(range(worker_count))
+        or any(worker.world_size != worker_count for worker in workers)
+        or len({worker.worker_id for worker in workers}) != worker_count
+        or len({worker.shard_id for worker in workers}) != worker_count
+    ):
+        raise AlgorithmExecutionError(
+            "framework-native evidence does not prove unique workers and shards"
+        )
+    if any(
+        worker.resources.num_cpus < resources_per_worker.num_cpus
+        or worker.resources.num_gpus < resources_per_worker.num_gpus
+        or any(
+            worker.resources.custom.get(name, 0.0) < amount
+            for name, amount in resources_per_worker.custom.items()
+        )
+        or not worker.rows_processed
+        for worker in workers
+    ):
+        raise AlgorithmExecutionError(
+            "framework-native evidence does not satisfy requested resources and input"
+        )
+    if sum(worker.rows_processed or 0 for worker in workers) != expected_training_rows:
+        raise AlgorithmExecutionError(
+            "framework-native evidence does not prove complete training input coverage"
+        )
+    if (
+        state.coordination is not StateCoordination.FRAMEWORK_NATIVE
+        or not state.synchronized
+        or not state.bounded
+        or state.global_model_digest is None
+        or {worker.model_state_digest for worker in workers}
+        != {state.global_model_digest}
+    ):
+        raise AlgorithmExecutionError(
+            "framework-native evidence does not prove one synchronized model state"
+        )
+    if evidence.get("input_complete") is not True:
+        raise AlgorithmExecutionError(
+            "framework-native evidence does not prove complete input coverage"
+        )
+    return (
+        [worker.to_dict() for worker in sorted(workers, key=lambda item: item.rank)],
+        {
+            "coordination": state.coordination.value,
+            "synchronized": state.synchronized,
+            "bounded": state.bounded,
+            "global_model_digest": state.global_model_digest,
+            "details": dict(state.details),
+        },
+    )
+
+
+def _algorithm(envelope: RuntimeExecutionEnvelope) -> FrameworkNativeAlgorithm:
+    plan = envelope.plan
+    spec = plan.distribution_spec
+    if spec is None or spec.strategy is not DistributionStrategy.FRAMEWORK_NATIVE:
+        raise AlgorithmConfigurationError(
+            "framework runtime requires a framework_native DistributionSpec"
+        )
+    _validate_module_digest(
+        plan.implementation.implementation_ref,
+        plan.implementation.code_digest,
+    )
+    implementation = _load_reference(plan.implementation.implementation_ref)
+    factory = _load_reference(plan.implementation.executable_factory_ref)
+    if not callable(factory):
+        raise AlgorithmConfigurationError(
+            "framework-native executable factory is not callable"
+        )
+    value = factory(plan=plan, implementation=implementation, artifacts=())
+    if not isinstance(value, FrameworkNativeAlgorithm):
+        raise AlgorithmConfigurationError(
+            "framework-native factory must return FrameworkNativeAlgorithm"
+        )
+    if not isinstance(spec.policy, FrameworkNativePolicy):
+        raise AlgorithmConfigurationError(
+            "framework-native DistributionSpec requires FrameworkNativePolicy"
+        )
+    declared_collector = _load_reference(
+        QualifiedReference.parse(spec.policy.evidence_collector_ref)
+    )
+    if declared_collector is not getattr(type(value), "collect_evidence", None):
+        raise AlgorithmConfigurationError(
+            "framework-native evidence_collector_ref does not match the "
+            "implementation method"
+        )
+    return value
+
+
+@DeveloperAPI
+class FrameworkNativeRuntime:
+    """Run an installed framework trainer and require framework evidence."""
+
+    @property
+    def runtime_id(self) -> str:
+        """Return the formal runtime identity."""
+        return FRAMEWORK_NATIVE_RUNTIME_ID
+
+    def execute(self, envelope: RuntimeExecutionEnvelope) -> WorkerExecutionResult:
+        """Execute one framework-owned trainer without materializing Driver data."""
+        if not ray.is_initialized():
+            raise AlgorithmExecutionError(
+                "Ray must be initialized before framework-native execution"
+            )
+        if envelope.cancelled:
+            raise AlgorithmExecutionError("framework-native execution was cancelled")
+        algorithm = _algorithm(envelope)
+        algorithm.validate_environment()
+        input_adapter = _load_reference(envelope.plan.runtime.worker_input_adapter_ref)
+        if not callable(input_adapter):
+            raise AlgorithmConfigurationError(
+                "framework-native input adapter is not callable"
+            )
+        prepared = input_adapter(envelope.input_payloads[0])
+        if not isinstance(prepared, PreparedInput):
+            raise AlgorithmConfigurationError(
+                "framework-native input adapter must return PreparedInput"
+            )
+        try:
+            datasets = algorithm.bind_datasets(prepared.views)
+            if not isinstance(datasets, Mapping):
+                raise AlgorithmConfigurationError(
+                    "framework-native bind_datasets must return a mapping"
+                )
+            training_dataset = datasets.get("train")
+            count_training_rows = getattr(training_dataset, "count", None)
+            if not callable(count_training_rows):
+                raise AlgorithmConfigurationError(
+                    "framework-native fit requires a named 'train' Ray Dataset"
+                )
+            expected_training_rows = int(count_training_rows())
+            if expected_training_rows < 1:
+                raise AlgorithmConfigurationError(
+                    "framework-native training Dataset must be non-empty"
+                )
+            trainer = algorithm.build_trainer(
+                envelope.plan.algorithm_config,
+                datasets,
+            )
+            fit = getattr(trainer, "fit", None)
+            if not callable(fit):
+                raise AlgorithmConfigurationError(
+                    "framework-native build_trainer must return a fit-capable object"
+                )
+            result = fit()
+            evidence = algorithm.collect_evidence(result)
+            if not isinstance(evidence, Mapping):
+                raise AlgorithmExecutionError(
+                    "framework-native collect_evidence must return a mapping"
+                )
+            plan = envelope.plan
+            workers, state = _validated_framework_evidence(
+                evidence,
+                worker_count=plan.runtime.worker_count,
+                resources_per_worker=WorkerResources(
+                    num_cpus=plan.runtime.num_cpus,
+                    num_gpus=plan.runtime.num_gpus,
+                    custom=plan.runtime.custom_resources,
+                ),
+                expected_training_rows=expected_training_rows,
+            )
+            checkpoint = algorithm.checkpoint_source(result)
+            exporter_ref = envelope.plan.implementation.exporter_ref
+            if exporter_ref is None:
+                raise AlgorithmConfigurationError(
+                    "framework-native fit requires an exporter"
+                )
+            exporter = _load_reference(exporter_ref)
+            if not callable(exporter):
+                raise AlgorithmConfigurationError(
+                    "framework-native exporter is not callable"
+                )
+            execution = exporter(
+                result=result,
+                checkpoint=checkpoint,
+                plan=envelope.plan,
+                run_id=envelope.run_id,
+            )
+            if not isinstance(execution, AlgorithmExecutionResult):
+                raise AlgorithmExecutionError(
+                    "framework-native exporter must return AlgorithmExecutionResult"
+                )
+            if (
+                envelope.plan.distribution_spec is not None
+                and envelope.plan.distribution_spec.result_policy
+                is ResultPolicy.BUNDLE_REQUIRED
+                and not execution.outputs.get("bundle_uri")
+            ):
+                raise AlgorithmExecutionError(
+                    "framework-native fit completed without the required Bundle "
+                    "publication"
+                )
+            versions = _actual_environment_versions(
+                envelope.plan.environment.python,
+                envelope.plan.environment.dependencies,
+            )
+            return WorkerExecutionResult(
+                execution=execution,
+                actual_versions=versions,
+                worker_metadata={
+                    "topology": "framework_native",
+                    "workers": workers,
+                    "state": state,
+                    "input_complete": True,
+                    "driver_materialized_training_rows": 0,
+                },
+            )
+        except ray.exceptions.RayError as exc:
+            raise AlgorithmExecutionError(
+                f"framework-native execution failed: {type(exc).__name__}"
+            ) from exc
+        finally:
+            prepared.close()
+
+
+__all__ = ["FrameworkNativeRuntime"]

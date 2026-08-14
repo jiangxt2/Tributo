@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from types import SimpleNamespace
 from typing import Literal, cast
 
 import daft
@@ -21,12 +22,14 @@ from tributo.algorithms.api import (
     InputBinding,
     QualifiedReference,
     ResolvedAlgorithmPlan,
+    RuntimeTopology,
 )
 from tributo.algorithms.core import AlgorithmPlanner, AlgorithmRegistrationRegistry
 from tributo.algorithms.spi import (
     InputExecutionContext,
     InputResolutionContext,
     MaterializedTabularInputView,
+    ResolvedInputLease,
     WorkerInputPayload,
 )
 from tributo.data import (
@@ -408,6 +411,35 @@ def test_data_parallel_ray_handle_uses_public_streaming_split() -> None:
         for prepared in prepared_inputs:
             prepared.close()
         binding.close()
+        lease.close()
+
+
+def test_map_reduce_binding_counts_input_before_public_streaming_split() -> None:
+    dataset = StubRayDataset(_COLUMNS)
+    lease = ResolvedInputLease(
+        handle=RayDataHandle(dataset),
+        provenance={},
+    )
+    plan = cast(
+        ResolvedAlgorithmPlan,
+        SimpleNamespace(
+            runtime=SimpleNamespace(
+                topology=RuntimeTopology.RAY_MAP_REDUCE,
+                worker_count=2,
+            ),
+            input_binding=_binding(),
+        ),
+    )
+
+    runtime_binding = IngestionInputRuntimeAdapter().bind(lease, plan)
+    try:
+        assert dataset.count_calls == 1
+        assert dataset.streaming_split_calls == [(2, False)]
+        assert [
+            payload.expected_total_rows for payload in runtime_binding.payloads
+        ] == [len(_COLUMNS["x0"]), len(_COLUMNS["x0"])]
+    finally:
+        runtime_binding.close()
         lease.close()
 
 

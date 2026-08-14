@@ -40,6 +40,7 @@ STABILITY_MAP: dict[str, str] = {
     "tributo.algorithms.api.execution": "alpha",
     "tributo.algorithms.api.models": "alpha",
     "tributo.algorithms.core.builder": "alpha",
+    "tributo.algorithms.core.runtime": "alpha",
     "tributo.algorithms.spi.execution": "alpha",
     "tributo.algorithms.spi.input": "alpha",
     # Util — stable

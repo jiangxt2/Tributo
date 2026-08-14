@@ -77,6 +77,7 @@ from the legacy setup-only propagation rule.
 | `tributo.algorithms.api.context` — `UserExecutionContext` | `alpha` | Restricted context for trusted module-qualified Worker functions |
 | `tributo.algorithms.api.errors` | `alpha` | Portable execution error taxonomy |
 | `tributo.algorithms.core.builder` — `AlgorithmBuilder` | `alpha` | Provisional sklearn and Custom Ray Function registration builders |
+| `tributo.algorithms.core.runtime` | `alpha` | Owned local Ray lifecycle and fail-closed Kubernetes connection/resource preflight |
 | `tributo.algorithms.spi.execution` | `alpha` | Provisional operation and Runtime execution protocols |
 | `tributo.algorithms.spi.input` | `alpha` | Two-stage input resolution and Driver/Worker ownership contracts |
 
@@ -159,6 +160,9 @@ from the legacy setup-only propagation rule.
 | `tributo.integrations.algorithm_inputs.ingestion` | `alpha` | Ingestion input bridge |
 | `tributo.integrations.algorithm_runtimes.legacy_descriptors` | `developer` | Internal lightweight descriptors for the bounded Trainer compatibility bridge |
 | `tributo.integrations.algorithm_runtimes.legacy_trainer` | `developer` | Internal Worker-only execution adapter; not a native first-party runtime |
+| `tributo.integrations.algorithm_runtimes.collective` | `developer` | Internal Ray Train collective runtime adapter |
+| `tributo.integrations.algorithm_runtimes.framework_native` | `developer` | Internal framework-native distributed runtime adapter |
+| `tributo.integrations.algorithm_runtimes.map_reduce` | `developer` | Internal bounded tree-MapReduce runtime adapter |
 | `tributo.integrations.exporters.*` | `beta` | Built-in exporter implementations |
 | `tributo.integrations.flavors` | `beta` | Built-in runtime flavor package |
 | `tributo.integrations.flavors.onnx_runtime` | `beta` | ONNX Runtime flavor implementation |
