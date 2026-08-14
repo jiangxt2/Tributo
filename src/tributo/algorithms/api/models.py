@@ -10,7 +10,7 @@ import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import parse_qsl, urlsplit
 
 from packaging.requirements import InvalidRequirement, Requirement
@@ -18,9 +18,17 @@ from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.utils import canonicalize_name
 
 from tributo._common.immutable import FrozenDict, deep_freeze, deep_thaw
+from tributo.algorithms.api.distribution import (
+    DistributionSpec,
+    DistributionStrategy,
+    ExecutionProfile,
+)
 from tributo.algorithms.api.errors import AlgorithmConfigurationError
 from tributo.training.algorithm_spec import AlgorithmSpec
 from tributo.util.annotations import DeveloperAPI, PublicAPI
+
+if TYPE_CHECKING:
+    from tributo.algorithms.api.execution import ExecutionReceipt
 
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _NAMESPACED_ID = re.compile(r"^[a-z][a-z0-9_.-]*$")
@@ -125,6 +133,9 @@ class ExecutionMode(str, Enum):
     MANAGED_ESTIMATOR = "managed_estimator"
     CUSTOM_RAY_FUNCTION = "custom_ray_function"
     LEGACY_TRAINER = "legacy_trainer"
+    COLLECTIVE = "collective"
+    MAP_REDUCE = "map_reduce"
+    FRAMEWORK_NATIVE = "framework_native"
 
 
 @PublicAPI(stability="alpha")
@@ -134,6 +145,9 @@ class RuntimeTopology(str, Enum):
     SINGLE_WORKER = "single_worker"
     FRAMEWORK_MANAGED = "framework_managed"
     DATA_PARALLEL = "data_parallel"
+    RAY_TRAIN_COLLECTIVE = "ray_train_collective"
+    FRAMEWORK_NATIVE = "framework_native"
+    RAY_MAP_REDUCE = "ray_map_reduce"
 
 
 @PublicAPI(stability="alpha")
@@ -284,6 +298,10 @@ class ImplementationDescriptor:
     code_digest: str | None = None
     artifact_format: Literal["none", "trusted_pickle"] = "none"
     allowed_config_keys: tuple[str, ...] = ()
+    runtime_id: str | None = None
+    worker_input_adapter_ref: QualifiedReference | None = None
+    exporter_ref: QualifiedReference | None = None
+    flavor_id: str | None = None
 
     def __post_init__(self) -> None:
         _require_namespaced_id(self.implementation_id, "implementation_id")
@@ -365,6 +383,39 @@ class ImplementationDescriptor:
         object.__setattr__(
             self, "allowed_config_keys", tuple(sorted(self.allowed_config_keys))
         )
+        if self.runtime_id is not None:
+            _require_namespaced_id(self.runtime_id, "runtime_id")
+        if self.flavor_id is not None:
+            _require_namespaced_id(self.flavor_id, "flavor_id")
+        for field_name in (
+            "worker_input_adapter_ref",
+            "exporter_ref",
+        ):
+            value = getattr(self, field_name)
+            if value is not None and not isinstance(value, QualifiedReference):
+                raise AlgorithmConfigurationError(
+                    f"{field_name} must be a QualifiedReference when provided"
+                )
+        formal_mode = self.execution_mode in {
+            ExecutionMode.COLLECTIVE,
+            ExecutionMode.MAP_REDUCE,
+            ExecutionMode.FRAMEWORK_NATIVE,
+        }
+        if formal_mode and (
+            self.runtime_id is None or self.worker_input_adapter_ref is None
+        ):
+            raise AlgorithmConfigurationError(
+                "formal distributed implementations must declare runtime_id and "
+                "worker_input_adapter_ref"
+            )
+        if (
+            AlgorithmOperation.FIT in self.operations
+            and formal_mode
+            and (self.exporter_ref is None or self.flavor_id is None)
+        ):
+            raise AlgorithmConfigurationError(
+                "formal fit implementations must declare exporter_ref and flavor_id"
+            )
 
 
 @PublicAPI(stability="alpha")
@@ -430,7 +481,12 @@ class RuntimeBinding:
     result_reducer_ref: QualifiedReference | None = None
     num_cpus: float = 1.0
     num_gpus: float = 0.0
+    custom_resources: Mapping[str, float] = field(default_factory=dict)
     max_retries: int = 0
+    execution_profile: ExecutionProfile | None = None
+    strategy: DistributionStrategy | None = None
+    distribution_digest: str | None = None
+    resume_from: str | None = None
 
     def __post_init__(self) -> None:
         _require_namespaced_id(self.runtime_id, "runtime_id")
@@ -501,6 +557,23 @@ class RuntimeBinding:
             raise AlgorithmConfigurationError(
                 "runtime CPU and GPU requirements must be finite and non-negative"
             )
+        custom_resources: dict[str, float] = {}
+        for name, value in self.custom_resources.items():
+            if not isinstance(name, str) or not name:
+                raise AlgorithmConfigurationError(
+                    "runtime custom resource names must be non-empty strings"
+                )
+            if (
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not math.isfinite(float(value))
+                or float(value) < 0
+            ):
+                raise AlgorithmConfigurationError(
+                    f"runtime custom resource {name!r} must be finite and non-negative"
+                )
+            custom_resources[name] = float(value)
+        object.__setattr__(self, "custom_resources", FrozenDict(custom_resources))
         if not isinstance(self.max_retries, int) or isinstance(self.max_retries, bool):
             raise AlgorithmConfigurationError("max_retries must be an integer")
         if self.max_retries < 0:
@@ -508,6 +581,66 @@ class RuntimeBinding:
         if topology is RuntimeTopology.DATA_PARALLEL and self.max_retries != 0:
             raise AlgorithmConfigurationError(
                 "the first data_parallel slice requires max_retries=0"
+            )
+        formal_topologies = {
+            RuntimeTopology.RAY_TRAIN_COLLECTIVE,
+            RuntimeTopology.FRAMEWORK_NATIVE,
+            RuntimeTopology.RAY_MAP_REDUCE,
+        }
+        if topology in formal_topologies and (
+            self.framework_parallelism != 1 or self.result_reducer_ref is not None
+        ):
+            raise AlgorithmConfigurationError(
+                "formal distributed runtimes use explicit worker groups and may not "
+                "use the legacy result reducer"
+            )
+        if (self.execution_profile is None) != (self.strategy is None):
+            raise AlgorithmConfigurationError(
+                "execution_profile and strategy must be resolved together"
+            )
+        if self.execution_profile is not None:
+            try:
+                profile = ExecutionProfile(self.execution_profile)
+                strategy = DistributionStrategy(self.strategy)
+            except (TypeError, ValueError) as exc:
+                raise AlgorithmConfigurationError(
+                    f"invalid resolved execution profile or strategy: {exc}"
+                ) from exc
+            object.__setattr__(self, "execution_profile", profile)
+            object.__setattr__(self, "strategy", strategy)
+            expected_topology = {
+                DistributionStrategy.RAY_TRAIN_COLLECTIVE: (
+                    RuntimeTopology.RAY_TRAIN_COLLECTIVE
+                ),
+                DistributionStrategy.FRAMEWORK_NATIVE: (
+                    RuntimeTopology.FRAMEWORK_NATIVE
+                ),
+                DistributionStrategy.RAY_MAP_REDUCE: RuntimeTopology.RAY_MAP_REDUCE,
+            }[strategy]
+            if topology is not expected_topology:
+                raise AlgorithmConfigurationError(
+                    "resolved RuntimeBinding topology conflicts with strategy"
+                )
+            if (
+                not isinstance(self.distribution_digest, str)
+                or _DIGEST.fullmatch(self.distribution_digest) is None
+            ):
+                raise AlgorithmConfigurationError(
+                    "formal RuntimeBinding requires a DistributionSpec digest"
+                )
+        elif self.distribution_digest is not None:
+            raise AlgorithmConfigurationError(
+                "legacy RuntimeBinding must not carry a DistributionSpec digest"
+            )
+        if self.resume_from is not None and (
+            not isinstance(self.resume_from, str) or not self.resume_from
+        ):
+            raise AlgorithmConfigurationError(
+                "runtime resume_from must be a non-empty string when provided"
+            )
+        if self.execution_profile is None and self.resume_from is not None:
+            raise AlgorithmConfigurationError(
+                "legacy RuntimeBinding must not carry formal resume state"
             )
 
 
@@ -519,7 +652,8 @@ class AlgorithmRegistration:
     spec: AlgorithmSpec
     implementation: ImplementationDescriptor
     environment: EnvironmentSpec
-    runtime: RuntimeBinding
+    runtime: RuntimeBinding | None = None
+    distribution_spec: DistributionSpec | None = None
     is_default: bool = False
 
     def __post_init__(self) -> None:
@@ -578,7 +712,16 @@ class AlgorithmRegistration:
             raise AlgorithmConfigurationError(
                 "implementation execution mode is not allowed by AlgorithmSpec"
             )
-        if (
+        if self.runtime is not None and self.distribution_spec is not None:
+            raise AlgorithmConfigurationError(
+                "registration must bind either a legacy runtime or a "
+                "DistributionSpec, not both"
+            )
+        if self.runtime is None and self.distribution_spec is None:
+            raise AlgorithmConfigurationError(
+                "registration requires a legacy runtime or a DistributionSpec"
+            )
+        if self.runtime is not None and (
             self.runtime.topology is RuntimeTopology.FRAMEWORK_MANAGED
             and self.implementation.execution_mode
             not in {ExecutionMode.MANAGED_ESTIMATOR, ExecutionMode.LEGACY_TRAINER}
@@ -588,7 +731,8 @@ class AlgorithmRegistration:
                 "and the bounded legacy Trainer adapter"
             )
         if (
-            self.runtime.topology is RuntimeTopology.DATA_PARALLEL
+            self.runtime is not None
+            and self.runtime.topology is RuntimeTopology.DATA_PARALLEL
             and self.implementation.execution_mode
             is not ExecutionMode.CUSTOM_RAY_FUNCTION
         ):
@@ -596,14 +740,18 @@ class AlgorithmRegistration:
                 "the first data_parallel topology supports only Custom Ray Function"
             )
         if (
-            self.runtime.topology
+            self.runtime is not None
+            and self.runtime.topology
             not in self.implementation.input_compatibility.distribution_policy
         ):
             raise AlgorithmConfigurationError(
                 "runtime topology is not accepted by the implementation's "
                 "distribution_policy"
             )
-        if self.runtime.topology is RuntimeTopology.DATA_PARALLEL:
+        if (
+            self.runtime is not None
+            and self.runtime.topology is RuntimeTopology.DATA_PARALLEL
+        ):
             reducer_ref = self.runtime.result_reducer_ref
             if (
                 reducer_ref is None
@@ -612,6 +760,20 @@ class AlgorithmRegistration:
                 raise AlgorithmConfigurationError(
                     "a data_parallel user reducer must be declared in the same module "
                     "as the user function"
+                )
+        if self.distribution_spec is not None:
+            if not isinstance(self.distribution_spec, DistributionSpec):
+                raise AlgorithmConfigurationError(
+                    "distribution_spec must be a DistributionSpec"
+                )
+            expected_mode = {
+                DistributionStrategy.RAY_TRAIN_COLLECTIVE: ExecutionMode.COLLECTIVE,
+                DistributionStrategy.FRAMEWORK_NATIVE: ExecutionMode.FRAMEWORK_NATIVE,
+                DistributionStrategy.RAY_MAP_REDUCE: ExecutionMode.MAP_REDUCE,
+            }[self.distribution_spec.strategy]
+            if self.implementation.execution_mode is not expected_mode:
+                raise AlgorithmConfigurationError(
+                    "implementation execution mode conflicts with DistributionSpec"
                 )
         unknown_defaults = sorted(
             set(self.spec.default_config) - set(self.implementation.allowed_config_keys)
@@ -651,6 +813,7 @@ class InputBinding:
     reference: str
     feature_names: tuple[str, ...]
     label_name: str | None = None
+    sample_weight_name: str | None = None
     schema_version: int = 1
 
     def __post_init__(self) -> None:
@@ -686,6 +849,20 @@ class InputBinding:
                 raise AlgorithmConfigurationError(
                     "label_name must not also be a feature name"
                 )
+        if self.sample_weight_name is not None:
+            if (
+                not isinstance(self.sample_weight_name, str)
+                or not self.sample_weight_name
+            ):
+                raise AlgorithmConfigurationError(
+                    "sample_weight_name must be a non-empty string when set"
+                )
+            if self.sample_weight_name in self.feature_names or (
+                self.sample_weight_name == self.label_name
+            ):
+                raise AlgorithmConfigurationError(
+                    "sample_weight_name must not also be a feature or label name"
+                )
         if (
             not isinstance(self.schema_version, int)
             or isinstance(self.schema_version, bool)
@@ -701,6 +878,7 @@ class InputBinding:
             "reference": self.reference,
             "feature_names": list(self.feature_names),
             "label_name": self.label_name,
+            "sample_weight_name": self.sample_weight_name,
             "schema_version": self.schema_version,
         }
 
@@ -854,6 +1032,7 @@ class AlgorithmResolution:
     execution_mode: ExecutionMode
     environment_id: str
     runtime_id: str
+    requested_algorithm: str
 
     def __post_init__(self) -> None:
         if (
@@ -864,6 +1043,13 @@ class AlgorithmResolution:
         ):
             raise AlgorithmConfigurationError(
                 "algorithm resolution requires an identity and version"
+            )
+        if (
+            not isinstance(self.requested_algorithm, str)
+            or not self.requested_algorithm
+        ):
+            raise AlgorithmConfigurationError(
+                "requested algorithm identity must be non-empty"
             )
         _require_namespaced_id(self.implementation_id, "implementation_id")
         _require_namespaced_id(self.environment_id, "environment_id")
@@ -900,6 +1086,7 @@ class ResolvedAlgorithmPlan:
     input_descriptor: ResolvedInputDescriptor
     algorithm_config: Mapping[str, Any]
     config_digest: str
+    distribution_spec: DistributionSpec | None = None
 
     def __post_init__(self) -> None:
         if self.format_version < 1:
@@ -937,6 +1124,15 @@ class ResolvedAlgorithmPlan:
             raise AlgorithmConfigurationError(
                 "plan operation is not offered by the resolved implementation"
             )
+        if self.distribution_spec is not None:
+            if self.runtime.strategy is not self.distribution_spec.strategy:
+                raise AlgorithmConfigurationError(
+                    "resolved runtime strategy conflicts with DistributionSpec"
+                )
+            if self.runtime.distribution_digest != self.distribution_spec.digest:
+                raise AlgorithmConfigurationError(
+                    "resolved runtime DistributionSpec digest is inconsistent"
+                )
         expected_resolution = (
             self.implementation.implementation_id,
             self.implementation.version,
@@ -986,6 +1182,8 @@ class ResolvedAlgorithmPlan:
             "format_version": self.format_version,
             "operation": self.operation.value,
             "resolution": {
+                "requested_algorithm": self.resolution.requested_algorithm,
+                "canonical_algorithm": self.resolution.algorithm,
                 "algorithm": self.resolution.algorithm,
                 "algorithm_version": self.resolution.algorithm_version,
                 "implementation_id": self.resolution.implementation_id,
@@ -1029,6 +1227,18 @@ class ResolvedAlgorithmPlan:
                 "code_digest": self.implementation.code_digest,
                 "artifact_format": self.implementation.artifact_format,
                 "allowed_config_keys": list(self.implementation.allowed_config_keys),
+                "runtime_id": self.implementation.runtime_id,
+                "worker_input_adapter_ref": (
+                    str(self.implementation.worker_input_adapter_ref)
+                    if self.implementation.worker_input_adapter_ref is not None
+                    else None
+                ),
+                "exporter_ref": (
+                    str(self.implementation.exporter_ref)
+                    if self.implementation.exporter_ref is not None
+                    else None
+                ),
+                "flavor_id": self.implementation.flavor_id,
             },
             "environment": {
                 "environment_id": self.environment.environment_id,
@@ -1048,8 +1258,26 @@ class ResolvedAlgorithmPlan:
                 ),
                 "num_cpus": self.runtime.num_cpus,
                 "num_gpus": self.runtime.num_gpus,
+                "custom_resources": dict(sorted(self.runtime.custom_resources.items())),
                 "max_retries": self.runtime.max_retries,
+                "execution_profile": (
+                    self.runtime.execution_profile.value
+                    if self.runtime.execution_profile is not None
+                    else None
+                ),
+                "strategy": (
+                    self.runtime.strategy.value
+                    if self.runtime.strategy is not None
+                    else None
+                ),
+                "distribution_digest": self.runtime.distribution_digest,
+                "resume_from": self.runtime.resume_from,
             },
+            "distribution_spec": (
+                self.distribution_spec.to_dict()
+                if self.distribution_spec is not None
+                else None
+            ),
             "input_descriptor": {
                 "resolver_id": self.input_descriptor.resolver_id,
                 "reference": self.input_descriptor.reference,
@@ -1235,6 +1463,7 @@ class AlgorithmRunResult:
     actual_versions: Mapping[str, str]
     input_provenance: Mapping[str, Any]
     worker_metadata: Mapping[str, Any] = field(default_factory=dict)
+    execution_receipt: ExecutionReceipt | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.run_id, str) or not self.run_id:
@@ -1248,6 +1477,13 @@ class AlgorithmRunResult:
         object.__setattr__(self, "actual_versions", FrozenDict(self.actual_versions))
         object.__setattr__(self, "input_provenance", deep_freeze(self.input_provenance))
         object.__setattr__(self, "worker_metadata", deep_freeze(self.worker_metadata))
+        if self.execution_receipt is not None:
+            from tributo.algorithms.api.execution import ExecutionReceipt
+
+            if not isinstance(self.execution_receipt, ExecutionReceipt):
+                raise AlgorithmConfigurationError(
+                    "execution_receipt must be an ExecutionReceipt when provided"
+                )
 
 
 __all__ = [

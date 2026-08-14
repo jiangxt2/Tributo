@@ -71,6 +71,9 @@ from the legacy setup-only propagation rule.
 | Module | Level | Notes |
 |--------|-------|-------|
 | `tributo.algorithms.api.models` | `alpha` | Portable registration, request, plan, result, environment, runtime, input, and artifact value objects |
+| `tributo.algorithms.api.distribution` | `alpha` | Versioned distributed strategy, profile, resource, and coordination declarations |
+| `tributo.algorithms.api.execution` | `alpha` | Formal execution request and immutable worker/node/shard receipt evidence |
+| `tributo.algorithms.api.descriptor` | `alpha` | Trusted installed-package distributed algorithm descriptor API v1 |
 | `tributo.algorithms.api.context` — `UserExecutionContext` | `alpha` | Restricted context for trusted module-qualified Worker functions |
 | `tributo.algorithms.api.errors` | `alpha` | Portable execution error taxonomy |
 | `tributo.algorithms.core.builder` — `AlgorithmBuilder` | `alpha` | Provisional sklearn and Custom Ray Function registration builders |

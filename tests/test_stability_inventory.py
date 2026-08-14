@@ -34,7 +34,10 @@ STABILITY_MAP: dict[str, str] = {
     "tributo.cli": "beta",
     # Portable algorithm execution — alpha
     "tributo.algorithms.api.context": "alpha",
+    "tributo.algorithms.api.descriptor": "alpha",
+    "tributo.algorithms.api.distribution": "alpha",
     "tributo.algorithms.api.errors": "alpha",
+    "tributo.algorithms.api.execution": "alpha",
     "tributo.algorithms.api.models": "alpha",
     "tributo.algorithms.core.builder": "alpha",
     "tributo.algorithms.spi.execution": "alpha",

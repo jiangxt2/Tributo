@@ -1,0 +1,569 @@
+"""Per-invocation request and verifiable distributed execution receipt."""
+
+from __future__ import annotations
+
+import math
+import re
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from typing import Any, cast
+
+from tributo._common.immutable import FrozenDict
+from tributo.algorithms.api.distribution import (
+    DistributionStrategy,
+    ExecutionProfile,
+    StateCoordination,
+    WorkerResources,
+)
+from tributo.algorithms.api.errors import AlgorithmConfigurationError
+from tributo.algorithms.api.models import AlgorithmRequest
+from tributo.util.annotations import PublicAPI
+
+_DIGEST = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _non_empty(value: object, field_name: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise AlgorithmConfigurationError(f"{field_name} must be non-empty")
+    return value
+
+
+def _integer(value: object, field_name: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise AlgorithmConfigurationError(f"{field_name} must be an integer")
+    return value
+
+
+def _number(value: object, field_name: str) -> float:
+    if (
+        not isinstance(value, (int, float))
+        or isinstance(value, bool)
+        or not math.isfinite(float(value))
+    ):
+        raise AlgorithmConfigurationError(f"{field_name} must be a finite number")
+    return float(value)
+
+
+def _mapping(value: object, field_name: str) -> Mapping[Any, Any]:
+    if not isinstance(value, Mapping):
+        raise AlgorithmConfigurationError(f"{field_name} must be a mapping")
+    return value
+
+
+def _boolean(value: object, field_name: str) -> bool:
+    if not isinstance(value, bool):
+        raise AlgorithmConfigurationError(f"{field_name} must be a boolean")
+    return value
+
+
+@PublicAPI(stability="alpha")
+@dataclass(frozen=True)
+class ExecutionRequest:
+    """Combine an algorithm request with one explicit execution choice."""
+
+    algorithm_request: AlgorithmRequest
+    profile: ExecutionProfile
+    worker_count: int
+    resources_per_worker: WorkerResources | None = None
+    resume_from: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.algorithm_request, AlgorithmRequest):
+            raise AlgorithmConfigurationError(
+                "algorithm_request must be an AlgorithmRequest"
+            )
+        try:
+            profile = ExecutionProfile(self.profile)
+        except (TypeError, ValueError) as exc:
+            raise AlgorithmConfigurationError(
+                "execution profile must be 'local' or 'kubernetes'"
+            ) from exc
+        object.__setattr__(self, "profile", profile)
+        if (
+            not isinstance(self.worker_count, int)
+            or isinstance(self.worker_count, bool)
+            or self.worker_count < 1
+        ):
+            raise AlgorithmConfigurationError("worker_count must be a positive integer")
+        if self.resources_per_worker is not None and not isinstance(
+            self.resources_per_worker, WorkerResources
+        ):
+            raise AlgorithmConfigurationError(
+                "resources_per_worker must be WorkerResources when provided"
+            )
+        if self.resume_from is not None:
+            _non_empty(self.resume_from, "resume_from")
+
+
+@PublicAPI(stability="alpha")
+@dataclass(frozen=True)
+class WorkerExecutionEvidence:
+    """Observed identity, shard, and resource evidence for one worker."""
+
+    worker_id: str
+    node_id: str
+    rank: int
+    world_size: int
+    shard_id: str
+    resources: WorkerResources
+    model_state_digest: str | None = None
+    rows_processed: int | None = None
+    input_rows: Mapping[str, int] = field(default_factory=dict)
+    batch_count: int | None = None
+    collective_steps: int | None = None
+
+    def __post_init__(self) -> None:
+        _non_empty(self.worker_id, "worker_id")
+        _non_empty(self.node_id, "node_id")
+        _non_empty(self.shard_id, "shard_id")
+        if (
+            not isinstance(self.rank, int)
+            or isinstance(self.rank, bool)
+            or self.rank < 0
+        ):
+            raise AlgorithmConfigurationError("rank must be non-negative")
+        if (
+            not isinstance(self.world_size, int)
+            or isinstance(self.world_size, bool)
+            or self.world_size < 1
+            or self.rank >= self.world_size
+        ):
+            raise AlgorithmConfigurationError(
+                "world_size must be positive and greater than rank"
+            )
+        if not isinstance(self.resources, WorkerResources):
+            raise AlgorithmConfigurationError(
+                "worker evidence resources must be WorkerResources"
+            )
+        if self.model_state_digest is not None and (
+            not isinstance(self.model_state_digest, str)
+            or _DIGEST.fullmatch(self.model_state_digest) is None
+        ):
+            raise AlgorithmConfigurationError(
+                "model_state_digest must be a lower-case SHA-256 digest"
+            )
+        if self.rows_processed is not None and (
+            not isinstance(self.rows_processed, int)
+            or isinstance(self.rows_processed, bool)
+            or self.rows_processed < 0
+        ):
+            raise AlgorithmConfigurationError(
+                "rows_processed must be a non-negative integer"
+            )
+        normalized_input_rows: dict[str, int] = {}
+        for name, count in self.input_rows.items():
+            if (
+                not isinstance(name, str)
+                or not name
+                or not isinstance(count, int)
+                or isinstance(count, bool)
+                or count < 0
+            ):
+                raise AlgorithmConfigurationError(
+                    "input_rows must map non-empty split names to non-negative integers"
+                )
+            normalized_input_rows[name] = count
+        object.__setattr__(self, "input_rows", FrozenDict(normalized_input_rows))
+        for name, value in (
+            ("batch_count", self.batch_count),
+            ("collective_steps", self.collective_steps),
+        ):
+            if value is not None and (
+                not isinstance(value, int) or isinstance(value, bool) or value < 0
+            ):
+                raise AlgorithmConfigurationError(
+                    f"{name} must be a non-negative integer"
+                )
+        if (
+            self.batch_count is not None
+            and self.collective_steps is not None
+            and self.batch_count > self.collective_steps
+        ):
+            raise AlgorithmConfigurationError(
+                "batch_count cannot exceed collective_steps"
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return portable evidence metadata."""
+        return {
+            "worker_id": self.worker_id,
+            "node_id": self.node_id,
+            "rank": self.rank,
+            "world_size": self.world_size,
+            "shard_id": self.shard_id,
+            "resources": self.resources.to_dict(),
+            "model_state_digest": self.model_state_digest,
+            "rows_processed": self.rows_processed,
+            "input_rows": dict(sorted(self.input_rows.items())),
+            "batch_count": self.batch_count,
+            "collective_steps": self.collective_steps,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]) -> WorkerExecutionEvidence:
+        """Parse Worker evidence without coercing malformed values into facts."""
+        try:
+            resources = _mapping(value["resources"], "worker resources")
+            custom = _mapping(resources.get("custom", {}), "custom resources")
+            input_rows = _mapping(value.get("input_rows", {}), "input_rows")
+            model_digest = value.get("model_state_digest")
+            rows_processed = value.get("rows_processed")
+            batch_count = value.get("batch_count")
+            collective_steps = value.get("collective_steps")
+            return cls(
+                worker_id=_non_empty(value["worker_id"], "worker_id"),
+                node_id=_non_empty(value["node_id"], "node_id"),
+                rank=_integer(value["rank"], "rank"),
+                world_size=_integer(value["world_size"], "world_size"),
+                shard_id=_non_empty(value["shard_id"], "shard_id"),
+                resources=WorkerResources(
+                    num_cpus=_number(resources["num_cpus"], "worker num_cpus"),
+                    num_gpus=_number(resources["num_gpus"], "worker num_gpus"),
+                    custom={
+                        _non_empty(name, "custom resource name"): _number(
+                            amount, "custom resource amount"
+                        )
+                        for name, amount in custom.items()
+                    },
+                ),
+                model_state_digest=(
+                    _non_empty(model_digest, "model_state_digest")
+                    if model_digest is not None
+                    else None
+                ),
+                rows_processed=(
+                    _integer(rows_processed, "rows_processed")
+                    if rows_processed is not None
+                    else None
+                ),
+                input_rows={
+                    _non_empty(name, "input split name"): _integer(
+                        count, "input row count"
+                    )
+                    for name, count in input_rows.items()
+                },
+                batch_count=(
+                    _integer(batch_count, "batch_count")
+                    if batch_count is not None
+                    else None
+                ),
+                collective_steps=(
+                    _integer(collective_steps, "collective_steps")
+                    if collective_steps is not None
+                    else None
+                ),
+            )
+        except KeyError as exc:
+            raise AlgorithmConfigurationError(
+                f"worker evidence is missing field {exc.args[0]!r}"
+            ) from exc
+
+
+@PublicAPI(stability="alpha")
+@dataclass(frozen=True)
+class StateCoordinationEvidence:
+    """Proof that worker-local state formed one bounded global model."""
+
+    coordination: StateCoordination
+    synchronized: bool
+    bounded: bool
+    global_model_digest: str | None = None
+    details: Mapping[str, str | int | float | bool | None] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        try:
+            coordination = StateCoordination(self.coordination)
+        except (TypeError, ValueError) as exc:
+            raise AlgorithmConfigurationError(
+                f"invalid state coordination evidence: {self.coordination!r}"
+            ) from exc
+        object.__setattr__(self, "coordination", coordination)
+        if not isinstance(self.synchronized, bool) or not isinstance(
+            self.bounded, bool
+        ):
+            raise AlgorithmConfigurationError(
+                "state coordination flags must be booleans"
+            )
+        if self.global_model_digest is not None and (
+            not isinstance(self.global_model_digest, str)
+            or _DIGEST.fullmatch(self.global_model_digest) is None
+        ):
+            raise AlgorithmConfigurationError(
+                "global_model_digest must be a lower-case SHA-256 digest"
+            )
+        normalized: dict[str, str | int | float | bool | None] = {}
+        for name, value in self.details.items():
+            if not isinstance(name, str) or not name:
+                raise AlgorithmConfigurationError(
+                    "state evidence detail names must be non-empty strings"
+                )
+            if not isinstance(value, (str, int, float, bool, type(None))):
+                raise AlgorithmConfigurationError(
+                    "state evidence details must contain JSON scalar values"
+                )
+            if isinstance(value, float) and not math.isfinite(value):
+                raise AlgorithmConfigurationError(
+                    "state evidence details must contain finite numbers"
+                )
+            normalized[name] = value
+        object.__setattr__(self, "details", FrozenDict(normalized))
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]) -> StateCoordinationEvidence:
+        """Parse state evidence without truthiness or string coercion."""
+        try:
+            details = _mapping(value.get("details", {}), "state evidence details")
+            digest = value.get("global_model_digest")
+            return cls(
+                coordination=cast(StateCoordination, value["coordination"]),
+                synchronized=_boolean(value["synchronized"], "synchronized"),
+                bounded=_boolean(value["bounded"], "bounded"),
+                global_model_digest=(
+                    _non_empty(digest, "global_model_digest")
+                    if digest is not None
+                    else None
+                ),
+                details=dict(details),
+            )
+        except KeyError as exc:
+            raise AlgorithmConfigurationError(
+                f"state evidence is missing field {exc.args[0]!r}"
+            ) from exc
+
+
+@PublicAPI(stability="alpha")
+@dataclass(frozen=True)
+class ExecutionReceipt:
+    """Immutable evidence used to classify a completed training execution."""
+
+    run_id: str
+    plan_id: str
+    requested_algorithm: str
+    canonical_algorithm: str
+    profile: ExecutionProfile
+    strategy: DistributionStrategy
+    requested_worker_count: int
+    distributed_min_workers: int
+    requested_resources_per_worker: WorkerResources
+    workers: tuple[WorkerExecutionEvidence, ...]
+    input_complete: bool
+    state: StateCoordinationEvidence
+    driver_materialized_training_rows: int = 0
+    artifact_ids: tuple[str, ...] = ()
+    cluster_resources: Mapping[str, float] = field(default_factory=dict)
+    runtime_owned: bool = False
+    api_version: int = 1
+
+    def __post_init__(self) -> None:
+        _non_empty(self.run_id, "run_id")
+        _non_empty(self.requested_algorithm, "requested_algorithm")
+        _non_empty(self.canonical_algorithm, "canonical_algorithm")
+        if not isinstance(self.plan_id, str) or _DIGEST.fullmatch(self.plan_id) is None:
+            raise AlgorithmConfigurationError(
+                "plan_id must be a lower-case SHA-256 digest"
+            )
+        try:
+            profile = ExecutionProfile(self.profile)
+            strategy = DistributionStrategy(self.strategy)
+        except (TypeError, ValueError) as exc:
+            raise AlgorithmConfigurationError(
+                f"invalid execution receipt enum value: {exc}"
+            ) from exc
+        object.__setattr__(self, "profile", profile)
+        object.__setattr__(self, "strategy", strategy)
+        if (
+            not isinstance(self.api_version, int)
+            or isinstance(self.api_version, bool)
+            or self.api_version != 1
+        ):
+            raise AlgorithmConfigurationError(
+                f"unsupported ExecutionReceipt api_version: {self.api_version!r}"
+            )
+        if (
+            not isinstance(self.requested_worker_count, int)
+            or isinstance(self.requested_worker_count, bool)
+            or self.requested_worker_count < 1
+        ):
+            raise AlgorithmConfigurationError(
+                "requested_worker_count must be a positive integer"
+            )
+        if (
+            not isinstance(self.distributed_min_workers, int)
+            or isinstance(self.distributed_min_workers, bool)
+            or self.distributed_min_workers < 2
+        ):
+            raise AlgorithmConfigurationError(
+                "distributed_min_workers must be an integer of at least two"
+            )
+        if not isinstance(self.requested_resources_per_worker, WorkerResources):
+            raise AlgorithmConfigurationError(
+                "requested_resources_per_worker must be WorkerResources"
+            )
+        workers = tuple(self.workers)
+        if not workers or any(
+            not isinstance(item, WorkerExecutionEvidence) for item in workers
+        ):
+            raise AlgorithmConfigurationError(
+                "execution receipt must contain WorkerExecutionEvidence"
+            )
+        if len(workers) != self.requested_worker_count:
+            raise AlgorithmConfigurationError(
+                "actual worker evidence count does not match the request"
+            )
+        expected_ranks = tuple(range(self.requested_worker_count))
+        if tuple(sorted(item.rank for item in workers)) != expected_ranks:
+            raise AlgorithmConfigurationError(
+                "worker evidence must contain every rank exactly once"
+            )
+        if any(item.world_size != self.requested_worker_count for item in workers):
+            raise AlgorithmConfigurationError(
+                "worker world_size does not match requested_worker_count"
+            )
+        requested_resources = self.requested_resources_per_worker
+        if any(
+            worker.resources.num_cpus < requested_resources.num_cpus
+            or worker.resources.num_gpus < requested_resources.num_gpus
+            or any(
+                worker.resources.custom.get(name, 0.0) < amount
+                for name, amount in requested_resources.custom.items()
+            )
+            for worker in workers
+        ):
+            raise AlgorithmConfigurationError(
+                "worker evidence does not satisfy requested_resources_per_worker"
+            )
+        if len({item.worker_id for item in workers}) != len(workers):
+            raise AlgorithmConfigurationError("worker IDs must be unique")
+        if len({item.shard_id for item in workers}) != len(workers):
+            raise AlgorithmConfigurationError("worker shard IDs must be unique")
+        object.__setattr__(
+            self, "workers", tuple(sorted(workers, key=lambda x: x.rank))
+        )
+        if not isinstance(self.input_complete, bool):
+            raise AlgorithmConfigurationError("input_complete must be a boolean")
+        if not isinstance(self.state, StateCoordinationEvidence):
+            raise AlgorithmConfigurationError("state must be StateCoordinationEvidence")
+        expected_coordination = {
+            DistributionStrategy.RAY_TRAIN_COLLECTIVE: StateCoordination.ALL_REDUCE,
+            DistributionStrategy.FRAMEWORK_NATIVE: StateCoordination.FRAMEWORK_NATIVE,
+            DistributionStrategy.RAY_MAP_REDUCE: StateCoordination.ASSOCIATIVE_REDUCE,
+        }[strategy]
+        if self.state.coordination is not expected_coordination:
+            raise AlgorithmConfigurationError(
+                "state coordination evidence does not match the declared strategy"
+            )
+        if (
+            not isinstance(self.driver_materialized_training_rows, int)
+            or isinstance(self.driver_materialized_training_rows, bool)
+            or self.driver_materialized_training_rows < 0
+        ):
+            raise AlgorithmConfigurationError(
+                "driver_materialized_training_rows must be non-negative"
+            )
+        artifacts = tuple(self.artifact_ids)
+        if any(not isinstance(item, str) or not item for item in artifacts):
+            raise AlgorithmConfigurationError(
+                "artifact_ids must contain non-empty strings"
+            )
+        if len(set(artifacts)) != len(artifacts):
+            raise AlgorithmConfigurationError("artifact_ids must be unique")
+        object.__setattr__(self, "artifact_ids", artifacts)
+        resources: dict[str, float] = {}
+        for name, value in self.cluster_resources.items():
+            if (
+                not isinstance(name, str)
+                or not name
+                or not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not math.isfinite(float(value))
+                or float(value) < 0
+            ):
+                raise AlgorithmConfigurationError(
+                    "cluster_resources must map names to finite non-negative numbers"
+                )
+            resources[name] = float(value)
+        object.__setattr__(self, "cluster_resources", FrozenDict(resources))
+        if not isinstance(self.runtime_owned, bool):
+            raise AlgorithmConfigurationError("runtime_owned must be a boolean")
+
+    @property
+    def node_count(self) -> int:
+        """Return the number of distinct Ray nodes that executed workers."""
+        return len({worker.node_id for worker in self.workers})
+
+    @property
+    def distributed(self) -> bool:
+        """Return whether evidence proves one true multi-worker model."""
+        return (
+            len(self.workers) >= self.distributed_min_workers
+            and self.input_complete
+            and self.state.synchronized
+            and self.state.bounded
+            and self.state.global_model_digest is not None
+            and self.driver_materialized_training_rows == 0
+            and bool(self.artifact_ids)
+            and all(
+                worker.rows_processed is not None and worker.rows_processed > 0
+                for worker in self.workers
+            )
+            and (
+                self.strategy is DistributionStrategy.RAY_MAP_REDUCE
+                or {worker.model_state_digest for worker in self.workers}
+                == {self.state.global_model_digest}
+            )
+        )
+
+    @property
+    def cross_node(self) -> bool:
+        """Return whether workers actually occupied multiple Ray nodes."""
+        return self.node_count >= 2
+
+    @property
+    def kubernetes_distributed_supported(self) -> bool:
+        """Return the per-run evidence predicate used by the KubeRay Gate."""
+        return (
+            self.profile is ExecutionProfile.KUBERNETES
+            and self.distributed
+            and self.cross_node
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return portable receipt metadata."""
+        return {
+            "api_version": self.api_version,
+            "run_id": self.run_id,
+            "plan_id": self.plan_id,
+            "requested_algorithm": self.requested_algorithm,
+            "canonical_algorithm": self.canonical_algorithm,
+            "execution_profile": self.profile.value,
+            "strategy": self.strategy.value,
+            "requested_worker_count": self.requested_worker_count,
+            "distributed_min_workers": self.distributed_min_workers,
+            "requested_resources_per_worker": (
+                self.requested_resources_per_worker.to_dict()
+            ),
+            "workers": [worker.to_dict() for worker in self.workers],
+            "input_complete": self.input_complete,
+            "state": {
+                "coordination": self.state.coordination.value,
+                "synchronized": self.state.synchronized,
+                "bounded": self.state.bounded,
+                "global_model_digest": self.state.global_model_digest,
+                "details": dict(sorted(self.state.details.items())),
+            },
+            "driver_materialized_training_rows": self.driver_materialized_training_rows,
+            "artifact_ids": list(self.artifact_ids),
+            "cluster_resources": dict(sorted(self.cluster_resources.items())),
+            "runtime_owned": self.runtime_owned,
+            "distributed": self.distributed,
+            "cross_node": self.cross_node,
+            "kubernetes_distributed_supported": (self.kubernetes_distributed_supported),
+        }
+
+
+__all__ = [
+    "ExecutionReceipt",
+    "ExecutionRequest",
+    "StateCoordinationEvidence",
+    "WorkerExecutionEvidence",
+]
