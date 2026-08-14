@@ -111,8 +111,10 @@ def test_runtime_prepare_is_content_addressed_and_never_uses_compose_build() -> 
     assert "runtime_lock(identity)" in runner
     assert "fcntl.flock" in runner
     assert "TRIBUTO_IT_RUNTIME_LOCK_TIMEOUT_SECONDS" in runner
-    assert "dangling=true" in runner
-    assert '"<none>"' in runner
+    assert "_assert_project_absent(project)" in runner
+    assert "ownership-scoped audit" in runner
+    assert "_report_new_image_artifacts(project, images_before)" in runner
+    assert "detected and ignored" in runner
     assert '"--no-build"' in runner
     assert '"--pull",\n                "never"' in runner
     assert "runtime-gc-dry-run" in runner

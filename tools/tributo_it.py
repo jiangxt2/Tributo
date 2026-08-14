@@ -66,7 +66,7 @@ EXCLUDED_DIRECTORY_NAMES = {
     "logs",
 }
 EXCLUDED_FILE_NAMES = {".coverage", ".pypirc", "id_rsa", "id_ed25519"}
-PROJECT_PATTERN = re.compile(r"^tributo-ingestion-[a-z0-9][a-z0-9_-]*$")
+PROJECT_PREFIXES = frozenset({"tributo-ingestion", "tributo-lance-vector"})
 DIGEST_REFERENCE_PATTERN = re.compile(r"^.+:[^/@]+@sha256:[0-9a-f]{64}$")
 
 
@@ -131,6 +131,15 @@ class PreparedRuntime:
     identity: RuntimeIdentity
     image_id: str
     source: str
+
+
+@dataclass(frozen=True)
+class ContainerSnapshot:
+    """Diagnostic state for a container that predates one IT run."""
+
+    state: str
+    name: str
+    compose_project: str
 
 
 def _run(
@@ -332,14 +341,22 @@ def _expected_labels(identity: RuntimeIdentity) -> dict[str, str]:
 def _version_check_code(identity: RuntimeIdentity) -> str:
     contract = identity.profile.version_contract
     major, minor = str(identity.profile.definition["python_version"]).split(".", 1)
-    return "; ".join(
-        (
-            "import importlib.metadata as metadata,sys",
-            f"assert sys.version_info[:2] == ({int(major)}, {int(minor)})",
-            f"assert metadata.version('ray') == {contract['ray']!r}",
-            f"assert metadata.version('daft').startswith({contract['daft_prefix']!r})",
-        )
-    )
+    checks = [
+        "import importlib.metadata as metadata,sys",
+        f"assert sys.version_info[:2] == ({int(major)}, {int(minor)})",
+        f"assert metadata.version('ray') == {contract['ray']!r}",
+        f"assert metadata.version('daft').startswith({contract['daft_prefix']!r})",
+    ]
+    for key, distribution in (
+        ("pylance", "pylance"),
+        ("lance_ray", "lance-ray"),
+        ("pyarrow", "pyarrow"),
+    ):
+        if key in contract:
+            checks.append(
+                f"assert metadata.version({distribution!r}) == {contract[key]!r}"
+            )
+    return "; ".join(checks)
 
 
 def validate_runtime_image(
@@ -1105,34 +1122,23 @@ def validate_compose_contract(
 
 
 def _image_has_repo_digests(image_id: str) -> bool:
-    """Whether *image_id* carries registry digest references.
-
-    Digest-only references (``repo@sha256:...``) surface as ``<none>`` rows in
-    ``docker image ls``; they are legitimate pull artifacts from the reusable
-    runtime registry, not dangling images created by the IT. Local builds and
-    build leftovers have no RepoDigests and stay subject to the check.
-    """
-    try:
-        result = _run(
-            [
-                "docker",
-                "image",
-                "inspect",
-                image_id,
-                "--format",
-                "{{json .RepoDigests}}",
-            ]
-        )
-    except TributoITError:
-        return False
-    try:
-        digests = json.loads(result.stdout.strip() or "[]")
-    except ValueError:
-        return False
+    """Return whether an untagged-looking image is a legitimate pulled digest."""
+    result = _run(
+        [
+            "docker",
+            "image",
+            "inspect",
+            image_id,
+            "--format",
+            "{{json .RepoDigests}}",
+        ]
+    )
+    digests = json.loads(result.stdout.strip() or "[]")
     return bool(digests)
 
 
-def _image_baseline() -> set[str]:
+def _diagnostic_image_ids() -> set[str]:
+    """List dangling or untagged build artifacts, excluding pulled digests."""
     dangling = _run(
         [
             "docker",
@@ -1168,7 +1174,44 @@ def _image_baseline() -> set[str]:
     return image_ids
 
 
-def _container_states() -> dict[str, str]:
+def _capture_image_diagnostic_baseline() -> set[str] | None:
+    """Capture best-effort image state without making it an ownership check."""
+    try:
+        return _diagnostic_image_ids()
+    except Exception as exc:
+        print(
+            "Docker image diagnostic baseline unavailable; owned-project checks "
+            f"remain authoritative: {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return None
+
+
+def _report_new_image_artifacts(project: str, before: set[str] | None) -> None:
+    """Report new dangling/untagged images without attributing or deleting them."""
+    if before is None:
+        return
+    try:
+        added = sorted(_diagnostic_image_ids() - before)
+    except Exception as exc:
+        print(
+            "Docker image diagnostic snapshot failed after scoped cleanup; "
+            f"owned-project checks remain authoritative: {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return
+    if added:
+        print(
+            "New dangling or untagged Docker image artifacts detected and ignored "
+            f"by the ownership-scoped audit for {project}: {added}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+
+def _container_states() -> dict[str, ContainerSnapshot]:
     result = _run(
         [
             "docker",
@@ -1176,14 +1219,83 @@ def _container_states() -> dict[str, str]:
             "--all",
             "--no-trunc",
             "--format",
-            "{{.ID}}\t{{.State}}",
+            '{{.ID}}\t{{.State}}\t{{.Names}}\t{{.Label "com.docker.compose.project"}}',
         ]
     )
     return {
-        fields[0]: fields[1]
+        fields[0]: ContainerSnapshot(
+            state=fields[1],
+            name=fields[2],
+            compose_project=fields[3],
+        )
         for line in result.stdout.splitlines()
-        if len(fields := line.split("\t", 1)) == 2
+        if len(fields := line.split("\t", 3)) == 4
     }
+
+
+def _capture_container_diagnostic_baseline() -> dict[str, ContainerSnapshot] | None:
+    """Capture best-effort global state for attribution-only diagnostics."""
+    try:
+        return _container_states()
+    except Exception as exc:
+        print(
+            "Docker diagnostic baseline unavailable; owned-project checks remain "
+            f"authoritative: {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return None
+
+
+def _report_external_container_activity(
+    project: str,
+    before: dict[str, ContainerSnapshot] | None,
+) -> None:
+    """Report concurrent Docker activity without assigning it to this IT run."""
+    if before is None:
+        return
+    try:
+        after = _container_states()
+    except Exception as exc:
+        print(
+            "Docker diagnostic snapshot failed after scoped cleanup; "
+            f"owned-project checks remain authoritative: {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return
+    changed = {
+        container_id: {
+            "name": snapshot.name,
+            "compose_project": snapshot.compose_project or None,
+            "before": snapshot.state,
+            "after": (
+                after[container_id].state if container_id in after else "<missing>"
+            ),
+        }
+        for container_id, snapshot in before.items()
+        if container_id not in after or after[container_id].state != snapshot.state
+    }
+    changed.update(
+        {
+            container_id: {
+                "name": snapshot.name,
+                "compose_project": snapshot.compose_project or None,
+                "before": "<missing>",
+                "after": snapshot.state,
+            }
+            for container_id, snapshot in after.items()
+            if container_id not in before
+        }
+    )
+    if changed:
+        print(
+            "Concurrent external Docker activity detected and ignored by the "
+            f"ownership-scoped audit for {project}: "
+            f"{json.dumps(changed, sort_keys=True)}",
+            file=sys.stderr,
+            flush=True,
+        )
 
 
 def _project_resource_ids(project: str) -> dict[str, list[str]]:
@@ -1357,21 +1469,32 @@ def _collect_logs(env: dict[str, str], path: Path) -> None:
         raise TributoITError(f"failed to collect Compose logs: {path}")
 
 
-def _default_project() -> str:
-    return f"tributo-ingestion-{int(time.time())}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+def _default_project(prefix: str = "tributo-ingestion") -> str:
+    if prefix not in PROJECT_PREFIXES:
+        raise TributoITError(f"unsupported integration-test project prefix: {prefix}")
+    return f"{prefix}-{int(time.time())}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
 
 
-def _validate_project(project: str) -> None:
-    if not PROJECT_PATTERN.fullmatch(project):
+def _validate_project(project: str, prefix: str = "tributo-ingestion") -> None:
+    if prefix not in PROJECT_PREFIXES:
+        raise TributoITError(f"unsupported integration-test project prefix: {prefix}")
+    pattern = re.compile(rf"^{re.escape(prefix)}-[a-z0-9][a-z0-9_-]*$")
+    if not pattern.fullmatch(project):
         raise TributoITError(
-            "COMPOSE_PROJECT_NAME must be a unique tributo-ingestion-* identifier"
+            f"COMPOSE_PROJECT_NAME must be a unique {prefix}-* identifier"
         )
 
 
-def run_data_ingestion(profile: RuntimeProfile) -> None:
-    """Run the complete Data Ingestion Docker suite with scoped cleanup."""
-    project = os.environ.get("COMPOSE_PROJECT_NAME") or _default_project()
-    _validate_project(project)
+def _run_docker_ray_suite(
+    profile: RuntimeProfile,
+    *,
+    project_prefix: str,
+    test_module: str,
+    display_name: str,
+) -> None:
+    """Run one module on the shared isolated Ray/MinIO lifecycle."""
+    project = os.environ.get("COMPOSE_PROJECT_NAME") or _default_project(project_prefix)
+    _validate_project(project, project_prefix)
     platform = docker_platform()
     registry = os.environ.get("TRIBUTO_IT_RUNTIME_REGISTRY")
     allow_build = os.environ.get("TRIBUTO_IT_ALLOW_LOCAL_BUILD", "1") == "1"
@@ -1379,12 +1502,12 @@ def run_data_ingestion(profile: RuntimeProfile) -> None:
     log_dir.mkdir(parents=True, exist_ok=True)
     test_log = log_dir / f"{project}-test.log"
     service_log = log_dir / f"{project}-services.log"
-    image_before = _image_baseline()
-    containers_before = _container_states()
     if any(_project_resource_ids(project).values()):
         raise TributoITError(
             f"refusing to take over existing Compose project resources: {project}"
         )
+    images_before = _capture_image_diagnostic_baseline()
+    containers_before = _capture_container_diagnostic_baseline()
 
     env: dict[str, str] | None = None
     primary_error: BaseException | None = None
@@ -1476,7 +1599,7 @@ def run_data_ingestion(profile: RuntimeProfile) -> None:
                 "ray-head",
                 "python",
                 "-m",
-                "tests.integrations.test_data_ingestion_dual_engine",
+                test_module,
             ),
             env,
             test_log,
@@ -1516,34 +1639,8 @@ def run_data_ingestion(profile: RuntimeProfile) -> None:
             print(f"Scoped Compose cleanup verified: {project}", flush=True)
         except BaseException as exc:
             cleanup_errors.append(str(exc))
-        try:
-            image_after = _image_baseline()
-            added_images = sorted(image_after - image_before)
-            if added_images:
-                raise TributoITError(
-                    "Docker IT added dangling or <none> images; no automatic deletion "
-                    f"was attempted: {added_images}"
-                )
-            print("Image lifecycle verified: no new dangling or <none> image IDs")
-        except BaseException as exc:
-            cleanup_errors.append(str(exc))
-        try:
-            containers_after = _container_states()
-            changed_existing = {
-                container_id: {
-                    "before": state,
-                    "after": containers_after.get(container_id, "<missing>"),
-                }
-                for container_id, state in containers_before.items()
-                if containers_after.get(container_id) != state
-            }
-            if changed_existing:
-                raise TributoITError(
-                    "pre-existing container state changed during this run: "
-                    f"{json.dumps(changed_existing, sort_keys=True)}"
-                )
-        except BaseException as exc:
-            cleanup_errors.append(str(exc))
+        _report_external_container_activity(project, containers_before)
+        _report_new_image_artifacts(project, images_before)
 
     if primary_error is not None or cleanup_errors:
         messages = []
@@ -1552,8 +1649,28 @@ def run_data_ingestion(profile: RuntimeProfile) -> None:
         messages.extend(f"cleanup contract failed: {error}" for error in cleanup_errors)
         raise TributoITError("\n".join(messages)) from primary_error
     print(
-        f"Data Ingestion Docker IT passed; logs: {test_log}, {service_log}",
+        f"{display_name} Docker IT passed; logs: {test_log}, {service_log}",
         flush=True,
+    )
+
+
+def run_data_ingestion(profile: RuntimeProfile) -> None:
+    """Run the complete Data Ingestion Docker suite with scoped cleanup."""
+    _run_docker_ray_suite(
+        profile,
+        project_prefix="tributo-ingestion",
+        test_module="tests.integrations.test_data_ingestion_dual_engine",
+        display_name="Data Ingestion",
+    )
+
+
+def run_lance_vector_index(profile: RuntimeProfile) -> None:
+    """Run distributed Lance vector indexing and search on Ray and MinIO."""
+    _run_docker_ray_suite(
+        profile,
+        project_prefix="tributo-lance-vector",
+        test_module="tests.integrations.test_lance_vector_index",
+        display_name="Lance Vector Index",
     )
 
 
@@ -1709,6 +1826,9 @@ def _parser() -> argparse.ArgumentParser:
     run_parser = subparsers.add_parser("run-data-ingestion")
     run_parser.add_argument("--profile", default="data-ingestion")
 
+    vector_parser = subparsers.add_parser("run-lance-vector-index")
+    vector_parser.add_argument("--profile", default="data-ingestion")
+
     gc_parser = subparsers.add_parser("runtime-gc-dry-run")
     gc_parser.add_argument("--profile")
     gc_parser.add_argument("--platform")
@@ -1730,6 +1850,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         if args.command == "run-data-ingestion":
             run_data_ingestion(load_profile(args.profile))
+            return 0
+
+        if args.command == "run-lance-vector-index":
+            run_lance_vector_index(load_profile(args.profile))
             return 0
 
         platform = (
