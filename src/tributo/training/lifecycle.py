@@ -83,9 +83,13 @@ def _load_provider_plugins(registry: Any) -> None:
             registry.register(cls)
 
     if _provider_plugins_cache is None:
+        from tributo._bootstrap import first_party_source_provider_plugins
         from tributo.plugin import discover_source_provider_plugins
 
-        _provider_plugins_cache = discover_source_provider_plugins()
+        _provider_plugins_cache = [
+            *first_party_source_provider_plugins(),
+            *discover_source_provider_plugins(),
+        ]
 
     for cls in _provider_plugins_cache:
         if cls.provider_id not in registry.list_all():
