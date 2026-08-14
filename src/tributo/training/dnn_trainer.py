@@ -1,4 +1,4 @@
-"""Single-worker DNN trainer based on Ray Train TorchTrainer.
+"""Ray Train/PyTorch DDP trainer shared by supervised DNN and PU adapters.
 
 Supports Sparse/Dense features, PU Learning, Focal Loss and other identity mining scenarios.
 """
@@ -138,15 +138,12 @@ class DNNTrainingParams(StrictConfigModel):
 
 
 class DNNRayConfig(StrictConfigModel):
-    """Ray execution configuration.
+    """Ray Train worker-group configuration."""
 
-    DNN is single-worker until preprocessing, model parameters, metrics,
-    early stopping, and checkpoints are synchronized across workers.
-    """
-
-    num_workers: Literal[1] = Field(
+    num_workers: int = Field(
         default=1,
-        description="Number of workers; only one worker is currently supported",
+        ge=1,
+        description="Number of DDP workers",
     )
     use_gpu: bool = Field(default=False)
     storage_path: Optional[str] = None
@@ -332,7 +329,7 @@ def split_pu_indices(
 
 
 class _PairedPUBatchSampler:
-    """Pair independently shuffled positive and unlabeled mini-batches."""
+    """Partition every P/U row once into bounded batches containing both classes."""
 
     def __init__(self, labels: Any, *, batch_size: int, seed: int) -> None:
         if batch_size < 2:
@@ -340,17 +337,21 @@ class _PairedPUBatchSampler:
         self._positive, self._unlabeled = validate_pu_labels(labels, split="train")
         self._positive_batch_size = max(1, batch_size // 2)
         self._unlabeled_batch_size = batch_size - self._positive_batch_size
+        minimum_batches = math.ceil(
+            (len(self._positive) + len(self._unlabeled)) / batch_size
+        )
+        if minimum_batches > min(len(self._positive), len(self._unlabeled)):
+            raise JobConfigurationError(
+                "PU class imbalance cannot form bounded batches that each contain "
+                "positive and unlabeled rows without replaying samples; increase "
+                "training.batch_size or reduce worker_count"
+            )
+        self._batch_count = minimum_batches
         self._seed = seed
         self._epoch = 0
 
     def __len__(self) -> int:
-        positive_batches = (
-            len(self._positive) + self._positive_batch_size - 1
-        ) // self._positive_batch_size
-        unlabeled_batches = (
-            len(self._unlabeled) + self._unlabeled_batch_size - 1
-        ) // self._unlabeled_batch_size
-        return max(positive_batches, unlabeled_batches)
+        return self._batch_count
 
     def set_epoch(self, epoch: int) -> None:
         """Select the deterministic ordering for an absolute training epoch."""
@@ -363,17 +364,29 @@ class _PairedPUBatchSampler:
         rng.shuffle(positive)
         rng.shuffle(unlabeled)
 
-        for batch_index in range(len(self)):
-            positive_start = batch_index * self._positive_batch_size
-            unlabeled_start = batch_index * self._unlabeled_batch_size
-            batch = [
-                positive[(positive_start + offset) % len(positive)]
-                for offset in range(self._positive_batch_size)
+        def _partition(values: list[int], *, reverse_large: bool) -> list[list[int]]:
+            quotient, remainder = divmod(len(values), self._batch_count)
+            sizes = [
+                quotient + (1 if index < remainder else 0)
+                for index in range(self._batch_count)
             ]
-            batch.extend(
-                unlabeled[(unlabeled_start + offset) % len(unlabeled)]
-                for offset in range(self._unlabeled_batch_size)
-            )
+            if reverse_large:
+                sizes.reverse()
+            result: list[list[int]] = []
+            start = 0
+            for size in sizes:
+                result.append(values[start : start + size])
+                start += size
+            return result
+
+        positive_batches = _partition(positive, reverse_large=False)
+        unlabeled_batches = _partition(unlabeled, reverse_large=True)
+        for positive_batch, unlabeled_batch in zip(positive_batches, unlabeled_batches):
+            batch = [*positive_batch, *unlabeled_batch]
+            if len(batch) > self._positive_batch_size + self._unlabeled_batch_size:
+                raise JobConfigurationError(
+                    "PU paired batch partition exceeded training.batch_size"
+                )
             rng.shuffle(batch)
             yield batch
 
@@ -428,6 +441,35 @@ def validate_finite_training_metrics(
     if non_finite:
         raise JobExecutionError(
             f"{algorithm} produced non-finite training metrics: {', '.join(non_finite)}"
+        )
+
+
+def _validate_distributed_resume_metadata(
+    envelope: Any,
+    *,
+    expected_world_size: int,
+    expected_distribution_digest: str | None,
+) -> None:
+    """Reject a checkpoint from a different collective execution contract."""
+    metadata = envelope.payload_metadata
+    checkpoint_world_size = metadata.get("world_size")
+    if checkpoint_world_size is None:
+        if expected_world_size != 1:
+            raise JobConfigurationError(
+                "Legacy resume checkpoints without world_size metadata cannot "
+                "start a multi-worker training run"
+            )
+    elif checkpoint_world_size != expected_world_size:
+        raise JobConfigurationError(
+            "Resume checkpoint world_size does not match the current worker group"
+        )
+    if (
+        expected_distribution_digest is not None
+        and metadata.get("distribution_spec_digest") != expected_distribution_digest
+    ):
+        raise JobConfigurationError(
+            "Resume checkpoint DistributionSpec digest does not match the "
+            "current execution plan"
         )
 
 
@@ -502,9 +544,10 @@ def build_export_checkpoint_config(
 
 @PublicAPI(stability="beta")
 class DNNTrainerImpl(BaseTrainer):
-    """Single-worker DNN implementation of BaseTrainer.
+    """Distributed DNN implementation of BaseTrainer.
 
-    Supports Sparse/Dense features, PU Learning, Focal Loss and other identity mining scenarios.
+    Supports supervised Sparse/Dense BCE and Focal Loss training. Historical
+    nnPU configuration must enter through the compatibility planner alias.
     """
 
     def __init__(
@@ -520,6 +563,12 @@ class DNNTrainerImpl(BaseTrainer):
         self._train_config = _validated_config or DNNTrainingConfig.model_validate(
             config
         )
+        if self._train_config.loss.type == "nnpu":
+            raise JobConfigurationError(
+                "DNN loss.type='nnpu' is a compatibility alias; use "
+                "run_dnn_training_with_config() for migration or select the "
+                "canonical 'pu' algorithm"
+            )
         self._features: list[SparseFeat | DenseFeat] = []
         self._transformer: Any = None
 
@@ -544,7 +593,7 @@ class DNNTrainerImpl(BaseTrainer):
 
         # Split train/val
         val_size = cfg.training.val_size
-        if val_size > 0 and cfg.loss.type != "nnpu":
+        if val_size > 0:
             train_ds, val_ds = ds.train_test_split(
                 test_size=val_size, seed=cfg.training.seed
             )
@@ -819,13 +868,39 @@ def evaluate_pu_split(
             risk.update(logits, labels)
             correct += batch_correct
             total += batch_total
-    if total == 0:
+    from tributo.training.distributed_torch import all_reduce_values
+
+    (
+        positive_loss_sum,
+        positive_as_negative_loss_sum,
+        unlabeled_negative_loss_sum,
+        positive_count,
+        unlabeled_count,
+        global_correct,
+        global_total,
+    ) = all_reduce_values(
+        (
+            risk.positive_loss_sum,
+            risk.positive_as_negative_loss_sum,
+            risk.unlabeled_negative_loss_sum,
+            risk.positive_count,
+            risk.unlabeled_count,
+            correct,
+            total,
+        )
+    )
+    risk.positive_loss_sum = positive_loss_sum
+    risk.positive_as_negative_loss_sum = positive_as_negative_loss_sum
+    risk.unlabeled_negative_loss_sum = unlabeled_negative_loss_sum
+    risk.positive_count = int(positive_count)
+    risk.unlabeled_count = int(unlabeled_count)
+    if global_total == 0:
         raise JobConfigurationError("PU evaluation split must not be empty")
     try:
         empirical_risk = risk.value()
     except ValueError as exc:
         raise JobConfigurationError(f"Invalid PU evaluation split: {exc}") from exc
-    return empirical_risk, correct / total
+    return empirical_risk, global_correct / global_total
 
 
 # ── Training loop (Ray worker level) ──
@@ -858,6 +933,18 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
         restore_rng_state,
         write_resume_manifest,
     )
+    from tributo.training.distributed_torch import (
+        all_gather_objects,
+        all_reduce_max,
+        all_reduce_values,
+        broadcast_bool,
+        collective_execution_evidence,
+        distributed_pu_loss,
+        equalized_batches,
+        fit_global_feature_transformer,
+        prepare_model,
+        unwrapped_model,
+    )
     from tributo.training.features.column_types import (
         features_from_dicts,
     )
@@ -878,44 +965,46 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
     loss_cfg = config.get("loss", {})
     pu_cfg = config.get("pu_learning", {})
     training_cfg = config.get("training", {})
-    context = ray.train.get_context()
-    world_size = context.get_world_size()
-    if world_size != 1:
+    trainer_type = str(config.get("trainer_type", "dnn"))
+    if trainer_type not in {"dnn", "pu"}:
         raise JobConfigurationError(
-            "DNN training currently supports a single worker; got "
-            f"world_size={world_size}. Multi-worker execution is disabled until "
-            "preprocessing, DDP metrics, early stopping, and checkpoints are "
-            "coordinated."
+            f"invalid distributed Torch trainer_type: {trainer_type!r}"
         )
+    context = ray.train.get_context()
 
     loss_type = loss_cfg.get("type", "bce")
+    pu_mode = loss_type in {"nnpu", "upu"}
+    if trainer_type == "dnn" and pu_mode:
+        raise JobConfigurationError(
+            "DNN nnPU is a compatibility alias; route it through the canonical "
+            "PU trainer instead of invoking the DNN worker directly"
+        )
     pu_criterion = None
-    if loss_type == "nnpu":
+    class_prior: float | None = None
+    prior_method = pu_cfg.get(
+        "class_prior_method",
+        "label_frequency" if trainer_type == "pu" else "simple",
+    )
+    if pu_mode:
         if not pu_cfg.get("enabled", False):
             raise JobConfigurationError(
                 "loss.type='nnpu' requires pu_learning.enabled=true"
             )
-        class_prior = parse_positive_class_prior(
-            pu_cfg.get("class_prior"),
-            config_path="pu_learning.class_prior",
-        )
-        warn_if_ignored_class_prior_method(
-            pu_cfg.get("class_prior_method", "simple"),
-            default_method="simple",
-            config_path="pu_learning.class_prior_method",
-            target_logger=logger,
-        )
-        try:
-            pu_criterion = PULoss(
-                class_prior=class_prior,
-                beta=float(pu_cfg.get("beta", 0.0)),
-                gamma=float(pu_cfg.get("gamma", 1.0)),
-                loss_type="nnpu",
+        raw_prior = pu_cfg.get("class_prior")
+        if raw_prior is not None:
+            class_prior = parse_positive_class_prior(
+                raw_prior,
+                config_path=(
+                    "pu.class_prior"
+                    if trainer_type == "pu"
+                    else "pu_learning.class_prior"
+                ),
             )
-        except (TypeError, ValueError) as exc:
+        elif prior_method != "label_frequency":
             raise JobConfigurationError(
-                f"Invalid nnPU loss configuration: {exc}"
-            ) from exc
+                "PU training without an explicit class_prior supports only "
+                "class_prior_method='label_frequency'"
+            )
     elif pu_cfg.get("enabled", False):
         raise JobConfigurationError(
             "pu_learning.enabled=true requires loss.type='nnpu'"
@@ -928,10 +1017,17 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
     resume_transformer = None
     if resume_checkpoint is not None:
         with checkpoint_directory(resume_checkpoint) as checkpoint_dir:
-            read_resume_manifest(
+            resume_envelope = read_resume_manifest(
                 checkpoint_dir,
-                expected_trainer_type="dnn",
+                expected_trainer_type=trainer_type,
                 expected_resume_id=resume_cfg.resume_id,
+            )
+            _validate_distributed_resume_metadata(
+                resume_envelope,
+                expected_world_size=context.get_world_size(),
+                expected_distribution_digest=config.get(
+                    "_tributo_distribution_spec_digest"
+                ),
             )
             resume_transformer = FeatureTransformer.load(
                 checkpoint_dir / "preprocessor.json"
@@ -941,20 +1037,57 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
                 "Resume checkpoint preprocessing features do not match the current run"
             )
 
-    # Get data (StreamSplitDataIterator, must collect via iter_batches)
-    train_ds = ray.train.get_dataset_shard("train")
-    try:
-        val_ds = ray.train.get_dataset_shard("val")
-    except KeyError as exc:
-        # Ray Train v2 raises when a dataset key was not passed. nnPU performs
-        # its stratified split inside the worker; supervised losses may omit
-        # the shard only when validation was explicitly disabled.
-        if loss_type != "nnpu" and training_cfg.get("val_size", 0.2) > 0:
+    # Get data (StreamSplitDataIterator, must collect via iter_batches).  PU
+    # receives independently split P/U datasets so every rank can construct
+    # globally coordinated risk batches without re-opening the full source.
+    # Supervised DNN receives a globally split train/validation pair from the
+    # formal adapter, rather than selecting validation rows independently in
+    # each rank.
+    if trainer_type == "pu":
+        train_shards = (
+            ("positive", ray.train.get_dataset_shard("positive")),
+            ("unlabeled", ray.train.get_dataset_shard("unlabeled")),
+        )
+        validation_enabled = float(training_cfg.get("val_size", 0.2)) > 0
+        if validation_enabled:
+            try:
+                val_shards = (
+                    ("positive_val", ray.train.get_dataset_shard("positive_val")),
+                    ("unlabeled_val", ray.train.get_dataset_shard("unlabeled_val")),
+                )
+            except KeyError as exc:
+                raise JobConfigurationError(
+                    "PU validation is enabled but the global stratified input "
+                    "adapter did not provide validation shards"
+                ) from exc
+            if any(shard is None for _, shard in val_shards):
+                raise JobConfigurationError(
+                    "PU validation is enabled but the global stratified input "
+                    "adapter provided an empty validation shard"
+                )
+        else:
+            val_shards = ()
+    else:
+        train_shards = (("train", ray.train.get_dataset_shard("train")),)
+        validation_enabled = float(training_cfg.get("val_size", 0.2)) > 0
+        try:
+            val_ds = ray.train.get_dataset_shard("val")
+        except KeyError as exc:
+            # Compatibility callers may disable validation and provide only
+            # the training Dataset. Formal DNN creates the split before
+            # Ray Train assigns shards.
+            if validation_enabled:
+                raise JobConfigurationError(
+                    "DNN validation is enabled but the formal input adapter did not "
+                    "provide a 'val' dataset shard"
+                ) from exc
+            val_ds = None
+        if validation_enabled and val_ds is None:
             raise JobConfigurationError(
-                "DNN validation is enabled but Ray Train did not provide the "
-                "'val' dataset shard"
-            ) from exc
-        val_ds = None
+                "DNN validation is enabled but the formal input adapter did not "
+                "provide a 'val' dataset shard"
+            )
+        val_shards = (("val", val_ds),) if val_ds is not None else ()
 
     # Convert to pandas under the worker materialization budget.
     # train and val share one budget — both frames stay alive together —
@@ -964,7 +1097,7 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
 
     budget = ResourceBudget.model_validate(config.get("resource") or {})
     worker_rank = context.get_world_rank()
-    row_bytes = estimate_row_bytes_from_schema(train_ds.schema())
+    row_bytes = estimate_row_bytes_from_schema(train_shards[0][1].schema())
     preflight_check(
         rows=None,
         row_bytes=row_bytes,
@@ -976,21 +1109,26 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
     collector = BoundedCollector(
         budget, algorithm="dnn", split="train", worker_rank=worker_rank
     )
+    input_rows: dict[str, int] = {name: 0 for name, _ in train_shards}
     # prefetch_batches=0: a prefetched batch would be held outside the
     # collector's accounting.
     train_batches = []
-    for batch in train_ds.iter_batches(
-        batch_size=DEFAULT_BATCH_SIZE,
-        batch_format="pandas",
-        prefetch_batches=0,
-    ):
-        collector.add(batch)
-        train_batches.append(batch)
+    for shard_name, train_ds in train_shards:
+        for batch in train_ds.iter_batches(
+            batch_size=DEFAULT_BATCH_SIZE,
+            batch_format="pandas",
+            prefetch_batches=0,
+        ):
+            collector.add(batch, split=shard_name)
+            input_rows[shard_name] += len(batch)
+            train_batches.append(batch)
+    if not train_batches:
+        raise JobConfigurationError("DNN/PU worker received an empty training shard")
     train_df = pd.concat(train_batches, ignore_index=True)
     del train_batches  # release the input list — the concat copy is the peak
 
     val_df = None
-    if val_ds is not None:
+    if val_shards:
         if row_bytes is not None:
             preflight_check(
                 rows=None,
@@ -1001,13 +1139,16 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
                 worker_rank=worker_rank,
             )
         val_batches = []
-        for batch in val_ds.iter_batches(
-            batch_size=DEFAULT_BATCH_SIZE,
-            batch_format="pandas",
-            prefetch_batches=0,
-        ):
-            collector.add(batch, split="val")
-            val_batches.append(batch)
+        for shard_name, val_ds in val_shards:
+            input_rows[shard_name] = 0
+            for batch in val_ds.iter_batches(
+                batch_size=DEFAULT_BATCH_SIZE,
+                batch_format="pandas",
+                prefetch_batches=0,
+            ):
+                collector.add(batch, split=shard_name)
+                input_rows[shard_name] += len(batch)
+                val_batches.append(batch)
         if val_batches:
             val_df = pd.concat(val_batches, ignore_index=True)
             del val_batches
@@ -1023,6 +1164,42 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
     feature_names = [f.name for f in features]
     all_train_data = {name: train_df[name].values for name in feature_names}
     all_train_labels = train_df[label_col].values.astype(np.float32)
+    if pu_mode:
+        if class_prior is None:
+            positive_count, total_count = all_reduce_values(
+                (
+                    float((all_train_labels == 1).sum()),
+                    float(all_train_labels.size),
+                )
+            )
+            class_prior = parse_positive_class_prior(
+                positive_count / total_count if total_count else None,
+                config_path="pu.class_prior[label_frequency]",
+            )
+        else:
+            warn_if_ignored_class_prior_method(
+                prior_method,
+                default_method=(
+                    "label_frequency" if trainer_type == "pu" else "simple"
+                ),
+                config_path=(
+                    "pu.class_prior_method"
+                    if trainer_type == "pu"
+                    else "pu_learning.class_prior_method"
+                ),
+                target_logger=logger,
+            )
+        try:
+            pu_criterion = PULoss(
+                class_prior=class_prior,
+                beta=float(pu_cfg.get("beta", 0.0)),
+                gamma=float(pu_cfg.get("gamma", 1.0)),
+                loss_type=loss_type,
+            )
+        except (TypeError, ValueError) as exc:
+            raise JobConfigurationError(
+                f"Invalid PU loss configuration: {exc}"
+            ) from exc
 
     val_data = None
     val_labels = None
@@ -1031,34 +1208,28 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
         train_labels = all_train_labels
         val_data = {name: val_df[name].values for name in feature_names}
         val_labels = val_df[label_col].values.astype(np.float32)
-        if loss_type == "nnpu":
+        if pu_mode:
             validate_pu_labels(train_labels, split="train")
             validate_pu_labels(val_labels, split="validation")
-    elif loss_type == "nnpu":
-        train_indices, val_indices = split_pu_indices(
-            all_train_labels,
-            val_size=training_cfg.get("val_size", 0.2),
-            seed=training_cfg.get("seed", 42),
-        )
-        train_data = {
-            name: values[train_indices] for name, values in all_train_data.items()
-        }
-        train_labels = all_train_labels[train_indices]
-        if val_indices:
-            val_data = {
-                name: values[val_indices] for name, values in all_train_data.items()
-            }
-            val_labels = all_train_labels[val_indices]
+    elif pu_mode:
+        if float(training_cfg.get("val_size", 0.2)) > 0:
+            raise JobConfigurationError(
+                "PU validation must be split globally before worker sharding"
+            )
+        validate_pu_labels(all_train_labels, split="train")
+        train_data = all_train_data
+        train_labels = all_train_labels
     else:
         train_data = all_train_data
         train_labels = all_train_labels
 
-    # Fit preprocessor
-    transformer = resume_transformer or FeatureTransformer(features)
-    if resume_transformer is None:
-        train_processed = transformer.fit_transform(train_data)
-    else:
-        train_processed = transformer.transform(train_data)
+    # Fit one global preprocessor from mergeable shard-local statistics.  Every
+    # rank receives identical encoders and dense normalization parameters.
+    transformer = resume_transformer or fit_global_feature_transformer(
+        features,
+        train_data,
+    )
+    train_processed = transformer.transform(train_data)
 
     val_processed = None
     if val_data is not None:
@@ -1073,7 +1244,7 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
     # Create DataLoader
     torch_train_dataset = train_dataset.to_torch_dataset()
     batch_size = training_cfg.get("batch_size", 256)
-    if loss_type == "nnpu":
+    if pu_mode:
         train_loader = build_pu_train_loader(
             torch_train_dataset,
             train_labels,
@@ -1094,7 +1265,7 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
             shuffle=False,
             num_workers=0,
         )
-        if loss_type == "nnpu"
+        if pu_mode
         else None
     )
 
@@ -1111,12 +1282,14 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
     )
 
     # Create model
+    seed = int(training_cfg.get("seed", 42)) + worker_rank
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
     model = DNNModel(features, **model_cfg)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = model.to(device)
 
     # Configure loss function
-    if loss_type == "nnpu":
+    if pu_mode:
         assert pu_criterion is not None
         criterion = pu_criterion
     elif loss_type == "focal":
@@ -1142,8 +1315,15 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
         with checkpoint_directory(resume_checkpoint) as checkpoint_dir:
             envelope = read_resume_manifest(
                 checkpoint_dir,
-                expected_trainer_type="dnn",
+                expected_trainer_type=trainer_type,
                 expected_resume_id=resume_cfg.resume_id,
+            )
+            _validate_distributed_resume_metadata(
+                envelope,
+                expected_world_size=context.get_world_size(),
+                expected_distribution_digest=config.get(
+                    "_tributo_distribution_spec_digest"
+                ),
             )
             model_state = torch.load(
                 checkpoint_dir / "model.pt", map_location="cpu", weights_only=True
@@ -1151,13 +1331,24 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
             optimizer_state = torch.load(
                 checkpoint_dir / "optimizer.pt", map_location="cpu", weights_only=True
             )
-            rng_state = json.loads((checkpoint_dir / "rng_state.json").read_text())
+            rng_payload = json.loads((checkpoint_dir / "rng_state.json").read_text())
             training_state = json.loads(
                 (checkpoint_dir / "training_state.json").read_text()
             )
         model.load_state_dict(model_state)
         optimizer.load_state_dict(optimizer_state)
-        restore_rng_state(rng_state)
+        if isinstance(rng_payload, dict) and isinstance(
+            rng_payload.get("rank_states"), list
+        ):
+            rank_states = rng_payload["rank_states"]
+            if len(rank_states) != context.get_world_size():
+                raise JobConfigurationError(
+                    "Resume checkpoint RNG state count does not match world_size"
+                )
+            restore_rng_state(rank_states[worker_rank])
+        else:
+            # Compatibility with pre-distribution single-worker checkpoints.
+            restore_rng_state(rng_payload)
         start_epoch = envelope.completed_step
         best_val_loss = float(training_state.get("best_val_loss", float("inf")))
         patience_counter = int(training_state.get("patience_counter", 0))
@@ -1167,99 +1358,204 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
             start_epoch,
         )
 
+    # ``prepare_model`` moves the model and wraps it with DDP.  The optimizer
+    # already references the same Parameter objects, so its restored state
+    # remains valid after wrapping.
+    model, device = prepare_model(model)
+
     # Training loop
     epochs = training_cfg.get("epochs", 10)
     patience = training_cfg.get("early_stopping_patience")
+    local_batch_count = len(train_loader)
+    collective_steps = all_reduce_max(local_batch_count)
 
     for epoch in range(start_epoch, epochs):
         stop_after_report = False
         # Training phase
         model.train()
-        if loss_type == "nnpu":
+        if pu_mode:
             train_loader.batch_sampler.set_epoch(epoch)
         train_objective = 0.0
+        train_objective_weight = 0.0
         train_correct = 0
         train_total = 0
 
-        for batch in train_loader:
-            loss, correct, total = _forward_step(model, batch, criterion, device)
+        for batch, active in equalized_batches(
+            train_loader,
+            collective_steps=collective_steps,
+        ):
+            if active:
+                if pu_mode:
+                    logits, labels, correct, total = _predict_step(model, batch, device)
+                    loss = distributed_pu_loss(criterion, logits, labels)
+                    world_size = (
+                        torch.distributed.get_world_size()
+                        if torch.distributed.is_initialized()
+                        else 1
+                    )
+                else:
+                    raw_loss, correct, total = _forward_step(
+                        model, batch, criterion, device
+                    )
+                    (global_batch_total,) = all_reduce_values((total,))
+                    if global_batch_total <= 0:
+                        raise JobConfigurationError(
+                            "DNN optimization step has no active rows"
+                        )
+                    world_size = (
+                        torch.distributed.get_world_size()
+                        if torch.distributed.is_initialized()
+                        else 1
+                    )
+                    loss = raw_loss * world_size * total / global_batch_total
+                    train_objective += raw_loss.item() * total
+                    train_objective_weight += total
+            else:
+                # Empty tensors keep DDP/custom collective call order aligned
+                # without replaying an observed row from a shorter shard.
+                logits, labels, correct, total = _predict_step(model, batch, device)
+                if pu_mode:
+                    loss = distributed_pu_loss(criterion, logits, labels)
+                else:
+                    (global_batch_total,) = all_reduce_values((0.0,))
+                    if global_batch_total <= 0:
+                        raise JobConfigurationError(
+                            "DNN optimization step has no active rows"
+                        )
+                    loss = logits.sum() * 0.0
+            if pu_mode:
+                world_size = (
+                    torch.distributed.get_world_size()
+                    if torch.distributed.is_initialized()
+                    else 1
+                )
+                train_objective += loss.item() / world_size
+                train_objective_weight += 1.0 / world_size
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-            train_objective += loss.item() * total
             train_correct += correct
             train_total += total
 
-        train_objective /= train_total
+        (
+            objective_sum,
+            objective_weight,
+            global_correct,
+            global_total,
+        ) = all_reduce_values(
+            (
+                train_objective,
+                train_objective_weight,
+                train_correct,
+                train_total,
+            )
+        )
+        if global_total <= 0 or objective_weight <= 0:
+            raise JobConfigurationError("DNN training received an empty worker group")
+        train_objective = objective_sum / objective_weight
         if pu_train_eval_loader is not None:
             train_loss, train_observed_label_accuracy = evaluate_pu_split(
-                model,
+                unwrapped_model(model),
                 pu_train_eval_loader,
                 criterion,
                 device,
             )
         else:
             train_loss = train_objective
-            train_observed_label_accuracy = train_correct / train_total
+            train_observed_label_accuracy = global_correct / global_total
 
         # Validation phase
         val_loss = 0.0
         val_observed_label_accuracy = 0.0
         if val_loader is not None:
-            if loss_type == "nnpu":
+            if pu_mode:
                 val_loss, val_observed_label_accuracy = evaluate_pu_split(
-                    model,
+                    unwrapped_model(model),
                     val_loader,
                     criterion,
                     device,
                 )
             else:
-                model.eval()
+                evaluation_model = unwrapped_model(model)
+                evaluation_model.eval()
                 val_correct = 0
                 val_total = 0
                 with torch.no_grad():
                     for batch in val_loader:
                         loss, correct, total = _forward_step(
-                            model, batch, criterion, device
+                            evaluation_model, batch, criterion, device
                         )
                         val_loss += loss.item() * total
                         val_correct += correct
                         val_total += total
-                val_loss /= val_total
-                val_observed_label_accuracy = val_correct / val_total
+                val_loss_sum, global_val_correct, global_val_total = all_reduce_values(
+                    (val_loss, val_correct, val_total)
+                )
+                if global_val_total <= 0:
+                    raise JobConfigurationError(
+                        "DNN validation received an empty worker group"
+                    )
+                val_loss = val_loss_sum / global_val_total
+                val_observed_label_accuracy = global_val_correct / global_val_total
 
         # Report metrics
         metrics = {
             "epoch": epoch + 1,
             "train_loss": train_loss,
         }
-        if loss_type == "nnpu":
+        if pu_mode:
+            assert pu_criterion is not None
             metrics["train_optimization_objective"] = train_objective
             metrics["train_observed_label_accuracy"] = train_observed_label_accuracy
             metrics["train_acc"] = train_observed_label_accuracy
+            metrics["class_prior"] = pu_criterion.class_prior
         else:
             metrics["train_acc"] = train_observed_label_accuracy
         if val_loader is not None:
             metrics["val_loss"] = val_loss
-            if loss_type == "nnpu":
+            if pu_mode:
                 metrics["val_observed_label_accuracy"] = val_observed_label_accuracy
                 metrics["val_acc"] = val_observed_label_accuracy
             else:
                 metrics["val_acc"] = val_observed_label_accuracy
 
-        validate_finite_training_metrics(metrics, algorithm="DNN")
+        validate_finite_training_metrics(metrics, algorithm=trainer_type.upper())
+
+        execution_workers, model_state_digest = collective_execution_evidence(
+            model,
+            shard_rows=len(train_dataset),
+            input_binding_digest=config.get("_tributo_input_binding_digest"),
+            input_rows=input_rows,
+            batch_count=local_batch_count,
+            collective_steps=collective_steps,
+        )
+        metrics["execution_workers"] = list(execution_workers)
+        metrics["model_state_digest"] = model_state_digest
+        metrics["world_size"] = len(execution_workers)
+        metrics["state_coordination"] = "all_reduce"
+        metrics["collective_backend"] = (
+            str(torch.distributed.get_backend())
+            if torch.distributed.is_initialized()
+            else "none"
+        )
+        # Ray Train publishes the checkpoint reported by global rank zero.  This is
+        # observed implementation evidence, not a value copied from the descriptor.
+        metrics["checkpoint_owner_rank"] = 0
+        metrics["metric_reducers"] = dict(config.get("_tributo_metric_reducers") or {})
 
         # Early stopping must never select a checkpoint using NaN or infinity.
         if val_loader is not None and patience is not None:
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                patience_counter = 0
-            else:
-                patience_counter += 1
-                if patience_counter >= patience:
-                    logger.info("Early stopping at epoch %d", epoch + 1)
-                    stop_after_report = True
+            if worker_rank == 0:
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    patience_counter = 0
+                else:
+                    patience_counter += 1
+                    stop_after_report = patience_counter >= patience
+            stop_after_report = broadcast_bool(stop_after_report, source_rank=0)
+            if stop_after_report and worker_rank == 0:
+                logger.info("Early stopping at epoch %d", epoch + 1)
 
         should_report = (
             not resume_enabled
@@ -1270,16 +1566,22 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
         if not should_report:
             continue
 
-        # Rank 0 reports the full checkpoint.  With T4-A enabled this is
-        # complete resume state; the default path retains the E2 export files.
+        rank_rng_states = (
+            all_gather_objects(capture_rng_state()) if resume_enabled else ()
+        )
+
+        # Rank 0 owns the consolidated checkpoint and complete resume state.
         world_rank = ray.train.get_context().get_world_rank()
         if world_rank == 0:
             from ray.train import Checkpoint
 
-            checkpoint_dir = Path(tempfile.mkdtemp(prefix="dnn_ckpt_"))
+            checkpoint_dir = Path(tempfile.mkdtemp(prefix=f"{trainer_type}_ckpt_"))
             try:
                 # Save model
-                torch.save(model.state_dict(), checkpoint_dir / "model.pt")
+                torch.save(
+                    unwrapped_model(model).state_dict(),
+                    checkpoint_dir / "model.pt",
+                )
 
                 # Save preprocessor
                 preprocessor_state = {
@@ -1304,9 +1606,32 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
                 model_config = build_export_checkpoint_config(
                     [f.__dict__ for f in features],
                     model_cfg,
-                    trainer_type="dnn",
-                    task_type="classification",
+                    trainer_type=trainer_type,
+                    task_type=(
+                        "pu_classification"
+                        if trainer_type == "pu"
+                        else "classification"
+                    ),
                     framework_version=torch.__version__,
+                    extra_metadata={
+                        "distribution": {
+                            "strategy": "ray_train_collective",
+                            "world_size": len(execution_workers),
+                            "model_state_digest": model_state_digest,
+                        },
+                        **(
+                            {
+                                "pu": {
+                                    "loss_type": loss_type,
+                                    "class_prior": pu_criterion.class_prior,
+                                    "beta": pu_criterion.beta,
+                                    "gamma": pu_criterion.gamma,
+                                }
+                            }
+                            if pu_mode and pu_criterion is not None
+                            else {}
+                        ),
+                    },
                 )
                 (checkpoint_dir / "model_config.json").write_text(
                     json.dumps(model_config, ensure_ascii=False, default=str)
@@ -1315,7 +1640,10 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
                 if resume_enabled:
                     torch.save(optimizer.state_dict(), checkpoint_dir / "optimizer.pt")
                     (checkpoint_dir / "rng_state.json").write_text(
-                        json.dumps(capture_rng_state(), ensure_ascii=False)
+                        json.dumps(
+                            {"rank_states": list(rank_rng_states)},
+                            ensure_ascii=False,
+                        )
                     )
                     (checkpoint_dir / "training_state.json").write_text(
                         json.dumps(
@@ -1329,7 +1657,7 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
                     envelope = write_resume_manifest(
                         checkpoint_dir,
                         resume_id=resume_cfg.resume_id,
-                        trainer_type="dnn",
+                        trainer_type=trainer_type,
                         completed_step=epoch + 1,
                         framework="pytorch",
                         framework_version=torch.__version__,
@@ -1347,6 +1675,10 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
                             "preprocessing": "preprocessor.json",
                             "rng": "rng_state.json",
                             "early_stopping": "training_state.json",
+                            "world_size": len(execution_workers),
+                            "distribution_spec_digest": config.get(
+                                "_tributo_distribution_spec_digest"
+                            ),
                         },
                     )
                     metrics["resume_id"] = envelope.resume_id
@@ -1361,7 +1693,7 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
         if stop_after_report:
             break
 
-    logger.info("Training completed for worker")
+    logger.info("%s training completed for worker", trainer_type.upper())
 
 
 # ── Orchestration entry points ──
@@ -1369,7 +1701,7 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
 
 @PublicAPI(stability="beta")
 def run_dnn_training_with_config(config: dict[str, Any]) -> dict[str, Any]:
-    """Run single-worker DNN training from a configuration dictionary.
+    """Run DNN training, routing the historical nnPU shape to canonical PU.
 
     Args:
         config: Training configuration dictionary.
@@ -1381,6 +1713,32 @@ def run_dnn_training_with_config(config: dict[str, Any]) -> dict[str, Any]:
 
     # Pydantic validation
     cfg = DNNTrainingConfig.model_validate(config)
+
+    if cfg.loss.type == "nnpu":
+        from tributo.training.pu_trainer import run_pu_training_with_config
+
+        pu_config = {
+            "data": config.get("data"),
+            "features": [item.model_dump() for item in cfg.features],
+            "model": cfg.model.model_dump(),
+            "pu": {
+                "loss_type": "nnpu",
+                "class_prior": cfg.pu_learning.class_prior,
+                "class_prior_method": cfg.pu_learning.class_prior_method,
+                "beta": cfg.pu_learning.beta,
+                "gamma": cfg.pu_learning.gamma,
+            },
+            "training": cfg.training.model_dump(),
+            "ray": cfg.ray.model_dump(),
+            "resource": cfg.resource.model_dump(),
+            "output": cfg.output.model_dump(),
+            "label_col": cfg.label_col,
+        }
+        logger.warning(
+            "DNN loss.type='nnpu' is a compatibility alias; routing to the "
+            "canonical PU trainer"
+        )
+        return run_pu_training_with_config(pu_config)
 
     # Load data
     logger.info("Loading data...")
@@ -1418,7 +1776,7 @@ def run_dnn_training_with_config(config: dict[str, Any]) -> dict[str, Any]:
 
 @PublicAPI(stability="beta")
 def run_dnn_training_from_json(config_path: str) -> dict[str, Any]:
-    """Run single-worker DNN training from a JSON configuration file.
+    """Run DNN training from a JSON configuration file.
 
     Args:
         config_path: Path to the JSON configuration file.

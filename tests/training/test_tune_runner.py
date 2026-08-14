@@ -12,6 +12,16 @@ from unittest.mock import MagicMock, call, patch
 
 import pytest
 
+from tributo.algorithms.api import (
+    DistributionSpec,
+    DistributionStrategy,
+    ExecutionProfile,
+    FrameworkNativePolicy,
+    InputDistribution,
+    StateCoordination,
+    WorkerRange,
+    WorkerResources,
+)
 from tributo.exceptions import JobConfigurationError, JobExecutionError
 from tributo.training.algorithm_spec import AlgorithmSpec, Capability
 from tributo.training.base import BaseTrainer
@@ -250,6 +260,87 @@ class TestTuneRunner:
         assert ray_tune_config.search_alg is None
         assert ray_tune_config.max_concurrent_trials == 2
 
+    def test_distributed_trial_reserves_complete_worker_group(
+        self,
+        trainer_spec: AlgorithmSpec,
+        tune_config: TuneSearchConfig,
+        search_space: Any,
+    ) -> None:
+        distribution = DistributionSpec(
+            strategy=DistributionStrategy.FRAMEWORK_NATIVE,
+            supported_worker_range=WorkerRange(1, 8),
+            supported_execution_profiles=(ExecutionProfile.LOCAL,),
+            resources_per_worker=WorkerResources(
+                num_cpus=2,
+                custom={"accelerator_type_a": 0.25},
+            ),
+            input_distribution=InputDistribution.FRAMEWORK_OWNED,
+            state_coordination=StateCoordination.FRAMEWORK_NATIVE,
+            policy=FrameworkNativePolicy(
+                framework="test-framework",
+                evidence_collector_ref="tests.collector:evidence",
+            ),
+        )
+
+        runner = TuneRunner(
+            trainer_spec,
+            tune_config,
+            search_space,
+            {"training": {"learning_rate": 0.01}, "ray": {"num_workers": 2}},
+            distribution_spec=distribution,
+        )
+
+        assert runner._trial_resource_plan is not None
+        placement = runner._trial_resource_plan.placement_group_factory
+        assert placement.strategy == "SPREAD"
+        assert placement.bundles == [
+            {"CPU": 1.0},
+            {"CPU": 2.0, "accelerator_type_a": 0.25},
+            {"CPU": 2.0, "accelerator_type_a": 0.25},
+        ]
+        assert placement.required_resources == {
+            "CPU": 5.0,
+            "accelerator_type_a": 0.5,
+        }
+
+    def test_distributed_topology_cannot_be_tuned_as_hyperparameter(
+        self,
+        trainer_spec: AlgorithmSpec,
+        tune_config: TuneSearchConfig,
+    ) -> None:
+        from tributo.training.tune_space import SearchParamSpec, SearchSpaceSpec
+
+        distribution = DistributionSpec(
+            strategy=DistributionStrategy.FRAMEWORK_NATIVE,
+            supported_worker_range=WorkerRange(1, 8),
+            supported_execution_profiles=(ExecutionProfile.LOCAL,),
+            resources_per_worker=WorkerResources(),
+            input_distribution=InputDistribution.FRAMEWORK_OWNED,
+            state_coordination=StateCoordination.FRAMEWORK_NATIVE,
+            policy=FrameworkNativePolicy(
+                framework="test-framework",
+                evidence_collector_ref="tests.collector:evidence",
+            ),
+        )
+        topology_space = SearchSpaceSpec(
+            parameters=(
+                SearchParamSpec(
+                    path="ray.num_workers",
+                    kind="choice",
+                    values=(1, 2),
+                ),
+            )
+        )
+
+        with pytest.raises(JobConfigurationError, match="not ordinary Tune"):
+            TuneRunner(
+                trainer_spec,
+                tune_config,
+                topology_space,
+                {"ray": {"num_workers": 2}},
+                distribution_spec=distribution,
+            )
+
     def test_legacy_runner_rejects_portable_registration(
         self, tune_config, search_space, effective_config
     ) -> None:
@@ -293,7 +384,10 @@ class TestTuneRunner:
                         "path": "/tmp/pu-train.parquet",
                     }
                 },
-                "pu": {"class_prior": 0.2},
+                "pu": {
+                    "class_prior": 0.2,
+                    "class_prior_method": "explicit",
+                },
             },
         )
         trainable = runner._build_trainable({}, "/tmp/test")

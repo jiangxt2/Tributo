@@ -8,7 +8,11 @@ from tributo._common.storage_profiles import StorageProfileResolver
 
 if TYPE_CHECKING:
     from tributo.exporting.gc import BundleGarbageCollectorBackend
-    from tributo.exporting.protocols import ExportValidator, ModelExporter
+    from tributo.exporting.protocols import (
+        ExportSourceProvider,
+        ExportValidator,
+        ModelExporter,
+    )
     from tributo.exporting.repository import BundleAliasStore, BundleRepository
     from tributo.exporting.runtime import BundleModelFlavor
 
@@ -43,6 +47,19 @@ def first_party_export_plugins() -> tuple[
     )
     validators: tuple[type[ExportValidator], ...] = (ONNXRuntimeValidator,)
     return exporters, validators
+
+
+def first_party_source_providers() -> tuple[type[ExportSourceProvider], ...]:
+    """Return built-in checkpoint providers without entry-point metadata."""
+    from tributo.integrations.sources.ray_dnn import RayDnnSourceProvider
+    from tributo.integrations.sources.ray_pu import RayPUSourceProvider
+    from tributo.integrations.sources.ray_xgboost import RayXGBoostSourceProvider
+
+    return (
+        RayXGBoostSourceProvider,
+        RayDnnSourceProvider,
+        RayPUSourceProvider,
+    )
 
 
 def first_party_model_flavors() -> tuple[type[BundleModelFlavor], ...]:

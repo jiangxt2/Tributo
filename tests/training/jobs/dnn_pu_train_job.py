@@ -70,7 +70,7 @@ def _training_config(algorithm: str, data_path: str, output_dir: str) -> dict[st
             "val_size": 0.25,
             "seed": 42,
         },
-        "ray": {"num_workers": 1, "use_gpu": False, "max_failures": 0},
+        "ray": {"num_workers": 2, "use_gpu": False, "max_failures": 0},
         "output": {"bundle_uri": output_dir},
     }
     if algorithm in {"dnn", "dnn_nnpu"}:
@@ -117,7 +117,29 @@ def _run_training(algorithm: str, data_path: str, output_dir: str) -> dict[str, 
         "status": summary["status"],
         "epoch": int(metrics["epoch"]),
         "train_loss": float(metrics["train_loss"]),
-        "class_prior": float(metrics["class_prior"]) if algorithm == "pu" else None,
+        "class_prior": (
+            float(metrics["class_prior"]) if algorithm in {"dnn_nnpu", "pu"} else None
+        ),
+        "world_size": int(metrics["world_size"]),
+        "worker_node_ids": sorted(
+            {str(worker["node_id"]) for worker in metrics["execution_workers"]}
+        ),
+        "model_state_digests": sorted(
+            {
+                str(worker["model_state_digest"])
+                for worker in metrics["execution_workers"]
+            }
+        ),
+        "input_rows": [
+            dict(worker["input_rows"]) for worker in metrics["execution_workers"]
+        ],
+        "batch_counts": [
+            int(worker["batch_count"]) for worker in metrics["execution_workers"]
+        ],
+        "collective_steps": [
+            int(worker["collective_steps"]) for worker in metrics["execution_workers"]
+        ],
+        "state_coordination": str(metrics["state_coordination"]),
         "onnx_exists": onnx_exists,
         "onnx_size": onnx_size,
     }
@@ -139,8 +161,24 @@ def _run_training(algorithm: str, data_path: str, output_dir: str) -> dict[str, 
         raise AssertionError(f"Missing ONNX artifact in {summary['bundle_uri']}")
     if result["epoch"] != 1 or not math.isfinite(result["train_loss"]):
         raise AssertionError(f"Invalid training metrics: {result}")
-    if algorithm == "pu" and result["class_prior"] != 0.35:
+    if algorithm in {"dnn_nnpu", "pu"} and result["class_prior"] != 0.35:
         raise AssertionError(f"Class prior was not preserved: {result}")
+    if (
+        result["world_size"] != 2
+        or len(result["worker_node_ids"]) < 2
+        or len(result["model_state_digests"]) != 1
+        or result["state_coordination"] != "all_reduce"
+        or any(not rows for rows in result["input_rows"])
+        or any(count < 1 for count in result["batch_counts"])
+        or len(set(result["collective_steps"])) != 1
+        or any(
+            count > steps
+            for count, steps in zip(
+                result["batch_counts"], result["collective_steps"], strict=True
+            )
+        )
+    ):
+        raise AssertionError(f"Distributed DDP evidence is incomplete: {result}")
     if algorithm in {"dnn_nnpu", "pu"} and (
         result["train_acc"] != result["train_observed_label_accuracy"]
         or result["val_acc"] != result["val_observed_label_accuracy"]

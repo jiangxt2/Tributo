@@ -73,14 +73,21 @@ class TestPUTrainingConfig:
 
         assert cfg.pu.class_prior_method == "external_estimator"
 
-    def test_missing_class_prior(self) -> None:
-        """PU training must not silently infer a class prior from observed labels."""
+    def test_label_frequency_may_derive_class_prior(self) -> None:
+        """The supported label-frequency path may omit an explicit prior."""
+        from tributo.training.pu_trainer import PUTrainingConfig
+
+        config = PUTrainingConfig()
+        assert config.pu.class_prior is None
+        assert config.pu.class_prior_method == "label_frequency"
+
+    def test_other_prior_method_still_requires_explicit_prior(self) -> None:
         from pydantic import ValidationError
 
         from tributo.training.pu_trainer import PUTrainingConfig
 
         with pytest.raises(ValidationError, match="class_prior"):
-            PUTrainingConfig()
+            PUTrainingConfig(pu={"class_prior_method": "em"})
 
     @pytest.mark.parametrize(
         "pu",
@@ -130,7 +137,7 @@ class TestPUBatchContract:
 
         from tributo.training.dnn_trainer import build_pu_train_loader
 
-        labels = np.array([1.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        labels = np.array([1.0, 1.0, 0.0, 0.0, 0.0], dtype=np.float32)
         dataset = [
             {"feature": torch.tensor(float(index)), "label": torch.tensor(label)}
             for index, label in enumerate(labels)
@@ -143,8 +150,26 @@ class TestPUBatchContract:
             seed=7,
         )
 
+        observed: list[int] = []
         for batch in loader:
             assert set(batch["label"].tolist()) == {0.0, 1.0}
+            observed.extend(int(value) for value in batch["feature"].tolist())
+        assert sorted(observed) == list(range(len(labels)))
+
+    def test_paired_loader_rejects_imbalance_that_would_require_replay(self) -> None:
+        torch = pytest.importorskip("torch")
+
+        from tributo.exceptions import JobConfigurationError
+        from tributo.training.dnn_trainer import build_pu_train_loader
+
+        labels = np.array([1.0, *([0.0] * 9)], dtype=np.float32)
+        dataset = [
+            {"row": torch.tensor(index), "label": torch.tensor(label)}
+            for index, label in enumerate(labels)
+        ]
+
+        with pytest.raises(JobConfigurationError, match="without replaying"):
+            build_pu_train_loader(dataset, labels, batch_size=4, seed=7)
 
     def test_paired_loader_uses_absolute_epoch_for_resume(self) -> None:
         torch = pytest.importorskip("torch")
@@ -525,14 +550,61 @@ class TestPUTrainerResourceSafety:
         )
         assert cfg.resource.max_batch_bytes == 1024
 
-    def test_num_workers_gt_1_rejected_at_construction(self):
-        """构造期拒绝 num_workers > 1（早于任何训练）。"""
-        from pydantic import ValidationError
-
+    def test_num_workers_gt_1_constructs(self):
+        """PU now uses the shared multi-worker DDP kernel."""
         from tributo.training.pu_trainer import PUTrainingConfig
 
-        with pytest.raises(ValidationError, match="num_workers"):
-            PUTrainingConfig(pu={"class_prior": 0.2}, ray={"num_workers": 2})
+        config = PUTrainingConfig(pu={"class_prior": 0.2}, ray={"num_workers": 2})
+        assert config.ray.num_workers == 2
+
+    def test_global_stratified_split_preserves_class_rows_before_sharding(self):
+        import random
+
+        from tributo.training.pu_trainer import split_pu_ray_datasets
+
+        class FakeRayDataset:
+            def __init__(self, rows: list[dict[str, float | int]]) -> None:
+                self.rows = rows
+
+            def filter(self, predicate: Any, *, fn_args: tuple[Any, ...]):
+                return FakeRayDataset(
+                    [row for row in self.rows if predicate(row, *fn_args)]
+                )
+
+            def count(self) -> int:
+                return len(self.rows)
+
+            def random_shuffle(self, *, seed: int):
+                rows = list(self.rows)
+                random.Random(seed).shuffle(rows)
+                return FakeRayDataset(rows)
+
+            def split_proportionately(self, proportions: list[float]):
+                boundary = round(len(self.rows) * proportions[0])
+                return [
+                    FakeRayDataset(self.rows[:boundary]),
+                    FakeRayDataset(self.rows[boundary:]),
+                ]
+
+        rows = [{"row_id": index, "label": float(index < 16)} for index in range(64)]
+
+        splits = split_pu_ray_datasets(
+            FakeRayDataset(rows),
+            label_col="label",
+            worker_count=2,
+            val_size=0.25,
+            seed=42,
+        )
+
+        assert {name: split.count() for name, split in splits.items()} == {
+            "positive": 12,
+            "unlabeled": 36,
+            "positive_val": 4,
+            "unlabeled_val": 12,
+        }
+        assert {
+            int(row["row_id"]) for split in splits.values() for row in split.rows
+        } == set(range(64))
 
     def test_num_workers_1_constructs(self):
         from tributo.training.pu_trainer import PUTrainerImpl
@@ -542,6 +614,35 @@ class TestPUTrainerResourceSafety:
             config={"pu": {"class_prior": 0.2}, "ray": {"num_workers": 1}},
         )
         assert trainer._pu_config.ray.num_workers == 1
+
+    def test_public_worker_adapter_delegates_to_shared_dnn_kernel(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import tributo.training.dnn_trainer as dnn_module
+        from tributo.training.pu_trainer import pu_train_loop_per_worker
+
+        captured: dict[str, Any] = {}
+        monkeypatch.setattr(
+            dnn_module,
+            "dnn_train_loop_per_worker",
+            lambda config: captured.update(config),
+        )
+
+        pu_train_loop_per_worker(
+            {
+                "features": [],
+                "pu": {"loss_type": "upu", "class_prior": 0.2},
+                "training": {"epochs": 2},
+                "_tributo_input_binding_digest": "a" * 64,
+                "_tributo_distribution_spec_digest": "b" * 64,
+            }
+        )
+
+        assert captured["trainer_type"] == "pu"
+        assert captured["loss"] == {"type": "upu"}
+        assert captured["pu_learning"]["class_prior"] == 0.2
+        assert captured["_tributo_input_binding_digest"] == "a" * 64
+        assert captured["_tributo_distribution_spec_digest"] == "b" * 64
 
     def test_worker_loop_rejects_missing_prior_before_data(
         self, monkeypatch: pytest.MonkeyPatch
@@ -554,7 +655,9 @@ class TestPUTrainerResourceSafety:
 
         import tributo.training.data_loader as data_loader_mod
         from tributo.exceptions import JobConfigurationError
-        from tributo.training.pu_trainer import pu_train_loop_per_worker
+        from tributo.training.pu_trainer import (
+            _legacy_pu_train_loop_per_worker as pu_train_loop_per_worker,
+        )
 
         monkeypatch.setattr(
             ray.train,
@@ -595,7 +698,9 @@ class TestPUTrainerResourceSafety:
         import ray.train
 
         from tributo.exceptions import JobConfigurationError
-        from tributo.training.pu_trainer import pu_train_loop_per_worker
+        from tributo.training.pu_trainer import (
+            _legacy_pu_train_loop_per_worker as pu_train_loop_per_worker,
+        )
 
         monkeypatch.setattr(
             ray.train,
@@ -625,7 +730,9 @@ class TestPUTrainerResourceSafety:
 
         import tributo.training.data_loader as data_loader_mod
         from tributo.exceptions import ResourceBudgetExceededError
-        from tributo.training.pu_trainer import pu_train_loop_per_worker
+        from tributo.training.pu_trainer import (
+            _legacy_pu_train_loop_per_worker as pu_train_loop_per_worker,
+        )
 
         monkeypatch.setattr(
             ray.train,
@@ -670,7 +777,9 @@ class TestPUTrainerResourceSafety:
 
         import tributo.training.data_loader as data_loader_mod
         from tributo.exceptions import ResourceBudgetExceededError
-        from tributo.training.pu_trainer import pu_train_loop_per_worker
+        from tributo.training.pu_trainer import (
+            _legacy_pu_train_loop_per_worker as pu_train_loop_per_worker,
+        )
 
         monkeypatch.setattr(
             ray.train,
@@ -723,7 +832,9 @@ class TestPUTrainerResourceSafety:
         import ray.train
 
         import tributo.training.data_loader as data_loader_mod
-        from tributo.training.pu_trainer import pu_train_loop_per_worker
+        from tributo.training.pu_trainer import (
+            _legacy_pu_train_loop_per_worker as pu_train_loop_per_worker,
+        )
 
         n = 32
         rng = np.random.default_rng(0)

@@ -1,4 +1,4 @@
-"""Single-worker Positive-Unlabeled Learning trainer on Ray Train.
+"""Positive-Unlabeled adapter over the shared Ray Train/PyTorch DDP kernel.
 
 Based on Ray Train TorchTrainer, focused on Positive-Unlabeled Learning scenarios.
 Supports nnPU/uPU risk estimators, explicit class priors, and PU-specific metrics.
@@ -74,6 +74,79 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _pu_label_matches(row: dict[str, Any], label_col: str, target: float) -> bool:
+    """Ray Data predicate used to build independently sharded P/U datasets."""
+    try:
+        return float(row[label_col]) == target
+    except (KeyError, TypeError, ValueError) as exc:
+        raise JobConfigurationError(
+            f"PU label column {label_col!r} must contain only numeric 0/1 values"
+        ) from exc
+
+
+def split_pu_ray_datasets(
+    dataset: Any,
+    *,
+    label_col: str,
+    worker_count: int,
+    val_size: float,
+    seed: int,
+) -> dict[str, Any]:
+    """Build one global stratified PU split before Ray Train assigns shards."""
+    if not 0 <= val_size < 1:
+        raise JobConfigurationError("PU training.val_size must be in [0, 1)")
+    positive = dataset.filter(
+        _pu_label_matches,
+        fn_args=(label_col, 1.0),
+    )
+    unlabeled = dataset.filter(
+        _pu_label_matches,
+        fn_args=(label_col, 0.0),
+    )
+    positive_count = int(positive.count())
+    unlabeled_count = int(unlabeled.count())
+    total_count = int(dataset.count())
+    if positive_count + unlabeled_count != total_count:
+        raise JobConfigurationError(
+            "PU labels must contain only 1 (positive) or 0 (unlabeled)"
+        )
+    if val_size <= 0:
+        if min(positive_count, unlabeled_count) < worker_count:
+            raise JobConfigurationError(
+                "distributed PU requires every worker to receive positive and "
+                "unlabeled training rows; got "
+                f"positive={positive_count}, unlabeled={unlabeled_count}, "
+                f"workers={worker_count}"
+            )
+        return {"positive": positive, "unlabeled": unlabeled}
+
+    positive_train, positive_val = positive.random_shuffle(
+        seed=seed
+    ).split_proportionately([1.0 - val_size])
+    unlabeled_train, unlabeled_val = unlabeled.random_shuffle(
+        seed=seed + 1
+    ).split_proportionately([1.0 - val_size])
+    splits = {
+        "positive": positive_train,
+        "unlabeled": unlabeled_train,
+        "positive_val": positive_val,
+        "unlabeled_val": unlabeled_val,
+    }
+    counts = {name: int(split.count()) for name, split in splits.items()}
+    if (
+        counts["positive"] + counts["positive_val"] != positive_count
+        or counts["unlabeled"] + counts["unlabeled_val"] != unlabeled_count
+    ):
+        raise JobConfigurationError("global PU split did not preserve every input row")
+    if min(counts.values()) < worker_count:
+        raise JobConfigurationError(
+            "global PU train/validation split must provide every worker with "
+            "positive and unlabeled rows; got "
+            f"counts={counts}, workers={worker_count}, val_size={val_size}"
+        )
+    return splits
+
+
 # ── PU-specific config models ──
 
 
@@ -84,9 +157,9 @@ class PUConfig(StrictConfigModel):
         default="nnpu",
         description="PU loss type: nnpu (non-negative constraint) | upu (unbiased estimate)",
     )
-    class_prior: PositiveClassPrior = Field(
-        ...,
-        description="Explicit positive class prior (π_p)",
+    class_prior: Optional[PositiveClassPrior] = Field(
+        default=None,
+        description=("Explicit positive class prior; omit only with label_frequency"),
     )
     class_prior_method: str = Field(
         default="label_frequency",
@@ -109,18 +182,12 @@ class PUConfig(StrictConfigModel):
 
 
 class PURayConfig(StrictConfigModel):
-    """Ray cluster configuration (PU-specific, defaults to num_workers=1).
+    """Ray Train worker-group configuration for the PU domain adapter."""
 
-    PU training is single-worker only: every worker loads the
-    *full* dataset itself, so ``num_workers > 1`` multiplies the
-    materialization footprint.  Configuration with ``num_workers > 1`` is
-    rejected at construction and re-checked inside the worker.  Distributed
-    PU training is not yet implemented.
-    """
-
-    num_workers: Literal[1] = Field(
+    num_workers: int = Field(
         default=1,
-        description="Number of workers; PU is single-worker only",
+        ge=1,
+        description="Number of DDP workers",
     )
     use_gpu: bool = Field(default=False)
     storage_path: Optional[str] = None
@@ -137,7 +204,7 @@ class PURayConfig(StrictConfigModel):
 
 
 class PUTrainingConfig(StrictConfigModel):
-    """Complete configuration for single-worker PU training."""
+    """Complete configuration for distributed PU training."""
 
     data: Any = Field(default=None, description="Data source configuration")
     features: list[FeatureItemConfig] = Field(
@@ -160,14 +227,22 @@ class PUTrainingConfig(StrictConfigModel):
         """Require room for both P and U examples in every training batch."""
         if self.training.batch_size < 2:
             raise ValueError("PU training requires training.batch_size >= 2")
+        if (
+            self.pu.class_prior is None
+            and self.pu.class_prior_method != "label_frequency"
+        ):
+            raise ValueError(
+                "PU class_prior may be omitted only for "
+                "class_prior_method='label_frequency'"
+            )
         return self
 
 
 # ── PU training loop (worker-level) ──
 
 
-def pu_train_loop_per_worker(config: dict[str, Any]) -> None:
-    """PU training main loop executed on each Ray worker.
+def _legacy_pu_train_loop_per_worker(config: dict[str, Any]) -> None:
+    """Retained single-worker migration baseline; not a registered execution path.
 
     Data is loaded inside the worker (via ray.data); the driver never holds
     the dataset.  Reuses the DNN model architecture and enforces a PU loss.
@@ -601,16 +676,67 @@ def pu_train_loop_per_worker(config: dict[str, Any]) -> None:
     logger.info("PU training completed for worker (class_prior=%.4f)", class_prior)
 
 
+def pu_train_loop_per_worker(config: dict[str, Any]) -> None:
+    """Adapt PU configuration to the one shared distributed Torch kernel."""
+    from tributo.training.dnn_trainer import dnn_train_loop_per_worker
+
+    pu_config = dict(config.get("pu") or {})
+    raw_prior = pu_config.get("class_prior")
+    class_prior = (
+        parse_positive_class_prior(raw_prior, config_path="pu.class_prior")
+        if raw_prior is not None
+        else None
+    )
+    if (
+        class_prior is None
+        and pu_config.get("class_prior_method", "label_frequency") != "label_frequency"
+    ):
+        raise JobConfigurationError(
+            "PU class_prior may be omitted only for "
+            "class_prior_method='label_frequency'"
+        )
+    loss_type = pu_config.get("loss_type", "nnpu")
+    if loss_type not in {"nnpu", "upu"}:
+        raise JobConfigurationError(
+            f"PU loss_type must be 'nnpu' or 'upu', got {loss_type!r}"
+        )
+    dnn_train_loop_per_worker(
+        {
+            "features": config.get("features", []),
+            "label_col": config.get("label_col", "label"),
+            "model": config.get("model", {}),
+            "loss": {"type": loss_type},
+            "pu_learning": {
+                "enabled": True,
+                "class_prior": class_prior,
+                "class_prior_method": pu_config.get(
+                    "class_prior_method", "label_frequency"
+                ),
+                "beta": pu_config.get("beta", 0.0),
+                "gamma": pu_config.get("gamma", 1.0),
+            },
+            "training": config.get("training", {}),
+            "resource": config.get("resource", {}),
+            "resume": config.get("resume", {}),
+            "_tributo_input_binding_digest": config.get(
+                "_tributo_input_binding_digest"
+            ),
+            "_tributo_distribution_spec_digest": config.get(
+                "_tributo_distribution_spec_digest"
+            ),
+            "_tributo_expected_input_rows": config.get("_tributo_expected_input_rows"),
+            "_tributo_metric_reducers": config.get("_tributo_metric_reducers"),
+            "trainer_type": "pu",
+        }
+    )
+
+
 # ── PUTrainer BaseTrainer implementation ──
 
 
 @PublicAPI(stability="beta")
 class PUTrainerImpl(BaseTrainer):
-    """Single-worker PU Learning trainer.
-
-    Focused on Positive-Unlabeled Learning scenarios; enforces PU loss.
-    Data is loaded inside workers — the driver never holds the dataset.
-    """
+    """PU domain facade that delegates to the shared DNN/PU DDP kernel."""
 
     def __init__(
         self,
@@ -626,15 +752,40 @@ class PUTrainerImpl(BaseTrainer):
         self._features = build_features_from_config(self._pu_config.features)
 
     def setup(self) -> None:
-        """Build feature columns. Data loading is deferred to workers."""
+        """Build features and resolve one canonical Ray Dataset for sharding."""
         cfg = self._pu_config
         logger.info("Built %d feature columns", len(self._features))
 
-        if cfg.data is None and "train" not in self.datasets:
+        if cfg.data is not None:
+            from tributo.training.data_loader import (
+                load_ray_dataset_from_config,
+                load_ray_dataset_from_source,
+            )
+
+            data_config = (
+                cfg.data.model_dump()
+                if hasattr(cfg.data, "model_dump")
+                else dict(cfg.data)
+            )
+            source = data_config.get("source")
+            dataset = (
+                load_ray_dataset_from_source(source)
+                if isinstance(source, dict)
+                else load_ray_dataset_from_config(data_config)
+            )
+            self.datasets = {"train": dataset}
+        if "train" not in self.datasets:
             raise ValueError("data config or datasets must contain 'train'")
+        self.datasets = split_pu_ray_datasets(
+            self.datasets["train"],
+            label_col=cfg.label_col,
+            worker_count=cfg.ray.num_workers,
+            val_size=cfg.training.val_size,
+            seed=cfg.training.seed,
+        )
 
     def training_loop(self) -> Any:
-        """Execute single-worker PU training via Ray Train TorchTrainer."""
+        """Execute PU training through the shared Ray Train TorchTrainer kernel."""
         cfg = self._pu_config
         storage_path = self.run_config.get("storage_path")
         if storage_path is None:
@@ -663,11 +814,9 @@ class PUTrainerImpl(BaseTrainer):
         if not ray.is_initialized():
             ray.init(address="auto", ignore_reinit_error=True)
 
-        # Pass config to workers (no data on driver)
+        # Pass only algorithm configuration; Ray Train shards the canonical
+        # Dataset so no Worker re-opens or duplicates the full source.
         train_loop_config = {
-            "data": (
-                cfg.data.model_dump() if hasattr(cfg.data, "model_dump") else cfg.data
-            ),
             "features": [f.__dict__ for f in self._features],
             "label_col": cfg.label_col,
             "model": cfg.model.model_dump(),
@@ -702,6 +851,7 @@ class PUTrainerImpl(BaseTrainer):
                 use_gpu=cfg.ray.use_gpu,
                 placement_strategy="SPREAD",
             ),
+            datasets=self.datasets,
             run_config=RunConfig(
                 name=run_name,
                 storage_path=storage_path,
@@ -714,9 +864,9 @@ class PUTrainerImpl(BaseTrainer):
         )
 
         logger.info(
-            "Starting PU training (loss=%s, class_prior=%.4f)...",
+            "Starting PU training (loss=%s, class_prior=%s)...",
             cfg.pu.loss_type,
-            cfg.pu.class_prior,
+            cfg.pu.class_prior or "label_frequency",
         )
         result = trainer.fit()
         metrics = result.metrics or {}
@@ -821,7 +971,7 @@ class PUTrainerImpl(BaseTrainer):
 
 @PublicAPI(stability="beta")
 def run_pu_training_with_config(config: dict[str, Any]) -> dict[str, Any]:
-    """Run single-worker PU training from a configuration dict.
+    """Run PU training from a configuration dict.
 
     This is the direct API for callers that already have a config dict
     in memory.  For YAML configs, convert to JSON first — YAML is no
@@ -866,7 +1016,7 @@ def run_pu_training_with_config(config: dict[str, Any]) -> dict[str, Any]:
 
 @PublicAPI(stability="beta")
 def run_pu_training_from_json(config_path: str) -> dict[str, Any]:
-    """Run single-worker PU training from a JSON configuration file.
+    """Run PU training from a JSON configuration file.
 
     Args:
         config_path: Path to a JSON configuration file.
