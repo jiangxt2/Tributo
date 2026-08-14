@@ -24,6 +24,11 @@ from pydantic import (
 
 from tributo._common.storage_profiles import StorageProfileResolver
 from tributo.data._source_paths import resolve_file_source_path
+from tributo.data.contracts.handles import (
+    DaftDataFrameHandle,
+    RayDataHandle,
+)
+from tributo.data.engine_ids import normalize_engine_id
 from tributo.data.provider import ResolvedSource
 from tributo.data.refs import _credential_paths, digest
 from tributo.data.scan_plan import (
@@ -38,20 +43,10 @@ from tributo.exceptions import DataSourceError, TributoError
 from tributo.util.annotations import PublicAPI
 
 if TYPE_CHECKING:
-    import daft
-    import ray.data
-
     from tributo.data.engine_binding import EngineBindings
 
 logger = logging.getLogger(__name__)
 
-
-_ENGINE_ALIASES = {
-    "ray": "tributo.ray_data",
-    "tributo.ray_data": "tributo.ray_data",
-    "daft": "tributo.daft",
-    "tributo.daft": "tributo.daft",
-}
 
 # ``describe()`` deliberately performs no connectivity, schema metadata, or
 # worker probes, so these checks are deferred for every current binding.
@@ -152,12 +147,7 @@ class IngestionRequest(BaseModel):
     @field_validator("engine")
     @classmethod
     def _normalize_engine(cls, value: str) -> str:
-        normalized = _ENGINE_ALIASES.get(value)
-        if normalized is None:
-            raise ValueError(
-                "engine must be one of: ray, tributo.ray_data, daft, tributo.daft"
-            )
-        return normalized
+        return normalize_engine_id(value)
 
     @field_validator("binding_id")
     @classmethod
@@ -376,18 +366,6 @@ class IngestionPlanReceipt(BaseModel):
         if leaked:
             raise ValueError("IngestionPlanReceipt must be credential-free")
         return self
-
-
-@PublicAPI(stability="alpha")
-@dataclass(frozen=True)
-class RayDataHandle:
-    dataset: ray.data.Dataset = field(repr=False)
-
-
-@PublicAPI(stability="alpha")
-@dataclass(frozen=True)
-class DaftDataFrameHandle:
-    dataframe: daft.DataFrame = field(repr=False)
 
 
 IngestionHandle: TypeAlias = RayDataHandle | DaftDataFrameHandle

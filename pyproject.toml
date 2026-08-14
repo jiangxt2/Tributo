@@ -142,6 +142,8 @@ tributo = "tributo.cli:main"
 [project.entry-points."tributo.connectors"]
 parquet = "tributo.data.parquet:ParquetDataConnector"
 
+[project.entry-points."tributo.write_bindings"]
+
 [project.entry-points."tributo.trainers"]
 dnn = "tributo.integrations.algorithm_runtimes.legacy_descriptors:DNN_DESCRIPTOR"
 pu = "tributo.integrations.algorithm_runtimes.legacy_descriptors:PU_DESCRIPTOR"

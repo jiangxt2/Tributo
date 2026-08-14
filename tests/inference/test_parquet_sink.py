@@ -57,7 +57,14 @@ class TestParquetResultSink:
         second = sink.write(_Dataset(), request, run_id="run-1", plan_digest="a" * 64)
 
         assert dataset.calls == [
-            (("/tmp/results",), {"compression": "snappy", "min_rows_per_file": 10})
+            (
+                ("/tmp/results",),
+                {
+                    "compression": "snappy",
+                    "mode": "append",
+                    "min_rows_per_file": 10,
+                },
+            )
         ]
         assert dataset.count_calls == 0
         assert first.rows_written is None
@@ -108,16 +115,23 @@ class TestParquetResultSink:
 
         assert profiles.calls == ["sink-domain"]
         assert dataset.calls[0][0] == ("bucket/results",)
+        assert dataset.calls[0][1]["mode"].value == "append"
         assert dataset.calls[0][1]["filesystem"] is filesystem
         assert receipt.uri == "s3://bucket/results"
-        factory.assert_called_once()
+        factory.assert_called_once_with(
+            access_key="sink-key",
+            secret_key="sink-secret",
+            region="us-east-1",
+            endpoint_override="minio:9000",
+            scheme="http",
+        )
 
     def test_s3_scheme_is_case_insensitive(self) -> None:
         dataset = _Dataset()
         profiles = _Profiles()
         filesystem = object()
 
-        with patch("pyarrow.fs.S3FileSystem", return_value=filesystem):
+        with patch("pyarrow.fs.S3FileSystem", return_value=filesystem) as factory:
             receipt = ParquetResultSink(profiles).write(
                 dataset,
                 ParquetResultSinkRequest(
@@ -129,7 +143,15 @@ class TestParquetResultSink:
 
         assert profiles.calls == ["sink-domain"]
         assert dataset.calls[0][0] == ("bucket/results",)
+        assert dataset.calls[0][1]["mode"].value == "append"
         assert dataset.calls[0][1]["filesystem"] is filesystem
+        factory.assert_called_once_with(
+            access_key="sink-key",
+            secret_key="sink-secret",
+            region="us-east-1",
+            endpoint_override="minio:9000",
+            scheme="http",
+        )
         assert receipt.uri == "S3://bucket/results"
 
     def test_write_error_is_sanitized(self, caplog: pytest.LogCaptureFixture) -> None:

@@ -64,8 +64,7 @@ class IcebergDataConnector(DataConnector):
     """Iceberg data connector.
 
     - ``read()``: compatibility adapter over the native Ray Iceberg Binding.
-    - ``write()``: Collects the Dataset to the driver and writes through
-      PyIceberg (auto-creates table if needed).
+    - ``write()``: compatibility facade over Ray Data's native Iceberg writer.
     """
 
     def read(self, **kwargs: Any) -> ray.data.Dataset:
@@ -109,29 +108,21 @@ class IcebergDataConnector(DataConnector):
         """
         cfg = IcebergWriteConfig(**kwargs)
 
-        catalog = _load_catalog(cfg.catalog_name, cfg.catalog_properties, cfg.s3)
+        from tributo.data.writing.compatibility import execute_ray_connector_write
 
-        arrow_table = dataset.to_arrow()
-
-        try:
-            table = catalog.load_table(cfg.table_identifier)
-        except NoSuchTableError:
-            logger.info("Table '%s' not found, creating...", cfg.table_identifier)
-            table = catalog.create_table(
-                identifier=cfg.table_identifier,
-                schema=arrow_table.schema,
-                location=cfg.location,
-            )
-
-        if cfg.mode == WriteMode.OVERWRITE:
-            table.overwrite(arrow_table)
-        else:
-            table.append(arrow_table)
-        logger.info(
-            "Iceberg table '%s' %s: %d rows",
-            cfg.table_identifier,
-            "overwritten" if cfg.mode == WriteMode.OVERWRITE else "appended",
-            arrow_table.num_rows,
+        execute_ray_connector_write(
+            dataset=dataset,
+            target_kind="iceberg",
+            target=cfg.table_identifier,
+            options={},
+            runtime_options={
+                "catalog_name": cfg.catalog_name,
+                "catalog_properties": cfg.catalog_properties,
+                "location": cfg.location,
+                "s3": cfg.s3,
+                "table_identifier": cfg.table_identifier,
+            },
+            mode=cfg.mode,
         )
 
     def exists(self, **kwargs: Any) -> bool:
@@ -158,7 +149,7 @@ def _load_catalog(
     catalog_properties: dict[str, str],
     s3_config: S3Config | None,
 ) -> Any:
-    """Load a PyIceberg catalog, merging S3 auth properties."""
+    """Load a catalog for the legacy ``exists()`` control-plane check."""
     merged = merge_iceberg_properties(catalog_properties, source=s3_config)
     return _pyiceberg_load_catalog(catalog_name, **merged)
 

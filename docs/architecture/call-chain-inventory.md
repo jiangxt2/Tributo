@@ -40,6 +40,39 @@ constructs the explicit `IngestionRequest` shown above. `load_dataframe_from_con
 materializes its Ray result for small historical callers. Neither selects a
 separate reader backend or invokes the old Connector compatibility reader.
 
+### 2. Bounded Data Writing
+
+**Shared control-plane entry**: `data.writing.WriteGateway`
+
+```
+DataConnector.write(**legacy kwargs)
+  └─ compatibility normalizer
+       └─ WriteRequest(engine="ray", target_kind, target, mode)
+
+Embedding output policy / ParquetResultSink
+  └─ explicit WriteRequest
+
+Any entry above
+  ↓
+WriteTargetRegistry → LogicalWritePlan
+  ↓
+WriteBindingRegistry → credential-free capability negotiation
+  ↓
+WriteGateway.execute(typed RayDataHandle or DaftDataFrameHandle)
+  ↓
+RayWriteBinding → ray.data.Dataset.write_*
+DaftWriteBinding → daft.DataFrame.write_*
+  ↓
+WriteReceipt / compatibility return shape
+```
+
+The Gateway owns request validation, target planning, capability checks,
+credential-free receipts, and error redaction. Ray Data or Daft owns the
+distributed data plane and native file/table commit. Iceberg catalog loading or
+table creation in a binding is control-plane preflight only. No Tributo
+consumer may bypass the Gateway with `to_arrow()`, a PyIceberg data mutation,
+or a Lance fragment/commit helper.
+
 **Canonical ingestion implementation**:
 - `data/transform_ir.py` — versioned engine-neutral ETL contract.
 - `data/scan_plan.py` — credential-free `FileScan` / `SqlScan` / `TableScan`.
@@ -124,7 +157,7 @@ RayMapBatchesExecutor
   │     → worker-local describe() + open()
   │     → RayDataHandle.dataset + IngestionPlanReceipt
   ├── BundleBatchPredictor → BundleModelLoader → named tensor predict
-  └── ParquetResultSink → Dataset.write_parquet()
+  └── ParquetResultSink → WriteGateway → RayWriteBinding → Dataset.write_parquet()
 ```
 
 The Executor never imports `training.data_loader`, Provider, LogicalScanPlan,
@@ -231,6 +264,18 @@ importlib.metadata.entry_points(group="tributo.ingestion_bindings")
 credential-safe descriptor validation and atomic registration
   ↓
 four-part Binding selection; native dependency import occurs at factory/compile
+```
+
+**Bounded-write Binding discovery**:
+
+```
+first default WriteGateway use
+  ↓
+importlib.metadata.entry_points(group="tributo.write_bindings")
+  ↓
+credential-safe descriptor validation and atomic registration
+  ↓
+WriteBinding selection; native dependency import occurs at factory/execute
 ```
 
 Selected optional integrations (`ray-doris`, `daft-olap-connectors`) also have

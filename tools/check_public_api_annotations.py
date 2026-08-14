@@ -41,6 +41,10 @@ _EXEMPT_NAMES: set[str] = {
     "CanonicalSourceInput",
     # Deprecated alias — resolves to the annotated ExportSourceProvider.
     "SourceProvider",
+    # Native bounded-data handle aliases — type aliases cannot be decorated;
+    # their concrete handle types are annotated.
+    "DataHandle",
+    "WriteHandle",
     # Stable string constants — Python str objects cannot be decorated.
     "ARTIFACT_KIND_MODEL",
     "ARTIFACT_KIND_REPORT",

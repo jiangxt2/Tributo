@@ -117,6 +117,45 @@ Binding constraints allow Hive tables backed by Parquet, ORC, or Iceberg
 without changing the Gateway or any algorithm consumer. Duplicate or ambiguous
 registrations fail closed; discovery never overrides an existing route.
 
+### Data Write Gateway
+
+The write migration uses one control-plane path while retaining the old public
+write facade:
+
+```
+Old DataConnector.write(**kwargs)
+  ↓
+Legacy write normalizer
+  ↓
+WriteRequest → WriteTargetRegistry → WriteBindingRegistry
+  ↓
+Ray/Daft typed handle → native Dataset/DataFrame writer
+```
+
+`DataConnector.write()` remains a compatibility adapter and keeps its historical
+`None` return shape. Internal bounded writers, Embedding output, and the
+Parquet inference sink use `WriteGateway`; they do not call `DataConnector.write()`
+or a format-specific private helper. The Gateway carries only credential-free
+request/digest/descriptor/receipt data. Engine-native runtime configuration is
+resolved inside the binding and is passed to Ray or Daft according to that
+engine's supported worker/runtime mechanism.
+
+Current exit-gate status:
+
+- [x] Ray/Daft Parquet and CSV native bindings and compatibility facades are
+  covered by contract tests and Docker cluster/MinIO IT.
+- [x] Iceberg and Daft Lance use native engine data-plane writers; PyIceberg
+  usage in Tributo is limited to catalog/table control-plane preflight and
+  `exists()` compatibility checks.
+- [x] Static boundaries reject Tributo-owned Lance fragment/commit and other
+  direct storage data-plane markers.
+- [ ] Ray Lance is not supported by the current locked Ray/pylance API
+  combination; the binding fails closed until the dependency contract is
+  satisfied. This is an explicit capability gap, not a fallback permission.
+- [ ] Legacy `DataConnector.write()` removal remains a separate future change
+  after its compatibility window, call audit, and deprecation evidence are
+  complete.
+
 ### Bundle Export (E1 / E2 / E4)
 
 ```

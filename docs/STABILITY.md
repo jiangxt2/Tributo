@@ -1,7 +1,7 @@
 # API Stability Inventory
 
 Canonical stability classification for every Tributo module.
-Last updated: 2026-08-11.
+Last updated: 2026-08-14.
 
 ## Stability Levels
 
@@ -88,6 +88,12 @@ from the legacy setup-only propagation rule.
 | `tributo.data.scan_plan` | `developer` | Internal engine-neutral scan SPI; downstream consumers use `IngestionGateway` |
 | `tributo.data.ingestion` | `alpha` | Two-stage Gateway, explicit request, typed handles, and receipt |
 | `tributo.data.handle_adapters` | `alpha` | Explicit native-handle conversions with conversion evidence; never a routing fallback |
+| `tributo.data.contracts.handles` | `alpha` | Typed Ray and Daft handle contracts shared by ingestion and writing |
+| `tributo.data.contracts.modes` | `beta` | Shared `WriteMode` contract, re-exported by the legacy DataConnector module |
+| `tributo.data.writing` | `alpha` | Unified bounded-write Gateway package |
+| `tributo.data.writing.capabilities` | `alpha` | Native writer capability declarations |
+| `tributo.data.writing.contracts` | `alpha` | Credential-safe write requests, descriptors, receipts, and errors |
+| `tributo.data.writing.gateway` | `alpha` | Target planning, capability negotiation, and native write delegation |
 | `tributo.data.engine_binding` | `developer` | Third-party extension SPI; not exported from the consumer-facing `tributo.data` root |
 | `tributo.data.binding_plugins` | `developer` | Descriptor-only `tributo.ingestion_bindings` discovery SPI |
 | `tributo.data.provider_plugins` | `developer` | Versioned descriptor-only `tributo.ingestion_providers` discovery SPI |

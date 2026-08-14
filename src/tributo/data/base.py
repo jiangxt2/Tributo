@@ -9,29 +9,19 @@ data consistently across storage backends.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from enum import Enum
 from typing import TYPE_CHECKING, Any, Optional
 
 from pydantic import Field
 
 from tributo._common.config import StrictConfigModel
+from tributo.data.contracts.modes import WriteMode
 from tributo.util.annotations import PublicAPI
 
 if TYPE_CHECKING:
     import ray.data
 
 
-@PublicAPI(stability="beta")
-class WriteMode(Enum):
-    """Write mode.
-
-    Note:
-        APPEND support varies by format.  Parquet drivers typically
-        overwrite, while Lance and Iceberg natively support inserts.
-    """
-
-    OVERWRITE = "overwrite"
-    APPEND = "append"
+__all__ = ["DataConnector", "S3Config", "WriteMode"]
 
 
 @PublicAPI(stability="beta")
