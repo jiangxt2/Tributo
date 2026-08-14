@@ -1,6 +1,10 @@
+---
+orphan: true
+---
+
 # Use cases and user guides
 
-These guides describe currently implemented workflows. Each guide states the
+These guides describe implemented workflows. Each guide states the
 runtime service, optional dependency, and maturity constraints that apply.
 
 ## Choose a workflow

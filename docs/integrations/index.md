@@ -19,9 +19,3 @@ current maturity and limitations of each integration.
 ## Guides
 
 - [Track published bundles with MLflow](../how-to/mlflow.md)
-
-```{toctree}
-:hidden:
-
-../how-to/mlflow
-```

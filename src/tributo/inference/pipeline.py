@@ -1,6 +1,8 @@
-"""Distributed batch inference pipeline: S3 Parquet → ONNX inference → S3 Parquet.
+"""Compatibility batch inference over canonical input and result-sink adapters.
 
-End-to-end Ray Data streaming; the Driver only orchestrates, data does not pass through the Head node.
+Ray Data executes batch prediction while the driver orchestrates. The pipeline
+accepts supported canonical bounded sources, a raw ONNX model or verified
+Bundle, and local or S3 Parquet or Lance output.
 """
 
 from __future__ import annotations

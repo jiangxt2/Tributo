@@ -16,7 +16,9 @@ workflows.
 ## End-to-end workflow
 
 ```text
-canonical data source -> Ray Dataset -> trainer -> model bundle -> inference
+bounded source -> Ray Data or Daft -> algorithm -> Bundle -> inference
+                                                -> explainability
+Lance vector dataset -> vector-index job -> search or maintenance receipt
 ```
 
 Use the [support matrix](../reference/support-matrix.md) to distinguish stable
@@ -24,7 +26,6 @@ features from alpha contracts and planned extension points.
 
 ## Start here
 
-- Follow [Getting Started](../quickstart.md) for the shortest runnable path.
-- Review [Installation](../installation.md) for optional dependency groups.
-- Select a workflow from [Use Cases](../user-guide/index.md).
+- Follow [Getting started](../getting-started/index.md) for the shortest path.
+- Select a component from the [documentation home](../index.md).
 - Use [Reference](../reference/index.md) for API and CLI contracts.

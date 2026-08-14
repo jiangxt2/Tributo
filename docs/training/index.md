@@ -1,17 +1,13 @@
-# Training
+# Trainer compatibility guides
 
 Tributo trainers execute through Ray Train and publish validated model
 bundles. Trainer implementations own configuration validation, training,
 checkpoint handling, and bundle export.
 
-```{toctree}
-:maxdepth: 1
+Use the [Algorithms and training](../algorithms/index.md) component as the main
+entry point. These pages retain the legacy Trainer organization and published
+URLs for compatibility.
 
-../how-to/training
-../how-to/pu-learning
-../how-to/custom-distributed-algorithms
-```
-
-Use the training guide for distributed XGBoost and DNN workflows. PU learning
-has additional prior-estimation and worker-count constraints documented in its
-dedicated guide.
+- [Configure distributed training](../how-to/training.md).
+- [Train a PU model](../how-to/pu-learning.md).
+- [Add a distributed algorithm](../how-to/custom-distributed-algorithms.md).

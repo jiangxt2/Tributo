@@ -1,12 +1,12 @@
-# Call Chain Inventory
+# Call chain inventory
 
 Documenting every data entry point and model export entry point in the current
 architecture candidate. Support claims are governed by Product Scope and the
 real-infrastructure gates, not by this inventory alone.
 
-## Data Entry Points
+## Data entry points
 
-### 1. Training Data Loading
+### Training data loading
 
 **Primary entry**: `training/data_loader.py`
 
@@ -40,7 +40,7 @@ constructs the explicit `IngestionRequest` shown above. `load_dataframe_from_con
 materializes its Ray result for small historical callers. Neither selects a
 separate reader backend or invokes the old Connector compatibility reader.
 
-### 2. Bounded Data Writing
+### Bounded data writing
 
 **Shared control-plane entry**: `data.writing.WriteGateway`
 
@@ -60,7 +60,7 @@ WriteBindingRegistry → credential-free capability negotiation
   ↓
 WriteGateway.execute(typed RayDataHandle or DaftDataFrameHandle)
   ↓
-RayWriteBinding → ray.data.Dataset.write_* or official Lance-Ray writer
+RayWriteBinding → ray.data.Dataset.write_*
 DaftWriteBinding → daft.DataFrame.write_*
   ↓
 WriteReceipt / compatibility return shape
@@ -71,10 +71,7 @@ credential-free receipts, and error redaction. Ray Data or Daft owns the
 distributed data plane and native file/table commit. Iceberg catalog loading or
 table creation in a binding is control-plane preflight only. No Tributo
 consumer may bypass the Gateway with `to_arrow()`, a PyIceberg data mutation,
-or a Lance fragment/commit helper. The current Ray Lance implementation is
-isolated in `RayLanceWriteBinding`, which calls
-`lance_ray.write_lance(stream=False)`. Switching that one Binding to
-`Dataset.write_lance` must not change any consumer in this call chain.
+or a Lance fragment/commit helper.
 
 **Canonical ingestion implementation**:
 - `data/transform_ir.py` — versioned engine-neutral ETL contract.
@@ -136,7 +133,7 @@ Binding filesystem/catalog/storage-format constraints prevent consumer
 modules from adding source-name branches. These SPIs do not add a plugin
 lifecycle or permit a third ingestion engine.
 
-### Inference Data Loading
+### Inference data loading
 
 **Primary bundle-aware entry**: `inference/api.py`
 
@@ -197,7 +194,53 @@ The flat `s3_config` field warns and remains only inside this adapter.
 ordinary `InferenceRequest`; no Trainer or in-memory model crosses the domain
 boundary.
 
-### 3. CLI Data Entry
+### Batch explainability
+
+**Primary entry**: `explainability/executor.py`
+
+```
+tributo explain / submit_explainability_job()
+  → Ray Job driver
+  → ExplainabilityRequest
+  → run_batch_explainability()
+       ├─ BundleReader → pinned manifest bytes and model role
+       ├─ OperationStore → idempotency key, lease, and attempt state
+       ├─ IngestionGatewayInputResolver → bounded Ray Data input
+       └─ Ray Data map_batches(ExplainabilityBatchWorker)
+            → ExplainabilityPlanner → ExplainerAdapter
+            → ParquetResultSink
+            → ExplainabilityReceipt + terminal operation record
+```
+
+The executor validates the request against the Bundle descriptor, pins the
+exact manifest bytes passed to workers, and writes each attempt under a unique
+lease-token path. Output size and row limits are checked before a successful
+receipt is recorded. Tree SHAP and explicitly enabled model-agnostic SHAP are
+batch operations; they do not change the inference or serving request path.
+
+### Vector-index operations
+
+**Primary entries**: `vector_index/index_job.py`, `search.py`, and
+`maintenance.py`
+
+```
+tributo vector <build|search|optimize|compact>
+  → submit_vector_job() → Ray Job driver → run_job_request()
+  → one validated operation request
+       ├─ build_vector_index() → LanceRayAdapter.create_index()
+       ├─ search_vectors() → fixed Lance version → global Top-K
+       ├─ optimize_vector_indices() → index appended fragments
+       └─ compact_vector_dataset() → compact files and recheck indices
+  → coverage, runtime, search, or maintenance receipt
+```
+
+Direct Python calls use the active Ray context. CLI requests cross the Ray Jobs
+control plane as a size-bounded, validated payload and import Lance dependencies
+inside the job. Search opens one requested dataset version and returns bounded
+inline rows or a Parquet result. Build and maintenance re-open the active
+dataset after mutation and derive coverage evidence from Lance metadata.
+
+### CLI data entry
 
 **Primary entry**: `cli.py`
 
@@ -209,7 +252,7 @@ CLI parses JSON → builds JobConfig / TrainingConfig
 submits to Ray Job API or calls local runner
 ```
 
-### 4. Plugin and Optional Data Connectors
+### Plugin and optional data connectors
 
 **Discovery**: `plugin.py::discover_connector_plugins()`
 
@@ -221,7 +264,7 @@ DataConnector subclass validation
 Registered in connector registry (data/registry.py)
 ```
 
-**Currently**: No third-party connector plugins exist. All built-in connectors
+No third-party connector plugins ship with v1.0.0. All built-in connectors
 are in `data/` module. This historical SPI serves `DataConnector` compatibility
 and write paths.
 
@@ -255,9 +298,9 @@ not support claims until their external packages and infrastructure gates pass.
 
 ---
 
-## Model Export Entry Points
+## Model export entry points
 
-### First-Party Trainer Bundle Path
+### First-party trainer Bundle path
 
 **Entry**: `training/base.py::BaseTrainer.run`
 
@@ -322,7 +365,7 @@ required Hook failure raises `PostPublishCallbackError` with the committed
 `BundleResult` and receipts; it never rolls back the Bundle commit. The same
 error exposes the terminal `TrainingResult` as `error.training_result`.
 
-### Bundle Consumption Path
+### Bundle consumption path
 
 **Entry**: `exporting/bundle_reader.py::BundleReader`
 
@@ -354,7 +397,7 @@ different internally consistent Manifest without an independently retained
 digest. Consumers that require replacement detection must retain a
 `BundleRef` or publication event rather than reconstructing a raw URI.
 
-### Deprecated Raw-Artifact Path
+### Deprecated raw-artifact path
 
 **Entry**: `training/exporters/` (re-exports from `exporting`)
 
@@ -372,7 +415,7 @@ The compatibility path is never selected by missing targets or an environment
 flag. It requires an explicit per-call switch and emits `DeprecationWarning`.
 New code must consume Bundle URI and role rather than `legacy_artifact_uri`.
 
-### Plugin Exporters
+### Plugin exporters
 
 **Discovery**: `plugin.py::discover_exporter_plugins()`
 
@@ -392,7 +435,7 @@ Plugin groups also discovered:
 
 ---
 
-## Key Observations
+## Key observations
 
 | Issue | Location | Impact |
 |-------|----------|--------|

@@ -1162,9 +1162,9 @@ def build_trainer(
 
 
 def run_training_with_config(config: dict[str, Any]) -> dict[str, Any]:
-    """Run XGBoost distributed training from a YAML config dictionary.
+    """Run XGBoost distributed training from a validated config dictionary.
 
-    YAML structure::
+    Configuration fields::
 
         data:
           type: csv | s3 | clickhouse

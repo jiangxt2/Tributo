@@ -76,7 +76,6 @@ dtype
 dtypes
 Embedder
 embedding
-embeddings
 Explainability
 entrypoint
 entrypoints
@@ -225,6 +224,7 @@ pytest
 quantized
 quantizer
 Quickstart
+quickstart
 Ray
 RayDataHandle
 RayExecutionPolicy

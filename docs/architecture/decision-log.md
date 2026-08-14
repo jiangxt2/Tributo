@@ -1,4 +1,4 @@
-# Architecture Decision Log
+# Architecture decision log
 
 Purpose: Record every Go/No-Go decision for condition tracks, including timing,
 evidence, and maintainer determination. Each track is re-evaluated when its
@@ -8,7 +8,7 @@ trigger condition is met.
 
 | Attribute | Value |
 |-----------|-------|
-| Decider | Tributo maintainers (currently @jiangxt2) |
+| Decider | Tributo maintainers (@jiangxt2 for v1.0.0) |
 | Evidence required | Measurable signal, not opinion (see per-track criteria) |
 | Decision format | `GO` / `NO-GO` with date, evidence summary, and link to supporting data |
 | Re-evaluation | At trigger events listed below; also on request from any contributor |

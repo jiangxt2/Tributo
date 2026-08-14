@@ -1,7 +1,9 @@
-# API Stability Inventory
+# API stability inventory
 
-Canonical stability classification for every Tributo module.
-Last updated: 2026-08-14.
+`@PublicAPI` annotations are the canonical symbol-level stability source. The
+[generated API reference](reference/index.md) covers every annotated object and
+CI compares each imported object's runtime stability with the source inventory.
+This page provides module-level guidance and deprecation notes.
 
 ## Stability Levels
 
@@ -23,7 +25,8 @@ Last updated: 2026-08-14.
 |--------|-------|-------|
 | `tributo.config` — `JobConfig` | `stable` | Ray Job submission config |
 | `tributo.config` — `AlgorithmExecutionConfig` and nested algorithm execution models | `alpha` | Strict JSON envelope shared by local Ray and Kubernetes-hosted Ray execution |
-| `tributo.job` — `TributoClient`, `RayJob` | `stable` | Primary user-facing API |
+| `tributo.job` — `TributoClient` | `stable` | Primary Ray Jobs client |
+| `tributo.job` — `RayJob` | `stable` annotation with runtime deprecation warning | Use `TributoClient`; the annotation and warning conflict is documented without changing the public contract in this documentation update |
 | `tributo.exceptions` — core exceptions | `stable` | ``TributoError`` and 16 common subtypes |
 | `tributo.exceptions` — `ResultMaterializationError` | `alpha` | Credential-safe lazy inference action failure |
 | `tributo.exceptions` — Bundle/Plugin exceptions | `beta` | ``BundleExportError``, ``BundleCommitBusyError``, ``AliasConflict``, ``UnsupportedArtifactFormat``, ``PostPublishCallbackError``, ``PluginLoadIssue`` |
@@ -40,7 +43,7 @@ from the legacy setup-only propagation rule.
 
 | Module | Level | Notes |
 |--------|-------|-------|
-| `tributo.training.config` — `TrainingConfig` | `beta` | Unified training config |
+| `tributo.training.config` — `TrainingDataConfig` and trainer-specific config models | `beta` | Training data and trainer configuration contracts |
 | `tributo.training.base` — `BaseTrainer`, `TrainerSpec` | `beta` | First-party trainers default to an explicit-destination Bundle; raw artifacts require `legacy_export=True` |
 | `tributo.training.results` — `TrainingResult` and status enums | `beta` | Closed training, Bundle, Hook, URI, and execution identity result contract |
 | `tributo.training.checkpoint` | `beta` | Resume checkpoint contract |
@@ -280,6 +283,7 @@ from the legacy setup-only propagation rule.
 | `TRIBUTO_DATA_BACKEND=legacy` | Default Provider/Gateway path | v1.0.0 | Selector is accepted with `FutureWarning` during the compatibility window; it no longer restores direct dispatch |
 | Third-party Provider `normalize()+open()` SPI | `plan()` + `EngineBinding` | v1.0.0 | Ray compatibility adapter only until the next major release; Gateway never falls back |
 | `InferenceConfig.s3_config` | Independent source/model/sink storage profiles | Inference architecture P0 | One compatibility window with `DeprecationWarning` |
+| `tributo.job.RayJob` | `tributo.job.TributoClient` | Runtime warning exists in v1.0.0 | Removal version is not declared; the `stable` annotation remains authoritative until a separate API decision changes it |
 
 ## Unannotated Code
 

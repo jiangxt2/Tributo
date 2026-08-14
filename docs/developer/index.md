@@ -10,6 +10,15 @@ changing credentials, artifacts, streaming, or publication behavior.
 The [test execution policy](testing.md) defines CI-safe, scheduled, external,
 and quarantined suites.
 
+```{toctree}
+:maxdepth: 1
+
+documentation
+../architecture/index
+../integrations/index
+testing
+```
+
 ## Local checks
 
 Install the project development environment:
@@ -38,7 +47,12 @@ make spelling SPHINXBUILD=.docs-venv/bin/sphinx-build
 Run the real-import integration build before publishing:
 
 ```bash
-uv sync --extra dev --extra training --locked
+uv sync \
+  --extra dev \
+  --extra grpc \
+  --extra training \
+  --extra vector-index \
+  --locked
 uv pip install --python .venv/bin/python -r requirements-doc.lock
 SPHINX_REAL_IMPORTS=1 make strict \
   SPHINXBUILD=.venv/bin/sphinx-build \
@@ -58,9 +72,7 @@ Python examples are syntax-checked in CI. Examples that submit work require a
 reachable Ray cluster and are covered by the existing project integration
 procedures rather than executed during an unprivileged RTD build.
 
-```{toctree}
-:hidden:
-:maxdepth: 1
-
-testing
-```
+Repository-backed local examples execute in CI. Examples that require Ray
+Jobs, Docker, databases, S3, or another external service name the corresponding
+integration evidence instead of contacting that infrastructure during Read the
+Docs builds.

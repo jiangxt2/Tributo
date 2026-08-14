@@ -1,4 +1,4 @@
-# Migration Safety Rules
+# Migration safety rules
 
 Rules for safely migrating between old and new code paths during architecture
 convergence. These apply to all migration PRs (D1+D2, E1, E2, E3, E4, T1, T3).
@@ -103,7 +103,7 @@ providers accept local paths and S3 paths with an explicit `S3Config`; S3 URI
 userinfo, query parameters, and fragments are rejected because accepting them
 would change object-key or credential semantics.
 
-New third-party sources do not use the deprecated `open()` exception. An
+Third-party sources do not use the deprecated `open()` exception. An
 installed package publishes a versioned logical Provider through
 `tributo.ingestion_providers` and physical Ray/Daft Bindings through
 `tributo.ingestion_bindings`. Provider-declared projection and relative-path

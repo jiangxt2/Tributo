@@ -1,8 +1,8 @@
-# ONNX Model Serving
+# Serve ONNX models
 
 Deploy ONNX models as HTTP inference services using Ray Serve.
 
-## Start a Service
+## Start a service
 
 ```bash
 uv run tributo serve start \
@@ -13,7 +13,7 @@ uv run tributo serve start \
 
 The service will be available at `http://127.0.0.1:8000/predict`.
 
-## Serve a Bundle
+## Serve a bundle
 
 Bundles are the stable Serving entry point. A serveable bundle must contain
 non-empty, typed `input_signature` and `output_signature` fields in its
@@ -27,10 +27,9 @@ uv run tributo serve start \
   --app-name my-model
 ```
 
-The E3 loader intentionally rejects bundles with an empty signature. The
-current pre-E2 export path can publish such legacy-compatible bundles; the
-trainer-to-manifest typed-signature producer is delivered by E2. Re-running
-that same pre-E2 export path does not add a signature.
+The loader rejects bundles with an empty signature. Legacy export paths can
+publish bundles without a typed signature. Re-export the model through a
+typed Bundle path before using the safe serving entry point.
 
 `--unsafe` is an explicit compatibility escape hatch for legacy bundles or
 non-safe flavors. It skips signature validation and must not be used for a
@@ -46,7 +45,7 @@ Use `--storage-profile` for an S3-compatible bundle configured through a
 registered storage profile. The same `--bundle-uri`, `--role`, `--unsafe`, and
 `--storage-profile` options are available on `serve grpc start`.
 
-## Send Inference Requests
+## Send inference requests
 
 ```python
 import requests
@@ -62,7 +61,7 @@ result = response.json()
 print(result["predictions"])
 ```
 
-## Python API
+## Use the Python API
 
 ```python
 from tributo.serving import start_serving, stop_serving, get_serving_status
@@ -83,7 +82,7 @@ print(f"Running: {status['running']}")
 stop_serving("my-model")
 ```
 
-## Streaming LLM Inference
+## Stream LLM output
 
 For LLM models with token streaming:
 
@@ -108,13 +107,13 @@ for line in response.iter_lines():
         print(line.decode())
 ```
 
-## gRPC Inference (alpha)
+## Use gRPC inference
 
-gRPC-based inference is available for lower latency. The gRPC deployment provides a
-protobuf-based interface for model inference.
+gRPC serving is a Beta API. The deployment provides a protobuf interface for
+model inference. Install the `grpc` extra before using it.
 
 The HTTP and gRPC output contracts are not yet identical: HTTP exposes the
-`return_probs` selector, while gRPC currently returns the model's primary
+`return_probs` selector, while the v1.0.0 gRPC contract returns the model's primary
 output (`outputs[0]`). For classification probabilities, use HTTP until the
 gRPC response contract adds an explicit output selector. The legacy gRPC
 `confidence` field is not a calibrated probability when the primary output is
@@ -129,9 +128,10 @@ builder.
 uv run tributo serve grpc start --model-path /path/to/model.onnx --port 50051
 ```
 
-```{warning}
-gRPC inference is under active development. The client API is not yet
-stabilized; use ONNX HTTP serving when a stable transport is required.
+```{note}
+The HTTP and gRPC transports are both Beta. Their output-selection contracts
+are not identical, so select the transport based on the response contract
+described above.
 ```
 
 ## Scaling
@@ -142,6 +142,6 @@ stabilized; use ONNX HTTP serving when a stable transport is required.
 | Route prefix | Each deployment gets a unique HTTP path. Use different `--app-name` values for multiple models. |
 | GPU | ONNX Runtime will use CUDA if a GPU is available and `onnxruntime-gpu` is installed. |
 
-## See Also
+## Next steps
 
 - Example: `examples/serve_onnx_model.py`

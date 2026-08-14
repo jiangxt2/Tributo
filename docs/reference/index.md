@@ -7,12 +7,20 @@ sphinx-click.
 ```{toctree}
 :maxdepth: 1
 
-../api
+Core API <api/core>
+Data API <api/data>
+Algorithms and training API <api/algorithms-training>
+Model lifecycle API <api/model-lifecycle>
+Inference and serving API <api/inference-serving>
+Vector-index API <api/vector-index>
+Pipeline and extension API <api/extensions>
 ../cli
 support-matrix
 ../STABILITY
+../api
 ```
 
-The API inventory and stability annotations are checked independently in a
-real project environment so the lightweight Read the Docs mocks cannot hide
-first-party import errors.
+The component pages are generated from source annotations. CI checks the
+complete inventory, imports every documented object in the real project
+environment, compares runtime stability to the source inventory, and rejects
+stale generated pages.

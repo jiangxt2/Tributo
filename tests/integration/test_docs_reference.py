@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
@@ -26,11 +27,14 @@ pytestmark = pytest.mark.integration
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DOCS_ROOT = REPOSITORY_ROOT / "docs"
+DOCS_BUILD_ROOT = Path(
+    os.environ.get("TRIBUTO_DOCS_BUILD_ROOT", DOCS_ROOT / "_build-real")
+)
 
 
 def test_documented_api_targets_import_with_real_dependencies() -> None:
     errors = validate_api_reference(
-        DOCS_ROOT / "api.md",
+        DOCS_ROOT,
         import_objects=True,
     )
     assert errors == []
@@ -64,7 +68,9 @@ def test_support_matrix_and_cli_share_registry_snapshot() -> None:
 
 
 def test_generated_sidebar_contains_global_navigation() -> None:
-    html_path = DOCS_ROOT / "_build-real" / "html" / "installation" / "index.html"
+    html_path = (
+        DOCS_BUILD_ROOT / "html" / "getting-started" / "installation" / "index.html"
+    )
     html = html_path.read_text(encoding="utf-8")
     match = re.search(
         r'<nav id="main-sidebar".*?</nav>',
@@ -75,23 +81,32 @@ def test_generated_sidebar_contains_global_navigation() -> None:
     sidebar = match.group(0)
 
     # The dirhtml builder emits directory-style URLs, so from the
-    # installation/index.html page every root-level link is one hop up.
+    # getting-started/installation/index.html page every root-level link is
+    # two hops up.
     expected_hrefs = (
-        "../overview/",
-        "../quickstart/",
-        "../user-guide/",
-        "../examples/",
-        "../integrations/",
-        "../data/",
-        "../training/",
-        "../model-lifecycle/",
-        "../inference/",
-        "../reference/",
-        "../ray-jobs/",
-        "../operations/",
-        "../developer/",
-        "../architecture/",
-        "../security/",
+        "../../overview/",
+        "../",
+        "../../examples/",
+        "../../data/",
+        "../../algorithms/",
+        "../../model-lifecycle/",
+        "../../inference/",
+        "../../vector-index/",
+        "../../reference/",
+        "../../ray-jobs/",
+        "../../operations/",
+        "../../developer/",
+        "../../security/",
     )
     positions = [sidebar.index(f'href="{href}"') for href in expected_hrefs]
     assert positions == sorted(positions)
+
+
+def test_generated_api_renders_stability_admonitions() -> None:
+    html_path = DOCS_BUILD_ROOT / "html" / "reference" / "api" / "core" / "index.html"
+    html = html_path.read_text(encoding="utf-8")
+
+    assert '<div class="tributo-stability tributo-stability-stable admonition">' in html
+    assert '<div class="tributo-stability tributo-stability-beta admonition">' in html
+    assert '<div class="tributo-stability tributo-stability-alpha admonition">' in html
+    assert ".. admonition::" not in html

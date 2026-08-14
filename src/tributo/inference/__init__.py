@@ -1,8 +1,10 @@
-"""tributo.inference — Distributed batch inference module.
+"""Bundle-backed and compatibility batch inference on Ray Data.
 
-Streaming inference based on Ray Data + ONNX Runtime, supporting XGBoost and other models.
+The formal request path resolves a verified model bundle, explicit tensor
+bindings, a bounded data source, and a result sink. The compatibility path can
+run a caller-provided ``BasePredictor`` with ``run_batch_inference``.
 
-Extend BasePredictor::
+Extend ``BasePredictor`` for a compatibility workflow::
 
     from tributo.inference import BasePredictor
 

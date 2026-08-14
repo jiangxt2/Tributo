@@ -1,14 +1,15 @@
 """Base trainer and registration spec.
 
-``BaseTrainer`` uses the Template Method pattern — subclasses only need to
-implement ``setup``, ``training_loop``, and ``export_model`` (or the newer
-``export_artifacts`` for non-model outputs).  An optional callback mechanism
-supports integration with experiment trackers such as MLflow.
+``BaseTrainer`` is a compatibility Template Method lifecycle. Subclasses
+implement ``setup`` and ``training_loop``. Formal first-party training publishes
+through ``BundleExportService``; ``export_artifacts`` and ``export_model`` remain
+compatibility hooks. An optional callback mechanism supports integrations such
+as MLflow.
 
 .. deprecated:: 0.5.0
-    Override ``export_artifacts()`` instead of ``export_model()``.
-    ``export_model()`` is kept as a backward-compatible alias with a
-    no-op default implementation.
+    Formal first-party training paths publish a Bundle through
+    ``BundleExportService``. ``export_artifacts()`` remains the replacement for
+    the older ``export_model()`` compatibility hook.
 """
 
 from __future__ import annotations
@@ -54,17 +55,16 @@ class TrainerCallback(Protocol):
 
 @PublicAPI(stability="beta")
 class BaseTrainer(ABC):
-    """Base class for trainers — ``setup → training_loop → export_artifacts``.
+    """Compatibility base class for the trainer lifecycle.
 
     Subclasses must implement two abstract methods:
     - ``setup()``: Initialise model, optimizer, data preprocessing, etc.
     - ``training_loop()``: Run training, return a checkpoint or model object.
 
-    For artifact export, subclasses should override ``export_artifacts()``
-    (the new extension point).  ``export_model()`` is kept for backward
-    compatibility — its default no-op implementation is called by
-    ``export_artifacts()`` when the subclass only overrides the legacy
-    ``export_model()`` method.
+    Formal first-party trainers publish through ``BundleExportService``.
+    Compatibility subclasses can override ``export_artifacts()``;
+    ``export_model()`` remains the older hook and is called by the default
+    ``export_artifacts()`` implementation.
 
     The base class provides ``run()`` as a Template Method that orchestrates
     the three steps in order.

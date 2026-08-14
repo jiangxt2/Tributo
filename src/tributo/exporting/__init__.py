@@ -1,7 +1,7 @@
-"""Tributo model export — stable public API.
+"""Tributo model export public API.
 
 ``tributo.exporting`` is the user-facing entry point for model export.
-It provides a minimal, stable surface::
+It provides a minimal Beta surface::
 
     from tributo.exporting import export, load_bundle, ExportSpec, BundleRef
 
