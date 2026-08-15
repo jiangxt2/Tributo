@@ -1,0 +1,12 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tributo-test-offline-algorithm"
+version = "1.0.0"
+requires-python = ">=3.12,<3.14"
+dependencies = ["tributo-test-offline-dependency==1.0.0"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tributo_test_offline_algorithm"]

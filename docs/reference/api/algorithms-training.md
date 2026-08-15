@@ -9,6 +9,33 @@ a public annotation or moving a public object.
 Stable, Beta, and Alpha objects appear because Ray-style API policy requires
 documentation for every public stability tier.
 
+## `tributo.algorithms.api.artifacts`
+
+```{autoclass} tributo.algorithms.api.artifacts.AlgorithmArtifact
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.artifacts.AlgorithmBundleManifest
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.artifacts.AlgorithmDistributionReceipt
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.artifacts.ArtifactDistributionMode
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.artifacts.ArtifactFile
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.artifacts.ImageProfile
+:no-members:
+```
+
+
 ## `tributo.algorithms.api.context`
 
 ```{autoclass} tributo.algorithms.api.context.UserExecutionContext

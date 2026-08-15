@@ -1,5 +1,13 @@
 """Public alpha contracts for portable algorithm execution."""
 
+from tributo.algorithms.api.artifacts import (
+    AlgorithmArtifact,
+    AlgorithmBundleManifest,
+    AlgorithmDistributionReceipt,
+    ArtifactDistributionMode,
+    ArtifactFile,
+    ImageProfile,
+)
 from tributo.algorithms.api.context import UserExecutionContext
 from tributo.algorithms.api.descriptor import DistributedAlgorithmDescriptor
 from tributo.algorithms.api.distribution import (
@@ -55,6 +63,9 @@ from tributo.algorithms.api.models import (
 
 __all__ = [
     "AlgorithmConfigurationError",
+    "AlgorithmArtifact",
+    "AlgorithmBundleManifest",
+    "AlgorithmDistributionReceipt",
     "AlgorithmDependencyError",
     "AlgorithmExecutionError",
     "AlgorithmExecutionResult",
@@ -66,6 +77,8 @@ __all__ = [
     "AlgorithmResolutionError",
     "AlgorithmRunResult",
     "ArtifactDraft",
+    "ArtifactDistributionMode",
+    "ArtifactFile",
     "BackendInputCompatibility",
     "CollectivePolicy",
     "DistributionSpec",
@@ -79,6 +92,7 @@ __all__ = [
     "FailureCategory",
     "FrameworkNativePolicy",
     "ImplementationDescriptor",
+    "ImageProfile",
     "InputDistribution",
     "InputBinding",
     "MapReducePolicy",

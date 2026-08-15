@@ -18,6 +18,8 @@ from ray.job_submission import JobStatus, JobSubmissionClient
 from tributo._common import DEFAULT_DASHBOARD_URL, build_runtime_env
 from tributo._common.retry import retry_with_exponential_backoff
 from tributo._common.submission_id import generate_submission_id
+from tributo.algorithms.api import EnvironmentSpec
+from tributo.algorithms.api.artifacts import AlgorithmArtifact, ImageProfile
 from tributo.util.annotations import PublicAPI
 
 logger = logging.getLogger(__name__)
@@ -25,6 +27,17 @@ DEFAULT_TIMEOUT = 180
 JobAttemptStatus = Literal["PENDING", "RUNNING", "SUCCEEDED", "FAILED", "STOPPED"]
 TerminalJobStatus = Literal["SUCCEEDED", "FAILED", "STOPPED"]
 _RESERVED_ENV_KEYS = frozenset({"TRIBUTO_RUN_ID", "TRIBUTO_ATTEMPT_ID"})
+
+
+def _resolve_algorithm_dependencies(
+    declared_dependencies: tuple[str, ...],
+    environment: EnvironmentSpec | None,
+) -> tuple[str, ...]:
+    """Reuse EnvironmentSpec dependencies without duplicating declarations."""
+    values = set(declared_dependencies)
+    if environment is not None:
+        values.update(environment.dependencies)
+    return tuple(sorted(values))
 
 
 @PublicAPI(stability="beta")
@@ -135,13 +148,19 @@ def submit_training_job(
     run_id: str | None = None,
     attempt_id: str | None = None,
     metadata: dict[str, str] | None = None,
+    algorithm_artifact: AlgorithmArtifact | None = None,
+    image_profile: ImageProfile | None = None,
+    declared_dependencies: tuple[str, ...] = (),
+    environment: EnvironmentSpec | None = None,
 ) -> str:
     """Submit a training job via the Ray Jobs API.
 
     Automatically builds the correct ``runtime_env``, ensuring:
     - The latest ``tributo`` code is uploaded to the cluster via ``py_modules``;
     - The entrypoint script is provided via ``working_dir``;
-    - Package dependencies are not implicitly mixed across Python environments.
+    - an algorithm Wheel is either code-only with image-provided dependencies
+      or installed from a preflighted offline Wheelhouse;
+    - package dependencies are not implicitly mixed across Python environments.
 
     Args:
         entrypoint: Entrypoint command, e.g. ``"python examples/xgboost_s3_training.py"``.
@@ -153,6 +172,12 @@ def submit_training_job(
         attempt_id: Unique attempt identifier; defaults to ``attempt-1``.
         metadata: Metadata stored with the Ray Job, not exposed as worker
             environment variables.
+        algorithm_artifact: Optional validated algorithm Wheel or offline
+            Bundle to make available for this Job.
+        image_profile: Immutable image compatibility record for the artifact.
+        declared_dependencies: Additional PEP 508 constraints to preflight.
+        environment: Optional formal or ``from_sklearn()`` EnvironmentSpec;
+            its dependencies are merged into the same preflight.
 
     Returns:
         Submitted job ID on success.
@@ -174,6 +199,12 @@ def submit_training_job(
         project_root=project_root,
         env_vars=job_env_vars,
         extra_excludes=extra_excludes,
+        algorithm_artifact=algorithm_artifact,
+        image_profile=image_profile,
+        declared_dependencies=_resolve_algorithm_dependencies(
+            declared_dependencies,
+            environment,
+        ),
     )
 
     client = _get_submission_client(dashboard_url)
@@ -202,6 +233,10 @@ def submit_training_job_with_retry(
     timeout: int = DEFAULT_TIMEOUT,
     poll_interval: int = 2,
     retry_classifier: Callable[[JobStatus | str, str], bool] | None = None,
+    algorithm_artifact: AlgorithmArtifact | None = None,
+    image_profile: ImageProfile | None = None,
+    declared_dependencies: tuple[str, ...] = (),
+    environment: EnvironmentSpec | None = None,
 ) -> TrainingJobResult:
     """Submit, reconcile and optionally retry a training run.
 
@@ -239,6 +274,12 @@ def submit_training_job_with_retry(
             project_root=project_root,
             env_vars=attempt_env_vars,
             extra_excludes=extra_excludes,
+            algorithm_artifact=algorithm_artifact,
+            image_profile=image_profile,
+            declared_dependencies=_resolve_algorithm_dependencies(
+                declared_dependencies,
+                environment,
+            ),
         )
         job_id, submission_id = _submit_training_job_attempt(
             client,

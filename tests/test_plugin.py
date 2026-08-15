@@ -357,6 +357,32 @@ def test_independent_distributed_algorithm_package_passes_conformance(
     assert fixture.DESCRIPTOR.registration.implementation.flavor_id is None
 
 
+def test_algorithm_artifact_plugin_filter_loads_only_the_selected_entry_point(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selected = _TrainerEntryPoint(
+        "selected_algorithm",
+        "package:SELECTED",
+        object(),
+    )
+    skipped = _TrainerEntryPoint(
+        "unselected_algorithm",
+        "package:UNSELECTED",
+        RuntimeError("must not load"),
+    )
+    _set_entry_points(monkeypatch, selected, skipped)
+    monkeypatch.setenv("TRIBUTO_PLUGINS", "selected_algorithm")
+    monkeypatch.setattr(
+        plugin,
+        "validate_distributed_algorithm_descriptor",
+        lambda descriptor, *, entry_point_name: descriptor,
+    )
+
+    assert plugin.discover_algorithm_descriptors() == [selected.loaded]
+    assert selected.load_calls == 1
+    assert skipped.load_calls == 0
+
+
 def test_independent_fixture_single_and_multi_partition_results_match(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

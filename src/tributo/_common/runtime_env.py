@@ -9,11 +9,17 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from tributo.util.annotations import DeveloperAPI
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from tributo.algorithms.api.artifacts import (
+        AlgorithmArtifact,
+        ImageProfile,
+    )
 
 
 # Directories and files excluded by default from working_dir archive
@@ -62,6 +68,9 @@ def build_runtime_env(
     extra_excludes: list[str] | None = None,
     env_vars: dict[str, str] | None = None,
     pythonpath: str | None = None,
+    algorithm_artifact: AlgorithmArtifact | None = None,
+    image_profile: ImageProfile | None = None,
+    declared_dependencies: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Build a runtime_env dict suitable for the Ray Jobs API.
 
@@ -71,8 +80,12 @@ def build_runtime_env(
     2. ``working_dir`` uploads the project root, providing entrypoint scripts;
 
     Package dependencies must be installed in the cluster image or supplied by
-    an explicit Ray runtime environment. The builder never derives package paths
-    from the submitting process or combines unrelated ``site-packages`` trees.
+    an explicit, preflighted offline Ray runtime environment. When
+    ``algorithm_artifact`` is present, the builder validates the Wheel or
+    Bundle against ``image_profile`` and owns the artifact-related
+    ``working_dir``, ``py_modules``, ``pip``, and ``excludes`` fields. It never
+    derives package paths from the submitting process or combines unrelated
+    ``site-packages`` trees.
 
     Args:
         project_root: Project root directory. When ``None``, walks up to find
@@ -84,6 +97,13 @@ def build_runtime_env(
         pythonpath: Optional cluster-visible ``PYTHONPATH`` to append to an
             explicitly supplied value. ``None`` leaves ``PYTHONPATH`` untouched.
             Do not pass paths derived from the submitting host.
+        algorithm_artifact: Optional user Wheel or offline Wheelhouse Bundle.
+            Image mode requires a code-only Wheel; offline mode requires a
+            complete local or attested remote Bundle.
+        image_profile: Immutable image compatibility record required when an
+            algorithm artifact is supplied.
+        declared_dependencies: Additional PEP 508 constraints checked against
+            the selected image or offline Wheelhouse.
 
     Returns:
         A dict that can be passed directly to
@@ -97,7 +117,16 @@ def build_runtime_env(
         ...     runtime_env=runtime_env,
         ... )
     """
-    root = project_root or find_project_root()
+    if project_root is None:
+        try:
+            root = find_project_root()
+        except FileNotFoundError as exc:
+            raise FileNotFoundError(
+                "project_root is required when Tributo is not running from a "
+                "source checkout containing pyproject.toml"
+            ) from exc
+    else:
+        root = project_root
     src_pkg = root / "src" / package_name
     if not src_pkg.exists():
         # Compat with flat layout (package directly under root)
@@ -134,10 +163,50 @@ def build_runtime_env(
     if merged_env_vars:
         runtime_env["env_vars"] = merged_env_vars
 
+    if algorithm_artifact is None and (
+        image_profile is not None or declared_dependencies
+    ):
+        raise ValueError(
+            "image_profile and declared_dependencies require algorithm_artifact"
+        )
+
+    if algorithm_artifact is not None:
+        if image_profile is None:
+            raise ValueError(
+                "image_profile is required when algorithm_artifact is configured"
+            )
+        from tributo._common.algorithm_distribution import (
+            algorithm_runtime_env_patch,
+            prepare_algorithm_distribution,
+        )
+
+        prepared = prepare_algorithm_distribution(
+            algorithm_artifact,
+            image_profile,
+            declared_dependencies=declared_dependencies,
+        )
+        artifact_patch = algorithm_runtime_env_patch(
+            prepared,
+            existing_env_vars=merged_env_vars,
+        )
+        if "working_dir" in artifact_patch:
+            runtime_env["working_dir"] = artifact_patch["working_dir"]
+        if "excludes" in artifact_patch:
+            runtime_env["excludes"] = artifact_patch["excludes"]
+        if "py_modules" in artifact_patch:
+            runtime_env["py_modules"] = [
+                *runtime_env.get("py_modules", []),
+                *artifact_patch["py_modules"],
+            ]
+        if "pip" in artifact_patch:
+            runtime_env["pip"] = artifact_patch["pip"]
+        merged_env_vars = artifact_patch["env_vars"]
+        runtime_env["env_vars"] = merged_env_vars
+
     logger.debug(
         "Built runtime_env: working_dir=%s, py_modules=%s, env_var_keys=%s",
-        root,
-        src_pkg,
+        runtime_env["working_dir"],
+        runtime_env["py_modules"],
         sorted(merged_env_vars),
     )
     return runtime_env

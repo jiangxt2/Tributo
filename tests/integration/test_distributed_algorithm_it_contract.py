@@ -63,6 +63,25 @@ def test_distributed_gate_uses_cached_images_and_scoped_compose_cleanup() -> Non
     assert "--pull never" in runner
     assert "uv build" in runner
     assert "TRIBUTO_DISTRIBUTED_PLUGIN_WHEEL" in runner
+    assert "tests/fixtures/offline_algorithm_dependency" in runner
+    assert "tests/fixtures/offline_algorithm_plugin" in runner
+    assert "tools/build_algorithm_bundle.py" in runner
+    assert (
+        'uv run --locked --no-sync python "${PROJECT_ROOT}/tools/build_algorithm_bundle.py"'
+        in runner
+    )
+    assert "offline-bundle.zip" in runner
+    assert "TRIBUTO_OFFLINE_ALGORITHM_BUNDLE_URI" in runner
+    assert "AWS_ENDPOINT_URL" in (
+        (
+            _ROOT / "tests" / "integrations" / "docker-compose.data-ingestion.yml"
+        ).read_text(encoding="utf-8")
+    )
+    assert "TRIBUTO_OFFLINE_ALGORITHM_BUNDLE" in runner
+    assert (
+        "test_offline_wheelhouse_installs_unique_dependency_on_driver_and_workers"
+        in runner
+    )
     assert "docker compose" in runner
     assert "down --volumes --remove-orphans" in runner
     assert "com.docker.compose.project=${PROJECT_NAME}" in runner
@@ -73,6 +92,10 @@ def test_distributed_gate_uses_cached_images_and_scoped_compose_cleanup() -> Non
     assert "report_global_image_changes || cleanup_status=1" not in runner
     assert "report_existing_container_changes || cleanup_status=1" not in runner
     assert "test_formal_distributed_algorithms_complete_on_ray_cluster" in runner
+    assert (
+        "test_remote_offline_wheelhouse_archive_installs_on_driver_and_workers"
+        in runner
+    )
     assert '--temp-dir="/workspace/tributo-work/tmp/ray-$${HOSTNAME}"' in (
         compose_override
     )

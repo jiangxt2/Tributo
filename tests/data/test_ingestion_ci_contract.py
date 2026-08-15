@@ -99,6 +99,7 @@ def test_distributed_ingestion_image_uses_locked_project_dependencies() -> None:
     assert "--no-default-groups" in dockerfile
     assert "--no-install-project" in dockerfile
     assert "--locked" in dockerfile
+    assert "python -m ensurepip --upgrade" in dockerfile
     assert "COPY --chown=1000:100 pyproject.toml uv.lock" in dockerfile
     assert "COPY --chown=ray:users ." not in dockerfile
     assert "src/" not in dockerfile

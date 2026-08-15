@@ -49,6 +49,8 @@ SOURCE_ENTRIES = (
     "uv.lock",
     ".python-version",
     "README.md",
+    "ci",
+    "scripts",
     "src",
     "tests",
 )

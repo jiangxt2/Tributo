@@ -31,6 +31,14 @@ RAY_JOB_LOG="${LOG_DIR}/ray-jobs.log"
 PLUGIN_DIST_DIR="${LOG_DIR}/plugin-dist"
 PLUGIN_CONTAINER_DIR="/workspace/tributo-work/distributed-plugin"
 PLUGIN_WHEEL=""
+OFFLINE_DIST_DIR="${LOG_DIR}/offline-dist"
+OFFLINE_BUNDLE_DIR="${LOG_DIR}/offline-bundle"
+OFFLINE_BUNDLE_ARCHIVE="${LOG_DIR}/offline-bundle.zip"
+OFFLINE_BUNDLE_CONTAINER_DIR="/workspace/tributo-work/offline-bundle"
+OFFLINE_BUNDLE_ARCHIVE_CONTAINER="/workspace/tributo-work/offline-bundle.zip"
+OFFLINE_BUNDLE_BUCKET="tributo-algorithm-it"
+OFFLINE_BUNDLE_KEY="${PROJECT_NAME}/offline-bundle.zip"
+OFFLINE_BUNDLE_URI="s3://${OFFLINE_BUNDLE_BUCKET}/${OFFLINE_BUNDLE_KEY}"
 BASELINE_CAPTURED=0
 COMPOSE_TOUCHED=0
 RAY_NODE_WAIT_SECONDS=120
@@ -44,6 +52,7 @@ if [[ -e "${LOG_DIR}" ]]; then
   exit 2
 fi
 mkdir -p "${PLUGIN_DIST_DIR}"
+mkdir -p "${OFFLINE_DIST_DIR}"
 
 compose() {
   docker compose \
@@ -235,6 +244,39 @@ if [[ "${#plugin_wheels[@]}" -ne 1 ]]; then
 fi
 PLUGIN_WHEEL="${plugin_wheels[0]}"
 
+uv build \
+  --wheel \
+  --out-dir "${OFFLINE_DIST_DIR}" \
+  --no-create-gitignore \
+  tests/fixtures/offline_algorithm_dependency \
+  2>&1 | tee "${LOG_DIR}/offline-dependency-wheel.log"
+uv build \
+  --wheel \
+  --out-dir "${OFFLINE_DIST_DIR}" \
+  --no-create-gitignore \
+  tests/fixtures/offline_algorithm_plugin \
+  2>&1 | tee "${LOG_DIR}/offline-algorithm-wheel.log"
+shopt -s nullglob
+offline_dependency_wheels=("${OFFLINE_DIST_DIR}"/tributo_test_offline_dependency-*.whl)
+offline_algorithm_wheels=("${OFFLINE_DIST_DIR}"/tributo_test_offline_algorithm-*.whl)
+shopt -u nullglob
+if [[ "${#offline_dependency_wheels[@]}" -ne 1 || "${#offline_algorithm_wheels[@]}" -ne 1 ]]; then
+  echo "Expected one offline algorithm Wheel and one dependency Wheel" >&2
+  exit 1
+fi
+uv run --locked --no-sync python "${PROJECT_ROOT}/tools/build_algorithm_bundle.py" \
+  --algorithm-wheel "${offline_algorithm_wheels[0]}" \
+  --dependency-wheel "${offline_dependency_wheels[0]}" \
+  --output "${OFFLINE_BUNDLE_DIR}" \
+  --algorithm-id "offline.algorithm" \
+  --profile-id "data-ingestion.cpu.v1" \
+  2>&1 | tee "${LOG_DIR}/offline-bundle.log"
+
+uv run --locked --no-sync python -c \
+  'import pathlib, sys, zipfile; root = pathlib.Path(sys.argv[1]); output = pathlib.Path(sys.argv[2]); archive = zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED); [archive.write(path, path.relative_to(root).as_posix()) for path in root.rglob("*") if path.is_file()]; archive.close()' \
+  "${OFFLINE_BUNDLE_DIR}" "${OFFLINE_BUNDLE_ARCHIVE}"
+OFFLINE_BUNDLE_ARCHIVE_SHA256="$(shasum -a 256 "${OFFLINE_BUNDLE_ARCHIVE}" | awk '{print $1}')"
+
 set -a
 # shellcheck disable=SC1090
 source "${VERSIONS_FILE}"
@@ -247,12 +289,12 @@ fi
 if [[ "${TRIBUTO_IT_ALLOW_LOCAL_BUILD:-1}" != "1" ]]; then
   prepare_args+=(--no-local-build)
 fi
-python3 "${PROJECT_ROOT}/tools/tributo_it.py" "${prepare_args[@]}" \
+uv run --locked --no-sync python "${PROJECT_ROOT}/tools/tributo_it.py" "${prepare_args[@]}" \
   2>&1 | tee "${LOG_DIR}/runtime-prepare.log"
 
 export TRIBUTO_IT_RUNTIME_IMAGE
 TRIBUTO_IT_RUNTIME_IMAGE="$({
-  python3 "${PROJECT_ROOT}/tools/tributo_it.py" runtime-key --profile data-ingestion
+  uv run --locked --no-sync python "${PROJECT_ROOT}/tools/tributo_it.py" runtime-key --profile data-ingestion
 } | python3 -c 'import json, sys; print(json.loads(sys.stdin.read().splitlines()[-1])["local_tag"])')"
 REQUIRED_RUNTIME_IMAGE="${TRIBUTO_IT_RUNTIME_IMAGE}"
 REQUIRED_RUNTIME_IMAGE_ID="$(docker image inspect \
@@ -261,7 +303,7 @@ export TRIBUTO_IT_MINIO_IMAGE="${MINIO_IMAGE}"
 export TRIBUTO_IT_SOURCE_ROOT="${PROJECT_ROOT}"
 export TRIBUTO_IT_TOOL_IMAGE="${TOOL_IMAGE}"
 
-python3 -c \
+uv run --locked --no-sync python -c \
   'from tools.tributo_it import ensure_digest_image, load_profile; p = load_profile("data-ingestion"); ensure_digest_image(p.tool_image); ensure_digest_image(p.minio_image)' \
   2>&1 | tee "${LOG_DIR}/infrastructure-images.log"
 
@@ -279,14 +321,46 @@ wait_for_stable_ray_nodes 3
 compose exec -T ray-head mkdir -p "${PLUGIN_CONTAINER_DIR}"
 compose cp "${PLUGIN_WHEEL}" "ray-head:${PLUGIN_CONTAINER_DIR}/"
 PLUGIN_CONTAINER_WHEEL="${PLUGIN_CONTAINER_DIR}/$(basename "${PLUGIN_WHEEL}")"
+compose exec -T ray-head mkdir -p \
+  "${OFFLINE_BUNDLE_CONTAINER_DIR}/wheelhouse"
+compose cp "${OFFLINE_BUNDLE_DIR}/algorithm.whl" \
+  "ray-head:${OFFLINE_BUNDLE_CONTAINER_DIR}/algorithm.whl"
+compose cp "${OFFLINE_BUNDLE_DIR}/requirements.lock" \
+  "ray-head:${OFFLINE_BUNDLE_CONTAINER_DIR}/requirements.lock"
+compose cp "${OFFLINE_BUNDLE_DIR}/manifest.json" \
+  "ray-head:${OFFLINE_BUNDLE_CONTAINER_DIR}/manifest.json"
+compose cp "${OFFLINE_BUNDLE_ARCHIVE}" \
+  "ray-head:${OFFLINE_BUNDLE_ARCHIVE_CONTAINER}"
+for offline_wheel in "${OFFLINE_BUNDLE_DIR}"/wheelhouse/*.whl; do
+  compose cp "${offline_wheel}" \
+    "ray-head:${OFFLINE_BUNDLE_CONTAINER_DIR}/wheelhouse/"
+done
+
+compose exec -T \
+  --env "TRIBUTO_OFFLINE_BUNDLE_ARCHIVE=${OFFLINE_BUNDLE_ARCHIVE_CONTAINER}" \
+  --env "TRIBUTO_OFFLINE_BUNDLE_BUCKET=${OFFLINE_BUNDLE_BUCKET}" \
+  --env "TRIBUTO_OFFLINE_BUNDLE_KEY=${OFFLINE_BUNDLE_KEY}" \
+  ray-head \
+  python -c \
+  'import boto3, os; from botocore.config import Config; from botocore.exceptions import ClientError; client = boto3.client("s3", endpoint_url=os.environ["TRIBUTO_MINIO_ENDPOINT"], aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"], aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"], region_name=os.environ["AWS_DEFAULT_REGION"], config=Config(s3={"addressing_style": "path"})); bucket = os.environ["TRIBUTO_OFFLINE_BUNDLE_BUCKET"]; key = os.environ["TRIBUTO_OFFLINE_BUNDLE_KEY"]; archive = os.environ["TRIBUTO_OFFLINE_BUNDLE_ARCHIVE"];
+try: client.head_bucket(Bucket=bucket)
+except ClientError: client.create_bucket(Bucket=bucket)
+client.upload_file(archive, bucket, key); print(f"uploaded s3://{bucket}/{key}")'
 
 compose exec -T \
   --env TRIBUTO_DOCKER_DISTRIBUTED_ALGORITHM_IT=1 \
   --env "TRIBUTO_DISTRIBUTED_PLUGIN_WHEEL=${PLUGIN_CONTAINER_WHEEL}" \
+  --env TRIBUTO_EXPECTED_ALGORITHM_MODE=image_py_modules \
+  --env "TRIBUTO_ALGORITHM_IMAGE_DIGEST=${REQUIRED_RUNTIME_IMAGE_ID}" \
+  --env "TRIBUTO_OFFLINE_ALGORITHM_BUNDLE=${OFFLINE_BUNDLE_CONTAINER_DIR}" \
+  --env "TRIBUTO_OFFLINE_ALGORITHM_BUNDLE_URI=${OFFLINE_BUNDLE_URI}" \
+  --env "TRIBUTO_OFFLINE_ALGORITHM_BUNDLE_SHA256=${OFFLINE_BUNDLE_ARCHIVE_SHA256}" \
   --env TRIBUTO_DISTRIBUTED_GATE_LOG=/workspace/tributo-work/distributed-algorithm-ray-jobs.log \
   ray-head \
   python -m pytest \
   tests/training/test_dnn_pu_training.py::test_formal_distributed_algorithms_complete_on_ray_cluster \
+  tests/training/test_dnn_pu_training.py::test_offline_wheelhouse_installs_unique_dependency_on_driver_and_workers \
+  tests/training/test_dnn_pu_training.py::test_remote_offline_wheelhouse_archive_installs_on_driver_and_workers \
   -o addopts= \
   -o cache_dir=/workspace/tributo-work/cache/pytest-distributed-algorithm \
   -m integration -vv -rP --tb=short --timeout=1200 2>&1 | tee "${TEST_LOG}"

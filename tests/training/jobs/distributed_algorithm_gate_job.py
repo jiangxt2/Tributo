@@ -446,6 +446,24 @@ def _assert_third_party_descriptor_discovered() -> None:
         )
 
 
+def _assert_algorithm_distribution_environment() -> None:
+    """Prove the Ray Job received the validated code-only Wheel contract."""
+    import json
+
+    expected_mode = os.environ.get("TRIBUTO_EXPECTED_ALGORITHM_MODE")
+    if expected_mode is None:
+        return
+    if os.environ.get("TRIBUTO_ALGORITHM_DISTRIBUTION_MODE") != expected_mode:
+        raise AssertionError("algorithm distribution mode was not propagated")
+    if os.environ.get("TRIBUTO_PLUGINS") != "third_party_mean_regressor":
+        raise AssertionError("algorithm entry-point filter was not propagated")
+    receipt = json.loads(os.environ["TRIBUTO_ALGORITHM_PREFLIGHT_RECEIPT"])
+    if receipt["mode"] != expected_mode:
+        raise AssertionError("algorithm preflight receipt mode disagrees")
+    if receipt["package_name"] != "tributo-test-distributed-algorithm":
+        raise AssertionError("algorithm preflight receipt package disagrees")
+
+
 def main() -> int:
     mode = os.environ.get("TRIBUTO_DISTRIBUTED_GATE_PROFILE", "docker-distributed")
     if mode not in {
@@ -461,6 +479,7 @@ def main() -> int:
             f"{mode} Gate must begin without an initialized Ray driver"
         )
     rng = random.Random(42)
+    _assert_algorithm_distribution_environment()
     f0 = [abs(rng.gauss(1.0, 0.3)) for _ in range(64)]
     f1 = [abs(rng.gauss(0.8, 0.2)) for _ in range(64)]
     labels = [float(index % 4 == 0) for index in range(64)]
