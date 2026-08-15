@@ -130,10 +130,19 @@ def test_ci_parity_no_collection_is_a_failure(
 ) -> None:
     precheck = _load_precheck()
     commands: list[list[str]] = []
+    sync_environments: list[dict[str, str]] = []
 
-    def no_tests(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+    def no_tests(
+        command: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
         commands.append(command)
-        returncode = 0 if command[:2] == ["uv", "sync"] else 5
+        if command[:2] == ["uv", "sync"]:
+            environment = kwargs.get("env")
+            assert isinstance(environment, dict)
+            sync_environments.append(
+                {str(key): str(value) for key, value in environment.items()}
+            )
+        returncode = 0 if command[:2] in (["uv", "venv"], ["uv", "sync"]) else 5
         return subprocess.CompletedProcess(
             command,
             returncode,
@@ -145,13 +154,76 @@ def test_ci_parity_no_collection_is_a_failure(
 
     issues = precheck.check_ci_parity_suite(str(ROOT))
 
+    versions = precheck._parse_python_versions_from_ci(str(ROOT))
     assert issues == [
-        "FAIL: CI-parity suite collected no tests; the manifest unit selection "
-        "is not valid evidence"
+        f"FAIL: CI-parity Python {version} suite collected no tests; the manifest "
+        "unit selection is not valid evidence"
+        for version in versions
     ]
-    assert len(commands) == 2
-    assert commands[1][1:3] == ["-m", "pytest"]
-    assert tuple(commands[1][3:]) == precheck.ci_unit_pytest_args(str(ROOT))
+    assert len(commands) == len(versions) * 3
+
+    venv_commands = [command for command in commands if command[:2] == ["uv", "venv"]]
+    sync_commands = [command for command in commands if command[:2] == ["uv", "sync"]]
+    pytest_commands = [
+        command for command in commands if command[1:3] == ["-m", "pytest"]
+    ]
+    assert (
+        len(venv_commands)
+        == len(sync_commands)
+        == len(pytest_commands)
+        == len(versions)
+    )
+    assert len(sync_environments) == len(versions)
+    for version in versions:
+        assert any(
+            command[command.index("--python") + 1] == version and "--offline" in command
+            for command in venv_commands
+        )
+    assert all("--offline" in command for command in sync_commands)
+    for command, environment in zip(sync_commands, sync_environments, strict=True):
+        assert environment["UV_PROJECT_ENVIRONMENT"] == str(
+            Path(command[3]).parent.parent
+        )
+    assert tuple(pytest_commands[0][3:]) == precheck.ci_unit_pytest_args(str(ROOT))
+
+
+def test_ci_parity_environment_sync_failure_is_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    precheck = _load_precheck()
+    commands: list[list[str]] = []
+
+    def fail_sync(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        if command[:2] == ["uv", "venv"]:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(
+            command,
+            1,
+            stdout="",
+            stderr="locked wheel unavailable",
+        )
+
+    monkeypatch.setattr(precheck.subprocess, "run", fail_sync)
+
+    issues = precheck.check_ci_parity_suite(str(ROOT))
+
+    versions = precheck._parse_python_versions_from_ci(str(ROOT))
+    assert len(issues) == len(versions)
+    assert all("dependency sync failed" in issue for issue in issues)
+    assert not any(command[1:3] == ["-m", "pytest"] for command in commands)
+
+
+def test_ci_parity_requires_declared_python_matrix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    precheck = _load_precheck()
+    monkeypatch.setattr(precheck, "_parse_python_versions_from_ci", lambda _: [])
+
+    assert precheck.check_ci_parity_suite(str(ROOT)) == [
+        "FAIL: CI-parity suite cannot determine Python versions from "
+        ".github/workflows/pr-test-suite.yml"
+    ]
 
 
 def test_ci_test_policy_audit_is_fail_closed(

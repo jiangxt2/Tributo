@@ -40,6 +40,7 @@ def _profile(
         image_uri="tributo:test",
         image_digest="a" * 64,
         python_spec=_python_spec(),
+        python_version=f"{sys.version_info.major}.{sys.version_info.minor}",
         wheel_tags=("py3-none-any",),
         installed_distributions=(
             installed if installed is not None else {"pip": "24.3.1"}
@@ -389,7 +390,8 @@ def test_build_runtime_env_combines_tributo_and_code_wheel(tmp_path: Path) -> No
 
     assert len(runtime_env["py_modules"]) == 2
     assert runtime_env["py_modules"][-1] == str(wheel)
-    assert runtime_env["working_dir"].endswith("algorithm-wheel-image-runtime")
+    working_dir = Path(runtime_env["working_dir"])
+    assert (working_dir / "pyproject.toml").is_file()
 
 
 def test_build_runtime_env_uses_bundle_as_working_dir_for_offline_mode(

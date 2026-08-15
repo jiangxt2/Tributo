@@ -63,6 +63,7 @@ def _profile() -> ImageProfile:
             f">={sys.version_info.major}.{sys.version_info.minor},"
             f"<{sys.version_info.major}.{sys.version_info.minor + 1}"
         ),
+        python_version=f"{sys.version_info.major}.{sys.version_info.minor}",
         wheel_tags=("py3-none-any",),
         installed_distributions={"pip": "24.3.1"},
     )
