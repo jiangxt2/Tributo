@@ -44,7 +44,8 @@ class LanceResultSink:
     only to columns declared by ``request.vector_columns``; model semantics
     remain the responsibility of the caller's Predictor.  The Gateway selects
     the stable Ray Lance Binding; the selected provider owns all data-plane and
-    save-mode behavior.  The compatibility Connector uses the same boundary.
+    save-mode behavior.  All callers use this same boundary; the sink does not
+    expose a format-specific compatibility facade.
     """
 
     api_version: ClassVar[int] = 1

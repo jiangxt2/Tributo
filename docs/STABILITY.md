@@ -94,14 +94,15 @@ from the legacy setup-only propagation rule.
 | Module | Level | Notes |
 |--------|-------|-------|
 | `tributo.data.source_config` — `SourceConfig` | `beta` | Strict in-memory contract; JSON is the built-in persisted format |
-| `tributo.data.provider` — `DataSourceProvider` | `beta` | Logical normalization/planning contract; open-only implementations are deprecated and limited to the old Ray adapter |
+| `tributo.data.provider` — `DataSourceProvider` | `beta` | Logical normalization/planning contract; `normalize()` and `plan()` drive canonical ingestion, while `open()`/`DatasetHandle` remain an independent Provider SPI |
 | `tributo.data.transform_ir` | `alpha` | Versioned engine-neutral ETL contract |
 | `tributo.data.transform_compiler` | `developer` | Internal Ray/Daft expression translation |
 | `tributo.data.scan_plan` | `developer` | Internal engine-neutral scan SPI; downstream consumers use `IngestionGateway` |
 | `tributo.data.ingestion` | `alpha` | Two-stage Gateway, explicit request, typed handles, and receipt |
 | `tributo.data.handle_adapters` | `alpha` | Explicit native-handle conversions with conversion evidence; never a routing fallback |
 | `tributo.data.contracts.handles` | `alpha` | Typed Ray and Daft handle contracts shared by ingestion and writing |
-| `tributo.data.contracts.modes` | `beta` | Shared `WriteMode` contract, re-exported by the legacy DataConnector module |
+| `tributo.data.contracts.modes` | `beta` | Canonical shared `WriteMode` contract; `tributo.data.base` remains a narrow re-export |
+| `tributo.data.contracts.storage` | `beta` | Canonical shared `S3Config` contract; credentials are hidden from repr and identity material |
 | `tributo.data.writing` | `alpha` | Unified bounded-write Gateway package |
 | `tributo.data.writing.capabilities` | `alpha` | Native writer capability declarations |
 | `tributo.data.writing.contracts` | `alpha` | Credential-safe write requests, descriptors, receipts, and errors |
@@ -109,14 +110,9 @@ from the legacy setup-only propagation rule.
 | `tributo.data.engine_binding` | `developer` | Third-party extension SPI; not exported from the consumer-facing `tributo.data` root |
 | `tributo.data.binding_plugins` | `developer` | Descriptor-only `tributo.ingestion_bindings` discovery SPI |
 | `tributo.data.provider_plugins` | `developer` | Versioned descriptor-only `tributo.ingestion_providers` discovery SPI |
-| `tributo.data.bindings.*` | `developer` | Thin adapters over public Ray Data, Daft, or installed connector APIs |
+| `tributo.data.bindings.*` | `developer` | Thin adapters over public Ray Data, Daft, or installed engine APIs |
 | `tributo.data.graph` | `beta` | Graph data abstraction (GNN; @PublicAPI says beta) |
-| `tributo.data.base` — `DataConnector` | `beta` | Historical read/write shape; reads are one-way Gateway adapters |
-| `tributo.data.lance` | `beta` | Compatibility adapter; read delegates Gateway |
-| `tributo.data.registry` | `beta` | Historical connector registry |
-| `tributo.data.iceberg` | `beta` | Compatibility adapter; read delegates Gateway |
-| `tributo.data.parquet` | `alpha` | Compatibility adapter; read delegates Gateway |
-| `tributo.data.csv` | `beta` | Compatibility adapter; read delegates Gateway |
+| `tributo.data.base` | `legacy` | Narrow compatibility re-export for `S3Config` and `WriteMode`; no reader, writer, registry, or Connector class |
 | `tributo.data.provider_registry` | `beta` | Data source provider registry |
 | `tributo.data.refs` | `beta` | Data reference value objects |
 
@@ -282,7 +278,7 @@ from the legacy setup-only propagation rule.
 | `tributo.exporting.protocols.SourceProvider` (name) | `ExportSourceProvider` (E1) | After E1 merge | 2 minor versions with DeprecationWarning |
 | Legacy flat data config | `CanonicalSourceInput` / `IngestionRequest` | v1.0.0 | Conversion-only adapter retained for its deprecation window; direct dispatch removed |
 | `TRIBUTO_DATA_BACKEND=legacy` | Default Provider/Gateway path | v1.0.0 | Selector is accepted with `FutureWarning` during the compatibility window; it no longer restores direct dispatch |
-| Third-party Provider `normalize()+open()` SPI | `plan()` + `EngineBinding` | v1.0.0 | Ray compatibility adapter only until the next major release; Gateway never falls back |
+| Third-party Provider `normalize()+open()` SPI | `plan()` + `EngineBinding` | v1.0.0 | Provider `open()` remains a standalone SPI; canonical Gateway never falls back and the removed Ray adapter warning is no longer emitted |
 | `InferenceConfig.s3_config` | Independent source/model/sink storage profiles | Inference architecture P0 | One compatibility window with `DeprecationWarning` |
 | `tributo.job.RayJob` | `tributo.job.TributoClient` | Runtime warning exists in v1.0.0 | Removal version is not declared; the `stable` annotation remains authoritative until a separate API decision changes it |
 

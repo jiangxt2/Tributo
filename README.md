@@ -88,7 +88,7 @@ uv sync
 # With XGBoost training + ONNX export
 uv sync --extra training
 
-# With data connectors (Lance / Iceberg)
+# With data formats (Lance / Iceberg)
 uv sync --extra data
 
 # With Hugging Face sources/exporters
@@ -121,9 +121,9 @@ dialect or backend you use:
 | Doris | independent `ray-doris` / `daft-olap-connectors` | external packages | Adapters present; package/infrastructure gates pending |
 | ORC / Hive external tables | no locked public reader path | — | Unsupported |
 
-Adapter presence is not a support claim. ClickHouse, Doris, HDFS, and Hive are
+Provider/binding presence is not a support claim. ClickHouse, Doris, HDFS, and Hive are
 reported as available only after their locked external dependencies and real
-infrastructure gates pass. Tributo never installs optional connectors at
+infrastructure gates pass. Tributo never installs optional providers or bindings at
 runtime.
 
 ---

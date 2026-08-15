@@ -31,7 +31,7 @@ Ray-only loaders are compatibility adapters over this same path.
 
 `tributo.data` is the consumer facade: callers use `IngestionRequest`,
 `IngestionGateway`, typed handles, receipts, and explicit handle adapters.
-`scan_plan`, `engine_binding`, Provider registries, and native Connector plans
+`scan_plan`, `engine_binding`, Provider registries, and native Binding plans
 are Developer SPI for ingestion extensions and must not be imported by
 Training, Inference, or graph algorithms. Historical beta Provider
 exports remain only for their documented compatibility window.
@@ -56,7 +56,7 @@ selects `binding_id` explicitly.
 | Local/S3 Lance | Native reader | Native reader | Verified |
 | PostgreSQL structured table | Native SQL reader | Native SQL reader | Verified |
 | HDFS Parquet/CSV | Native reader with PyArrow HDFS | No locked public reader | Adapted; cluster gate pending |
-| ClickHouse | No selected Connector | `daft-olap-connectors` | Adapter only; external package and database gates pending |
+| ClickHouse | No selected Binding | `daft-olap-connectors` | Adapter only; external package and database gates pending |
 | Doris | `ray-doris` | `daft-olap-connectors` | Adapter only; external packages and database gates pending |
 | ORC or Hive external table | No locked public reader | No locked public reader | Unsupported, fail-closed |
 
@@ -67,17 +67,16 @@ for the exact boundary.
 
 Credentials belong to runtime configuration. They must not appear in dataset
 identifiers, logical plans, receipts, logs, or public errors. Bounded providers
-and unbounded stream sources remain separate contracts, and an input Connector
-does not imply an inference output sink.
+and unbounded stream sources remain separate contracts, and a bounded input
+provider does not imply an inference output sink.
 
 ## Lance output compatibility
 
-`LanceDataConnector` is a beta compatibility adapter over `WriteGateway`, the
-same control-plane boundary used by inference. It always writes Lance and never
-infers an output format from vector-like columns. Older releases wrote Parquet
-with ZSTD when no floating-point list column was present; callers that require
-Parquet must now select `ParquetDataConnector` or a Parquet ResultSink
-explicitly.
+Lance output is written through `WriteGateway`, the same control-plane boundary
+used by inference. The Lance ResultSink always writes Lance and never infers an
+output format from vector-like columns. Older releases exposed format-specific
+compatibility facades; callers now select a `WriteRequest` /
+native Binding or a ResultSink explicitly.
 
 The stable Ray Binding currently delegates to the official Lance-Ray
 `write_lance(..., stream=False)` API; the Daft Binding delegates to

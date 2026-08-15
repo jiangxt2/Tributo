@@ -6,5 +6,12 @@ from tributo.data.contracts.handles import (
     RayDataHandle,
 )
 from tributo.data.contracts.modes import WriteMode
+from tributo.data.contracts.storage import S3Config
 
-__all__ = ["DaftDataFrameHandle", "DataHandle", "RayDataHandle", "WriteMode"]
+__all__ = [
+    "DaftDataFrameHandle",
+    "DataHandle",
+    "RayDataHandle",
+    "S3Config",
+    "WriteMode",
+]

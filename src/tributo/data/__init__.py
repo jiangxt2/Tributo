@@ -1,9 +1,9 @@
-"""Tributo bounded-ingestion contracts and compatibility adapters.
+"""Tributo bounded-ingestion, neutral contract, and native-write APIs.
 
-Ray Data, Daft, or an installed connector owns physical reads. Tributo owns
-typed requests, logical plans, engine bindings, ETL translation, errors, and
-provenance. Historical ``DataConnector`` exports remain for compatibility and
-write paths.
+Ray Data, Daft, or an installed binding owns physical reads and writes.
+Tributo owns typed requests, logical plans, engine bindings, ETL translation,
+errors, and provenance.  The former ``DataConnector`` facade and registry are
+intentionally not exported.
 
 Usage example::
 
@@ -18,12 +18,9 @@ Usage example::
     dataset = result.handle.dataset
 """
 
-from __future__ import annotations
+from importlib import import_module
 
-import importlib
-import logging
-
-from tributo.data.base import DataConnector, S3Config, WriteMode
+from tributo.data.contracts import S3Config, WriteMode
 from tributo.data.graph import GraphDataBundle, GraphSchema
 from tributo.data.handle_adapters import (
     HandleConversionReceipt,
@@ -63,7 +60,6 @@ from tributo.data.refs import (
     digest,
     schema_fingerprint,
 )
-from tributo.data.registry import get_connector, list_connectors, register_connector
 from tributo.data.source_config import (
     CanonicalSourceInput,
     CsvSourceConfig,
@@ -117,37 +113,11 @@ from tributo.data.writing import (
     WriteTargetRegistry,
     default_write_gateway,
 )
-from tributo.exceptions import JobConfigurationError
-from tributo.plugin import discover_connector_plugins
-
-logger = logging.getLogger(__name__)
-
-# Trigger built-in connector registration (must be after registry import):
-# connectors register themselves via module-level register_connector()
-# calls (parquet.py/lance.py/iceberg.py), so the registry must be loaded
-# before the importlib.import_module() calls below. Never move connector
-# registration into registry/source_config module init — that would
-# create an import cycle with data/__init__.py.
-# iceberg/lance are optional dependencies — skip registration when not installed.
-try:
-    importlib.import_module("tributo.data.iceberg")
-except ImportError:
-    pass
-try:
-    importlib.import_module("tributo.data.lance")
-except ImportError:
-    pass
-importlib.import_module("tributo.data.parquet")
-importlib.import_module("tributo.data.csv")
-# Built-in providers register themselves via module-level register_provider()
-# calls in provider_builtins.py.
-importlib.import_module("tributo.data.provider_builtins")
 
 __all__ = [
-    # Abstract base classes and config
-    "DataConnector",
-    "WriteMode",
+    # Neutral shared contracts
     "S3Config",
+    "WriteMode",
     # Graph data abstraction
     "GraphSchema",
     "GraphDataBundle",
@@ -155,7 +125,7 @@ __all__ = [
     "HandleConversionReceipt",
     "RayHandleAdaptation",
     "adapt_daft_result_to_ray",
-    # Candidate bounded-ingestion contract
+    # Bounded-ingestion contract
     "IngestionRequest",
     "IngestionRuntimeContext",
     "ReadOptions",
@@ -191,15 +161,10 @@ __all__ = [
     "CastColumn",
     "FillNull",
     "Limit",
-    # Connector registry
-    "get_connector",
-    "register_connector",
-    "list_connectors",
-    # Provider contract
+    # Provider contract and registry
     "DataSourceProvider",
     "ResolvedSource",
     "DatasetHandle",
-    # Provider registry
     "register_provider",
     "resolve_provider",
     "unregister_provider",
@@ -244,15 +209,7 @@ __all__ = [
     "WriteTargetRegistry",
 ]
 
-# Auto-discover third-party connector plugins via entry_points
-for _ep_cls in discover_connector_plugins():
-    from tributo.data.registry import register_connector as _reg_conn
-
-    _conn_name = _ep_cls.__name__.lower()
-    try:
-        _reg_conn(_conn_name, _ep_cls)
-    except JobConfigurationError:
-        logger.debug(
-            "Connector %r from plugin already registered; skipping.",
-            _conn_name,
-        )
+# Importing the canonical provider catalog is the only data-module
+# initialization required here. It registers Provider classes, not legacy
+# Connector classes, and has no optional Connector side effects.
+import_module("tributo.data.provider_builtins")

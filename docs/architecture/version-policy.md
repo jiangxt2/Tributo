@@ -88,7 +88,6 @@ version and the Manifest schema version.
 | DistributionSpec | 1 | `algorithms/api/distribution.py` |
 | ExecutionReceipt | 1 | `algorithms/api/execution.py` |
 | Trainer entry points | N/A (not versioned) | `plugin.py` |
-| Connector entry points | N/A (not versioned) | `plugin.py` |
 
 ### Plugin Compatibility Rules
 

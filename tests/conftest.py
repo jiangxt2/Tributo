@@ -26,8 +26,6 @@ _OPTIONAL_IMPORTS = {
     "serving/test_streaming_http.py": ["httpx"],
     "serving/test_streaming_integration.py": ["httpx"],
     "serving/test_streaming_deployment.py": ["transformers"],
-    "data/test_iceberg_connector.py": ["pyiceberg"],
-    "data/test_lance_connector.py": ["lance"],
     "registry/test_model_registry.py": ["mlflow"],
     "registry/test_integration.py": ["mlflow"],
     "training/test_pu_trainer.py": ["torch"],

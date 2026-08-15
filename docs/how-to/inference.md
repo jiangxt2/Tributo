@@ -148,8 +148,8 @@ historical output behavior. Tributo forwards `create`, `append`, and
 concurrent-create, fragment-count, and version behavior therefore follows the
 locked Lance-Ray provider rather than a stronger Tributo contract.
 
-`LanceResultSink` and `LanceDataConnector` never import Lance-Ray directly;
-both enter `WriteGateway`. The exposed request options are limited to the
+`LanceResultSink` never imports Lance-Ray directly; it enters `WriteGateway`.
+The exposed request options are limited to the
 intersection needed by Lance-Ray and Ray Data: mode, URI, storage options,
 minimum/maximum rows per file, and Lance data-storage version. A future switch
 to `Dataset.write_lance` changes only `RayLanceWriteBinding` and its dependency
@@ -157,13 +157,12 @@ declaration. Empty-input behavior, schema compatibility or evolution,
 concurrent-create semantics, fragment layout, and post-write dataset versions
 remain provider-owned behavior rather than Tributo guarantees.
 
-`LanceDataConnector.write` now always writes Lance. Earlier beta releases
-silently wrote Parquet with ZSTD when no floating-point list column was
-detected. Call `ParquetDataConnector` or select the Parquet ResultSink
-explicitly when Parquet is required. The removed `tributo.embeddings` API has
-no compatibility shim; migrate its model semantics into a user-supplied
-Predictor and select the generic Lance ResultSink only when Lance output is
-desired.
+Earlier beta releases exposed format-specific write facades and could infer
+Parquet from the absence of a floating-point list column. Those facades are
+removed; select the Parquet or Lance ResultSink explicitly. The removed
+`tributo.embeddings` API has no compatibility shim; migrate its model semantics
+into a user-supplied Predictor and select the generic Lance ResultSink only
+when Lance output is desired.
 
 Submit the same request as a detached Ray Job with
 `submit_inference_request(request)`. The request is resolved once before

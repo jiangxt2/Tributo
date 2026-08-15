@@ -28,7 +28,6 @@ def test_writing_core_does_not_depend_on_ingestion_or_legacy_base() -> None:
     violations = [
         f"{path.name}: {marker}"
         for path in _production_python_files()
-        if path.name != "compatibility.py"
         for marker in forbidden
         if marker in path.read_text()
     ]
@@ -88,7 +87,6 @@ def test_production_writers_do_not_materialize_data_handles_to_arrow() -> None:
     violations = [
         f"{path.relative_to(WORKTREE_ROOT)}: {receiver}.to_arrow()"
         for path in _production_python_files()
-        if path.name != "compatibility.py"
         for receiver in _data_handle_to_arrow_calls(path)
     ]
 

@@ -4,8 +4,8 @@ These training helpers preserve existing input shapes and Ray Dataset return
 values while constructing an explicit ``IngestionRequest`` and consuming a
 typed ``RayDataHandle``. They are not an independent Reader: canonical inputs
 and legacy flat dictionaries both enter ``open_ingestion()`` after
-normalization. The deprecated Provider ``open()`` branch remains reachable
-only from public compatibility entry points such as ``DataConnector.read()``.
+normalization. Provider ``open()`` remains an independent third-party SPI;
+canonical ingestion does not fall back to it.
 
 ``TRIBUTO_DATA_BACKEND=legacy`` remains a deprecated compatibility selector
 during the migration window. It emits a warning and uses the same conversion

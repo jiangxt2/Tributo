@@ -17,8 +17,9 @@ Call `WriteGateway.plan()` when you need to inspect the selected descriptor
 before execution.
 
 The explicit gateway can support `APPEND` where the native engine contract is
-verified. Legacy Parquet and CSV `DataConnector` facades reject append and do
-not define the explicit gateway's capability boundary.
+verified. Mode support is defined by the selected native Binding's capability
+descriptor; there is no format-specific compatibility facade that changes that
+boundary.
 
 ## Interpret the receipt
 

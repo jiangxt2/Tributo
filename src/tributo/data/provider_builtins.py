@@ -2,7 +2,7 @@
 
 Parquet, CSV, Iceberg, Lance, ClickHouse, Doris, and PostgreSQL normalize input
 and build logical plans. Execution is delegated directly to Ray Data, Daft, or
-an installed connector Binding. Provider IDs identify logical sources, not
+an installed engine Binding. Provider IDs identify logical sources, not
 execution engines.
 
 Credential handling: passwords/access keys live in ``runtime_options`` only
@@ -288,8 +288,9 @@ def _require_option_types(
     options: Mapping[str, Any],
     expected: Mapping[str, type],
 ) -> None:
-    """Validate option *value* types — a wrong type must fail here, not at
-    the connector (e.g. ``columns="id"`` would silently read one column).
+    """Validate option *value* types — a wrong type must fail during
+    provider normalization (e.g. ``columns="id"`` would silently read one
+    column).
 
     Stricter than a bare ``isinstance``:
     * ``bool`` never satisfies an ``int`` requirement (it is an int subclass
@@ -297,7 +298,7 @@ def _require_option_types(
     * list-valued options are checked element-wise (``columns=[1]`` would
       read columns named ``"1"`` / crash downstream);
     * ``s3`` dict keys must be known S3Config fields (fail-fast instead of
-      a late connector error);
+      a late binding error);
     * ``catalog_properties`` keys and values must be ``str`` (they are
       identity material — a non-str value would corrupt the ref_id).
     """
@@ -446,9 +447,9 @@ def _strip_uri_credentials(uri: str) -> str:
 
 
 def _validate_file_uri(provider_id: str, uri: str) -> None:
-    """Reject S3 URI features the current connectors cannot execute safely.
+    """Reject S3 URI features the current file providers cannot execute safely.
 
-    The Parquet and CSV connectors accept an object path plus an ``S3Config``;
+    The Parquet and CSV providers accept an object path plus an ``S3Config``;
     they do not implement URI userinfo, signed query URLs, object-version
     query parameters, or fragments.  Failing during normalization prevents a
     credential-free ref_id from describing a read that would use different
@@ -539,7 +540,7 @@ class ParquetProvider(_FileProvider):
     _config_cls = ParquetSourceConfig
 
     def plan(self, resolved: ResolvedSource) -> "LogicalScanPlan":
-        """Describe a Parquet read without invoking the legacy connector."""
+        """Describe a Parquet read for the selected native Binding."""
         from tributo.data.scan_plan import FileScan
 
         scheme = urlsplit(resolved.canonical_uri).scheme.lower()
@@ -561,7 +562,7 @@ class CsvProvider(_FileProvider):
     _config_cls = CsvSourceConfig
 
     def plan(self, resolved: ResolvedSource) -> "LogicalScanPlan":
-        """Describe a CSV read without invoking the legacy connector."""
+        """Describe a CSV read for the selected native Binding."""
         from tributo.data.scan_plan import FileScan
 
         scheme = urlsplit(resolved.canonical_uri).scheme.lower()

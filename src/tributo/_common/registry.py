@@ -1,7 +1,7 @@
 """Generic thread-safe registry for plugin-style extensibility.
 
 Eliminates the duplicated ``dict + threading.Lock`` pattern shared by
-``training/registry.py`` and ``data/registry.py``.
+the framework's remaining plugin registries.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ class Registry(Generic[K, V]):
 
     Args:
         name: Human-readable item name used in error messages
-            (e.g. ``"trainer"``, ``"connector"``).
+            (e.g. ``"trainer"`` or ``"provider"``).
     """
 
     def __init__(self, name: str = "item") -> None:

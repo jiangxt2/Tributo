@@ -5,9 +5,10 @@ convergence. These apply to all migration PRs (D1+D2, E1, E2, E3, E4, T1, T3).
 
 ## Core Principle
 
-**New path + typed compat adapter + observable stop-loss gate.** Compatibility
-inputs may remain after a legacy execution backend is removed; an adapter must
-normalize into the new path rather than preserve two reader implementations.
+**New path + typed input normalization + observable stop-loss gate.** Compatibility
+input shapes may remain after legacy execution facades are removed; the
+normalization helper must construct the canonical request rather than preserve a second
+reader or writer implementation.
 
 ## Migration Strategy Per Domain
 
@@ -31,17 +32,17 @@ Current exit-gate status:
   new public path returns an `IngestionOpenResult` with a typed native handle.
 - [x] Training and inference route through the new Provider
   (verified by code audit, not just test coverage).
-- [ ] Legacy input adapters have completed their documented compatibility
-  window. They remain available and keep their `FutureWarning`; only the
-  duplicate execution backend has been removed.
+- [x] Legacy input adapters remain conversion-only and construct the canonical
+  Gateway request. The old Connector reader/writer facades and registry are
+  removed; no duplicate execution backend remains.
 
-The maintainer-approved architecture convergence removed the duplicate
-direct-dispatch execution backend without claiming that the legacy *input*
-deprecation window had elapsed. `TRIBUTO_DATA_BACKEND=legacy` therefore remains
-accepted with a `FutureWarning`, but it selects the same conversion and Gateway
-path as the default. Rollback uses normal release rollback or disables adoption
-of the alpha Gateway; the compatibility selector does not reactivate duplicate
-reader code.
+The maintainer-approved architecture convergence removes the duplicate
+direct-dispatch execution backend while retaining the legacy *input*
+normalizer. `TRIBUTO_DATA_BACKEND=legacy` therefore remains accepted with its
+existing `FutureWarning`, but it selects the same conversion and Gateway path
+as the default. Rollback uses normal release rollback or disables adoption of
+the alpha Gateway; the compatibility selector does not reactivate Connector
+code.
 
 ### D3 Delivery Record
 
@@ -65,13 +66,13 @@ Compatibility:
 - The internal training loader normalizes legacy input and constructs an explicit
   `IngestionRequest` for the Gateway with `engine="ray"`; it is a Ray Dataset
   shape adapter, not an alternate reader backend.
-- `DataConnector.read()` and other old public Ray compatibility callers continue
-  to use the Ray compatibility adapter during the deprecation window.
-  Third-party Providers that shipped only the beta `normalize()+open()` SPI
-  remain callable from that adapter with a `FutureWarning`.
-  The alpha Gateway never catches a planning or Binding failure and falls back
-  to `open()`; external Providers must migrate to `plan()` plus an
-  `EngineBinding` before the next major release.
+- Old Connector read callers are a breaking change in this release and must
+  migrate to `IngestionRequest`/`IngestionGateway`.
+  Third-party Providers that ship only the beta `normalize()+open()` SPI are
+  still valid Provider objects, but Tributo no longer automatically dispatches
+  `open()` for them. Canonical planning fails closed at `plan()` with a clear
+  `JobConfigurationError`; the removed adapter's `FutureWarning` is not
+  re-created in `IngestionGateway`.
 - Legacy ClickHouse and Doris raw-SQL shapes remain parseable only to produce a
   credential-free migration error. Built-in execution supports structured
   table/projection/partitioning requests; Tributo does not restore an arbitrary
@@ -79,14 +80,16 @@ Compatibility:
 
 Deprecation window:
 
-Legacy inputs remain supported for at least two minor versions or six months,
-whichever is longer. Warning emission and adapter removal are separate follow-up
-work after the data migration exit gates are satisfied.
+Legacy input shapes remain supported by the existing normalization helpers. The removal
+of the Connector execution facade is intentionally immediate because this
+personal project accepts the major-version breaking change; the normalization
+warning and conversion semantics remain separate from that removal.
 
 Exit gate:
 
-The independent runtime backend is removed. Do not remove legacy *input
-normalizers* until their compatibility windows and route audits are satisfied.
+The independent runtime backend and Connector facade are removed. Do not remove
+legacy *input normalization* until its own compatibility windows and route
+audits are satisfied.
 
 Provider IDs identify logical data sources (`tributo.parquet`,
 `tributo.clickhouse`, etc.); engine selectors are not persisted as provider
@@ -94,11 +97,10 @@ IDs. The unused `SourcePlan` / `SourceRouter` prototype has been replaced by
 the explicit `IngestionRequest` → `IngestionGateway` → `LogicalScanPlan` →
 `EngineBinding` path. Gateway `describe()` performs static validation without
 metadata I/O; `open()` creates the lazy typed handle and receipt. Built-in
-`DataConnector.read()` remains a one-way Ray adapter over this path. Training
-loader surfaces normalize compatibility input and open the explicit Gateway
-request directly; neither surface may restore an independent reader. Provider
-`open()` is a temporary external beta-SPI compatibility exception described
-above, not a Gateway fallback. File
+Training loader surfaces normalize compatibility input and open the explicit
+Gateway request directly; neither surface may restore an independent reader.
+Provider `open()` remains an independent external beta SPI, not a Gateway
+fallback. File
 providers accept local paths and S3 paths with an explicit `S3Config`; S3 URI
 userinfo, query parameters, and fragments are rejected because accepting them
 would change object-key or credential semantics.
@@ -114,43 +116,34 @@ registrations fail closed; discovery never overrides an existing route.
 
 ### Data Write Gateway
 
-The write migration uses one control-plane path while retaining the old public
-write facade:
+The write path uses one control-plane path:
 
 ```
-Old DataConnector.write(**kwargs)
-  ↓
-Legacy write normalizer
-  ↓
 WriteRequest → WriteTargetRegistry → WriteBindingRegistry
   ↓
 Ray/Daft typed handle → native Dataset/DataFrame writer
 ```
 
-`DataConnector.write()` remains a compatibility adapter and keeps its historical
-`None` return shape. Internal bounded writers and Parquet/Lance inference sinks
-use `WriteGateway`; they do not call `DataConnector.write()` or a
-format-specific private helper. The Gateway carries only credential-free
-request/digest/descriptor/receipt data. Engine-native runtime configuration is
-resolved inside the binding and is passed to Ray or Daft according to that
-engine's supported worker/runtime mechanism.
+All bounded writers and Parquet/Lance inference sinks use `WriteGateway`
+directly. The Gateway carries only credential-free request/digest/descriptor/
+receipt data. Engine-native runtime configuration is resolved inside the
+binding and is passed to Ray or Daft according to that engine's supported
+worker/runtime mechanism.
 
 Current exit-gate status:
 
-- [x] Ray/Daft Parquet and CSV native bindings and compatibility facades are
-  covered by contract tests and Docker cluster/MinIO IT.
+- [x] Ray/Daft Parquet and CSV native bindings are covered by contract tests and
+  Docker cluster/MinIO IT.
 - [x] Iceberg and Ray/Daft Lance use native engine data-plane writers; PyIceberg
-  usage in Tributo is limited to catalog/table control-plane preflight and
-  `exists()` compatibility checks.
+  usage in Tributo is limited to catalog/table control-plane preflight.
 - [x] Static boundaries reject Tributo-owned Lance fragment/commit and other
   direct storage data-plane markers.
 - [x] Ray Lance is delegated by `tributo.ray.lance` to the official
   `lance_ray.write_lance(stream=False)` integration with locked Lance-Ray and
   PyLance versions. Consumers depend only on the Binding contract, so a future
   `Dataset.write_lance` switch does not change their APIs or architecture.
-- [ ] Legacy `DataConnector.write()` removal remains a separate future change
-  after its compatibility window, call audit, and deprecation evidence are
-  complete.
+- [x] Legacy `DataConnector.write()` and its conversion adapter are removed;
+  canonical `WriteRequest`/`WriteGateway` contract tests remain.
 
 ### Bundle Export (E1 / E2 / E4)
 

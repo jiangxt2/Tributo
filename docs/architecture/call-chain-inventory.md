@@ -38,18 +38,14 @@ EngineBindings.compile() → RayDataHandle.dataset
 flat dictionaries through `LegacyConfigNormalizer`; the training loader then
 constructs the explicit `IngestionRequest` shown above. `load_dataframe_from_config()`
 materializes its Ray result for small historical callers. Neither selects a
-separate reader backend or invokes the old Connector compatibility reader.
+separate reader backend or invokes a legacy execution adapter.
 
 ### Bounded data writing
 
 **Shared control-plane entry**: `data.writing.WriteGateway`
 
 ```
-DataConnector.write(**legacy kwargs)
-  └─ compatibility normalizer
-       └─ WriteRequest(engine="ray", target_kind, target, mode)
-
-ParquetResultSink / LanceResultSink / compatibility DataConnector
+ParquetResultSink / LanceResultSink / bounded-write caller
   └─ explicit WriteRequest
 
 Any entry above
@@ -63,7 +59,7 @@ WriteGateway.execute(typed RayDataHandle or DaftDataFrameHandle)
 RayWriteBinding → ray.data.Dataset.write_*
 DaftWriteBinding → daft.DataFrame.write_*
   ↓
-WriteReceipt / compatibility return shape
+WriteReceipt
 ```
 
 The Gateway owns request validation, target planning, capability checks,
@@ -252,21 +248,12 @@ CLI parses JSON → builds JobConfig / TrainingConfig
 submits to Ray Job API or calls local runner
 ```
 
-### Plugin and optional data connectors
+### Plugin and optional data providers
 
-**Discovery**: `plugin.py::discover_connector_plugins()`
-
-```
-importlib.metadata.entry_points(group="tributo.connectors")
-  ↓
-DataConnector subclass validation
-  ↓
-Registered in connector registry (data/registry.py)
-```
-
-No third-party connector plugins ship with v1.0.0. All built-in connectors
-are in `data/` module. This historical SPI serves `DataConnector` compatibility
-and write paths.
+The removed `tributo.connectors` entry-point group has no runtime discovery
+path. Bounded data extensions use the descriptor-only Provider and Binding
+groups below; they are separate from the model/export plugin groups discovered
+by `tributo.plugin`.
 
 **Bounded-ingestion Binding discovery**:
 
