@@ -28,6 +28,7 @@ from tributo.algorithms.api import (
     WorkerRange,
     WorkerResources,
 )
+from tributo.algorithms.api.models import FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS
 from tributo.algorithms.spi import CollectiveAlgorithm
 from tributo.integrations.algorithm_runtimes.legacy_descriptors import (
     DNN_DESCRIPTOR as LEGACY_DNN_DESCRIPTOR,
@@ -38,8 +39,11 @@ from tributo.integrations.algorithm_runtimes.legacy_descriptors import (
 from tributo.training.base import BaseTrainer
 from tributo.util.annotations import DeveloperAPI, PublicAPI
 
+_COLLECTIVE_CONTRACT = FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS[
+    DistributionStrategy.RAY_TRAIN_COLLECTIVE
+]
 _RAY_TRAIN_INPUT = QualifiedReference.parse(
-    "tributo.integrations.algorithm_inputs.ingestion:prepare_ray_train_input"
+    _COLLECTIVE_CONTRACT.worker_input_adapter_ref
 )
 _COLLECTIVE_FACTORY = QualifiedReference.parse(
     "tributo.algorithms.builtin.torch_collective:create_collective_algorithm"
@@ -425,7 +429,7 @@ def _registration(
                 "resource",
                 "training",
             ),
-            runtime_id="tributo.ray_train_collective",
+            runtime_id=_COLLECTIVE_CONTRACT.runtime_id,
             worker_input_adapter_ref=_RAY_TRAIN_INPUT,
             exporter_ref=_COLLECTIVE_EXPORTER,
             flavor_id="onnx-runtime-v1",

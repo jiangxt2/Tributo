@@ -13,10 +13,12 @@ from tributo.algorithms.api import (
     AlgorithmExecutionResult,
     CollectivePolicy,
     DistributionStrategy,
+    ResolvedAlgorithmPlan,
     ResultPolicy,
     WorkerExecutionEvidence,
     WorkerExecutionResult,
 )
+from tributo.algorithms.api.models import FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS
 from tributo.algorithms.core.worker import (
     _actual_environment_versions,
     _load_reference,
@@ -27,9 +29,52 @@ from tributo.algorithms.spi import (
     PreparedInput,
     RuntimeExecutionEnvelope,
 )
+from tributo.integrations.algorithm_runtimes.portable_metrics import (
+    portable_fit_only_metrics,
+)
 from tributo.util.annotations import DeveloperAPI
 
-RAY_TRAIN_COLLECTIVE_RUNTIME_ID = "tributo.ray_train_collective"
+RAY_TRAIN_COLLECTIVE_RUNTIME_ID = FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS[
+    DistributionStrategy.RAY_TRAIN_COLLECTIVE
+].runtime_id
+
+
+def _collective_execution_result(
+    *,
+    result: object,
+    metrics: Mapping[str, Any],
+    plan: ResolvedAlgorithmPlan,
+    run_id: str,
+) -> AlgorithmExecutionResult:
+    """Apply the declared result policy after collective semantics succeed."""
+    distribution = plan.distribution_spec
+    if distribution is not None and distribution.result_policy is ResultPolicy.FIT_ONLY:
+        # FIT_ONLY deliberately discards the trained model/checkpoint; receipt
+        # metadata carries the execution evidence for this non-public result.
+        return AlgorithmExecutionResult(
+            status="succeeded",
+            metrics=portable_fit_only_metrics(metrics),
+        )
+    exporter_ref = plan.implementation.exporter_ref
+    if exporter_ref is None:
+        raise AlgorithmConfigurationError(
+            "collective bundle_required fit requires an explicit exporter"
+        )
+    exporter = _load_reference(exporter_ref)
+    if not callable(exporter):
+        raise AlgorithmConfigurationError(
+            "collective exporter reference is not callable"
+        )
+    execution = exporter(result=result, plan=plan, run_id=run_id)
+    if not isinstance(execution, AlgorithmExecutionResult):
+        raise AlgorithmExecutionError(
+            "collective exporter must return AlgorithmExecutionResult"
+        )
+    if not execution.outputs.get("bundle_uri"):
+        raise AlgorithmExecutionError(
+            "collective fit completed without the required Bundle publication"
+        )
+    return execution
 
 
 def _load_algorithm(envelope: RuntimeExecutionEnvelope) -> CollectiveAlgorithm:
@@ -297,29 +342,12 @@ class RayTrainCollectiveRuntime:
                 raise AlgorithmExecutionError(
                     "collective training did not report any declared global metric"
                 )
-            exporter_ref = plan.implementation.exporter_ref
-            if exporter_ref is None:
-                raise AlgorithmConfigurationError(
-                    "collective fit requires an explicit exporter"
-                )
-            exporter = _load_reference(exporter_ref)
-            if not callable(exporter):
-                raise AlgorithmConfigurationError(
-                    "collective exporter reference is not callable"
-                )
-            execution = exporter(result=result, plan=plan, run_id=envelope.run_id)
-            if not isinstance(execution, AlgorithmExecutionResult):
-                raise AlgorithmExecutionError(
-                    "collective exporter must return AlgorithmExecutionResult"
-                )
-            if (
-                plan.distribution_spec is not None
-                and plan.distribution_spec.result_policy is ResultPolicy.BUNDLE_REQUIRED
-                and not execution.outputs.get("bundle_uri")
-            ):
-                raise AlgorithmExecutionError(
-                    "collective fit completed without the required Bundle publication"
-                )
+            execution = _collective_execution_result(
+                result=result,
+                metrics=metrics,
+                plan=plan,
+                run_id=envelope.run_id,
+            )
             versions = _actual_environment_versions(
                 plan.environment.python,
                 plan.environment.dependencies,

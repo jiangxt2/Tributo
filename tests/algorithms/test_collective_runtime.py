@@ -2,10 +2,20 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+from typing import cast
+
 import pytest
 
-from tributo.algorithms.api import AlgorithmExecutionError
-from tributo.integrations.algorithm_runtimes.collective import _worker_evidence
+from tributo.algorithms.api import (
+    AlgorithmExecutionError,
+    ResolvedAlgorithmPlan,
+    ResultPolicy,
+)
+from tributo.integrations.algorithm_runtimes.collective import (
+    _collective_execution_result,
+    _worker_evidence,
+)
 
 
 def _worker(rank: int, *, digest: str = "a" * 64) -> dict[str, object]:
@@ -115,4 +125,71 @@ def test_collective_evidence_rejects_incomplete_global_row_coverage() -> None:
             num_gpus=0,
             custom_resources={},
             expected_input_rows={"train": 8},
+        )
+
+
+def test_collective_fit_only_skips_exporter_and_keeps_portable_metrics() -> None:
+    plan = cast(
+        ResolvedAlgorithmPlan,
+        SimpleNamespace(
+            distribution_spec=SimpleNamespace(result_policy=ResultPolicy.FIT_ONLY),
+            implementation=SimpleNamespace(exporter_ref=None),
+        ),
+    )
+
+    execution = _collective_execution_result(
+        result=object(),
+        metrics={
+            "loss": 0.25,
+            "execution_workers": [_worker(0), _worker(1)],
+            "model_state_digest": "a" * 64,
+            "world_size": 2,
+            "state_coordination": "all_reduce",
+            "collective_backend": "gloo",
+            "checkpoint_owner_rank": 0,
+            "metric_reducers": {"loss": "weighted_mean"},
+        },
+        plan=plan,
+        run_id="run-1",
+    )
+
+    assert execution.status == "succeeded"
+    assert execution.metrics == {"loss": 0.25}
+    assert execution.outputs == {}
+    assert execution.artifacts == ()
+
+
+def test_collective_fit_only_rejects_nonportable_user_metrics() -> None:
+    plan = cast(
+        ResolvedAlgorithmPlan,
+        SimpleNamespace(
+            distribution_spec=SimpleNamespace(result_policy=ResultPolicy.FIT_ONLY),
+            implementation=SimpleNamespace(exporter_ref=None),
+        ),
+    )
+
+    with pytest.raises(AlgorithmExecutionError, match="FIT_ONLY user metrics"):
+        _collective_execution_result(
+            result=object(),
+            metrics={"loss": object()},
+            plan=plan,
+            run_id="run-1",
+        )
+
+
+def test_collective_fit_only_rejects_non_string_metric_names() -> None:
+    plan = cast(
+        ResolvedAlgorithmPlan,
+        SimpleNamespace(
+            distribution_spec=SimpleNamespace(result_policy=ResultPolicy.FIT_ONLY),
+            implementation=SimpleNamespace(exporter_ref=None),
+        ),
+    )
+
+    with pytest.raises(AlgorithmExecutionError, match="metric names must be strings"):
+        _collective_execution_result(
+            result=object(),
+            metrics={1: 0.25},
+            plan=plan,
+            run_id="run-1",
         )

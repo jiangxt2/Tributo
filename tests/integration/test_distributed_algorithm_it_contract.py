@@ -32,7 +32,11 @@ def test_local_gate_owns_only_its_named_container_and_volumes() -> None:
     assert 'docker volume rm "${SOURCE_VOLUME_NAME}"' in runner
     assert 'docker volume rm "${WORK_VOLUME_NAME}"' in runner
     assert "create-source-snapshot" in runner
+    assert "uv build" in runner
+    assert "tests/fixtures/distributed_algorithm_plugin" in runner
+    assert "tributo-plugin.whl" in runner
     assert '"${SOURCE_VOLUME_NAME}:/workspace/tributo-src:ro"' in runner
+    assert '"${PLUGIN_WHEEL}:/workspace/tributo-plugin.whl:ro"' in runner
     assert "TRIBUTO_DOCKER_ALGORITHM_LOCAL_IT=1" in runner
     assert "test_distributed_algorithm_local.py" in runner
     assert "dangling=true" in runner
@@ -80,9 +84,20 @@ def test_distributed_gate_uses_cached_images_and_scoped_compose_cleanup() -> Non
 
 def test_distributed_fixture_is_a_code_only_wheel() -> None:
     pyproject = tomllib.loads(_PLUGIN_PYPROJECT.read_text(encoding="utf-8"))
+    fixture_source = (
+        _PLUGIN_PYPROJECT.parent
+        / "src"
+        / "tributo_test_distributed_algorithm"
+        / "__init__.py"
+    ).read_text(encoding="utf-8")
 
     assert "dependencies" not in pyproject["project"]
     assert "tributo.algorithms" in pyproject["project"]["entry-points"]
+    assert "AlgorithmBuilder.from_distributed_algorithm" in fixture_source
+    assert "MapReduceAlgorithm" in fixture_source
+    assert "ResultPolicy.FIT_ONLY" in fixture_source
+    assert "tributo.algorithms.builtin" not in fixture_source
+    assert "exporter=" not in fixture_source
 
 
 def test_concurrent_daemon_images_are_diagnostic_only(tmp_path: Path) -> None:

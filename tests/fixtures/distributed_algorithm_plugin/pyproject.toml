@@ -7,10 +7,10 @@ name = "tributo-test-distributed-algorithm"
 version = "0.1.0"
 requires-python = ">=3.12,<3.14"
 # Ray installs py_modules wheels into an isolated target directory. Keep this
-# fixture code-only: Tributo and sklearn are trusted runtime-image dependencies.
+# fixture code-only: Tributo and NumPy are trusted runtime-image dependencies.
 
 [project.entry-points."tributo.algorithms"]
-third_party_multinomial_nb = "tributo_test_distributed_algorithm:DESCRIPTOR"
+third_party_mean_regressor = "tributo_test_distributed_algorithm:DESCRIPTOR"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/tributo_test_distributed_algorithm"]

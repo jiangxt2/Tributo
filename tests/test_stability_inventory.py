@@ -208,6 +208,7 @@ STABILITY_MAP: dict[str, str] = {
 #: list the exceptions here.  Keys are ``module.symbol``, values are the
 #: symbol-specific stability.
 _SYMBOL_OVERRIDES: dict[str, str] = {
+    "tributo.plugin.validate_distributed_algorithm_descriptor": "alpha",
     "tributo.config.AlgorithmExecutionConfig": "alpha",
     "tributo.config.AlgorithmInputConfig": "alpha",
     "tributo.config.AlgorithmWorkerResourcesConfig": "alpha",

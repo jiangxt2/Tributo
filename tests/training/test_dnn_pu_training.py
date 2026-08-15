@@ -48,12 +48,17 @@ def disable_uv_runtime_env_hook(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _result_from_logs(logs: str) -> list[dict[str, Any]]:
-    for line in logs.splitlines():
-        if line.startswith("RESULT: "):
-            return cast(
-                list[dict[str, Any]],
-                json.loads(line.removeprefix("RESULT: ")),
-            )
+    marker = "RESULT: "
+    decoder = json.JSONDecoder()
+    offset = 0
+    while (marker_offset := logs.find(marker, offset)) >= 0:
+        payload = logs[marker_offset + len(marker) :].lstrip()
+        try:
+            result, _ = decoder.raw_decode(payload)
+        except json.JSONDecodeError:
+            offset = marker_offset + len(marker)
+            continue
+        return cast(list[dict[str, Any]], result)
     raise AssertionError(f"RESULT line not found in job logs:\n{logs}")
 
 
@@ -138,21 +143,40 @@ def test_formal_distributed_algorithms_complete_on_ray_cluster(
             "pu",
             "xgboost",
             "multinomial_nb",
-            "third_party_multinomial_nb",
+            "third_party_mean_regressor",
+        }
+        assert {
+            (result["algorithm"], result["worker_count"])
+            for result in results
+            if result["algorithm"] == "third_party_mean_regressor"
+        } == {
+            ("third_party_mean_regressor", 1),
+            ("third_party_mean_regressor", 2),
         }
         for result in results:
             receipt = result["receipt"]
             assert result["status"] == "succeeded"
             assert receipt["execution_profile"] == "local"
-            assert receipt["requested_worker_count"] == 2
-            assert receipt["distributed"] is True
-            assert receipt["cross_node"] is True
+            assert receipt["requested_worker_count"] == result["worker_count"]
+            assert receipt["distributed"] is (result["worker_count"] >= 2)
+            assert receipt["cross_node"] is (result["worker_count"] >= 2)
             assert receipt["kubernetes_distributed_supported"] is False
             assert receipt["driver_materialized_training_rows"] == 0
-            assert len(receipt["workers"]) == 2
-            assert len({worker["node_id"] for worker in receipt["workers"]}) == 2
-            assert len({worker["shard_id"] for worker in receipt["workers"]}) == 2
-            assert receipt["artifact_ids"]
+            assert len(receipt["workers"]) == result["worker_count"]
+            assert (
+                len({worker["node_id"] for worker in receipt["workers"]})
+                == (result["worker_count"])
+            )
+            assert (
+                len({worker["shard_id"] for worker in receipt["workers"]})
+                == (result["worker_count"])
+            )
+            if result["algorithm"] == "third_party_mean_regressor":
+                assert receipt["result_policy"] == "fit_only"
+                assert receipt["artifact_ids"] == []
+            else:
+                assert receipt["result_policy"] == "bundle_required"
+                assert receipt["artifact_ids"]
 
         failure_result = _submit_gate_job(
             job_client,

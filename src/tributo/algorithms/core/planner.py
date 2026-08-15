@@ -10,7 +10,6 @@ from tributo.algorithms.api import (
     AlgorithmConfigurationError,
     AlgorithmRequest,
     AlgorithmResolution,
-    DistributionStrategy,
     ExecutionRequest,
     InputDistribution,
     MapReducePolicy,
@@ -20,7 +19,10 @@ from tributo.algorithms.api import (
     WorkerResources,
     canonical_digest,
 )
-from tributo.algorithms.api.models import AlgorithmRegistration
+from tributo.algorithms.api.models import (
+    FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS,
+    AlgorithmRegistration,
+)
 from tributo.algorithms.core.registry import AlgorithmRegistrationRegistry
 from tributo.algorithms.spi import InputResolutionContext, InputResolverPort
 from tributo.util.annotations import DeveloperAPI
@@ -265,13 +267,7 @@ class AlgorithmPlanner:
             raise AlgorithmConfigurationError(
                 "formal implementation is missing runtime adapter declarations"
             )
-        topology = {
-            DistributionStrategy.RAY_TRAIN_COLLECTIVE: (
-                RuntimeTopology.RAY_TRAIN_COLLECTIVE
-            ),
-            DistributionStrategy.FRAMEWORK_NATIVE: RuntimeTopology.FRAMEWORK_NATIVE,
-            DistributionStrategy.RAY_MAP_REDUCE: RuntimeTopology.RAY_MAP_REDUCE,
-        }[distribution.strategy]
+        topology = FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS[distribution.strategy].topology
         max_retries = (
             distribution.policy.max_retries
             if isinstance(distribution.policy, MapReducePolicy)

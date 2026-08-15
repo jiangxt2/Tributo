@@ -9,12 +9,12 @@ from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.utils import canonicalize_name
 from packaging.version import InvalidVersion, Version
 
-from tributo.algorithms.api.distribution import (
-    DistributionStrategy,
-    ExecutionProfile,
-)
+from tributo.algorithms.api.distribution import ExecutionProfile
 from tributo.algorithms.api.errors import AlgorithmConfigurationError
-from tributo.algorithms.api.models import AlgorithmRegistration, ExecutionMode
+from tributo.algorithms.api.models import (
+    FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS,
+    AlgorithmRegistration,
+)
 from tributo.util.annotations import PublicAPI
 
 
@@ -65,11 +65,9 @@ class DistributedAlgorithmDescriptor:
         object.__setattr__(self, "package_name", package_name)
         object.__setattr__(self, "package_version", package_version)
         object.__setattr__(self, "tributo_version_spec", str(tributo_version))
-        expected_mode = {
-            DistributionStrategy.RAY_TRAIN_COLLECTIVE: ExecutionMode.COLLECTIVE,
-            DistributionStrategy.FRAMEWORK_NATIVE: ExecutionMode.FRAMEWORK_NATIVE,
-            DistributionStrategy.RAY_MAP_REDUCE: ExecutionMode.MAP_REDUCE,
-        }[self.registration.distribution_spec.strategy]
+        expected_mode = FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS[
+            self.registration.distribution_spec.strategy
+        ].execution_mode
         if self.registration.implementation.execution_mode is not expected_mode:
             raise AlgorithmConfigurationError(
                 "distributed descriptor strategy and implementation mode disagree"
