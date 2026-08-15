@@ -30,3 +30,9 @@ documentation for every public stability tier.
 ```{autoclass} tributo.pipeline.core.PipelineStep
 :no-members:
 ```
+
+
+## `tributo.plugin`
+
+```{autofunction} tributo.plugin.validate_distributed_algorithm_descriptor
+```
