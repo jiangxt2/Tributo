@@ -8,6 +8,8 @@ x-ray-common: &ray-common
     AWS_ACCESS_KEY_ID: minioadmin
     AWS_SECRET_ACCESS_KEY: minioadmin123
     AWS_DEFAULT_REGION: us-east-1
+    AWS_ENDPOINT_URL: http://minio:9000
+    AWS_ENDPOINT_URL_S3: http://minio:9000
     PYTHONDONTWRITEBYTECODE: "1"
     PYTHONPATH: /workspace/tributo-src/src:/workspace/tributo-src
     RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO: "0"

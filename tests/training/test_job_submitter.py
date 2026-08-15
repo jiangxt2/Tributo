@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from ray.job_submission import JobStatus
 
+from tributo.algorithms import AlgorithmArtifact, EnvironmentSpec, ImageProfile
 from tributo.training.job_submitter import (
     submit_training_job,
     submit_training_job_with_retry,
@@ -224,3 +225,43 @@ class TestRetryClassification:
                 run_id="run-1",
                 metadata={"TRIBUTO_RUN_ID": "other-run"},
             )
+
+    def test_algorithm_artifact_and_environment_dependencies_reach_preflight(
+        self,
+    ) -> None:
+        client = MagicMock()
+        client.submit_job.return_value = "job-artifact"
+        artifact = AlgorithmArtifact(source="algorithm.whl")
+        profile = ImageProfile(
+            profile_id="cpu.test",
+            image_uri="tributo:test",
+            image_digest="a" * 64,
+        )
+
+        with (
+            patch(
+                "tributo.training.job_submitter._get_submission_client",
+                return_value=client,
+            ),
+            patch(
+                "tributo.training.job_submitter.build_runtime_env",
+                side_effect=_runtime_env,
+            ) as build_runtime_env,
+        ):
+            job_id = submit_training_job(
+                "python train.py",
+                run_id="run-artifact",
+                algorithm_artifact=artifact,
+                image_profile=profile,
+                environment=EnvironmentSpec(
+                    environment_id="tests.sklearn",
+                    dependencies=("scikit-learn>=1.6,<2",),
+                ),
+            )
+
+        assert job_id == "job-artifact"
+        assert build_runtime_env.call_args.kwargs["algorithm_artifact"] is artifact
+        assert build_runtime_env.call_args.kwargs["image_profile"] is profile
+        assert build_runtime_env.call_args.kwargs["declared_dependencies"] == (
+            "scikit-learn<2,>=1.6",
+        )

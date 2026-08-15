@@ -4,9 +4,11 @@ alg
 algo
 AlgorithmSpec
 AliasConfig
+allowlist
 API
 APIs
 api
+argv
 ASHA
 associatively
 ArtifactModelImporter

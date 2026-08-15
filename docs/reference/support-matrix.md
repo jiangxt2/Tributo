@@ -77,7 +77,8 @@ compatible profile, while the generated `Validated profiles` column remains
 | Ray Tune | Beta | Capability-gated algorithms only |
 | Legacy managed sklearn and Custom Ray Function | Alpha compatibility | Joblib and legacy `data_parallel` remain compatibility mechanisms and do not prove distributed model training |
 | Portable distributed execution | Alpha | Explicit collective, framework-native, and bounded tree-MapReduce strategies; local and Kubernetes profiles share one contract |
-| Constrained algorithm descriptor SPI | Alpha | Trusted pre-installed packages only; no dependency installation, isolation, hot reload, or PluginManager lifecycle |
+| Constrained algorithm descriptor SPI | Alpha | Trusted packages from the selected image or a validated Job artifact; no arbitrary dependency resolution, isolation, hot reload, or PluginManager lifecycle |
+| Algorithm Wheel distribution | Alpha | Image Profiles plus code-only `py_modules` Wheels by default; opt-in offline Wheelhouse installs use `--no-index`, an attested manifest, and the existing entry-point registry. No online dependency resolution or untrusted-code sandbox is provided |
 | Graph training | Alpha skeleton | No built-in PyG/DGL trainer |
 | Causal estimation | Extension contract | No concrete estimator is bundled |
 | Streaming user recovery decisions | Not implemented | Kafka source remains separate; no recovery algorithm or source-to-sink runtime is planned by the algorithm-module refactor |

@@ -5,6 +5,7 @@ Provides a Pydantic-based configuration system for Ray job submissions.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from pydantic import (
@@ -17,6 +18,7 @@ from pydantic import (
 
 from tributo._common.config import StrictConfigModel
 from tributo.algorithms.api import AlgorithmOperation, ExecutionProfile
+from tributo.algorithms.api.artifacts import AlgorithmArtifact, ImageProfile
 from tributo.data import IngestionRequest
 from tributo.util.annotations import PublicAPI
 
@@ -54,6 +56,22 @@ class JobConfig(BaseModel):
     submission_id: Optional[str] = Field(
         default=None, description="Optional submission ID"
     )
+    algorithm_artifact: AlgorithmArtifact | None = Field(
+        default=None,
+        description="Validated user algorithm Wheel or offline Bundle",
+    )
+    image_profile: ImageProfile | None = Field(
+        default=None,
+        description="Immutable image compatibility Profile selected by the platform",
+    )
+    declared_dependencies: tuple[str, ...] = Field(
+        default=(),
+        description="EnvironmentSpec dependency constraints used during preflight",
+    )
+    project_root: Path | None = Field(
+        default=None,
+        description="Project source root used for the standard Ray working_dir upload",
+    )
 
     @field_validator("entrypoint")
     @classmethod
@@ -62,6 +80,44 @@ class JobConfig(BaseModel):
         if not v or not v.strip():
             raise ValueError("Entrypoint cannot be empty")
         return v.strip()
+
+    @field_validator("declared_dependencies")
+    @classmethod
+    def validate_declared_dependencies(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        from packaging.requirements import InvalidRequirement, Requirement
+
+        normalized: list[str] = []
+        for dependency in value:
+            try:
+                requirement = Requirement(dependency)
+            except (InvalidRequirement, TypeError) as exc:
+                raise ValueError(
+                    f"declared_dependencies contains an invalid requirement: {dependency!r}"
+                ) from exc
+            if requirement.url is not None:
+                raise ValueError("declared_dependencies must not contain URLs")
+            normalized.append(str(requirement))
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("declared_dependencies must not contain duplicates")
+        return tuple(sorted(normalized))
+
+    @model_validator(mode="after")
+    def validate_algorithm_distribution(self) -> JobConfig:
+        if self.algorithm_artifact is None:
+            if self.image_profile is not None or self.declared_dependencies:
+                raise ValueError(
+                    "image_profile and declared_dependencies require algorithm_artifact"
+                )
+            return self
+        if self.image_profile is None:
+            raise ValueError("algorithm_artifact requires image_profile")
+        reserved = {"working_dir", "py_modules", "pip", "excludes"}
+        overlap = sorted(reserved.intersection(self.runtime_env))
+        if overlap:
+            raise ValueError(
+                f"runtime_env must not override artifact-owned fields: {overlap}"
+            )
+        return self
 
     model_config = ConfigDict(frozen=False, extra="forbid")
 

@@ -146,7 +146,9 @@ def test_source_snapshot_uses_allowlist_manifest_and_completion_marker(
 ) -> None:
     source = tmp_path / "checkout"
     destination = tmp_path / "snapshot"
+    (source / "ci").mkdir(parents=True)
     (source / "src" / "tributo" / "__pycache__").mkdir(parents=True)
+    (source / "scripts").mkdir()
     (source / "tests").mkdir()
     (source / ".git").mkdir()
     (source / "pyproject.toml").write_text(
@@ -160,12 +162,14 @@ tributo = "tributo.cli:main"
 """
     )
     (source / "uv.lock").write_text("version = 1\n")
+    (source / "ci" / "test-suites.json").write_text("{}\n")
     module = source / "src" / "tributo" / "module.py"
     module.write_text("uncommitted = True\n")
     (source / "src" / "tributo" / "__pycache__" / "module.pyc").write_bytes(b"x")
     (source / "src" / "tributo" / "module-link.py").symlink_to("module.py")
     (source / "tests" / ".env.local").write_text("TOKEN=secret\n")
     (source / "tests" / "test_example.py").write_text("def test_example(): pass\n")
+    (source / "scripts" / "ci_test_plan.py").write_text("MARKER = True\n")
     (source / ".git" / "config").write_text("secret\n")
 
     digest = tributo_it.create_source_snapshot(
@@ -177,6 +181,9 @@ tributo = "tributo.cli:main"
 
     copied_module = destination / "src" / "tributo" / "module.py"
     assert copied_module.is_file()
+    assert (
+        destination / "scripts" / "ci_test_plan.py"
+    ).read_text() == "MARKER = True\n"
     assert (destination / "src" / "tributo" / "module-link.py").is_symlink()
     assert not (destination / "src" / "tributo" / "__pycache__").exists()
     assert not (destination / "tests" / ".env.local").exists()
@@ -212,10 +219,14 @@ tributo = "tributo.cli:main"
 def test_source_snapshot_rejects_symlink_that_escapes_checkout(tmp_path: Path) -> None:
     source = tmp_path / "checkout"
     destination = tmp_path / "snapshot"
+    (source / "ci").mkdir(parents=True)
     (source / "src").mkdir(parents=True)
+    (source / "scripts").mkdir()
     (source / "tests").mkdir()
     (source / "pyproject.toml").write_text("[project]\n")
     (source / "uv.lock").write_text("version = 1\n")
+    (source / "ci" / "test-suites.json").write_text("{}\n")
+    (source / "scripts" / "ci_test_plan.py").write_text("MARKER = True\n")
     (source / "src" / "outside").symlink_to("../../outside.txt")
     (tmp_path / "outside.txt").write_text("secret\n")
 

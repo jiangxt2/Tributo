@@ -11,8 +11,8 @@ Layered architecture (Ray/Daft-style):
   Layer 3:  Commit Message — Signed-off-by + format check + claims vs diff
   Layer 4:  General Hygiene — unintended files, merge conflicts, large files
   Layer 5:  Run Changed Tests — pytest on changed test files
-  Layer 5.5: CI-parity Suite — dev-only environment runs the CI unit suite
-             (catches optional-dependency imports and runtime failures)
+  Layer 5.5: CI-parity Matrix — dev-only environments run the CI unit suite
+             for every Python version declared by the workflow
   Layer 5.6: Docs CI Parity — prepares the locked docs environment and runs
              static contracts, strict build, and spelling for docs CI changes
 
@@ -1159,74 +1159,144 @@ def check_run_tests(root: str, changed_files: list[str]) -> list[str]:
     return issues
 
 
-def check_ci_parity_suite(root: str) -> list[str]:
-    """Run the CI unit suite in a dev-only environment.
+def check_ci_parity_suite(root: str, *, allow_network: bool = False) -> list[str]:
+    """Run the CI unit suite in a dev-only environment for every CI Python.
 
     The CI unit-tests job installs only the ``dev`` extra, while a local
     worktree usually has the data/data-daft/postgresql extras installed.
     Tests that import or execute optional engine/connector dependencies pass
     locally but fail in CI, either at collection or at runtime.  This layer
-    rebuilds the dev-only environment in a temporary venv (from the uv
-    cache, offline) and runs the complete CI unit suite, so both failure
-    classes are caught before push.
+    rebuilds one dev-only environment per Python version declared in the CI
+    matrix and runs the complete CI unit suite in each environment, so
+    optional-dependency and cross-Python failures are caught before push.
+
+    The default is offline and therefore requires the declared Python
+    interpreters and locked distributions to be available locally.  An
+    explicit ``allow_network`` request may bootstrap missing environments.
     """
     issues: list[str] = []
     try:
         unit_args = ci_unit_pytest_args(root)
     except (ImportError, OSError, RuntimeError, ValueError) as exc:
         return [f"FAIL: cannot load CI unit suite policy: {exc}"]
-    venv_dir = tempfile.mkdtemp(prefix="tributo-ci-parity-")
+
+    python_versions = _parse_python_versions_from_ci(root)
+    if not python_versions:
+        return [
+            "FAIL: CI-parity suite cannot determine Python versions from "
+            ".github/workflows/pr-test-suite.yml"
+        ]
+
+    network_args = [] if allow_network else ["--offline"]
+    venv_root = tempfile.mkdtemp(prefix="tributo-ci-parity-")
     try:
-        sync = subprocess.run(
-            ["uv", "sync", "--extra", "dev", "--locked", "--offline"],
-            capture_output=True,
-            text=True,
-            cwd=root,
-            timeout=600,
-            env={**os.environ, "UV_PROJECT_ENVIRONMENT": venv_dir},
-        )
-        if sync.returncode != 0:
-            tail = "\n".join((sync.stdout or sync.stderr).splitlines()[-3:])
-            issues.append(
-                f"WARN: dev-only parity sync failed — CI-parity suite skipped ({tail})"
-            )
-            return issues
-        python = os.path.join(venv_dir, "bin", "python")
-        suite = subprocess.run(
-            [
-                python,
-                "-m",
-                "pytest",
-                *unit_args,
-            ],
-            capture_output=True,
-            text=True,
-            cwd=root,
-            timeout=600,
-        )
-        if suite.returncode == 5:
-            issues.append(
-                "FAIL: CI-parity suite collected no tests; the manifest unit "
-                "selection is not valid evidence"
-            )
-            return issues
-        if suite.returncode != 0:
-            failures = [
-                line.strip()
-                for line in suite.stdout.splitlines()
-                if line.startswith("FAILED ") or line.startswith("ERROR ")
-            ]
-            if failures:
-                issues.append(
-                    "FAIL: CI-parity suite failed — a test depends on an "
-                    "optional dependency at runtime:\n" + "\n".join(failures[:10])
+        for python_version in python_versions:
+            version_label = python_version.replace(".", "-")
+            venv_dir = os.path.join(venv_root, f"python-{version_label}")
+            try:
+                create = subprocess.run(
+                    [
+                        "uv",
+                        "venv",
+                        venv_dir,
+                        "--python",
+                        python_version,
+                        *network_args,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    cwd=root,
+                    timeout=120,
                 )
-            else:
-                tail = "\n".join(suite.stdout.splitlines()[-10:])
-                issues.append("FAIL: CI-parity suite failed:\n" + tail)
+            except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+                issues.append(
+                    f"FAIL: CI-parity Python {python_version} environment "
+                    f"creation could not run: {exc}"
+                )
+                continue
+            if create.returncode != 0:
+                issues.append(
+                    f"FAIL: CI-parity Python {python_version} environment "
+                    "creation failed; install/cache this interpreter or rerun "
+                    "with --allow-network:\n" + _command_output_tail(create, lines=5)
+                )
+                continue
+
+            python = os.path.join(venv_dir, "bin", "python")
+            try:
+                sync = subprocess.run(
+                    [
+                        "uv",
+                        "sync",
+                        "--python",
+                        python,
+                        "--extra",
+                        "dev",
+                        "--locked",
+                        *network_args,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    cwd=root,
+                    timeout=600,
+                    env={**os.environ, "UV_PROJECT_ENVIRONMENT": venv_dir},
+                )
+            except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+                issues.append(
+                    f"FAIL: CI-parity Python {python_version} dependency "
+                    f"sync could not run: {exc}"
+                )
+                continue
+            if sync.returncode != 0:
+                issues.append(
+                    f"FAIL: CI-parity Python {python_version} dependency "
+                    "sync failed; rerun with --allow-network if the offline "
+                    "cache is incomplete:\n" + _command_output_tail(sync, lines=5)
+                )
+                continue
+
+            try:
+                suite = subprocess.run(
+                    [python, "-m", "pytest", *unit_args],
+                    capture_output=True,
+                    text=True,
+                    cwd=root,
+                    timeout=600,
+                )
+            except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+                issues.append(
+                    f"FAIL: CI-parity Python {python_version} suite could not "
+                    f"run: {exc}"
+                )
+                continue
+            if suite.returncode == 5:
+                issues.append(
+                    f"FAIL: CI-parity Python {python_version} suite collected "
+                    "no tests; the manifest unit selection is not valid evidence"
+                )
+                continue
+            if suite.returncode != 0:
+                output = "\n".join(
+                    part for part in (suite.stdout, suite.stderr) if part
+                )
+                failures = [
+                    line.strip()
+                    for line in output.splitlines()
+                    if line.startswith("FAILED ") or line.startswith("ERROR ")
+                ]
+                if failures:
+                    issues.append(
+                        f"FAIL: CI-parity Python {python_version} suite failed:\n"
+                        + "\n".join(failures[:10])
+                    )
+                else:
+                    issues.append(
+                        f"FAIL: CI-parity Python {python_version} suite failed:\n"
+                        + "\n".join(output.splitlines()[-10:])
+                    )
         return issues
     finally:
-        shutil.rmtree(venv_dir, ignore_errors=True)
+        shutil.rmtree(venv_root, ignore_errors=True)
 
 
 def docs_ci_affected(changed_files: list[str], root: str | None = None) -> bool:
@@ -1385,7 +1455,7 @@ def main():
         action="store_true",
         help=(
             "Run the optional cross-platform dependency resolver against "
-            "package indexes and allow docs environment bootstrap; the "
+            "package indexes and allow CI/docs environment bootstrap; the "
             "default check is offline"
         ),
     )
@@ -1504,8 +1574,8 @@ def main():
         print(f"  {'PASS' if not l5 else 'ISSUES'} — {len(l5)} issue(s)\n")
 
     # Layer 5.5
-    print("=== Layer 5.5: CI-parity Suite ===")
-    l55 = check_ci_parity_suite(root)
+    print("=== Layer 5.5: CI-parity Matrix ===")
+    l55 = check_ci_parity_suite(root, allow_network=args.allow_network)
     all_issues.extend(l55)
     for issue in l55:
         print(f"  {issue}")

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import warnings
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tributo.algorithms import AlgorithmArtifact, ImageProfile
 from tributo.config import JobConfig
 from tributo.exceptions import JobExecutionError, JobSubmissionError
 from tributo.job import RayJob, TributoClient
@@ -56,6 +58,58 @@ class TestTributoClient:
             entrypoint_num_gpus=1.0,
             entrypoint_memory=1024,
         )
+
+    def test_submit_builds_artifact_runtime_environment(self, client, mock_client):
+        mock_client.submit_job.return_value = "job-artifact"
+        artifact = AlgorithmArtifact(source="algorithm.whl")
+        profile = ImageProfile(
+            profile_id="cpu.test",
+            image_uri="tributo:test",
+            image_digest="a" * 64,
+        )
+        with patch(
+            "tributo.job.build_runtime_env",
+            return_value={"working_dir": "/tmp/bundle", "env_vars": {}},
+        ) as build_runtime_env:
+            result = client.submit(
+                entrypoint="python train.py",
+                algorithm_artifact=artifact,
+                image_profile=profile,
+                declared_dependencies=("numpy>=2",),
+            )
+
+        assert result == "job-artifact"
+        assert build_runtime_env.call_args.kwargs["algorithm_artifact"] is artifact
+        assert build_runtime_env.call_args.kwargs["image_profile"] is profile
+        assert build_runtime_env.call_args.kwargs["declared_dependencies"] == (
+            "numpy>=2",
+        )
+
+    def test_submit_rejects_distribution_fields_without_artifact(
+        self, client, mock_client
+    ):
+        profile = ImageProfile(
+            profile_id="cpu.test",
+            image_uri="tributo:test",
+            image_digest="a" * 64,
+        )
+
+        with pytest.raises(JobSubmissionError, match="require algorithm_artifact"):
+            client.submit(
+                entrypoint="python train.py",
+                image_profile=profile,
+            )
+
+        mock_client.submit_job.assert_not_called()
+
+    def test_submit_rejects_artifact_without_profile(self, client, mock_client):
+        with pytest.raises(JobSubmissionError, match="requires image_profile"):
+            client.submit(
+                entrypoint="python train.py",
+                algorithm_artifact=AlgorithmArtifact(source="algorithm.whl"),
+            )
+
+        mock_client.submit_job.assert_not_called()
 
     def test_submit_raises_on_failure(self, client, mock_client):
         mock_client.submit_job.side_effect = RuntimeError("connection refused")
@@ -134,6 +188,15 @@ class TestRayJob:
         assert call_kwargs["entrypoint"] == "python script.py"
         assert call_kwargs["runtime_env"] == {}
         assert call_kwargs["metadata"] == {}
+
+    def test_submit_passes_project_root_to_client(self, job):
+        job.config.project_root = Path("/workspace/project")
+        job._client.submit = MagicMock(return_value="job-1")
+
+        assert job.submit() == "job-1"
+        assert job._client.submit.call_args.kwargs["project_root"] == Path(
+            "/workspace/project"
+        )
 
     def test_get_status_delegates(self, job, mock_client):
         mock_status = MagicMock()

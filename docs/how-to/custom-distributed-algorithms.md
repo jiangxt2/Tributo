@@ -1,10 +1,11 @@
 # Custom distributed algorithms
 
 Tributo accepts trusted Python packages through a narrow descriptor SPI. A
-package can be pre-installed in the runtime image or supplied as a reviewed,
-locked wheel through Ray Job `py_modules`. Tributo does not resolve plugin
-dependencies online, isolate arbitrary code, hot reload packages, or maintain
-multiple plugin versions.
+package can be pre-installed in the selected image Profile, supplied as a
+reviewed code-only Wheel through Ray Job `py_modules`, or supplied as a
+reviewed offline Bundle containing a complete Wheelhouse. Tributo does not
+resolve plugin dependencies online, isolate arbitrary code, hot reload
+packages, or maintain multiple plugin versions.
 
 A wheel supplied through `py_modules` must be code-only: its Core Metadata must
 not contain `Requires-Dist` entries. Ray installs such wheels with pip into a
@@ -12,6 +13,207 @@ job-local target directory, so declared dependencies would invoke dependency
 resolution during job startup. Tributo, sklearn, and every other runtime
 dependency must already exist in the reviewed Ray image. A package installed
 while building that image can use normal locked build-time dependencies.
+
+## Select the runtime distribution mode
+
+The runtime contract is explicit at Job submission time. The platform selects
+an immutable `ImageProfile`; the caller supplies an `AlgorithmArtifact` only
+when the algorithm is not already in that image:
+
+```python
+from tributo.algorithms import AlgorithmArtifact, ImageProfile
+from tributo.training import submit_training_job
+
+
+profile = ImageProfile(
+    profile_id="sklearn.cpu.v1",
+    image_uri="registry.internal/tributo/sklearn:2026.08",
+    image_digest="<64-lower-case-sha256>",
+    python_version="3.12",
+    sys_platform="linux",
+    platform_machine="x86_64",
+    wheel_tags=("py3-none-any",),
+    algorithm_ids=("example.random_forest",),
+    installed_distributions={
+        "pip": "24.3.1",
+        "scikit-learn": "1.6.1",
+        "numpy": "2.2.6",
+    },
+)
+artifact = AlgorithmArtifact(
+    source="/trusted-artifacts/my_algorithm-1.0.0-py3-none-any.whl",
+    package_name="my-algorithm",
+    package_version="1.0.0",
+)
+
+job_id = submit_training_job(
+    "python train.py",
+    algorithm_artifact=artifact,
+    image_profile=profile,
+)
+```
+
+The default `image_py_modules` mode validates the Wheel locally and passes it
+to Ray as `runtime_env.py_modules`. Its Core Metadata must contain no
+`Requires-Dist` entries. Dependencies must already be present in the selected
+image Profile; `declared_dependencies` or a registration's
+`EnvironmentSpec.dependencies` are checked against that inventory before the
+Ray Job is submitted. A local Wheel may instead be an immutable HTTPS/S3 URI
+with its SHA-256, package identity, entry-point names, and Wheel tags declared
+explicitly.
+
+The Wheel's `tributo.algorithms` entry point is automatically selected through
+the existing plugin discovery path. Tributo sets `TRIBUTO_PLUGINS` for the
+entry point recorded by the artifact, so the Driver's normal descriptor
+discovery and `TrainingAlgorithmRegistry` bootstrap register it for this Job.
+One Job has one active algorithm entry point. This is Job-local registration;
+it does not mutate a global registry.
+
+## Use an offline Wheelhouse
+
+Use `offline_wheelhouse` when the algorithm has Python dependencies that are
+not in the image and the complete, already-built dependency closure is allowed
+to travel with the Job. A standard Bundle is:
+
+```text
+algorithm-bundle/
+├── manifest.json
+├── algorithm.whl                         # optional friendly root copy
+├── requirements.lock
+└── wheelhouse/
+    ├── my_algorithm-1.0.0-py3-none-any.whl
+    ├── dependency_a-3.2.0-py3-none-any.whl
+    └── dependency_b-1.4.0-py3-none-any.whl
+```
+
+`requirements.lock` must keep all installation controls inside the file:
+
+```text
+--no-index
+--find-links ${RAY_RUNTIME_ENV_CREATE_WORKING_DIR}/wheelhouse
+${RAY_RUNTIME_ENV_CREATE_WORKING_DIR}/wheelhouse/my_algorithm-1.0.0-py3-none-any.whl
+```
+
+Tributo verifies the manifest file digests, Wheel metadata, Wheel tags,
+`Requires-Dist` closure, and the absence of HTTP(S), VCS, index, editable,
+constraint, and nested-requirements references. The Wheel may retain standard
+`Requires-Dist` metadata in this mode. The image must explicitly allow offline
+pip, and all relevant dependency Wheels must be present in the Bundle or
+already listed in the image Profile.
+
+The selected image must also contain `pip` in its Ray process environment.
+Ray 2.55.1 creates the `runtime_env.pip` environment by cloning the active
+Python environment; an image built with UV should bootstrap pip during image
+construction (for example, with Python's bundled `ensurepip`) and list its
+version in `ImageProfile.installed_distributions`. This is an image-build
+operation and does not access an index during Job startup.
+
+```python
+offline_artifact = AlgorithmArtifact(
+    source="/trusted-artifacts/my-algorithm-bundle",
+    mode="offline_wheelhouse",
+)
+
+job_id = submit_training_job(
+    "python train.py",
+    algorithm_artifact=offline_artifact,
+    image_profile=profile,
+)
+```
+
+In this mode the Bundle is Ray's single `working_dir`, because Ray expands
+`${RAY_RUNTIME_ENV_CREATE_WORKING_DIR}` relative to that directory. The
+training entrypoint therefore must be present in the selected image or in the
+Bundle itself. Tributo does not silently merge a second project directory into
+the Bundle; if the training code must be uploaded separately, use the
+code-only `py_modules` mode or build one reviewed application Bundle containing
+both the entrypoint and the offline dependency files.
+
+For an internal HTTPS/S3 Bundle URI, the URI must identify an immutable ZIP
+archive; a remote directory URI is not a valid Ray `working_dir` source. The
+archive must expand directly to `manifest.json`, `requirements.lock`, and
+`wheelhouse/` (without an extra top-level directory). Pass the archive
+SHA-256, package identity, entry-point names, and the attested `manifest`
+metadata in `AlgorithmArtifact`. Tributo can then perform the same fail-closed
+preflight without downloading or resolving anything on the submitting host;
+Ray fetches the fixed `working_dir` archive when it creates the Job runtime
+environment. This still requires the Ray nodes to be authorized to read the
+internal artifact store, but it does not require a pip index or a separate pip
+service.
+
+Ray's `pip_install_options` is an argv list, not a shell command. Therefore
+the `${RAY_RUNTIME_ENV_CREATE_WORKING_DIR}` expansion belongs in
+`requirements.lock`, while Tributo supplies the fixed options
+`--disable-pip-version-check` and `--no-cache-dir`. The generated runtime
+environment is equivalent to:
+
+```yaml
+pip:
+  packages:
+    - "-r ${RAY_RUNTIME_ENV_CREATE_WORKING_DIR}/requirements.lock"
+  pip_check: true
+  pip_install_options:
+    - --disable-pip-version-check
+    - --no-cache-dir
+```
+
+`pip_check: true` is a whole-environment health check in Ray 2.55.1's normal
+`--system-site-packages` runtime environment; it is not the Wheelhouse
+closure check. Image Profiles should be published only after a clean baseline
+`python -m pip check`. Ray's pip API has no option to ignore selected baseline
+lines: if an explicitly approved historical conflict is recorded in
+`pip_check_baseline`, Tributo sets `pip_check` to `false` for that Bundle and
+records the waiver in the distribution receipt. Such a Profile must be
+treated as an exception and remediated before production promotion; the
+waiver must never be attributed to the user algorithm.
+
+## Keep `from_sklearn()` compatible
+
+`from_sklearn()` remains a managed-estimator compatibility path. It does not
+turn an arbitrary sklearn estimator into a distributed single-model trainer.
+Its existing `EnvironmentSpec` is the dependency declaration reused by the
+same artifact preflight:
+
+```python
+from tributo.algorithms import AlgorithmBuilder
+from tributo.algorithms.api import EnvironmentSpec
+
+registration = AlgorithmBuilder.from_sklearn(
+    spec=SKLEARN_SPEC,
+    implementation_id="example.random_forest",
+    implementation_version="1.0.0",
+    estimator_factory="example_algorithms.random_forest:create_estimator",
+    environment=EnvironmentSpec(
+        environment_id="example.random_forest.v1",
+        dependencies=("scikit-learn>=1.6,<1.7",),
+    ),
+    allowed_config_keys=(),
+)
+
+job_id = submit_training_job(
+    "python train.py",
+    algorithm_artifact=artifact,
+    image_profile=profile,
+    environment=registration.environment,
+)
+```
+
+This validates the declared sklearn dependency against the image or offline
+Wheelhouse, while preserving the existing managed-estimator topology and
+support classification. It does not add an implicit `pip install` path.
+
+## Choose an image Profile
+
+Profiles are immutable compatibility records, not an algorithm resolver. A
+deployment may publish separate CPU, GPU, PyTorch, sklearn, or algorithm-family
+Profiles. Python, Ray, native-library, CUDA/NCCL, and Wheel-tag compatibility
+must be established when the image is built and tested. Tributo validates the
+selected Profile and its digest at submission; it does not switch clusters or
+build an image during training. `wheel_tags` and the target marker fields
+(`python_version`, `sys_platform`, and `platform_machine`) are mandatory for
+artifact preflight. A non-empty `algorithm_ids` allowlist is enforced against
+an offline Bundle's manifest; an empty allowlist means that the Profile does
+not restrict the algorithm family.
 
 ## Choose the state coordination strategy
 
