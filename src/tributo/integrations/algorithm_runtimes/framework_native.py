@@ -14,6 +14,7 @@ from tributo.algorithms.api import (
     DistributionStrategy,
     FrameworkNativePolicy,
     QualifiedReference,
+    ResolvedAlgorithmPlan,
     ResultPolicy,
     StateCoordination,
     StateCoordinationEvidence,
@@ -21,6 +22,7 @@ from tributo.algorithms.api import (
     WorkerExecutionResult,
     WorkerResources,
 )
+from tributo.algorithms.api.models import FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS
 from tributo.algorithms.core.worker import (
     _actual_environment_versions,
     _load_reference,
@@ -31,9 +33,59 @@ from tributo.algorithms.spi import (
     PreparedInput,
     RuntimeExecutionEnvelope,
 )
+from tributo.integrations.algorithm_runtimes.portable_metrics import (
+    portable_fit_only_metrics,
+)
 from tributo.util.annotations import DeveloperAPI
 
-FRAMEWORK_NATIVE_RUNTIME_ID = "tributo.framework_native"
+FRAMEWORK_NATIVE_RUNTIME_ID = FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS[
+    DistributionStrategy.FRAMEWORK_NATIVE
+].runtime_id
+
+
+def _framework_execution_result(
+    *,
+    algorithm: FrameworkNativeAlgorithm,
+    result: object,
+    plan: ResolvedAlgorithmPlan,
+    run_id: str,
+) -> AlgorithmExecutionResult:
+    """Apply result delivery only after framework evidence has been validated."""
+    distribution = plan.distribution_spec
+    if distribution is not None and distribution.result_policy is ResultPolicy.FIT_ONLY:
+        raw_metrics = getattr(result, "metrics", {})
+        if not isinstance(raw_metrics, Mapping):
+            raise AlgorithmExecutionError(
+                "framework-native FIT_ONLY result metrics must be a mapping"
+            )
+        return AlgorithmExecutionResult(
+            status="succeeded",
+            metrics=portable_fit_only_metrics(raw_metrics),
+        )
+    checkpoint = algorithm.checkpoint_source(result)
+    exporter_ref = plan.implementation.exporter_ref
+    if exporter_ref is None:
+        raise AlgorithmConfigurationError(
+            "framework-native bundle_required fit requires an exporter"
+        )
+    exporter = _load_reference(exporter_ref)
+    if not callable(exporter):
+        raise AlgorithmConfigurationError("framework-native exporter is not callable")
+    execution = exporter(
+        result=result,
+        checkpoint=checkpoint,
+        plan=plan,
+        run_id=run_id,
+    )
+    if not isinstance(execution, AlgorithmExecutionResult):
+        raise AlgorithmExecutionError(
+            "framework-native exporter must return AlgorithmExecutionResult"
+        )
+    if not execution.outputs.get("bundle_uri"):
+        raise AlgorithmExecutionError(
+            "framework-native fit completed without the required Bundle publication"
+        )
+    return execution
 
 
 def _validated_framework_evidence(
@@ -227,37 +279,12 @@ class FrameworkNativeRuntime:
                 ),
                 expected_training_rows=expected_training_rows,
             )
-            checkpoint = algorithm.checkpoint_source(result)
-            exporter_ref = envelope.plan.implementation.exporter_ref
-            if exporter_ref is None:
-                raise AlgorithmConfigurationError(
-                    "framework-native fit requires an exporter"
-                )
-            exporter = _load_reference(exporter_ref)
-            if not callable(exporter):
-                raise AlgorithmConfigurationError(
-                    "framework-native exporter is not callable"
-                )
-            execution = exporter(
+            execution = _framework_execution_result(
+                algorithm=algorithm,
                 result=result,
-                checkpoint=checkpoint,
                 plan=envelope.plan,
                 run_id=envelope.run_id,
             )
-            if not isinstance(execution, AlgorithmExecutionResult):
-                raise AlgorithmExecutionError(
-                    "framework-native exporter must return AlgorithmExecutionResult"
-                )
-            if (
-                envelope.plan.distribution_spec is not None
-                and envelope.plan.distribution_spec.result_policy
-                is ResultPolicy.BUNDLE_REQUIRED
-                and not execution.outputs.get("bundle_uri")
-            ):
-                raise AlgorithmExecutionError(
-                    "framework-native fit completed without the required Bundle "
-                    "publication"
-                )
             versions = _actual_environment_versions(
                 envelope.plan.environment.python,
                 envelope.plan.environment.dependencies,

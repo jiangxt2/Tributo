@@ -255,6 +255,7 @@ from the legacy setup-only propagation rule.
 | Module | Level | Notes |
 |--------|-------|-------|
 | `tributo.plugin` — all `discover_*` functions | `beta` | Plugin discovery (no PluginManager until PL1+PL2) |
+| `tributo.plugin.validate_distributed_algorithm_descriptor` | `alpha` | Conformance validation for constrained distributed algorithm entry points |
 
 ### Utilities (tributo.util.*)
 

@@ -14,6 +14,7 @@ from tributo.algorithms.api import (
     AlgorithmExecutionError,
     AlgorithmInputError,
     ResolvedAlgorithmPlan,
+    ResultPolicy,
     WorkerExecutionEvidence,
     WorkerResources,
 )
@@ -21,8 +22,9 @@ from tributo.algorithms.builtin.multinomial_nb import (
     DistributedMultinomialNB,
     export_model,
 )
-from tributo.algorithms.spi import AlgorithmExecutionContext
+from tributo.algorithms.spi import AlgorithmExecutionContext, MapReduceAlgorithm
 from tributo.integrations.algorithm_runtimes.map_reduce import (
+    _map_reduce_execution_result,
     _MapReduceStageResult,
     _validate_input_coverage,
     _validate_partition_row_count,
@@ -256,6 +258,62 @@ def test_runtime_cross_checks_observed_rows_against_driver_count() -> None:
         expected_total_rows=4,
     )
     assert _validate_input_coverage(complete) == 4
+
+
+def test_map_reduce_fit_only_still_finalizes_and_skips_exporter() -> None:
+    finalized: list[object] = []
+
+    class FinalizingAlgorithm:
+        def finalize_model(self, state: object) -> object:
+            finalized.append(state)
+            return {"model": "in-memory"}
+
+    plan = cast(
+        ResolvedAlgorithmPlan,
+        SimpleNamespace(
+            distribution_spec=SimpleNamespace(result_policy=ResultPolicy.FIT_ONLY),
+            implementation=SimpleNamespace(exporter_ref=None),
+        ),
+    )
+    state = {"sum": 4}
+
+    execution = _map_reduce_execution_result(
+        algorithm=cast(MapReduceAlgorithm[Any, Any, Any], FinalizingAlgorithm()),
+        state=state,
+        plan=plan,
+        run_id="run-1",
+    )
+
+    assert finalized == [state]
+    assert execution.status == "succeeded"
+    assert execution.metrics == {}
+    assert execution.outputs == {}
+    assert execution.artifacts == ()
+
+
+def test_map_reduce_fit_only_finalizer_failure_is_fail_closed() -> None:
+    class FailingFinalizer:
+        def finalize_model(self, _state: object) -> object:
+            raise AlgorithmExecutionError("finalizer failed")
+
+    plan = cast(
+        ResolvedAlgorithmPlan,
+        SimpleNamespace(
+            distribution_spec=SimpleNamespace(result_policy=ResultPolicy.FIT_ONLY),
+            implementation=SimpleNamespace(exporter_ref=None),
+        ),
+    )
+
+    with pytest.raises(AlgorithmExecutionError, match="finalizer failed"):
+        _map_reduce_execution_result(
+            algorithm=cast(
+                MapReduceAlgorithm[Any, Any, Any],
+                FailingFinalizer(),
+            ),
+            state={},
+            plan=plan,
+            run_id="run-1",
+        )
 
 
 def test_state_schema_and_size_gate_fail_closed() -> None:

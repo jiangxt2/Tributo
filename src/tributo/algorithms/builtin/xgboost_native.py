@@ -30,14 +30,18 @@ from tributo.algorithms.api import (
     WorkerRange,
     WorkerResources,
 )
+from tributo.algorithms.api.models import FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS
 from tributo.algorithms.spi import FrameworkNativeAlgorithm
 from tributo.integrations.algorithm_runtimes.legacy_descriptors import (
     XGBOOST_DESCRIPTOR as LEGACY_XGBOOST_DESCRIPTOR,
 )
 from tributo.util.annotations import DeveloperAPI, PublicAPI
 
+_FRAMEWORK_NATIVE_CONTRACT = FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS[
+    DistributionStrategy.FRAMEWORK_NATIVE
+]
 _RAY_TRAIN_INPUT = QualifiedReference.parse(
-    "tributo.integrations.algorithm_inputs.ingestion:prepare_ray_train_input"
+    _FRAMEWORK_NATIVE_CONTRACT.worker_input_adapter_ref
 )
 
 
@@ -345,7 +349,7 @@ XGBOOST_REGISTRATION = AlgorithmRegistration(
         distribution="xgboost",
         framework="xgboost",
         allowed_config_keys=("data", "model", "training", "ray", "resource", "output"),
-        runtime_id="tributo.framework_native",
+        runtime_id=_FRAMEWORK_NATIVE_CONTRACT.runtime_id,
         worker_input_adapter_ref=_RAY_TRAIN_INPUT,
         exporter_ref=QualifiedReference.parse(
             "tributo.algorithms.builtin.xgboost_native:export_result"

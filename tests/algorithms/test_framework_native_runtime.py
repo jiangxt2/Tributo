@@ -3,11 +3,20 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
-from tributo.algorithms.api import AlgorithmExecutionError, WorkerResources
+from tributo.algorithms.api import (
+    AlgorithmExecutionError,
+    ResolvedAlgorithmPlan,
+    ResultPolicy,
+    WorkerResources,
+)
+from tributo.algorithms.spi import FrameworkNativeAlgorithm
 from tributo.integrations.algorithm_runtimes.framework_native import (
+    _framework_execution_result,
     _validated_framework_evidence,
 )
 
@@ -82,4 +91,83 @@ def test_framework_evidence_fails_before_bundle_publication(
             worker_count=2,
             resources_per_worker=WorkerResources(),
             expected_training_rows=8,
+        )
+
+
+def test_framework_native_fit_only_skips_checkpoint_and_exporter() -> None:
+    class CheckpointMustNotRun:
+        def checkpoint_source(self, _result: object) -> object:
+            raise AssertionError("checkpoint publication source was requested")
+
+    plan = cast(
+        ResolvedAlgorithmPlan,
+        SimpleNamespace(
+            distribution_spec=SimpleNamespace(result_policy=ResultPolicy.FIT_ONLY),
+            implementation=SimpleNamespace(exporter_ref=None),
+        ),
+    )
+    result = SimpleNamespace(
+        metrics={
+            "score": 0.75,
+            "execution_workers": [_worker(0), _worker(1)],
+            "model_state_digest": "a" * 64,
+            "world_size": 2,
+            "state_coordination": "framework_native",
+        }
+    )
+
+    execution = _framework_execution_result(
+        algorithm=cast(FrameworkNativeAlgorithm, CheckpointMustNotRun()),
+        result=result,
+        plan=plan,
+        run_id="run-1",
+    )
+
+    assert execution.status == "succeeded"
+    assert execution.metrics == {"score": 0.75}
+    assert execution.outputs == {}
+    assert execution.artifacts == ()
+
+
+def test_framework_native_fit_only_rejects_nonportable_user_metrics() -> None:
+    class CheckpointMustNotRun:
+        def checkpoint_source(self, _result: object) -> object:
+            raise AssertionError("checkpoint publication source was requested")
+
+    plan = cast(
+        ResolvedAlgorithmPlan,
+        SimpleNamespace(
+            distribution_spec=SimpleNamespace(result_policy=ResultPolicy.FIT_ONLY),
+            implementation=SimpleNamespace(exporter_ref=None),
+        ),
+    )
+
+    with pytest.raises(AlgorithmExecutionError, match="FIT_ONLY user metrics"):
+        _framework_execution_result(
+            algorithm=cast(FrameworkNativeAlgorithm, CheckpointMustNotRun()),
+            result=SimpleNamespace(metrics={"score": object()}),
+            plan=plan,
+            run_id="run-1",
+        )
+
+
+def test_framework_native_fit_only_rejects_non_mapping_metrics() -> None:
+    class CheckpointMustNotRun:
+        def checkpoint_source(self, _result: object) -> object:
+            raise AssertionError("checkpoint publication source was requested")
+
+    plan = cast(
+        ResolvedAlgorithmPlan,
+        SimpleNamespace(
+            distribution_spec=SimpleNamespace(result_policy=ResultPolicy.FIT_ONLY),
+            implementation=SimpleNamespace(exporter_ref=None),
+        ),
+    )
+
+    with pytest.raises(AlgorithmExecutionError, match="must be a mapping"):
+        _framework_execution_result(
+            algorithm=cast(FrameworkNativeAlgorithm, CheckpointMustNotRun()),
+            result=SimpleNamespace(metrics=object()),
+            plan=plan,
+            run_id="run-1",
         )

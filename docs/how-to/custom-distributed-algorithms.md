@@ -26,9 +26,23 @@ Implement exactly one interface:
 Inheriting an interface is necessary but not sufficient. The package must also
 publish an immutable `DistributedAlgorithmDescriptor` containing one atomic
 `AlgorithmRegistration`: algorithm identity, implementation references,
-environment requirements, input compatibility, exporter/flavor, and a matching
-`DistributionSpec`. The descriptor also declares the publishing distribution,
-its exact installed version, and the compatible Tributo package range.
+environment requirements, result policy, and a matching `DistributionSpec`.
+Use `AlgorithmBuilder.from_distributed_algorithm()` to assemble these existing
+contracts. It fills only the fields mechanically implied by the strategy:
+`ExecutionMode`, Runtime ID, Runtime topology, input distribution, state
+coordination, and the standard Ray Data Worker input adapter. Worker ranges,
+resources, strategy policy, package identity, environment, configuration keys,
+and support evidence remain explicit.
+
+This Builder removes declaration boilerplate. It does not inspect or rewrite an
+arbitrary single-machine `fit()` implementation. The algorithm must still
+implement the synchronization, associative reduction, or framework-native
+semantics of its selected interface.
+
+The formal Builder currently accepts only algorithms whose declared operations
+are exactly `("fit",)`. An algorithm that also exposes `evaluate` or `predict`
+must construct an `AlgorithmRegistration` directly until those operations have
+formal distributed runtime contracts.
 
 ## MapReduce example shape
 
@@ -56,11 +70,14 @@ class DistributedCounter(MapReduceAlgorithm):
         return True
 ```
 
-The `multinomial_nb` built-in is the reference implementation. Every Ray map
+The `multinomial_nb` built-in is a Bundle-producing reference implementation.
+The independent package under `tests/fixtures/distributed_algorithm_plugin`
+directly implements the same public interface without importing a Tributo
+builtin. Every Ray map
 task reads one exclusive shard, returns only bounded sufficient statistics,
-the runtime constructs a balanced reduction tree, and the finalizer publishes
-a validated Bundle. A sequential `partial_fit` loop or a Driver-side list of
-all partial models does not satisfy this contract.
+and the runtime constructs a balanced reduction tree. The finalizer always
+runs, including for fit-only execution. A sequential `partial_fit` loop or a
+Driver-side list of all partial models does not satisfy this contract.
 
 The input runtime adapter must also supply one immutable expected total row
 count on every map payload. The built-in ingestion adapter obtains it from the
@@ -76,6 +93,76 @@ be `0`. A future retryable adapter must first add a replayable shard identity
 and prove that a retried map consumes exactly the same rows; declaring
 `retry_safe=True` on the algorithm alone is not sufficient.
 
+## Build the descriptor
+
+The following abbreviated call shows the public Builder path. The strategy
+policy remains explicit because its mathematical guarantees cannot be inferred
+from the algorithm class.
+
+```python
+from tributo.algorithms import AlgorithmBuilder
+from tributo.algorithms.api import (
+    DistributionStrategy,
+    EnvironmentSpec,
+    ExecutionProfile,
+    MapReducePolicy,
+    ResultPolicy,
+    StateField,
+    WorkerRange,
+    WorkerResources,
+)
+
+
+DESCRIPTOR = AlgorithmBuilder.from_distributed_algorithm(
+    spec=ALGORITHM_SPEC,
+    implementation_id="example.counter.map_reduce",
+    implementation_version="1.0.0",
+    implementation="example_algorithms.counter:DistributedCounter",
+    executable_factory="example_algorithms.counter:create_algorithm",
+    distribution="example-algorithms",
+    framework=None,
+    environment=EnvironmentSpec(
+        environment_id="example.counter.v1",
+        dependencies=("example-algorithms==1.0.0",),
+    ),
+    allowed_config_keys=(),
+    strategy=DistributionStrategy.RAY_MAP_REDUCE,
+    supported_worker_range=WorkerRange(1, 32),
+    supported_execution_profiles=(ExecutionProfile.LOCAL,),
+    resources_per_worker=WorkerResources(num_cpus=1),
+    policy=MapReducePolicy(
+        state_schema=(StateField("count", "int64", ()),),
+        max_partial_state_bytes=4096,
+        reducer_ref="example_algorithms.counter:DistributedCounter.merge_states",
+        finalizer_ref="example_algorithms.counter:DistributedCounter.finalize_model",
+    ),
+    package_name="example-algorithms",
+    package_version="1.0.0",
+    tributo_version_spec=">=1,<2",
+    result_policy=ResultPolicy.FIT_ONLY,
+    tested=True,
+)
+```
+
+An explicitly supplied `BackendInputCompatibility` may broaden compatible input
+views, but it must retain the strategy topology and standard Worker adapter.
+Conflicts fail while the descriptor is being built, before a Ray Job is
+submitted.
+
+Choose `FIT_ONLY` when the completed in-memory model is intentionally not a
+published product. The Runtime skips exporter, flavor, artifact, and Bundle
+publication, while retaining input, Worker, shard, state-coordination, and
+finalization evidence. Algorithm finalization/merge semantics still run in
+`FIT_ONLY`; only the publication chain is skipped. Collective and
+framework-native Runtime implementations expose portable user metrics after
+removing runtime evidence fields, and fail closed if a user metric is not
+portable. The current
+MapReduce SPI has no metrics channel, so its `FIT_ONLY` result contains no
+metrics even though `finalize_model` still runs. Such a result cannot be loaded
+by Serving or registered as a model. Choose `BUNDLE_REQUIRED` for any model
+that must be persisted or consumed after training; both `exporter` and
+`flavor_id` are then mandatory and Bundle publication remains fail-closed.
+
 ## Descriptor entry point
 
 Expose the descriptor from the installed package:
@@ -87,15 +174,34 @@ distributed_counter = "example_algorithms.descriptors:DISTRIBUTED_COUNTER"
 
 Discovery validates the entry-point identity, descriptor API version,
 publishing package metadata, Tributo compatibility, DistributionSpec/
-implementation-mode agreement, and inheritance from the declared strategy
-interface. Invalid descriptors are diagnosed and excluded; the Registry is
-updated atomically. See
+implementation-mode agreement, Runtime and input topology, result policy, and
+inheritance from the declared strategy interface. Invalid descriptors are
+diagnosed and excluded; the Registry is updated atomically. A package test can
+run the exact same conformance rules before job submission:
+
+```python
+from tributo.plugin import validate_distributed_algorithm_descriptor
+
+
+validate_distributed_algorithm_descriptor(
+    DESCRIPTOR,
+    entry_point_name="distributed_counter",
+)
+```
+
+These checks are fail-closed: the strategy, execution mode, Runtime ID,
+topology, and Worker input adapter must remain aligned, so a previously
+accepted descriptor with conflicting fields can be rejected after an upgrade.
+
+The package must be installed when this check runs because conformance compares
+the descriptor with installed package metadata. See
 `tests/fixtures/distributed_algorithm_plugin` for a complete independent
 package fixture.
 
-Formal fit exporters receive the Dispatcher-generated `run_id` as a keyword
-argument. A Bundle-producing exporter must bind that value as both the Bundle
-request and run identity; it must not substitute the enclosing Ray Job ID.
+For `BUNDLE_REQUIRED`, formal fit exporters receive the Dispatcher-generated
+`run_id` as a keyword argument. A Bundle-producing exporter must bind that value
+as both the Bundle request and run identity; it must not substitute the
+enclosing Ray Job ID.
 
 ## Execution evidence
 
@@ -106,7 +212,12 @@ receipt proves all of the following:
 - unique shard identities and complete input coverage;
 - one synchronized, framework-native, or associatively reduced model state;
 - no Driver materialization of training rows;
-- requested resource satisfaction and a formal Bundle result.
+- requested resource satisfaction;
+- a formal Bundle artifact only when `result_policy=bundle_required`.
+
+The Receipt records `result_policy`. A `fit_only` Receipt may prove true
+distributed training with no artifact IDs; it does not claim that a reusable
+model was published.
 
 The same algorithm can run with one worker under the local profile. That is a
 supported single-machine run, not a distributed-training claim. Tributo's

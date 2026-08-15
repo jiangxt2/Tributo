@@ -10,6 +10,7 @@ import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import parse_qsl, urlsplit
 
@@ -22,6 +23,9 @@ from tributo.algorithms.api.distribution import (
     DistributionSpec,
     DistributionStrategy,
     ExecutionProfile,
+    InputDistribution,
+    ResultPolicy,
+    StateCoordination,
 )
 from tributo.algorithms.api.errors import AlgorithmConfigurationError
 from tributo.training.algorithm_spec import AlgorithmSpec
@@ -148,6 +152,59 @@ class RuntimeTopology(str, Enum):
     RAY_TRAIN_COLLECTIVE = "ray_train_collective"
     FRAMEWORK_NATIVE = "framework_native"
     RAY_MAP_REDUCE = "ray_map_reduce"
+
+
+@dataclass(frozen=True)
+class FormalDistributedStrategyContract:
+    """Canonical fields mechanically implied by a formal strategy."""
+
+    execution_mode: ExecutionMode
+    runtime_id: str
+    topology: RuntimeTopology
+    input_distribution: InputDistribution
+    state_coordination: StateCoordination
+    worker_input_adapter_ref: str
+
+
+FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS: Mapping[
+    DistributionStrategy, FormalDistributedStrategyContract
+] = MappingProxyType(
+    {
+        DistributionStrategy.RAY_TRAIN_COLLECTIVE: FormalDistributedStrategyContract(
+            execution_mode=ExecutionMode.COLLECTIVE,
+            runtime_id="tributo.ray_train_collective",
+            topology=RuntimeTopology.RAY_TRAIN_COLLECTIVE,
+            input_distribution=InputDistribution.SHARDED,
+            state_coordination=StateCoordination.ALL_REDUCE,
+            worker_input_adapter_ref=(
+                "tributo.integrations.algorithm_inputs.ingestion:"
+                "prepare_ray_train_input"
+            ),
+        ),
+        DistributionStrategy.RAY_MAP_REDUCE: FormalDistributedStrategyContract(
+            execution_mode=ExecutionMode.MAP_REDUCE,
+            runtime_id="tributo.ray_map_reduce",
+            topology=RuntimeTopology.RAY_MAP_REDUCE,
+            input_distribution=InputDistribution.SHARDED,
+            state_coordination=StateCoordination.ASSOCIATIVE_REDUCE,
+            worker_input_adapter_ref=(
+                "tributo.integrations.algorithm_inputs.ingestion:"
+                "prepare_ray_batch_input"
+            ),
+        ),
+        DistributionStrategy.FRAMEWORK_NATIVE: FormalDistributedStrategyContract(
+            execution_mode=ExecutionMode.FRAMEWORK_NATIVE,
+            runtime_id="tributo.framework_native",
+            topology=RuntimeTopology.FRAMEWORK_NATIVE,
+            input_distribution=InputDistribution.FRAMEWORK_OWNED,
+            state_coordination=StateCoordination.FRAMEWORK_NATIVE,
+            worker_input_adapter_ref=(
+                "tributo.integrations.algorithm_inputs.ingestion:"
+                "prepare_ray_train_input"
+            ),
+        ),
+    }
+)
 
 
 @PublicAPI(stability="alpha")
@@ -408,14 +465,6 @@ class ImplementationDescriptor:
                 "formal distributed implementations must declare runtime_id and "
                 "worker_input_adapter_ref"
             )
-        if (
-            AlgorithmOperation.FIT in self.operations
-            and formal_mode
-            and (self.exporter_ref is None or self.flavor_id is None)
-        ):
-            raise AlgorithmConfigurationError(
-                "formal fit implementations must declare exporter_ref and flavor_id"
-            )
 
 
 @PublicAPI(stability="alpha")
@@ -608,15 +657,7 @@ class RuntimeBinding:
                 ) from exc
             object.__setattr__(self, "execution_profile", profile)
             object.__setattr__(self, "strategy", strategy)
-            expected_topology = {
-                DistributionStrategy.RAY_TRAIN_COLLECTIVE: (
-                    RuntimeTopology.RAY_TRAIN_COLLECTIVE
-                ),
-                DistributionStrategy.FRAMEWORK_NATIVE: (
-                    RuntimeTopology.FRAMEWORK_NATIVE
-                ),
-                DistributionStrategy.RAY_MAP_REDUCE: RuntimeTopology.RAY_MAP_REDUCE,
-            }[strategy]
+            expected_topology = FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS[strategy].topology
             if topology is not expected_topology:
                 raise AlgorithmConfigurationError(
                     "resolved RuntimeBinding topology conflicts with strategy"
@@ -766,14 +807,27 @@ class AlgorithmRegistration:
                 raise AlgorithmConfigurationError(
                     "distribution_spec must be a DistributionSpec"
                 )
-            expected_mode = {
-                DistributionStrategy.RAY_TRAIN_COLLECTIVE: ExecutionMode.COLLECTIVE,
-                DistributionStrategy.FRAMEWORK_NATIVE: ExecutionMode.FRAMEWORK_NATIVE,
-                DistributionStrategy.RAY_MAP_REDUCE: ExecutionMode.MAP_REDUCE,
-            }[self.distribution_spec.strategy]
+            expected_mode = FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS[
+                self.distribution_spec.strategy
+            ].execution_mode
             if self.implementation.execution_mode is not expected_mode:
                 raise AlgorithmConfigurationError(
                     "implementation execution mode conflicts with DistributionSpec"
+                )
+            has_exporter = self.implementation.exporter_ref is not None
+            has_flavor = self.implementation.flavor_id is not None
+            if has_exporter != has_flavor:
+                raise AlgorithmConfigurationError(
+                    "formal distributed exporter_ref and flavor_id must be declared "
+                    "together"
+                )
+            if (
+                AlgorithmOperation.FIT in self.implementation.operations
+                and self.distribution_spec.result_policy is ResultPolicy.BUNDLE_REQUIRED
+                and not has_exporter
+            ):
+                raise AlgorithmConfigurationError(
+                    "bundle_required formal fit must declare exporter_ref and flavor_id"
                 )
         unknown_defaults = sorted(
             set(self.spec.default_config) - set(self.implementation.allowed_config_keys)

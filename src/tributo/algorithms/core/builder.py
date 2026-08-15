@@ -2,18 +2,31 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from tributo.algorithms.api import (
     AlgorithmConfigurationError,
     AlgorithmOperation,
     AlgorithmRegistration,
     BackendInputCompatibility,
+    CollectivePolicy,
+    DistributedAlgorithmDescriptor,
+    DistributionSpec,
+    DistributionStrategy,
     EnvironmentSpec,
     ExecutionMode,
+    ExecutionProfile,
+    FrameworkNativePolicy,
     ImplementationDescriptor,
+    MapReducePolicy,
     QualifiedReference,
+    ResultPolicy,
     RuntimeBinding,
     RuntimeTopology,
+    WorkerRange,
+    WorkerResources,
 )
+from tributo.algorithms.api.models import FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS
 from tributo.training.algorithm_spec import AlgorithmSpec
 from tributo.util.annotations import PublicAPI
 
@@ -50,6 +63,149 @@ class AlgorithmBuilder:
             required_input_capabilities=("materializable",),
             supported_explicit_adapters=AlgorithmBuilder._PRODUCTION_INPUT_ADAPTERS,
             distribution_policy=topologies,
+        )
+
+    @staticmethod
+    def _formal_input_compatibility(
+        topology: RuntimeTopology,
+        adapter: QualifiedReference,
+    ) -> BackendInputCompatibility:
+        return BackendInputCompatibility(
+            accepted_input_views=("ray_data",),
+            accepted_ingestion_engines=("tributo.ray_data",),
+            required_input_capabilities=("shardable",),
+            supported_explicit_adapters=(adapter,),
+            distribution_policy=(topology,),
+        )
+
+    @staticmethod
+    def from_distributed_algorithm(
+        *,
+        spec: AlgorithmSpec,
+        implementation_id: str,
+        implementation_version: str,
+        implementation: str,
+        executable_factory: str,
+        distribution: str,
+        framework: str | None,
+        environment: EnvironmentSpec,
+        allowed_config_keys: tuple[str, ...],
+        strategy: DistributionStrategy,
+        supported_worker_range: WorkerRange,
+        supported_execution_profiles: tuple[ExecutionProfile, ...],
+        resources_per_worker: WorkerResources,
+        policy: CollectivePolicy | MapReducePolicy | FrameworkNativePolicy,
+        package_name: str,
+        package_version: str,
+        tributo_version_spec: str,
+        result_policy: ResultPolicy = ResultPolicy.BUNDLE_REQUIRED,
+        input_compatibility: BackendInputCompatibility | None = None,
+        exporter: str | None = None,
+        flavor_id: str | None = None,
+        distributed_min_workers: int = 2,
+        stability: Literal["alpha", "beta", "stable"] = "alpha",
+        tested: bool = False,
+        supported: bool = False,
+        validated_execution_profiles: tuple[ExecutionProfile, ...] = (),
+        limitations: tuple[str, ...] = (),
+        is_default: bool = False,
+        code_digest: str | None = None,
+    ) -> DistributedAlgorithmDescriptor:
+        """Lower one formal distributed implementation to its public descriptor.
+
+        The current formal distributed Builder supports only the ``fit``
+        operation. Implementations that also expose ``evaluate`` or
+        ``predict`` must construct an ``AlgorithmRegistration`` directly.
+        """
+        try:
+            resolved_strategy = DistributionStrategy(strategy)
+            operations = tuple(
+                AlgorithmOperation(operation) for operation in spec.operations
+            )
+        except (TypeError, ValueError) as exc:
+            raise AlgorithmConfigurationError(
+                f"formal distributed algorithm has an invalid enum value: {exc}"
+            ) from exc
+        if operations != (AlgorithmOperation.FIT,):
+            raise AlgorithmConfigurationError(
+                "formal distributed algorithm Builder supports only operation='fit'"
+            )
+
+        contract = FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS[resolved_strategy]
+        execution_mode = contract.execution_mode
+        runtime_id = contract.runtime_id
+        topology = contract.topology
+        input_distribution = contract.input_distribution
+        coordination = contract.state_coordination
+        adapter = QualifiedReference.parse(contract.worker_input_adapter_ref)
+        compatibility = input_compatibility or (
+            AlgorithmBuilder._formal_input_compatibility(topology, adapter)
+        )
+        if compatibility.distribution_policy != (topology,):
+            raise AlgorithmConfigurationError(
+                "input compatibility conflicts with the distributed strategy topology"
+            )
+        if adapter not in compatibility.supported_explicit_adapters:
+            raise AlgorithmConfigurationError(
+                "input compatibility must include the strategy's standard Ray Data "
+                "Worker adapter"
+            )
+        if (
+            "ray_data" not in compatibility.accepted_input_views
+            or "tributo.ray_data" not in compatibility.accepted_ingestion_engines
+            or "shardable" not in compatibility.required_input_capabilities
+        ):
+            raise AlgorithmConfigurationError(
+                "formal distributed input compatibility must retain the standard "
+                "shardable Ray Data contract"
+            )
+
+        registration = AlgorithmRegistration(
+            spec=spec,
+            implementation=ImplementationDescriptor(
+                implementation_id=implementation_id,
+                version=implementation_version,
+                execution_mode=execution_mode,
+                implementation_ref=QualifiedReference.parse(implementation),
+                executable_factory_ref=QualifiedReference.parse(executable_factory),
+                operations=operations,
+                input_compatibility=compatibility,
+                distribution=distribution,
+                framework=framework,
+                code_digest=code_digest,
+                artifact_format="none",
+                allowed_config_keys=allowed_config_keys,
+                runtime_id=runtime_id,
+                worker_input_adapter_ref=adapter,
+                exporter_ref=(
+                    QualifiedReference.parse(exporter) if exporter is not None else None
+                ),
+                flavor_id=flavor_id,
+            ),
+            environment=environment,
+            distribution_spec=DistributionSpec(
+                strategy=resolved_strategy,
+                supported_worker_range=supported_worker_range,
+                supported_execution_profiles=supported_execution_profiles,
+                resources_per_worker=resources_per_worker,
+                input_distribution=input_distribution,
+                state_coordination=coordination,
+                policy=policy,
+                distributed_min_workers=distributed_min_workers,
+                result_policy=result_policy,
+            ),
+            is_default=is_default,
+        )
+        return DistributedAlgorithmDescriptor(
+            registration=registration,
+            package_name=package_name,
+            package_version=package_version,
+            tributo_version_spec=tributo_version_spec,
+            stability=stability,
+            tested=tested,
+            supported=supported,
+            validated_execution_profiles=validated_execution_profiles,
+            limitations=limitations,
         )
 
     @staticmethod

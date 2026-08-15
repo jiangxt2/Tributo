@@ -6,6 +6,7 @@ import importlib
 import importlib.metadata
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, ClassVar
 
 import pytest
@@ -318,7 +319,7 @@ def test_independent_distributed_algorithm_package_passes_conformance(
     monkeypatch.syspath_prepend(str(fixture_src))
     fixture = importlib.import_module("tributo_test_distributed_algorithm")
     entry_point = _TrainerEntryPoint(
-        "third_party_multinomial_nb",
+        "third_party_mean_regressor",
         "tributo_test_distributed_algorithm:DESCRIPTOR",
         fixture.DESCRIPTOR,
     )
@@ -334,8 +335,13 @@ def test_independent_distributed_algorithm_package_passes_conformance(
     diagnostics = []
 
     descriptors = plugin.discover_algorithm_descriptors(diagnostics=diagnostics)
+    validated = plugin.validate_distributed_algorithm_descriptor(
+        fixture.DESCRIPTOR,
+        entry_point_name="third_party_mean_regressor",
+    )
 
     assert descriptors == [fixture.DESCRIPTOR]
+    assert validated is fixture.DESCRIPTOR
     assert diagnostics == []
     assert fixture.DESCRIPTOR.registration.is_default is True
     assert fixture.DESCRIPTOR.registration.distribution_spec is not None
@@ -343,6 +349,79 @@ def test_independent_distributed_algorithm_package_passes_conformance(
         fixture.DESCRIPTOR.registration.distribution_spec.strategy.value
         == "ray_map_reduce"
     )
+    assert (
+        fixture.DESCRIPTOR.registration.distribution_spec.result_policy.value
+        == "fit_only"
+    )
+    assert fixture.DESCRIPTOR.registration.implementation.exporter_ref is None
+    assert fixture.DESCRIPTOR.registration.implementation.flavor_id is None
+
+
+def test_independent_fixture_single_and_multi_partition_results_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import numpy as np
+
+    from tributo.algorithms.spi import AlgorithmExecutionContext
+
+    fixture_src = (
+        Path(__file__).parent / "fixtures" / "distributed_algorithm_plugin" / "src"
+    )
+    monkeypatch.syspath_prepend(str(fixture_src))
+    fixture = importlib.import_module("tributo_test_distributed_algorithm")
+    plan = SimpleNamespace(
+        input_binding=SimpleNamespace(
+            feature_names=("f0", "f1"),
+            label_name="label",
+        )
+    )
+    algorithm = fixture.ThirdPartyMeanRegressor(plan)
+    batch = {
+        "f0": np.asarray([1.0, 2.0, 3.0, 4.0]),
+        "f1": np.asarray([2.0, 4.0, 6.0, 8.0]),
+        "label": np.asarray([0.0, 1.0, 1.0, 2.0]),
+    }
+    context = AlgorithmExecutionContext(inputs={})
+
+    single = algorithm.finalize_model(algorithm.map_partition((batch,), context))
+    left = algorithm.map_partition(
+        ({name: values[:2] for name, values in batch.items()},),
+        context,
+    )
+    right = algorithm.map_partition(
+        ({name: values[2:] for name, values in batch.items()},),
+        context,
+    )
+    multi = algorithm.finalize_model(algorithm.merge_states(left, right))
+
+    assert single == multi
+    assert single.feature_means == (2.5, 5.0)
+    assert single.target_mean == 1.0
+    assert single.row_count == 4
+
+
+def test_direct_conformance_accepts_every_first_party_formal_descriptor() -> None:
+    from tributo.algorithms.builtin import (
+        DNN_DESCRIPTOR,
+        MULTINOMIAL_NB_DESCRIPTOR,
+        PU_DESCRIPTOR,
+        XGBOOST_DESCRIPTOR,
+    )
+
+    descriptors = (
+        DNN_DESCRIPTOR,
+        PU_DESCRIPTOR,
+        XGBOOST_DESCRIPTOR,
+        MULTINOMIAL_NB_DESCRIPTOR,
+    )
+
+    assert [
+        plugin.validate_distributed_algorithm_descriptor(
+            descriptor,
+            entry_point_name=descriptor.name,
+        )
+        for descriptor in descriptors
+    ] == list(descriptors)
 
 
 def test_distributed_algorithm_discovery_rejects_wrong_strategy_base(
@@ -372,6 +451,11 @@ def test_distributed_algorithm_discovery_rejects_wrong_strategy_base(
     )
     diagnostics = []
 
+    with pytest.raises(TypeError, match="CollectiveAlgorithm"):
+        plugin.validate_distributed_algorithm_descriptor(
+            invalid_descriptor,
+            entry_point_name="dnn",
+        )
     assert plugin.discover_algorithm_descriptors(diagnostics=diagnostics) == []
     assert diagnostics[0].entry_point_name == "dnn"
     assert diagnostics[0].error_type == "TypeError"

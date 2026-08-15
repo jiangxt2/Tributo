@@ -71,9 +71,11 @@ def _algorithm_config(
     *,
     worker_count: int,
 ) -> dict[str, Any]:
+    if algorithm == "third_party_mean_regressor":
+        return {}
     output = {"bundle_uri": bundle_uri}
     storage_path = str(Path(bundle_uri).parent / f"ray-results-{algorithm}")
-    if algorithm in {"multinomial_nb", "third_party_multinomial_nb"}:
+    if algorithm == "multinomial_nb":
         return {"alpha": 1.0, "output": output}
     if algorithm == "xgboost":
         return {
@@ -189,6 +191,7 @@ def _execute(
     runtime_manager: object | None = None,
     local_num_cpus: int | None = None,
 ) -> dict[str, Any]:
+    from tributo.algorithms.api import ResultPolicy
     from tributo.algorithms.composition import build_algorithm_dispatcher
     from tributo.algorithms.core import LocalRuntimeOptions, RayRuntimeManager
     from tributo.algorithms.spi import InputExecutionContext, InputResolutionContext
@@ -218,28 +221,31 @@ def _execute(
     receipt = result.execution_receipt
     if receipt is None:
         raise AssertionError(f"{algorithm} returned no ExecutionReceipt")
-    from tributo.exporting.service import bundle_id_for_request
-
-    if result.execution.outputs.get("bundle_id") != bundle_id_for_request(
-        receipt.run_id
-    ):
-        raise AssertionError(
-            f"{algorithm} Bundle identity does not match its execution receipt"
-        )
     preprocessor_state: dict[str, object] | None = None
-    with BundleReader().open_artifact(
-        str(result.execution.outputs["bundle_uri"]), role="inference"
-    ) as artifact:
-        model = artifact.path_for("model.onnx")
-        if not model.is_file() or model.stat().st_size <= 0:
-            raise AssertionError(f"{algorithm} Bundle has no readable ONNX model")
-        if algorithm == "dnn":
-            raw_preprocessor = json.loads(
-                artifact.path_for("preprocessor.json").read_text(encoding="utf-8")
+    if receipt.result_policy is ResultPolicy.BUNDLE_REQUIRED:
+        from tributo.exporting.service import bundle_id_for_request
+
+        if result.execution.outputs.get("bundle_id") != bundle_id_for_request(
+            receipt.run_id
+        ):
+            raise AssertionError(
+                f"{algorithm} Bundle identity does not match its execution receipt"
             )
-            if not isinstance(raw_preprocessor, dict):
-                raise AssertionError("DNN preprocessor is not a JSON object")
-            preprocessor_state = raw_preprocessor
+        with BundleReader().open_artifact(
+            str(result.execution.outputs["bundle_uri"]), role="inference"
+        ) as artifact:
+            model = artifact.path_for("model.onnx")
+            if not model.is_file() or model.stat().st_size <= 0:
+                raise AssertionError(f"{algorithm} Bundle has no readable ONNX model")
+            if algorithm == "dnn":
+                raw_preprocessor = json.loads(
+                    artifact.path_for("preprocessor.json").read_text(encoding="utf-8")
+                )
+                if not isinstance(raw_preprocessor, dict):
+                    raise AssertionError("DNN preprocessor is not a JSON object")
+                preprocessor_state = raw_preprocessor
+    elif result.execution.artifacts or result.execution.outputs or receipt.artifact_ids:
+        raise AssertionError(f"{algorithm} FIT_ONLY execution published artifacts")
     evidence = receipt.to_dict()
     if profile == "local" and (runtime_manager is None or local_num_cpus is not None):
         if not receipt.runtime_owned:
@@ -257,8 +263,10 @@ def _execute(
             raise AssertionError(f"{algorithm} did not prove cross-node distribution")
         if not receipt.kubernetes_distributed_supported:
             raise AssertionError(f"{algorithm} did not prove Kubernetes support")
-    elif not receipt.distributed or not receipt.cross_node:
+    elif worker_count >= 2 and (not receipt.distributed or not receipt.cross_node):
         raise AssertionError(f"{algorithm} did not prove cross-node distribution")
+    elif worker_count == 1 and receipt.distributed:
+        raise AssertionError(f"{algorithm} single worker claimed distribution")
     if profile == "local" and receipt.kubernetes_distributed_supported:
         raise AssertionError("Docker local-profile evidence masqueraded as Kubernetes")
     if receipt.driver_materialized_training_rows != 0:
@@ -300,11 +308,11 @@ def _execute(
                 "PU global stratified split did not preserve the expected class "
                 f"counts: {observed_splits}"
             )
-    if algorithm in {"multinomial_nb", "third_party_multinomial_nb"}:
+    if algorithm in {"multinomial_nb", "third_party_mean_regressor"}:
         if sum(worker.rows_processed or 0 for worker in receipt.workers) != 64:
-            raise AssertionError("MultinomialNB did not consume every input row")
+            raise AssertionError(f"{algorithm} did not consume every input row")
         if worker_count >= 2 and receipt.state.details.get("tree_depth") != 1:
-            raise AssertionError("MultinomialNB did not execute a reduction tree")
+            raise AssertionError(f"{algorithm} did not execute a reduction tree")
     if (
         algorithm == "xgboost"
         and sum(worker.rows_processed or 0 for worker in receipt.workers) != 48
@@ -430,7 +438,7 @@ def _assert_third_party_descriptor_discovered() -> None:
     matches = [
         descriptor
         for descriptor in discover_algorithm_descriptors()
-        if descriptor.name == "third_party_multinomial_nb"
+        if descriptor.name == "third_party_mean_regressor"
     ]
     if len(matches) != 1:
         raise AssertionError(
@@ -465,6 +473,7 @@ def main() -> int:
     try:
         _stage_parquet(data_path, records)
         if mode == "local":
+            _assert_third_party_descriptor_discovered()
             results = [
                 _execute(
                     algorithm,
@@ -486,6 +495,17 @@ def main() -> int:
                     local_num_cpus=4,
                 )
                 for algorithm in ("dnn", "multinomial_nb")
+            )
+            results.extend(
+                _execute(
+                    "third_party_mean_regressor",
+                    data_path,
+                    f"{root}/unused-fit-only-output-{worker_count}",
+                    profile="local",
+                    worker_count=worker_count,
+                    local_num_cpus=4,
+                )
+                for worker_count in (1, 2)
             )
             dnn_results = [result for result in results if result["algorithm"] == "dnn"]
             _assert_dnn_single_multi_numerical_consistency(
@@ -517,7 +537,6 @@ def main() -> int:
                 "pu",
                 "xgboost",
                 "multinomial_nb",
-                "third_party_multinomial_nb",
             ]
             results = [
                 _execute(
@@ -530,6 +549,17 @@ def main() -> int:
                 )
                 for algorithm in algorithms
             ]
+            results.extend(
+                _execute(
+                    "third_party_mean_regressor",
+                    data_path,
+                    f"{root}/unused-fit-only-output-{worker_count}",
+                    profile=profile,
+                    worker_count=worker_count,
+                    runtime_manager=runtime_manager,
+                )
+                for worker_count in (1, 2)
+            )
         print(f"RESULT: {json.dumps(results, sort_keys=True)}")
     finally:
         if not configured_root:

@@ -224,6 +224,7 @@ class AlgorithmRunCoordinator:
             workers=workers,
             input_complete=input_complete,
             state=state,
+            result_policy=plan.distribution_spec.result_policy,
             driver_materialized_training_rows=driver_rows,
             artifact_ids=tuple(artifact_ids),
             cluster_resources={},

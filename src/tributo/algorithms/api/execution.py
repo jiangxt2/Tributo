@@ -12,11 +12,15 @@ from tributo._common.immutable import FrozenDict
 from tributo.algorithms.api.distribution import (
     DistributionStrategy,
     ExecutionProfile,
+    ResultPolicy,
     StateCoordination,
     WorkerResources,
 )
 from tributo.algorithms.api.errors import AlgorithmConfigurationError
-from tributo.algorithms.api.models import AlgorithmRequest
+from tributo.algorithms.api.models import (
+    FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS,
+    AlgorithmRequest,
+)
 from tributo.util.annotations import PublicAPI
 
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
@@ -348,6 +352,7 @@ class ExecutionReceipt:
     workers: tuple[WorkerExecutionEvidence, ...]
     input_complete: bool
     state: StateCoordinationEvidence
+    result_policy: ResultPolicy = ResultPolicy.BUNDLE_REQUIRED
     driver_materialized_training_rows: int = 0
     artifact_ids: tuple[str, ...] = ()
     cluster_resources: Mapping[str, float] = field(default_factory=dict)
@@ -365,12 +370,14 @@ class ExecutionReceipt:
         try:
             profile = ExecutionProfile(self.profile)
             strategy = DistributionStrategy(self.strategy)
+            result_policy = ResultPolicy(self.result_policy)
         except (TypeError, ValueError) as exc:
             raise AlgorithmConfigurationError(
                 f"invalid execution receipt enum value: {exc}"
             ) from exc
         object.__setattr__(self, "profile", profile)
         object.__setattr__(self, "strategy", strategy)
+        object.__setattr__(self, "result_policy", result_policy)
         if (
             not isinstance(self.api_version, int)
             or isinstance(self.api_version, bool)
@@ -443,11 +450,9 @@ class ExecutionReceipt:
             raise AlgorithmConfigurationError("input_complete must be a boolean")
         if not isinstance(self.state, StateCoordinationEvidence):
             raise AlgorithmConfigurationError("state must be StateCoordinationEvidence")
-        expected_coordination = {
-            DistributionStrategy.RAY_TRAIN_COLLECTIVE: StateCoordination.ALL_REDUCE,
-            DistributionStrategy.FRAMEWORK_NATIVE: StateCoordination.FRAMEWORK_NATIVE,
-            DistributionStrategy.RAY_MAP_REDUCE: StateCoordination.ASSOCIATIVE_REDUCE,
-        }[strategy]
+        expected_coordination = FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS[
+            strategy
+        ].state_coordination
         if self.state.coordination is not expected_coordination:
             raise AlgorithmConfigurationError(
                 "state coordination evidence does not match the declared strategy"
@@ -501,7 +506,7 @@ class ExecutionReceipt:
             and self.state.bounded
             and self.state.global_model_digest is not None
             and self.driver_materialized_training_rows == 0
-            and bool(self.artifact_ids)
+            and (self.result_policy is ResultPolicy.FIT_ONLY or bool(self.artifact_ids))
             and all(
                 worker.rows_processed is not None and worker.rows_processed > 0
                 for worker in self.workers
@@ -537,6 +542,7 @@ class ExecutionReceipt:
             "canonical_algorithm": self.canonical_algorithm,
             "execution_profile": self.profile.value,
             "strategy": self.strategy.value,
+            "result_policy": self.result_policy.value,
             "requested_worker_count": self.requested_worker_count,
             "distributed_min_workers": self.distributed_min_workers,
             "requested_resources_per_worker": (

@@ -41,7 +41,7 @@ import logging
 import os
 from importlib.metadata import entry_points
 from inspect import Parameter, signature
-from typing import Any, TypeGuard, cast
+from typing import TYPE_CHECKING, Any, TypeGuard, cast
 
 from pydantic import BaseModel
 
@@ -53,6 +53,10 @@ from tributo.exporting.protocols import (
     ModelExporter,
     ModelFactory,
 )
+from tributo.util.annotations import PublicAPI
+
+if TYPE_CHECKING:
+    from tributo.algorithms.api import DistributedAlgorithmDescriptor
 
 logger = logging.getLogger(__name__)
 
@@ -163,10 +167,13 @@ def discover_trainer_descriptors(
     return descriptors
 
 
-def discover_algorithm_descriptors(
-    diagnostics: list[PluginLoadDiagnostic] | None = None,
-) -> list[Any]:
-    """Discover and validate constrained distributed algorithm descriptors."""
+@PublicAPI(stability="alpha")
+def validate_distributed_algorithm_descriptor(
+    descriptor: object,
+    *,
+    entry_point_name: str,
+) -> DistributedAlgorithmDescriptor:
+    """Validate one installed, trusted distributed algorithm descriptor."""
     import importlib
     import importlib.metadata
 
@@ -177,11 +184,82 @@ def discover_algorithm_descriptors(
         DistributedAlgorithmDescriptor,
         DistributionStrategy,
     )
+    from tributo.algorithms.api.models import FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS
     from tributo.algorithms.spi import (
         CollectiveAlgorithm,
         FrameworkNativeAlgorithm,
         MapReduceAlgorithm,
     )
+
+    if not isinstance(descriptor, DistributedAlgorithmDescriptor):
+        raise TypeError("entry point does not export DistributedAlgorithmDescriptor")
+    if descriptor.name != entry_point_name:
+        raise ValueError(
+            "descriptor algorithm identity does not match entry-point name"
+        )
+    installed_package_version = importlib.metadata.version(descriptor.package_name)
+    if Version(installed_package_version) != Version(descriptor.package_version):
+        raise ValueError("descriptor package version does not match installed metadata")
+    installed_tributo_version = importlib.metadata.version("tributo")
+    if Version(installed_tributo_version) not in SpecifierSet(
+        descriptor.tributo_version_spec
+    ):
+        raise ValueError(
+            "installed Tributo version is outside descriptor compatibility"
+        )
+
+    registration = descriptor.registration
+    distribution_spec = registration.distribution_spec
+    if distribution_spec is None:
+        raise TypeError("distributed descriptor lost its DistributionSpec")
+    implementation_descriptor = registration.implementation
+    expected_base = {
+        DistributionStrategy.RAY_TRAIN_COLLECTIVE: CollectiveAlgorithm,
+        DistributionStrategy.RAY_MAP_REDUCE: MapReduceAlgorithm,
+        DistributionStrategy.FRAMEWORK_NATIVE: FrameworkNativeAlgorithm,
+    }[distribution_spec.strategy]
+    contract = FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS[distribution_spec.strategy]
+    if implementation_descriptor.execution_mode is not contract.execution_mode:
+        raise ValueError("implementation execution mode conflicts with strategy")
+    if implementation_descriptor.runtime_id != contract.runtime_id:
+        raise ValueError("implementation runtime_id conflicts with strategy")
+    worker_adapter = implementation_descriptor.worker_input_adapter_ref
+    if (
+        worker_adapter is None
+        or str(worker_adapter) != contract.worker_input_adapter_ref
+    ):
+        raise ValueError("implementation Worker input adapter conflicts with strategy")
+    compatibility = implementation_descriptor.input_compatibility
+    if compatibility.distribution_policy != (contract.topology,):
+        raise ValueError("implementation input topology conflicts with strategy")
+    if worker_adapter not in compatibility.supported_explicit_adapters:
+        raise ValueError(
+            "implementation input compatibility omits its Worker input adapter"
+        )
+    if (
+        "ray_data" not in compatibility.accepted_input_views
+        or "tributo.ray_data" not in compatibility.accepted_ingestion_engines
+        or "shardable" not in compatibility.required_input_capabilities
+    ):
+        raise ValueError(
+            "implementation input compatibility omits the shardable Ray Data contract"
+        )
+
+    reference = implementation_descriptor.implementation_ref
+    implementation: object = importlib.import_module(reference.module)
+    for segment in reference.qualname.split("."):
+        implementation = getattr(implementation, segment)
+    if not isinstance(implementation, type) or not issubclass(
+        implementation, expected_base
+    ):
+        raise TypeError(f"implementation must inherit {expected_base.__name__}")
+    return descriptor
+
+
+def discover_algorithm_descriptors(
+    diagnostics: list[PluginLoadDiagnostic] | None = None,
+) -> list[Any]:
+    """Discover and validate constrained distributed algorithm descriptors."""
 
     enabled = _get_enabled_plugins()
     descriptors: list[Any] = []
@@ -189,47 +267,10 @@ def discover_algorithm_descriptors(
         if enabled is not None and ep.name not in enabled:
             continue
         try:
-            descriptor = ep.load()
-            if not isinstance(descriptor, DistributedAlgorithmDescriptor):
-                raise TypeError(
-                    "entry point does not export DistributedAlgorithmDescriptor"
-                )
-            if descriptor.name != ep.name:
-                raise ValueError(
-                    "descriptor algorithm identity does not match entry-point name"
-                )
-            installed_package_version = importlib.metadata.version(
-                descriptor.package_name
+            descriptor = validate_distributed_algorithm_descriptor(
+                ep.load(),
+                entry_point_name=ep.name,
             )
-            if Version(installed_package_version) != Version(
-                descriptor.package_version
-            ):
-                raise ValueError(
-                    "descriptor package version does not match installed metadata"
-                )
-            installed_tributo_version = importlib.metadata.version("tributo")
-            if Version(installed_tributo_version) not in SpecifierSet(
-                descriptor.tributo_version_spec
-            ):
-                raise ValueError(
-                    "installed Tributo version is outside descriptor compatibility"
-                )
-            distribution_spec = descriptor.registration.distribution_spec
-            if distribution_spec is None:
-                raise TypeError("distributed descriptor lost its DistributionSpec")
-            reference = descriptor.registration.implementation.implementation_ref
-            implementation: object = importlib.import_module(reference.module)
-            for segment in reference.qualname.split("."):
-                implementation = getattr(implementation, segment)
-            expected_base = {
-                DistributionStrategy.RAY_TRAIN_COLLECTIVE: CollectiveAlgorithm,
-                DistributionStrategy.RAY_MAP_REDUCE: MapReduceAlgorithm,
-                DistributionStrategy.FRAMEWORK_NATIVE: FrameworkNativeAlgorithm,
-            }[distribution_spec.strategy]
-            if not isinstance(implementation, type) or not issubclass(
-                implementation, expected_base
-            ):
-                raise TypeError(f"implementation must inherit {expected_base.__name__}")
         except Exception as exc:
             _record_diagnostic(
                 diagnostics,

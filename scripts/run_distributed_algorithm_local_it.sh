@@ -20,6 +20,8 @@ WORK_VOLUME_NAME="tributo-algorithm-local-work-${RUN_ID}"
 LOG_DIR="/tmp/tributo-algorithm-local-${RUN_ID}"
 TEST_LOG="${LOG_DIR}/tests.log"
 IMAGE_LOG="${LOG_DIR}/image-prepare.log"
+PLUGIN_DIST_DIR="${LOG_DIR}/plugin-dist"
+PLUGIN_WHEEL=""
 BASELINE_CONTAINERS="${LOG_DIR}/existing-containers.tsv"
 BASELINE_IMAGES="${LOG_DIR}/baseline-dangling-images.txt"
 FINAL_IMAGES="${LOG_DIR}/final-dangling-images.txt"
@@ -126,8 +128,24 @@ trap cleanup EXIT
 cd "${PROJECT_ROOT}"
 mkdir -p "${LOG_DIR}"
 command -v docker >/dev/null
+command -v uv >/dev/null
 docker info >/dev/null
 snapshot_existing_containers
+
+uv build \
+  --wheel \
+  --out-dir "${PLUGIN_DIST_DIR}" \
+  --no-create-gitignore \
+  tests/fixtures/distributed_algorithm_plugin \
+  2>&1 | tee "${LOG_DIR}/plugin-wheel.log"
+shopt -s nullglob
+plugin_wheels=("${PLUGIN_DIST_DIR}"/*.whl)
+shopt -u nullglob
+if [[ "${#plugin_wheels[@]}" -ne 1 ]]; then
+  echo "Expected exactly one third-party plugin wheel, found ${#plugin_wheels[@]}" >&2
+  exit 1
+fi
+PLUGIN_WHEEL="${plugin_wheels[0]}"
 
 prepare_args=(prepare-runtime --profile data-ingestion)
 if [[ -n "${TRIBUTO_IT_RUNTIME_REGISTRY:-}" ]]; then
@@ -179,11 +197,12 @@ docker create \
   --init \
   --shm-size 2gb \
   --env PYTHONDONTWRITEBYTECODE=1 \
-  --env PYTHONPATH=/workspace/tributo-src/src:/workspace/tributo-src \
+  --env PYTHONPATH=/workspace/tributo-plugin.whl:/workspace/tributo-src/src:/workspace/tributo-src \
   --env TRIBUTO_DOCKER_ALGORITHM_LOCAL_IT=1 \
   --env TMPDIR=/workspace/tributo-work/tmp \
   --env XDG_CACHE_HOME=/workspace/tributo-work/cache \
   --volume "${SOURCE_VOLUME_NAME}:/workspace/tributo-src:ro" \
+  --volume "${PLUGIN_WHEEL}:/workspace/tributo-plugin.whl:ro" \
   --volume "${WORK_VOLUME_NAME}:/workspace/tributo-work" \
   --workdir /workspace/tributo-src \
   "${RUNTIME_IMAGE}" \

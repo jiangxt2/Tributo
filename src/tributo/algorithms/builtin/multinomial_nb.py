@@ -33,6 +33,7 @@ from tributo.algorithms.api import (
     WorkerRange,
     WorkerResources,
 )
+from tributo.algorithms.api.models import FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS
 from tributo.algorithms.spi import AlgorithmExecutionContext, MapReduceAlgorithm
 from tributo.training.algorithm_spec import AlgorithmSpec, Capability, ProblemType
 from tributo.util.annotations import DeveloperAPI, PublicAPI
@@ -449,9 +450,10 @@ def export_model(
     )
 
 
-_INPUT_ADAPTER = QualifiedReference.parse(
-    "tributo.integrations.algorithm_inputs.ingestion:prepare_ray_batch_input"
-)
+_MAP_REDUCE_CONTRACT = FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS[
+    DistributionStrategy.RAY_MAP_REDUCE
+]
+_INPUT_ADAPTER = QualifiedReference.parse(_MAP_REDUCE_CONTRACT.worker_input_adapter_ref)
 
 MULTINOMIAL_NB_REGISTRATION = AlgorithmRegistration(
     spec=AlgorithmSpec(
@@ -504,7 +506,7 @@ MULTINOMIAL_NB_REGISTRATION = AlgorithmRegistration(
             "force_alpha",
             "output",
         ),
-        runtime_id="tributo.ray_map_reduce",
+        runtime_id=_MAP_REDUCE_CONTRACT.runtime_id,
         worker_input_adapter_ref=_INPUT_ADAPTER,
         exporter_ref=QualifiedReference.parse(
             "tributo.algorithms.builtin.multinomial_nb:export_model"

@@ -54,6 +54,8 @@ def test_owned_local_runtime_executes_without_ray_jobs() -> None:
         ("multinomial_nb", 1),
         ("dnn", 2),
         ("multinomial_nb", 2),
+        ("third_party_mean_regressor", 1),
+        ("third_party_mean_regressor", 2),
     }
     for result in results:
         receipt = result["receipt"]
@@ -64,3 +66,9 @@ def test_owned_local_runtime_executes_without_ray_jobs() -> None:
         assert receipt["kubernetes_distributed_supported"] is False
         assert receipt["driver_materialized_training_rows"] == 0
         assert receipt["distributed"] is (result["worker_count"] >= 2)
+        if result["algorithm"] == "third_party_mean_regressor":
+            assert receipt["result_policy"] == "fit_only"
+            assert receipt["artifact_ids"] == []
+        else:
+            assert receipt["result_policy"] == "bundle_required"
+            assert receipt["artifact_ids"]

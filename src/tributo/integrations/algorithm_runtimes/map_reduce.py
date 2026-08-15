@@ -25,6 +25,7 @@ from tributo.algorithms.api import (
     WorkerExecutionResult,
     WorkerResources,
 )
+from tributo.algorithms.api.models import FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS
 from tributo.algorithms.core.worker import (
     _actual_environment_versions,
     _load_reference,
@@ -41,7 +42,9 @@ from tributo.algorithms.spi import (
 )
 from tributo.util.annotations import DeveloperAPI
 
-RAY_MAP_REDUCE_RUNTIME_ID = "tributo.ray_map_reduce"
+RAY_MAP_REDUCE_RUNTIME_ID = FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS[
+    DistributionStrategy.RAY_MAP_REDUCE
+].runtime_id
 
 
 @dataclass(frozen=True)
@@ -267,6 +270,42 @@ def _validate_input_coverage(stage: _MapReduceStageResult) -> int:
     return observed
 
 
+def _map_reduce_execution_result(
+    *,
+    algorithm: MapReduceAlgorithm[Any, Any, Any],
+    state: object,
+    plan: ResolvedAlgorithmPlan,
+    run_id: str,
+) -> AlgorithmExecutionResult:
+    """Finalize the global model, then apply the independent result policy."""
+    model = algorithm.finalize_model(state)
+    distribution = plan.distribution_spec
+    if distribution is not None and distribution.result_policy is ResultPolicy.FIT_ONLY:
+        # MapReduceAlgorithm exposes only a finalized model, not a metrics
+        # channel; FIT_ONLY therefore returns no user metrics in this slice.
+        return AlgorithmExecutionResult(status="succeeded")
+    exporter_ref = plan.implementation.exporter_ref
+    if exporter_ref is None:
+        raise AlgorithmConfigurationError(
+            "MapReduce bundle_required fit requires an explicit exporter reference"
+        )
+    exporter = _load_reference(exporter_ref)
+    if not callable(exporter):
+        raise AlgorithmConfigurationError(
+            "MapReduce exporter reference is not callable"
+        )
+    execution = exporter(model=model, plan=plan, run_id=run_id)
+    if not isinstance(execution, AlgorithmExecutionResult):
+        raise AlgorithmExecutionError(
+            "MapReduce exporter must return AlgorithmExecutionResult"
+        )
+    if not execution.outputs.get("bundle_uri"):
+        raise AlgorithmExecutionError(
+            "MapReduce fit completed without the required Bundle publication"
+        )
+    return execution
+
+
 @ray.remote
 def _map_partition(
     plan: ResolvedAlgorithmPlan,
@@ -403,30 +442,12 @@ def _finalize_model(
     policy = _policy(plan)
     algorithm = _algorithm(plan, policy)
     observed_input_rows = _validate_input_coverage(stage)
-    model = algorithm.finalize_model(stage.state)
-    exporter_ref = plan.implementation.exporter_ref
-    if exporter_ref is None:
-        raise AlgorithmConfigurationError(
-            "MapReduce fit requires an explicit exporter reference"
-        )
-    exporter = _load_reference(exporter_ref)
-    if not callable(exporter):
-        raise AlgorithmConfigurationError(
-            "MapReduce exporter reference is not callable"
-        )
-    execution = exporter(model=model, plan=plan, run_id=run_id)
-    if not isinstance(execution, AlgorithmExecutionResult):
-        raise AlgorithmExecutionError(
-            "MapReduce exporter must return AlgorithmExecutionResult"
-        )
-    if (
-        plan.distribution_spec is not None
-        and plan.distribution_spec.result_policy is ResultPolicy.BUNDLE_REQUIRED
-        and not execution.outputs.get("bundle_uri")
-    ):
-        raise AlgorithmExecutionError(
-            "MapReduce fit completed without the required Bundle publication"
-        )
+    execution = _map_reduce_execution_result(
+        algorithm=algorithm,
+        state=stage.state,
+        plan=plan,
+        run_id=run_id,
+    )
     identity = _runtime_identity()
     worker_metadata: dict[str, Any] = {
         "topology": "ray_map_reduce",

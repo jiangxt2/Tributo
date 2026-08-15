@@ -16,6 +16,7 @@ from tributo.algorithms.api import (
     ExecutionProfile,
     ExecutionReceipt,
     ExecutionRequest,
+    ResultPolicy,
     StateCoordination,
     StateCoordinationEvidence,
     WorkerExecutionEvidence,
@@ -127,6 +128,7 @@ def test_coordinator_receipt_preserves_requested_alias_and_canonical_algorithm()
         distribution_spec=SimpleNamespace(
             strategy=DistributionStrategy.RAY_TRAIN_COLLECTIVE,
             distributed_min_workers=2,
+            result_policy=ResultPolicy.BUNDLE_REQUIRED,
         ),
         runtime=SimpleNamespace(
             execution_profile=ExecutionProfile.LOCAL,
@@ -241,6 +243,13 @@ def test_distribution_threshold_resources_and_bundle_are_evidence_not_claims() -
 
     assert replace(receipt, distributed_min_workers=3).distributed is False
     assert replace(receipt, artifact_ids=()).distributed is False
+    fit_only = replace(
+        receipt,
+        result_policy=ResultPolicy.FIT_ONLY,
+        artifact_ids=(),
+    )
+    assert fit_only.distributed is True
+    assert fit_only.to_dict()["result_policy"] == "fit_only"
     assert (
         replace(
             receipt,
