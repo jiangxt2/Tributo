@@ -3,22 +3,37 @@
 from __future__ import annotations
 
 import importlib
+import json
+import runpy
 import sys
 from pathlib import Path
+from typing import Any
 
 import click
+import pytest
 
+import tools.generate_public_api_reference as public_api_generator
 from tools.check_docs import (
     autodoc_targets,
     click_directive,
     command_paths,
     resolve_target,
     root_toctree_targets,
+    validate_api_reference,
+    validate_doc_code,
     validate_mock_inventory,
     validate_navigation,
+    validate_publication_metadata,
     validate_python_examples,
+    validate_ray_writing_style,
+    validate_repository_examples,
     validate_support_matrix,
     validate_system_landscape_svg,
+)
+from tools.generate_public_api_reference import (
+    build_inventory,
+    check_pages,
+    component_for,
 )
 from tributo.util.annotations import DeveloperAPI, PublicAPI
 
@@ -75,6 +90,67 @@ def test_repository_navigation_matches_ray_style_contract() -> None:
     assert validate_navigation(REPOSITORY_ROOT / "docs") == []
 
 
+def test_repository_doc_code_compiles() -> None:
+    assert validate_doc_code(REPOSITORY_ROOT / "docs") == []
+
+
+def test_repository_cluster_examples_compile() -> None:
+    assert validate_repository_examples(REPOSITORY_ROOT) == []
+
+
+def test_repository_headings_match_ray_style_contract() -> None:
+    assert validate_ray_writing_style(REPOSITORY_ROOT / "docs") == []
+
+
+def test_generated_public_api_reference_covers_source_inventory() -> None:
+    inventory = build_inventory()
+
+    assert inventory
+    assert len({symbol.target for symbol in inventory}) == len(inventory)
+    assert {component_for(symbol) for symbol in inventory} == {
+        "algorithms-training",
+        "core",
+        "data",
+        "vector-index",
+        "extensions",
+        "inference-serving",
+        "model-lifecycle",
+    }
+    pipeline_symbols = tuple(
+        symbol for symbol in inventory if symbol.module.startswith("tributo.pipeline.")
+    )
+    assert pipeline_symbols
+    assert {component_for(symbol) for symbol in pipeline_symbols} == {"extensions"}
+    assert all(
+        page.endswith("\n") and not page.endswith("\n\n")
+        for page in public_api_generator.expected_pages(inventory).values()
+    )
+    assert check_pages(inventory) == []
+
+
+def test_api_reference_validation_reuses_source_inventory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = public_api_generator.build_inventory
+    calls = 0
+
+    def counting_build_inventory(
+        source_root: Path = public_api_generator.SOURCE_ROOT,
+    ) -> tuple[public_api_generator.PublicSymbol, ...]:
+        nonlocal calls
+        calls += 1
+        return original(source_root)
+
+    monkeypatch.setattr(
+        public_api_generator,
+        "build_inventory",
+        counting_build_inventory,
+    )
+
+    assert validate_api_reference(REPOSITORY_ROOT / "docs", import_objects=False) == []
+    assert calls == 1
+
+
 def test_resolve_target_imports_longest_module_prefix() -> None:
     assert resolve_target("pathlib.Path") is Path
 
@@ -119,7 +195,8 @@ def test_stability_extension_only_marks_top_level_objects() -> None:
     stability.add_stability_to_docstring(
         None, "class", "example.StableAPI", StableAPI, None, lines
     )
-    assert ".. admonition:: Stable API" in lines
+    assert ":::{admonition} Stable API" in lines
+    assert ":class: tributo-stability tributo-stability-stable" in lines
 
     method_lines = ["Method documentation."]
     stability.add_stability_to_docstring(
@@ -159,6 +236,144 @@ def test_python_example_validation_supports_explicit_pseudocode(
         encoding="utf-8",
     )
     assert validate_python_examples(docs_root) == []
+
+
+def test_repository_example_validation_rejects_invalid_python(
+    tmp_path: Path,
+) -> None:
+    examples_root = tmp_path / "examples"
+    examples_root.mkdir()
+    (examples_root / "invalid.py").write_text(
+        "if True print('invalid')\n",
+        encoding="utf-8",
+    )
+
+    errors = validate_repository_examples(tmp_path)
+
+    assert len(errors) == 1
+    assert "invalid repository example" in errors[0]
+
+
+def test_publication_metadata_matches_project_documentation_url(
+    tmp_path: Path,
+) -> None:
+    documentation_url = "https://docs.example.test/en/latest/"
+    docs_root = tmp_path / "docs"
+    static_root = docs_root / "_static"
+    static_root.mkdir(parents=True)
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\n"
+        'name = "example"\n'
+        "[project.urls]\n"
+        f'Documentation = "{documentation_url}"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "README.md").write_text(
+        f"[Docs]({documentation_url})\n"
+        f"[Quickstart]({documentation_url}getting-started/quickstart/)\n"
+        f"[Support]({documentation_url}reference/support-matrix/)\n",
+        encoding="utf-8",
+    )
+    versions_path = static_root / "versions.json"
+    versions_path.write_text(
+        json.dumps([{"name": "latest", "version": "latest", "url": documentation_url}]),
+        encoding="utf-8",
+    )
+
+    assert validate_publication_metadata(docs_root) == []
+
+    versions_path.write_text(
+        json.dumps(
+            [
+                {
+                    "name": "latest",
+                    "version": "latest",
+                    "url": "https://stale.example.test/",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    assert any(
+        "does not match project Documentation URL" in error
+        for error in validate_publication_metadata(docs_root)
+    )
+
+
+def _load_docs_conf(
+    monkeypatch: pytest.MonkeyPatch,
+    environment: dict[str, str],
+) -> dict[str, Any]:
+    for name in (
+        "GITHUB_EVENT_NAME",
+        "GITHUB_REF_NAME",
+        "READTHEDOCS_GIT_IDENTIFIER",
+        "READTHEDOCS_VERSION_TYPE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    return runpy.run_path(str(REPOSITORY_ROOT / "docs" / "conf.py"))
+
+
+def test_docs_conf_uses_editable_branch_and_canonical_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _load_docs_conf(
+        monkeypatch,
+        {
+            "READTHEDOCS_GIT_IDENTIFIER": "docs/example",
+            "READTHEDOCS_VERSION_TYPE": "branch",
+        },
+    )
+
+    documentation_url = config["documentation_url"]
+    assert config["html_baseurl"] == documentation_url
+    assert config["html_context"]["github_version"] == "docs/example"
+    assert config["html_theme_options"]["use_edit_page_button"] is True
+    assert config["html_theme_options"]["switcher"]["json_url"] == (
+        f"{documentation_url}_static/versions.json"
+    )
+
+
+@pytest.mark.parametrize(
+    "environment",
+    [
+        {
+            "READTHEDOCS_GIT_IDENTIFIER": "123",
+            "READTHEDOCS_VERSION_TYPE": "external",
+        },
+        {
+            "GITHUB_EVENT_NAME": "pull_request",
+            "GITHUB_REF_NAME": "feature/pr-preview",
+        },
+    ],
+)
+def test_docs_conf_disables_edit_button_for_pull_request_previews(
+    monkeypatch: pytest.MonkeyPatch,
+    environment: dict[str, str],
+) -> None:
+    config = _load_docs_conf(monkeypatch, environment)
+
+    assert config["html_theme_options"]["use_edit_page_button"] is False
+
+
+def test_ray_style_validation_ignores_code_and_rejects_numbered_title_case(
+    tmp_path: Path,
+) -> None:
+    docs_root = tmp_path / "docs"
+    docs_root.mkdir()
+    path = docs_root / "guide.md"
+    path.write_text(
+        "# API Reference\n\n## 1. Setup\n\n```python\n# 2. Code Comment\n```\n",
+        encoding="utf-8",
+    )
+
+    errors = validate_ray_writing_style(docs_root)
+
+    assert any("sentence case" in error for error in errors)
+    assert any("numeric prefix" in error for error in errors)
+    assert all("Code Comment" not in error for error in errors)
 
 
 def test_repository_system_landscape_svg_matches_contract() -> None:

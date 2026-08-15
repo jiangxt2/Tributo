@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import json
 import re
 import sys
+import tomllib
 import xml.etree.ElementTree as ET
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -54,20 +57,17 @@ _FORCED_COLORS_MEDIA_PATTERN = re.compile(
 
 _RAY_STYLE_ROOT_TARGETS = (
     "overview/index",
-    "quickstart",
-    "installation",
-    "user-guide/index",
+    "getting-started/index",
     "examples/index",
-    "integrations/index",
     "data/index",
-    "training/index",
+    "algorithms/index",
     "model-lifecycle/index",
     "inference/index",
+    "vector-index/index",
     "reference/index",
     "ray-jobs/index",
     "operations/index",
     "developer/index",
-    "architecture/index",
     "security/index",
 )
 _RAY_SIDEBAR_OPTIONS = (
@@ -95,6 +95,7 @@ _REQUIRED_ROOT_API_TARGETS = frozenset(
 _REQUIRED_TOP_LEVEL_COMMANDS = frozenset(
     {
         "algo",
+        "explain",
         "export",
         "export-gc",
         "inspect",
@@ -105,6 +106,7 @@ _REQUIRED_TOP_LEVEL_COMMANDS = frozenset(
         "stop",
         "submit",
         "tune",
+        "vector",
     }
 )
 _REQUIRED_NESTED_COMMANDS = frozenset(
@@ -114,6 +116,33 @@ _REQUIRED_NESTED_COMMANDS = frozenset(
         "tributo serve grpc start",
         "tributo serve streaming start",
         "tributo tune run",
+        "tributo vector build",
+        "tributo vector compact",
+        "tributo vector optimize",
+        "tributo vector result",
+        "tributo vector search",
+    }
+)
+_REQUIRED_CLI_GUIDE_LINKS = frozenset(
+    {
+        "(algorithms/index.md)",
+        "(vector-index/index.md)",
+        "(inference/index.md)",
+        "(model-lifecycle/index.md)",
+        "(ray-jobs/index.md)",
+    }
+)
+
+_RAY_HEADING_PROPER_NAMES = frozenset(
+    {
+        "API",
+        "Bundle",
+        "CLI",
+        "Jobs",
+        "MLflow",
+        "ONNX",
+        "Ray",
+        "Tributo",
     }
 )
 
@@ -223,21 +252,41 @@ def validate_mock_inventory() -> list[str]:
     return errors
 
 
-def validate_api_reference(path: Path, *, import_objects: bool) -> list[str]:
-    """Validate explicit API directives and optional real imports."""
-    text = path.read_text(encoding="utf-8")
-    targets = autodoc_targets(text)
-    errors: list[str] = []
+def validate_api_reference(docs_root: Path, *, import_objects: bool) -> list[str]:
+    """Validate generated API coverage and optional real imports."""
+    from tools.generate_public_api_reference import build_inventory, check_pages
 
-    if not targets:
-        errors.append(f"{path}: no autodoc targets found")
+    api_root = docs_root / "reference" / "api"
+    paths = tuple(sorted(api_root.glob("*.md")))
+    errors: list[str] = []
+    if not paths:
+        errors.append(f"{api_root}: no generated API pages found")
         return errors
-    duplicates = sorted({target for target in targets if targets.count(target) > 1})
+
+    targets = tuple(
+        target
+        for path in paths
+        for target in autodoc_targets(path.read_text(encoding="utf-8"))
+    )
+    target_counts = Counter(targets)
+    duplicates = sorted(target for target, count in target_counts.items() if count > 1)
     if duplicates:
-        errors.append(f"{path}: duplicate autodoc targets: {duplicates}")
+        errors.append(f"{api_root}: duplicate autodoc targets: {duplicates}")
+
+    inventory = build_inventory()
+    expected = {symbol.documentation_target: symbol for symbol in inventory}
+    missing_public = sorted(set(expected) - set(targets))
+    if missing_public:
+        errors.append(f"{api_root}: missing PublicAPI targets: {missing_public}")
+    unexpected = sorted(set(targets) - set(expected))
+    if unexpected:
+        errors.append(f"{api_root}: undocumented source for targets: {unexpected}")
     missing_static = sorted(_REQUIRED_ROOT_API_TARGETS - set(targets))
     if missing_static:
-        errors.append(f"{path}: missing root API targets: {missing_static}")
+        errors.append(f"{api_root}: missing root API targets: {missing_static}")
+
+    if docs_root.resolve() == DEFAULT_DOCS_ROOT.resolve():
+        errors.extend(check_pages(inventory))
 
     if not import_objects:
         return errors
@@ -245,22 +294,20 @@ def validate_api_reference(path: Path, *, import_objects: bool) -> list[str]:
     from tributo.util.annotations import get_stability
 
     for target in targets:
+        symbol = expected.get(target)
+        if symbol is None:
+            continue
         try:
             obj = resolve_target(target)
         except (AttributeError, ImportError) as exc:
             errors.append(f"{target}: import failed: {type(exc).__name__}: {exc}")
             continue
         stability = get_stability(obj)
-        if stability is None or stability == "developer":
-            errors.append(f"{target}: documented without a public stability annotation")
-
-    package = importlib.import_module("tributo")
-    dynamic_targets = {f"tributo.{name}" for name in getattr(package, "__all__", ())}
-    missing_dynamic = sorted(dynamic_targets - set(targets))
-    if missing_dynamic:
-        errors.append(
-            f"docs/api.md is missing exported tributo root APIs: {missing_dynamic}"
-        )
+        if stability != symbol.stability:
+            errors.append(
+                f"{target}: runtime stability {stability!r} does not match "
+                f"source inventory {symbol.stability!r}"
+            )
     return errors
 
 
@@ -292,6 +339,11 @@ def validate_cli_reference(path: Path, *, import_cli: bool) -> list[str]:
         errors.append(f"{path}: click directive must set :prog: tributo")
     if options.get("nested") != "full":
         errors.append(f"{path}: click directive must set :nested: full")
+    missing_guides = sorted(
+        target for target in _REQUIRED_CLI_GUIDE_LINKS if target not in text
+    )
+    if missing_guides:
+        errors.append(f"{path}: missing component guide links: {missing_guides}")
 
     if not import_cli:
         return errors
@@ -331,6 +383,150 @@ def validate_python_examples(docs_root: Path) -> list[str]:
                 compile(match.group("code"), f"{path}:{line}", "exec")
             except SyntaxError as exc:
                 errors.append(f"{path}:{line}: invalid Python example: {exc.msg}")
+    return errors
+
+
+def validate_doc_code(docs_root: Path) -> list[str]:
+    """Compile repository-backed documentation examples."""
+    errors: list[str] = []
+    root = docs_root / "examples" / "doc_code"
+    if not root.is_dir():
+        return [f"{root}: executable documentation example directory is missing"]
+    paths = tuple(sorted(root.glob("*.py")))
+    if not paths:
+        return [f"{root}: no executable documentation examples found"]
+    for path in paths:
+        try:
+            compile(path.read_text(encoding="utf-8"), str(path), "exec")
+        except SyntaxError as exc:
+            errors.append(f"{path}:{exc.lineno}: invalid doc_code: {exc.msg}")
+    return errors
+
+
+def validate_repository_examples(repository_root: Path) -> list[str]:
+    """Compile root cluster examples without starting external infrastructure."""
+    errors: list[str] = []
+    root = repository_root / "examples"
+    if not root.is_dir():
+        return [f"{root}: repository example directory is missing"]
+    paths = tuple(sorted(root.glob("*.py")))
+    if not paths:
+        return [f"{root}: no repository Python examples found"]
+    for path in paths:
+        try:
+            compile(path.read_text(encoding="utf-8"), str(path), "exec")
+        except SyntaxError as exc:
+            errors.append(f"{path}:{exc.lineno}: invalid repository example: {exc.msg}")
+    return errors
+
+
+def validate_publication_metadata(docs_root: Path) -> list[str]:
+    """Keep published documentation links aligned with project metadata."""
+    repository_root = docs_root.parent
+    pyproject_path = repository_root / "pyproject.toml"
+    readme_path = repository_root / "README.md"
+    versions_path = docs_root / "_static" / "versions.json"
+    errors: list[str] = []
+
+    try:
+        project_metadata = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))[
+            "project"
+        ]
+        documentation_url = project_metadata["urls"]["Documentation"]
+    except (KeyError, OSError, tomllib.TOMLDecodeError) as exc:
+        return [f"{pyproject_path}: cannot read project Documentation URL: {exc}"]
+
+    if not isinstance(documentation_url, str):
+        return [f"{pyproject_path}: project Documentation URL must be a string"]
+    if not documentation_url.startswith("https://"):
+        errors.append(f"{pyproject_path}: project Documentation URL must use HTTPS")
+    if not documentation_url.endswith("/"):
+        errors.append(f"{pyproject_path}: project Documentation URL must end with '/'")
+
+    try:
+        readme = readme_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        errors.append(f"{readme_path}: cannot read README: {exc}")
+    else:
+        required_readme_urls = (
+            documentation_url,
+            f"{documentation_url}getting-started/quickstart/",
+            f"{documentation_url}reference/support-matrix/",
+        )
+        for required_url in required_readme_urls:
+            if required_url not in readme:
+                errors.append(
+                    f"{readme_path}: missing canonical documentation URL "
+                    f"{required_url!r}"
+                )
+
+    try:
+        versions = json.loads(versions_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        errors.append(f"{versions_path}: cannot read version switcher data: {exc}")
+    else:
+        if not isinstance(versions, list):
+            errors.append(f"{versions_path}: version switcher data must be a list")
+        else:
+            latest = [
+                entry
+                for entry in versions
+                if isinstance(entry, dict) and entry.get("version") == "latest"
+            ]
+            if len(latest) != 1:
+                errors.append(
+                    f"{versions_path}: expected exactly one latest version entry"
+                )
+            elif latest[0].get("url") != documentation_url:
+                errors.append(
+                    f"{versions_path}: latest URL {latest[0].get('url')!r} does "
+                    f"not match project Documentation URL {documentation_url!r}"
+                )
+    return errors
+
+
+def validate_ray_writing_style(docs_root: Path) -> list[str]:
+    """Enforce objective Ray heading rules without linting code fences."""
+    errors: list[str] = []
+    numbered = re.compile(r"^(?:ADR\s+)?\d+(?:[.):]|\s)", re.IGNORECASE)
+    word_pattern = re.compile(r"[A-Za-z][A-Za-z0-9+-]*")
+    for path in sorted(docs_root.rglob("*.md")):
+        in_fence = False
+        for line_number, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            if line.lstrip().startswith("```"):
+                in_fence = not in_fence
+                continue
+            if in_fence:
+                continue
+            match = re.fullmatch(r"(?P<marks>#{1,6})\s+(?P<title>.+?)\s*", line)
+            if match is None:
+                continue
+            title = match.group("title")
+            if numbered.match(title):
+                errors.append(
+                    f"{path}:{line_number}: heading must not use a numeric prefix"
+                )
+            if "—" in title or "–" in title:
+                errors.append(
+                    f"{path}:{line_number}: heading must not use an em or en dash"
+                )
+            if len(match.group("marks")) != 1:
+                continue
+            words = word_pattern.findall(title)
+            unexpected_title_case = [
+                word
+                for word in words[1:]
+                if word[0].isupper()
+                and not word.isupper()
+                and word not in _RAY_HEADING_PROPER_NAMES
+            ]
+            if unexpected_title_case:
+                errors.append(
+                    f"{path}:{line_number}: H1 must use sentence case; "
+                    f"unexpected title words {unexpected_title_case}"
+                )
     return errors
 
 
@@ -454,7 +650,7 @@ def run_checks(docs_root: Path, *, static_only: bool) -> list[str]:
     errors.extend(validate_navigation(docs_root))
     errors.extend(
         validate_api_reference(
-            docs_root / "api.md",
+            docs_root,
             import_objects=not static_only,
         )
     )
@@ -465,6 +661,10 @@ def run_checks(docs_root: Path, *, static_only: bool) -> list[str]:
         )
     )
     errors.extend(validate_python_examples(docs_root))
+    errors.extend(validate_doc_code(docs_root))
+    errors.extend(validate_repository_examples(docs_root.parent))
+    errors.extend(validate_publication_metadata(docs_root))
+    errors.extend(validate_ray_writing_style(docs_root))
     errors.extend(
         validate_system_landscape_svg(
             docs_root / "images" / "tributo-system-landscape.svg"

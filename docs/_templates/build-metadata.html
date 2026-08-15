@@ -1,0 +1,11 @@
+<p class="build-metadata">
+  Tributo {{ release }} · build
+  {% if build_commit != "local" %}
+  <a href="https://github.com/jiangxt2/tributo/commit/{{ build_commit }}">
+    <code>{{ build_commit[:12] }}</code>
+  </a>
+  {% else %}
+  <code>local</code>
+  {% endif %}
+  · <a href="{{ canonical_url }}">canonical documentation</a>
+</p>

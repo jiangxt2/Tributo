@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="736" height="860" viewBox="0 0 736 860" role="img" aria-labelledby="title description">
   <title id="title">Tributo system landscape on Ray</title>
-  <desc id="description">Users submit training, inference, serving, and streaming workloads through Tributo. Tributo owns portable framework contracts and delegates distributed execution to Ray 2.55.1. Data systems, bundle stores, MLflow, and Kafka remain external systems. Platform control-plane capabilities are outside the Tributo boundary.</desc>
+  <desc id="description">Users submit training, vector-index, inference, explainability, serving, and streaming workloads through Tributo. Tributo owns portable framework contracts and delegates distributed execution to Ray 2.55.1. Data systems, bundle stores, Lance, MLflow, and Kafka remain external systems. Platform control-plane capabilities are outside the Tributo boundary.</desc>
   <style>
     :root {
       --canvas: #ffffff;
@@ -163,12 +163,11 @@
   <text class="tiny" x="156" y="225">legacy Beta</text>
   <text class="tiny" x="156" y="243">portable Alpha</text>
   <line class="divider" x1="326" y1="190" x2="326" y2="244"/>
-  <text x="344" y="204">Custom inference</text>
-  <text class="tiny" x="344" y="225">user Predictor</text>
+  <text x="344" y="204">Batch inference</text>
+  <text class="tiny" x="344" y="225">Bundle / user Predictor</text>
   <line class="divider" x1="516" y1="190" x2="516" y2="244"/>
-  <text x="534" y="204">Batch inference</text>
-  <text class="tiny" x="534" y="225">resolved plan</text>
-  <text class="tiny" x="534" y="243">Ray actors</text>
+  <text x="534" y="204">Vector / explain</text>
+  <text class="tiny" x="534" y="225">index jobs + reports</text>
   <line class="divider" x1="156" y1="256" x2="686" y2="256"/>
   <text x="156" y="286">Online serving</text>
   <text class="tiny" x="156" y="307">HTTP + gRPC + SSE</text>
@@ -184,7 +183,7 @@
   <text class="strong node-title" x="168" y="420">Ingestion Gateway</text>
   <text class="small" x="168" y="445">Canonical request</text>
   <text class="small" x="168" y="466">Logical scan plan</text>
-  <text class="small" x="168" y="487">Engine binding</text>
+  <text class="small" x="168" y="487">Read / write binding</text>
 
   <rect class="node algorithm" x="332" y="394" width="176" height="110" rx="8"/>
   <text class="strong node-title" x="348" y="420">Portable Algorithms</text>
@@ -196,7 +195,7 @@
   <text class="strong node-title" x="538" y="420">Bundle + Inference</text>
   <text class="small" x="538" y="445">Export / publish / read</text>
   <text class="small" x="538" y="466">Resolved model plan</text>
-  <text class="small" x="538" y="487">Executor / DataSink</text>
+  <text class="small" x="538" y="487">Executor / ResultSink</text>
 
   <text class="tiny" x="156" y="515">Extension SPIs: providers + bindings + runtimes + importers</text>
   <text class="tiny" x="156" y="532">Exporters + validators + flavors + sinks + hooks</text>
@@ -263,15 +262,15 @@
 
     <rect class="node workload" x="38" y="234" width="660" height="152" rx="8"/>
     <text class="strong" x="56" y="271">Scenario workloads</text>
-    <text x="56" y="304">Train / Tune · Custom inference</text>
-    <text x="56" y="337">Batch inference · Online serving</text>
+    <text x="56" y="304">Train / Tune · Batch inference</text>
+    <text x="56" y="337">Vector index / Explain · Serve / Stream</text>
     <text x="56" y="370">Kafka input Alpha · no service loop</text>
 
     <path class="flow" d="M 368 386 V 398"/>
 
     <rect class="node ingestion" x="38" y="400" width="660" height="54" rx="8"/>
     <text class="strong" x="56" y="437">Ingestion</text>
-    <text x="220" y="437">request · plan · binding</text>
+    <text x="220" y="437">read / write request · plan · binding</text>
 
     <rect class="node algorithm" x="38" y="460" width="660" height="54" rx="8"/>
     <text class="strong" x="56" y="497">Algorithms</text>
@@ -292,7 +291,7 @@
     <text class="strong" x="48" y="733">External systems</text>
     <text x="48" y="766">Data systems</text>
     <text x="48" y="799">Bundle stores</text>
-    <text x="48" y="832">MLflow · Kafka</text>
+    <text x="48" y="832">Lance · MLflow · Kafka</text>
 
     <rect class="node excluded" x="376" y="696" width="330" height="152" rx="8"/>
     <text class="strong" x="394" y="733">Out of scope</text>

@@ -1,4 +1,4 @@
-# Batch Explainability
+# Run batch explainability
 
 Tributo provides explainability as an optional batch operation over a published
 Bundle. The default is disabled: training, Bundle export, inference, and their

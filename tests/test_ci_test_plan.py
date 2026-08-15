@@ -98,6 +98,29 @@ def test_documentation_only_change_avoids_unit_and_storage_suites(
     assert plan["selected"]["manual_external"] == []
 
 
+def test_public_api_generator_change_selects_documentation_gate(
+    manifest: ci_test_plan.Manifest,
+) -> None:
+    path = "tools/generate_public_api_reference.py"
+    plan = ci_test_plan.build_plan(
+        manifest,
+        event="pull_request",
+        mode="pr",
+        changed_paths=[path],
+    )
+
+    assert plan["matched_rules"][path] == "documentation"
+    assert plan["selected"]["ci_fast"] == ["policy", "documentation-api"]
+    assert plan["run_unit"] is False
+    assert plan["run_docs"] is True
+    assert manifest.suite("documentation-api").extras == (
+        "dev",
+        "grpc",
+        "training",
+        "vector-index",
+    )
+
+
 def test_storage_change_selects_bounded_ci_and_reports_external_validation(
     manifest: ci_test_plan.Manifest,
 ) -> None:

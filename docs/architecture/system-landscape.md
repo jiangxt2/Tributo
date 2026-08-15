@@ -3,9 +3,10 @@
 ![Tributo system landscape showing users, framework workloads and contracts, the Ray execution runtime, external systems, and platform concerns that are outside the framework boundary.](../images/tributo-system-landscape.svg)
 
 Tributo is a Ray-native ML Framework/SDK. It owns portable contracts for job
-submission, bounded ingestion, algorithm execution, model bundles, inference,
-and serving. Ray 2.55.1 remains the distributed execution runtime for Jobs,
-Data, Train, Tune, Serve, tasks, actors, and scheduling.
+submission, bounded ingestion and writing, algorithm execution, model bundles,
+inference, explainability, serving, and Lance vector-index operations. Ray
+2.55.1 remains the distributed execution runtime for Jobs, Data, Train, Tune,
+Serve, tasks, actors, and scheduling.
 
 ## Reading the landscape
 
@@ -17,8 +18,8 @@ The main flow runs from top to bottom:
 - Scenario workloads cover training and tuning, custom batch inference,
   online serving, and streaming input. Their stability is not uniform: legacy
   trainers remain Beta compatibility paths, portable algorithm execution is
-  Alpha, and Kafka is an Alpha `StreamSource` rather than a complete service
-  loop.
+  Alpha, vector indexing and explainability are Alpha, and Kafka is an Alpha
+  `StreamSource` rather than a complete service loop.
 - The portable contract layer separates bounded ingestion, algorithm dispatch,
   and Bundle-based model delivery. Providers, engine bindings, exporters,
   validators, model importers, flavors, hooks, runtime adapters, and sinks
@@ -28,7 +29,7 @@ The main flow runs from top to bottom:
 
 ## External systems
 
-Data systems, Bundle stores, MLflow, and Kafka remain outside the framework
+Data systems, Bundle stores, MLflow, Lance namespaces, and Kafka remain outside the framework
 boundary:
 
 - Data systems supply bounded inputs. Support varies by source and engine;
@@ -38,6 +39,8 @@ boundary:
   implemented.
 - MLflow is an optional model-import, tracking, provenance, and registry
   integration. It is not the source of truth for Bundle readability.
+- Lance stores vector data and index metadata. Tributo validates requests and
+  receipts; Lance-Ray executes distributed index and maintenance tasks.
 - Kafka provides a fail-closed microbatch input protocol. Tributo does not ship
   a built-in Kafka-to-inference long-running service loop.
 

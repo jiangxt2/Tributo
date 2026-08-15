@@ -46,6 +46,8 @@ myst-parser==4.0.1
     # via -r requirements-doc.in
 packaging==26.3
     # via sphinx
+protobuf==6.33.6
+    # via -r requirements-doc.in
 pydantic==2.13.4
     # via -r requirements-doc.in
 pydantic-core==2.46.4

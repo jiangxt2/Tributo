@@ -37,15 +37,16 @@ def get_object_stability(obj: Any) -> str:
 
 
 def render_stability_lines(level: str) -> list[str]:
-    """Return reStructuredText lines for one stability callout."""
+    """Return MyST lines for one stability callout."""
     normalized = level if level in _STABILITY_CONTENT else "developer"
     label, description = _STABILITY_CONTENT[normalized]
     return [
         "",
-        f".. admonition:: {label} API",
-        (f"   :class: tributo-stability tributo-stability-{normalized}"),
+        f":::{{admonition}} {label} API",
+        f":class: tributo-stability tributo-stability-{normalized}",
         "",
-        f"   {description}",
+        description,
+        ":::",
         "",
     ]
 

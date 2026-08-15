@@ -63,8 +63,10 @@ Check:
 - the artifact flavor has a registered loader;
 - the process has access to the matching storage profile.
 
-Safetensors, PT2, native XGBoost, and quantized artifacts require matching
-flavor implementations before they can enter the unified serving path.
+Native XGBoost JSON and UBJ artifacts use the registered
+`xgboost-native-v1` loader. Safetensors, PT2, Hugging Face ONNX, and quantized
+artifacts remain fail-closed until a matching safe runtime passes its
+compatibility gate.
 
 ## Documentation fails only without mocks
 

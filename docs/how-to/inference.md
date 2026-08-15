@@ -1,4 +1,4 @@
-# Batch Inference
+# Run batch inference
 
 Run Bundle-aware distributed batch inference across a Ray cluster. The current
 production flavor matrix contains `onnx-runtime-v1` and the safe native
@@ -6,7 +6,7 @@ production flavor matrix contains `onnx-runtime-v1` and the safe native
 
 ## Bundle-aware request
 
-New code should use strict named bindings. Table columns and model tensor names
+Formal requests use strict named bindings. Table columns and model tensor names
 are separate, and outputs are selected by name rather than by position.
 
 ```python
@@ -82,13 +82,13 @@ The distributed batch path compiles table columns directly into the named
 model tensors declared by `input_binding`; it does not execute DNN/PU
 `FeatureTransformer` state. Batch requests for DNN/PU Bundles must therefore
 bind already-preprocessed columns. Raw-feature preprocessing for these Bundles
-is currently provided by `IdentityPredictor` in the online-serving path.
+is provided by `IdentityPredictor` in the v1.0.0 online-serving path.
 
 Source profile resolution and source-local S3 precedence are owned by the Data
 Gateway. Inference does not merge provider options or copy source credentials
 into its model and sink adapters.
 
-Batch inference currently requires the explicit Ray ingestion engine. It does
+Batch inference in v1.0.0 requires the explicit Ray ingestion engine. It does
 not auto-select an engine, switch engines after a failure, or implicitly
 convert a Daft handle to Ray. Input feature projection is appended through the
 shared Data Transform IR. The final result includes the Data Gateway's
@@ -310,7 +310,7 @@ ONNX output name. Names containing `probab` are consumed as probabilities;
 names containing `logit`, and the exact name `output`, are treated as logits
 and receive a sigmoid transformation. Any other output name is rejected.
 
-`torch-onnx-v1` currently exports its single output with the name `output`.
+`torch-onnx-v1` in v1.0.0 exports its single output with the name `output`.
 Consequently, a Torch model used with `IdentityPredictor` must return one
 binary logit per row from `forward()`. A model whose final layer already
 applies sigmoid or softmax does not satisfy this contract and would otherwise

@@ -1,0 +1,47 @@
+{
+  "algorithm": "pu",
+  "profile": "local",
+  "worker_count": 2,
+  "input": {
+    "ingestion": {
+      "source": {
+        "type": "parquet",
+        "path": "/shared/training-data/*.parquet"
+      },
+      "engine": "ray"
+    },
+    "features": ["account_age", "monthly_usage"],
+    "label": "is_confirmed_positive"
+  },
+  "algorithm_config": {
+    "features": [
+      {"name": "account_age", "type": "dense"},
+      {"name": "monthly_usage", "type": "dense"}
+    ],
+    "label_col": "is_confirmed_positive",
+    "model": {
+      "dnn_hidden_units": [128, 64, 32],
+      "dnn_dropout": 0.3
+    },
+    "pu": {
+      "loss_type": "nnpu",
+      "class_prior": 0.3
+    },
+    "training": {
+      "epochs": 50,
+      "batch_size": 1024,
+      "learning_rate": 0.001
+    },
+    "ray": {
+      "num_workers": 2,
+      "max_failures": 0
+    },
+    "output": {
+      "bundle_uri": "/shared/models/pu-fraud"
+    }
+  },
+  "local_runtime": {
+    "num_cpus": 2,
+    "num_gpus": 0
+  }
+}

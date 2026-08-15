@@ -67,7 +67,7 @@ same terminal contract as `error.training_result`.
 
 The old raw-artifact hooks are available only through
 `trainer.run(output_path=..., legacy_export=True)`. That opt-in emits a
-`DeprecationWarning` and must not be used for new integrations.
+`DeprecationWarning` and must not be used for formal integrations.
 
 ## XGBoost Training
 

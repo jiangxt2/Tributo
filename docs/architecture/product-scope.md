@@ -1,4 +1,4 @@
-# Product Scope
+# Product scope
 
 Canonical definition of what Tributo is — and is not. This document is the
 authoritative reference for scoping decisions. When a proposed feature falls
@@ -16,8 +16,9 @@ Tributo is a **Ray-native ML Framework/SDK** — not a multi-tenant ML Platform.
 | Model artifacts | Bundle (Manifest + files), `BundleReader` | Model Registry with approval workflows |
 | Multi-tenancy | Not in this cycle | Project/Quota/RBAC, tenant isolation, audit |
 | Training | Distributed XGBoost, DNN, PU Learning, constrained algorithm SPI, and selected sklearn MapReduce adapters | AutoML, managed notebooks, experiment tracking UI |
-| Inference | Batch (Ray Data) + Online (Ray Serve/gRPC) | A/B testing, canary, shadow, auto-rollback |
-| Data | Explicit Ray Data / Daft bounded ingestion; `StreamSource` for unbounded | Managed ETL, data catalog, schema registry |
+| Inference | Batch with Ray Data, explainability batches, and online Ray Serve or gRPC | A/B testing, canary, shadow, auto-rollback |
+| Data | Explicit Ray Data or Daft bounded ingestion and native writing; `StreamSource` for unbounded input | Managed ETL, data catalog, schema registry |
+| Vector indexing | Build, search, optimize, and compact existing Lance vector datasets through Lance-Ray | Vector database control plane, automatic embedding or index policy |
 | Observability | Framework-level metrics, logs, trace IDs | Centralized dashboard, alerting, cost attribution |
 
 Ray is the execution runtime; Tributo provides the Framework-level contracts for

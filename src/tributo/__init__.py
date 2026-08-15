@@ -1,7 +1,9 @@
-"""Tributo: Unified framework for submitting Ray Jobs.
+"""Ray-native machine learning control-plane APIs.
 
-This package provides a standardized interface for submitting and managing
-Ray jobs with consistent configuration and error handling.
+The root package exposes the stable Ray Jobs client, job configuration, and
+shared exception hierarchy. Component APIs live in packages such as
+``tributo.data``, ``tributo.algorithms``, ``tributo.exporting``,
+``tributo.inference``, and ``tributo.vector_index``.
 """
 
 from __future__ import annotations

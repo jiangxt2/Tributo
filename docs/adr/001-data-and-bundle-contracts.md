@@ -1,4 +1,4 @@
-# ADR 001: Data and Bundle Contract Namespaces
+# Data and Bundle contract namespaces
 
 **Status**: Accepted
 **Date**: 2026-08-02
@@ -31,7 +31,7 @@ writes implementation code.
 
 Each domain gets an independent, non-overlapping ID namespace.
 
-#### 1. Provider IDs (Data Domain)
+#### Provider IDs for the Data domain
 
 ```
 Format:      "<domain>.<name>"
@@ -57,7 +57,7 @@ Rules:
   engine. Daft, Ray, and legacy implementations remain internal backends or
   selector choices and must not be frozen into the public provider namespace.
 
-#### 2. Exporter IDs (Bundle Domain)
+#### Exporter IDs for the Bundle domain
 
 ```
 Format:      "<framework>-<format>[-<variant>]"
@@ -71,7 +71,7 @@ Rules:
   variants get new IDs (e.g. `xgboost-onnx-v2`).
 - The exporter ID appears in `ManifestExecutionNode.exporter_id`.
 
-#### 3. Validator IDs (Bundle Domain)
+#### Validator IDs for the Bundle domain
 
 ```
 Format:      "<scope>-<check>"
@@ -82,7 +82,7 @@ Rules:
 - Already defined by `ExportValidator.validator_id`. Ratified as-is.
 - Immutable once referenced in a validator binding chain.
 
-#### 4. Flavor IDs (Bundle Domain)
+#### Flavor IDs for the Bundle domain
 
 ```
 Format:      "<framework>[-<variant>]"
@@ -94,7 +94,7 @@ Rules:
 - A flavor represents a serialized model format that a `BundleReader` can
   deserialize.
 
-#### 5. Architecture IDs (Model Factory Domain)
+#### Architecture IDs for the Model Factory domain
 
 ```
 Format:      "<model-family>[-<variant>]"

@@ -1,4 +1,4 @@
-# CLI Reference
+# CLI reference
 
 The command reference below is generated from `tributo.cli:main`. Adding,
 removing, or changing a Click command updates this page without maintaining a
@@ -28,3 +28,13 @@ uv run tributo serve grpc start --help
 
 Commands that contact Ray require a reachable dashboard or serving endpoint.
 Generating `--help` and this reference does not contact those services.
+
+## Component guides
+
+- Use [Algorithms and training](algorithms/index.md) for `algo` and `tune`.
+- Use [Model lifecycle](model-lifecycle/index.md) for `export`, `export-gc`, and
+  `registry`.
+- Use [Inference and serving](inference/index.md) for `explain` and `serve`.
+- Use [Vector indexing](vector-index/index.md) for `vector`.
+- Use [Ray clusters](ray-jobs/index.md) for `submit`, `status`, `logs`, `stop`,
+  and `inspect`.

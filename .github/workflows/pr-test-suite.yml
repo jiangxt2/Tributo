@@ -61,6 +61,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+
   dco:
     name: DCO Check
     runs-on: ubuntu-latest
@@ -252,7 +253,12 @@ jobs:
 
       - name: Install real runtime and documentation dependencies
         run: |
-          uv sync --extra dev --extra training --locked
+          uv sync \
+            --extra dev \
+            --extra grpc \
+            --extra training \
+            --extra vector-index \
+            --locked
           uv pip install \
             --python .venv/bin/python \
             --requirement requirements-doc.lock
@@ -269,7 +275,9 @@ jobs:
       - name: Run documentation API integration tests
         run: |
           .venv/bin/python tools/generate_algorithm_support_matrix.py --check
+          .venv/bin/python tools/generate_public_api_reference.py --check
           python3 scripts/ci_test_plan.py run --suite documentation-api
+
 
   docs-linkcheck:
     name: Documentation External Links

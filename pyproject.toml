@@ -1,7 +1,7 @@
 [project]
 name = "tributo"
 version = "1.0.0"
-description = "Telecom-native ML framework: PU Learning, behavioral sequence pre-training, and billion-scale look-alike on Ray"
+description = "Ray-native machine learning SDK for distributed data, training, model bundles, and inference"
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
 license = { text = "Apache-2.0" }
@@ -36,7 +36,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/jiangxt2/tributo"
-Documentation = "https://github.com/jiangxt2/tributo"
+Documentation = "https://tributo.readthedocs.io/en/latest/"
 Repository = "https://github.com/jiangxt2/tributo"
 Issues = "https://github.com/jiangxt2/tributo/issues"
 

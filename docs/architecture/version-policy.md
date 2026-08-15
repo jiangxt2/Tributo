@@ -1,4 +1,4 @@
-# Version Policy
+# Version policy
 
 How Tributo handles versioning across the Python package, API stability tiers,
 Bundle Manifests, and Plugin contracts.
@@ -77,7 +77,7 @@ version and the Manifest schema version.
 
 | Contract | Current `api_version` | Defined In |
 |----------|----------------------|-----------|
-| `ModelExporter` | 1 | `exporting/protocols.py` |
+| `ModelExporter` | 2 | `exporting/protocols.py` |
 | `ExportValidator` | 1 | `exporting/protocols.py` |
 | `ExportSourceProvider` (renamed from `SourceProvider` in E1) | 1 | `exporting/protocols.py` |
 | `ModelFactory` | 1 | `exporting/protocols.py` |
@@ -113,7 +113,7 @@ version and the Manifest schema version.
   inherit the stronger guarantees of bounded-ingestion or distributed-algorithm
   descriptor discovery.
 
-### Plugin Lifecycle (Current — Pre-PL1+PL2)
+### Plugin lifecycle before PL1 and PL2
 
 - Discovery: independent `importlib.metadata.entry_points()` loaders. Bounded
   ingestion discovers Provider and Binding descriptors lazily on first use;
@@ -124,7 +124,7 @@ version and the Manifest schema version.
 - No `PluginManager` class exists yet — each `discover_*` function is
   independent.
 
-### Plugin Lifecycle (Future — PL1+PL2, Go-required)
+### Plugin lifecycle after PL1 and PL2 approval
 
 - `PluginManager.discover()` — centralized discovery with caching.
 - `PluginManager.load(group)` — load plugins for a specific group.

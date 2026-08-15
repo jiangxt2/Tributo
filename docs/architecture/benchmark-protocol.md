@@ -1,45 +1,54 @@
-# Benchmark Protocol
+# Benchmark protocol
 
-This document defines the reproducible benchmark protocol for measuring
-performance before and after architecture changes. All condition track Go/No-Go
-decisions and migration stop-loss thresholds (§6.9 of the architecture roadmap)
-reference this protocol.
+This document proposes a reproducible protocol for a future performance gate.
+Tributo ships a deterministic data generator and a data-provider benchmark
+runner under `tests/benchmark/`, but it does not yet ship a repository-owned
+benchmark dataset, stored baseline, or blocking benchmark CI job. Do not cite
+this page as evidence that a performance comparison ran.
 
-## Fixed Environment
+## Record the environment
 
 | Variable | Value | Why |
 |----------|-------|-----|
-| Python | 3.12.x (latest patch) | Matches `requires-python` lower bound |
+| Python | Exact major, minor, and patch | The package supports Python 3.12 and 3.13 |
 | Ray | 2.55.1 | Pinned in `pyproject.toml` |
-| OS | macOS 15.x (arm64) for dev; Linux x86_64 for external reference runs | Record which was used |
+| OS | Exact OS, release, and architecture | Required for comparison |
+
 | Hardware | Record CPU model, core count, RAM | Required for cross-run comparison |
 | Tributo commit | Full SHA | Baseline and candidate commits must be recorded |
 | Dependencies | Locked via `uv.lock` | No floating dependencies |
 
-## Dataset
+## Record the dataset
 
 | Attribute | Requirement |
 |-----------|------------|
-| Format | Parquet (benchmark dataset stored in `tests/benchmark/data/`) |
-| Size | ≥ 1 GB for training benchmarks; ≥ 100 MB for export benchmarks |
-| Schema | Fixed schema documented in benchmark script header |
-| Generation | Script in `tests/benchmark/generate_data.py` — deterministic seed |
-| Location | Local filesystem for dev; S3/MinIO for external reference runs |
+| Format | Record the physical format and compression |
+| Size | Record row count and encoded bytes |
+| Schema | Record a stable schema fingerprint |
+| Generation | Record generator revision, arguments, and deterministic seed |
+| Location | Record local or remote storage and cache state without credentials |
 
-## Measurement Rules
+
+`tests/benchmark/generate_data.py` creates deterministic inputs for the
+provider benchmark in `tests/benchmark/benchmark_data_provider.py`. The
+v1.0.0 source tree does not commit a canonical `tests/benchmark/data/`
+dataset, so every comparison must record the generator revision and arguments
+used to create its inputs.
+
+## Apply measurement rules
 
 ### Warm-up
 
-- Every benchmark run MUST include at least **1 warm-up iteration** whose
+- Every benchmark run should include at least one warm-up iteration whose
   results are discarded.
 - Warm-up ensures JIT compilation, filesystem cache, and Ray actor pools are
   in steady state.
 
 ### Repetitions
 
-- Each benchmark MUST run **≥ 3 measured iterations**.
+- Each benchmark should run at least three measured iterations.
 - Report: mean, standard deviation, min, max for each metric.
-- If standard deviation > 10% of mean, run ≥ 5 iterations.
+- If standard deviation exceeds 10% of the mean, run at least five iterations.
 
 ### Metrics
 
@@ -56,10 +65,10 @@ reference this protocol.
 - Driver RSS: `psutil.Process().memory_info().rss`.
 - Report peak value across the run, not time-averaged.
 
-## Stop-Loss Thresholds
+## Evaluate proposed stop-loss thresholds
 
-These thresholds are defined in §6.9 of the architecture roadmap. A migration
-is paused if thresholds are exceeded on **two consecutive** benchmark runs.
+These thresholds are review guidance until a benchmark gate is implemented and
+approved. They do not automatically block a change.
 
 | Scenario | Threshold | Metric |
 |----------|-----------|--------|
@@ -68,15 +77,16 @@ is paused if thresholds are exceeded on **two consecutive** benchmark runs.
 | Inference/Serving | > 20% increase | p95 latency |
 | Any path | Regression | Required artifact or data results |
 
-### Threshold Calculation
+### Calculate a threshold
 
-- Baseline = mean of ≥ 3 runs on the **baseline commit**.
-- Candidate = mean of ≥ 3 runs on the **candidate commit**.
+- Baseline = mean of at least three runs on the baseline commit.
+- Candidate = mean of at least three runs on the candidate commit.
 - Change% = `(candidate - baseline) / baseline * 100`.
 - A single run exceeding threshold triggers a **re-test** (not a pause).
-- Two consecutive runs exceeding threshold triggers **automatic pause**.
+- Two consecutive comparisons over the threshold require review; no automated
+  pause exists.
 
-## Recovery After Pause
+## Review a regression
 
 1. Document the regression in `decision-log.md`.
 2. Identify root cause (profile, not speculate).
@@ -101,7 +111,7 @@ import psutil
 import ray
 from tributo import JobConfig
 
-DATASET_PATH = "tests/benchmark/data/..."
+DATASET_PATH = "<recorded-dataset-path>"
 
 
 def measure():
@@ -129,7 +139,13 @@ if __name__ == "__main__":
     ray.shutdown()
 ```
 
-## Test-Tier Integration
+## CI status and test-tier integration
+
+No benchmark workflow or stored baseline implements this protocol. A future
+gate must wire the existing deterministic generator and benchmark runner (or
+commit an immutable dataset), add an immutable baseline record,
+machine-readable results, variance handling, and an explicit workflow before
+this page can describe blocking CI behavior.
 
 Small deterministic contracts for benchmark result parsing may run in the
 budgeted scheduled tier. A benchmark that uses the reference dataset, starts a

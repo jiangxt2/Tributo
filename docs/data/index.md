@@ -1,9 +1,21 @@
 # Data
 
-Tributo has one bounded-ingestion control path and two explicit execution
-engines. Tributo validates requests, creates an engine-neutral logical scan,
-translates the portable ETL subset, and records provenance. Ray Data, Daft, or
-an installed third-party Connector owns the physical read.
+Tributo has one bounded-ingestion control path, an engine-neutral transform
+contract, and a native-write control path. Ray Data, Daft, or an installed
+binding owns physical data movement.
+
+## Start with a task
+
+```{toctree}
+:maxdepth: 1
+
+key-concepts
+user-guides/read-data
+user-guides/write-data
+```
+
+See the generated [Data API reference](../reference/api/data.md) for every
+annotated public object.
 
 ```text
 IngestionRequest
@@ -24,7 +36,7 @@ are Developer SPI for ingestion extensions and must not be imported by
 Training, Inference, or graph algorithms. Historical beta Provider
 exports remain only for their documented compatibility window.
 
-New bounded sources use `ProviderSourceConfig(provider, uri, options)` and may
+Third-party bounded sources use `ProviderSourceConfig(provider, uri, options)` and may
 publish a versioned Provider descriptor through
 `tributo.ingestion_providers`. Physical Ray/Daft implementations publish
 Binding descriptors through `tributo.ingestion_bindings`. Provider metadata

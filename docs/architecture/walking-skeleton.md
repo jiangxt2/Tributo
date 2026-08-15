@@ -1,4 +1,4 @@
-# Walking Skeleton
+# Walking skeleton
 
 The walking skeleton is a real distributed external validation for the
 model-export architecture:

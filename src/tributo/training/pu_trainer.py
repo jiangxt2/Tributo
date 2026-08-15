@@ -321,10 +321,10 @@ def _legacy_pu_train_loop_per_worker(config: dict[str, Any]) -> None:
     if source is None:
         raise ValueError("data.source is required for PU training")
 
-    # PU is single-worker only.  Every worker loads the full
-    # dataset itself, so a second worker would duplicate the entire
-    # materialization footprint.  Re-checked here (before any data is
-    # read) even though construction already rejects num_workers > 1.
+    # This private migration baseline is deliberately single-worker because
+    # every worker would load the full dataset itself. The public PUTrainerImpl
+    # and DistributedPU paths do not call it; they delegate to the shared
+    # distributed DNN/PU kernel. Keep the defensive check before reading data.
     world_size = ray.train.get_context().get_world_size()
     if world_size != 1:
         raise JobConfigurationError(

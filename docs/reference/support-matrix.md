@@ -99,6 +99,7 @@ matrix are generated from the same Registry projection.
 | HDFS bundle publication | Not implemented | Storage backend extension |
 | Ray Data batch inference | Beta | Actor-based model reuse |
 | Batch output to local/S3 Parquet | Implemented | Database sinks are separate |
+| Batch explainability | Alpha | Optional SHAP adapter over a declared Bundle role; batch-only Ray ingestion and bounded Parquet results |
 
 Artifact capabilities are independent. "Readable" means `BundleReader` can
 verify and expose the artifact; it does not imply that Tributo can execute it.
@@ -114,8 +115,8 @@ verify and expose the artifact; it does not imply that Tributo can execute it.
 
 The ONNX entries describe execution of validated tensors. DNN/PU Bundle
 publication includes digest-protected preprocessing state, and
-`IdentityPredictor` consumes it for raw-feature online inference. Distributed
-batch inference currently requires callers to bind already-preprocessed
+`IdentityPredictor` consumes it for raw-feature online inference. In v1.0.0,
+batch inference requires callers to bind already-preprocessed
 tensors; it does not apply DNN/PU preprocessing implicitly.
 
 ## Serving and streaming
@@ -128,6 +129,16 @@ tensors; it does not apply DNN/PU preprocessing implicitly.
 | Kafka source | Alpha | Fail-closed microbatch source |
 | Kafka-to-inference service loop | Not built in | Requires explicit orchestration and sink |
 
+## Vector indexing
+
+| Capability | Status | Boundary |
+| --- | --- | --- |
+| Lance vector-index build | Alpha, verified | IVF_FLAT and IVF_PQ through Lance-Ray with l2, cosine, or dot distance |
+| Lance vector search | Alpha, verified | Fixed-version global Top-K with bounded inline or explicit Parquet delivery |
+| Lance index optimization | Alpha, verified | Active dataset version only; indexes appended fragments |
+| Lance file compaction | Alpha, verified | Active dataset version only; Lance-Ray owns file compaction |
+| Vector-index namespace mode | Alpha | Namespace properties resolve from a named worker environment variable; no inline credentials |
+
 ## Configuration and compatibility
 
 | Contract | Status |
@@ -138,7 +149,7 @@ tensors; it does not apply DNN/PU preprocessing implicitly.
 | Public stability source | `@PublicAPI` and the stability inventory |
 | Versioning | Semantic Versioning |
 | Third-party Provider `normalize()+open()` | Deprecated; old Ray adapter only, with `FutureWarning`; Gateway requires `plan()` plus `EngineBinding` |
-| New third-party bounded source | `ProviderSourceConfig` plus versioned Provider/Binding descriptors; no consumer-module source branches |
+| Third-party bounded source | `ProviderSourceConfig` plus versioned Provider/Binding descriptors; no consumer-module source branches |
 
 For symbol-level compatibility promises, consult the
 [API stability inventory](../STABILITY.md).
