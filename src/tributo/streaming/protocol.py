@@ -1,9 +1,9 @@
 """StreamSource protocol — unbounded data for online inference.
 
-``StreamSource`` is intentionally separate from ``DataConnector``:
-where ``DataConnector.read()`` returns a finite ``ray.data.Dataset``,
-``StreamSource`` produces an unbounded stream of micro-batches suitable
-for online inference (user churn prediction, real-time anomaly detection).
+``StreamSource`` is intentionally separate from bounded ingestion:
+``IngestionGateway`` produces finite typed data handles, while
+``StreamSource`` produces an unbounded stream of micro-batches suitable for
+online inference (user churn prediction, real-time anomaly detection).
 
 Design constraints:
 - Kafka partition ownership is decoupled from model replica scaling —

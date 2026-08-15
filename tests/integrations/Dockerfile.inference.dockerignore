@@ -4,6 +4,10 @@
 !src/**
 !tests/
 !tests/**
+!scripts/
+!scripts/**
+!ci/
+!ci/**
 !pyproject.toml
 !uv.lock
 !README.md

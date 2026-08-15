@@ -17,13 +17,6 @@ Discovery groups:
             [project.entry-points."tributo.trainers"]
             my_algo = "my_package.descriptors:MY_ALGO_DESCRIPTOR"
 
-    ``tributo.connectors``
-        Each entry point must point to a ``DataConnector`` subclass.
-        Example::
-
-            [project.entry-points."tributo.connectors"]
-            my_db = "my_package.connector:MyDBConnector"
-
     ``tributo.bundle_repositories`` / ``tributo.bundle_alias_stores``
         Each entry point must point to a storage adapter class implementing
         the corresponding versioned repository protocol. Adapter constructors
@@ -288,46 +281,6 @@ def discover_algorithm_descriptors(
             continue
         descriptors.append(descriptor)
     return descriptors
-
-
-def discover_connector_plugins() -> list[type[Any]]:
-    """Discover third-party data connectors registered via entry_points.
-
-    Each entry point is expected to point to a ``DataConnector`` subclass.
-    """
-    from tributo.data.base import DataConnector
-
-    enabled = _get_enabled_plugins()
-    classes: list[type[Any]] = []
-
-    for ep in _iter_entry_points("tributo.connectors"):
-        if enabled is not None and ep.name not in enabled:
-            logger.debug(
-                "Skipping connector plugin %r (not in TRIBUTO_PLUGINS)", ep.name
-            )
-            continue
-        try:
-            cls = ep.load()
-        except Exception:
-            logger.warning(
-                "Failed to load connector plugin %r (%s)",
-                ep.name,
-                ep.value,
-                exc_info=True,
-            )
-            continue
-
-        if not (isinstance(cls, type) and issubclass(cls, DataConnector)):
-            logger.warning(
-                "Connector plugin %r is not a DataConnector subclass (got %r); skipping.",
-                ep.name,
-                cls,
-            )
-            continue
-        classes.append(cls)
-        logger.info("Discovered connector plugin %r (%s)", ep.name, ep.value)
-
-    return classes
 
 
 def _entry_point_distribution_name(entry_point: Any) -> str:

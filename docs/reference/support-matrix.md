@@ -44,12 +44,12 @@ compatible profile, while the generated `Validated profiles` column remains
 | PostgreSQL structured table reads | Verified | Ray uses a single public SQL read and fails closed on parallel shard requirements; Daft may use native partition hints |
 | ClickHouse/Doris raw SQL | Unsupported | Legacy shapes return a credential-free migration error; use structured table input or execute SQL outside Tributo ingestion |
 | HDFS Parquet/CSV reads | Adapter only | Ray binding exists; real HDFS/JVM/worker gate is pending |
-| ClickHouse reads | Adapter only | Requires unpublished `daft-olap-connectors` and real-database Conformance; Connector `auto` partition discovery is distinct from engine auto-routing |
-| Doris reads | Adapter only | Requires unpublished `ray-doris` or `daft-olap-connectors` and real-database Conformance; tablet planning remains Connector-owned |
+| ClickHouse reads | Adapter only | Requires unpublished `daft-olap-connectors` and real-database Conformance; provider partition discovery is distinct from engine auto-routing |
+| Doris reads | Adapter only | Requires unpublished `ray-doris` or `daft-olap-connectors` and real-database Conformance; tablet planning remains provider/binding-owned |
 | ORC and Hive external-table reads | Not implemented | Locked Ray/Daft versions expose no validated public reader |
 | Third-party ingestion Provider/Binding SPI | Implemented | Installed packages use `tributo.ingestion_providers` plus `tributo.ingestion_bindings`; bad plugins are isolated, duplicate routes never replace built-ins, and Binding selection can constrain filesystem, catalog, and storage format |
-| Lance output | Implemented as a generic ResultSink/Connector path | User Predictor owns vector semantics; the sink does not pool, normalize, or automatically invoke the separate vector-index workflow |
-| Native bounded writes | Basic local/S3 native round-trips are implemented through `WriteGateway` for Ray/Daft Parquet, CSV, Iceberg, and Lance. Ray Lance delegates to locked `lance-ray==0.5.0`/PyLance 9; Daft delegates to `DataFrame.write_lance`. Legacy Parquet/CSV `DataConnector` facades reject `APPEND`, while explicit native Gateway consumers may use it. Existing-target `CREATE`, missing-target `APPEND`, schema evolution, and empty writes remain provider-owned, are not Tributo guarantees, and are outside the current Gate | Tributo owns control-plane validation only; Ray Data, Daft, or an official native integration owns data-plane writes |
+| Lance output | Implemented as a generic ResultSink path | User Predictor owns vector semantics; the sink does not pool, normalize, or automatically invoke the separate vector-index workflow |
+| Native bounded writes | Basic local/S3 native round-trips are implemented through `WriteGateway` for Ray/Daft Parquet, CSV, Iceberg, and Lance. Ray Lance delegates to locked `lance-ray==0.5.0`/PyLance 9; Daft delegates to `DataFrame.write_lance`. Mode support comes from the selected native Binding capability. Existing-target `CREATE`, missing-target `APPEND`, schema evolution, and empty writes remain provider-owned, are not Tributo guarantees, and are outside the current Gate | Tributo owns control-plane validation only; Ray Data, Daft, or an official native integration owns data-plane writes |
 | Custom Hugging Face Predictor | User-provided Ray Data/Jobs extension point | Tokenization, task semantics, output interpretation, pooling, normalization, and metadata remain user-owned |
 | Database inference sinks | Extension point | No built-in ClickHouse or Doris sink |
 | Ray/Daft transform compiler | Alpha | Portable bounded ETL subset with dual-engine Conformance |
@@ -148,7 +148,7 @@ tensors; it does not apply DNN/PU preprocessing implicitly.
 | YAML configuration | Rejected |
 | Public stability source | `@PublicAPI` and the stability inventory |
 | Versioning | Semantic Versioning |
-| Third-party Provider `normalize()+open()` | Deprecated; old Ray adapter only, with `FutureWarning`; Gateway requires `plan()` plus `EngineBinding` |
+| Third-party Provider `normalize()+open()` | Independent Provider SPI retained; canonical Gateway requires `plan()` plus `EngineBinding`, and does not fallback or emit the removed adapter warning |
 | Third-party bounded source | `ProviderSourceConfig` plus versioned Provider/Binding descriptors; no consumer-module source branches |
 
 For symbol-level compatibility promises, consult the

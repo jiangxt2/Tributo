@@ -145,9 +145,6 @@ test-integration = [
 [project.scripts]
 tributo = "tributo.cli:main"
 
-[project.entry-points."tributo.connectors"]
-parquet = "tributo.data.parquet:ParquetDataConnector"
-
 [project.entry-points."tributo.write_bindings"]
 
 [project.entry-points."tributo.trainers"]
@@ -305,7 +302,6 @@ disallow_untyped_defs = false
 # errors so that mypy stays useful for the rest of the codebase.
 module = [
     "tributo._common.serve_utils",
-    "tributo.data.iceberg",
     "tributo.serving.composition",
     "tributo.serving.grpc_deployment",
     "tributo.serving.identity_predictor",
@@ -320,7 +316,6 @@ ignore_errors = true
 [[tool.mypy.overrides]]
 # Modules with only no-any-return / no-untyped-def from external deps.
 module = [
-    "tributo.data.lance",
     "tributo.inference.pipeline",
     "tributo.registry.mlflow_util",
     "tributo.training.local_runner",

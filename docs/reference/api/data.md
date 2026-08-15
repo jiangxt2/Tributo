@@ -9,17 +9,6 @@ a public annotation or moving a public object.
 Stable, Beta, and Alpha objects appear because Ray-style API policy requires
 documentation for every public stability tier.
 
-## `tributo.data.base`
-
-```{autoclass} tributo.data.base.DataConnector
-:no-members:
-```
-
-```{autoclass} tributo.data.base.S3Config
-:no-members:
-```
-
-
 ## `tributo.data.contracts.handles`
 
 ```{autoclass} tributo.data.contracts.handles.DaftDataFrameHandle
@@ -38,9 +27,9 @@ documentation for every public stability tier.
 ```
 
 
-## `tributo.data.csv`
+## `tributo.data.contracts.storage`
 
-```{autoclass} tributo.data.csv.CsvDataConnector
+```{autoclass} tributo.data.contracts.storage.S3Config
 :no-members:
 ```
 
@@ -67,13 +56,6 @@ documentation for every public stability tier.
 ```
 
 ```{autofunction} tributo.data.handle_adapters.adapt_daft_result_to_ray
-```
-
-
-## `tributo.data.iceberg`
-
-```{autoclass} tributo.data.iceberg.IcebergDataConnector
-:no-members:
 ```
 
 
@@ -141,20 +123,6 @@ documentation for every public stability tier.
 ```
 
 
-## `tributo.data.lance`
-
-```{autoclass} tributo.data.lance.LanceDataConnector
-:no-members:
-```
-
-
-## `tributo.data.parquet`
-
-```{autoclass} tributo.data.parquet.ParquetDataConnector
-:no-members:
-```
-
-
 ## `tributo.data.provider`
 
 ```{autoclass} tributo.data.provider.DataSourceProvider
@@ -198,18 +166,6 @@ documentation for every public stability tier.
 ```
 
 ```{autofunction} tributo.data.refs.schema_fingerprint
-```
-
-
-## `tributo.data.registry`
-
-```{autofunction} tributo.data.registry.get_connector
-```
-
-```{autofunction} tributo.data.registry.list_connectors
-```
-
-```{autofunction} tributo.data.registry.register_connector
 ```
 
 

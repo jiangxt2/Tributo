@@ -14,7 +14,7 @@ semantics:
 |--------|-----------------|----------|
 | Export source resolution | `SourceProvider` (protocol) | `exporting/protocols.py` |
 | Data source ingestion | `DataSourceProvider` (beta stable contract) | `data/provider.py` |
-| Data connector | `DataConnector` (base class) | `data/base.py` |
+| Data shared contracts | `S3Config`, `WriteMode` | `data/contracts/` |
 | Inference data routing | `InferenceConfig.data_type` branches | `inference/pipeline.py` |
 | Model export | `ModelExporter` (protocol) | `exporting/protocols.py` |
 | Legacy training export | `TrainingExporter` abstract | `training/exporters/` |
@@ -186,8 +186,8 @@ old direct dispatch runtime backend is removed. During its compatibility
 window, `TRIBUTO_DATA_BACKEND=legacy` remains accepted with a `FutureWarning`,
 but routes through the same legacy-input conversion and Gateway as the default;
 it cannot select or restore a separate reader implementation. Legacy flat
-dictionaries, `DatasetHandle`, and `DataConnector.read()` remain one-way Ray
-compatibility adapters over the Gateway.
+dictionaries remain conversion-only inputs; `DatasetHandle` and Provider
+`open()` remain independent beta SPI contracts and are not alternate Gateway routes.
 
 Installed bounded-source extensions use two symmetric, descriptor-only entry
 point groups:

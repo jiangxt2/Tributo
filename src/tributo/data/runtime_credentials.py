@@ -3,7 +3,8 @@
 This module is the approved neutral bridge between credential-free control
 plane contracts and engine-native runtime objects.  It may import shared
 ``S3Config``/``StorageProfile`` types, but writing code must not use this
-bridge to reach legacy connector execution or storage-format data-plane code.
+bridge to reach removed compatibility execution or storage-format data-plane
+code.
 """
 
 from __future__ import annotations

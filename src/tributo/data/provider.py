@@ -6,14 +6,15 @@ The canonical runtime boundary (ADR 001)::
     provider.normalize(source) -> ResolvedSource
     provider.plan(resolved) -> LogicalScanPlan
     IngestionGateway.open(request) -> IngestionOpenResult
-    EngineBinding -> Ray Data / Daft / installed connector
+    EngineBinding -> Ray Data / Daft / installed engine integration
 
 ``ResolvedSource`` separates *identity* options (everything that changes the
 data — columns, snapshot, SQL digest, partition/filter) from *runtime*
 options (connection credentials etc.). Credentials never appear in ``repr``,
 logs, errors, ``DatasetRef`` or benchmark output. ``open()`` and
-``DatasetHandle`` remain conversion-only Ray compatibility surfaces; built-in
-providers no longer own an independent reader implementation.
+``DatasetHandle`` remain independent Provider-level beta SPI surfaces;
+built-in providers no longer own an independent reader implementation and
+canonical ingestion never falls back to ``open()``.
 """
 
 from __future__ import annotations
@@ -158,7 +159,7 @@ class DataSourceProvider(ABC):
         """
 
     def open(self, resolved: ResolvedSource) -> DatasetHandle:
-        """Open the legacy Ray-only compatibility path over *resolved*.
+        """Open the Provider-level Ray-only SPI surface over *resolved*.
 
         Plan-only providers need not implement this method.  The default
         fails explicitly so the ingestion path can never fall back to an

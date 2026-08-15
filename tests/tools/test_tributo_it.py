@@ -157,9 +157,6 @@ requires-python = ">=3.12"
 
 [project.scripts]
 tributo = "tributo.cli:main"
-
-[project.entry-points."tributo.connectors"]
-parquet = "tributo.data:ParquetConnector"
 """
     )
     (source / "uv.lock").write_text("version = 1\n")
@@ -197,7 +194,6 @@ parquet = "tributo.data:ParquetConnector"
         for entry_point in tributo_distribution.entry_points
     } == {
         ("console_scripts", "tributo", "tributo.cli:main"),
-        ("tributo.connectors", "parquet", "tributo.data:ParquetConnector"),
     }
     module.write_text("changed after snapshot\n")
     assert copied_module.read_text() == "uncommitted = True\n"

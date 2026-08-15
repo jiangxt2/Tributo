@@ -21,7 +21,6 @@ from tributo.data.writing import (
     WriteRequest,
     WriteTargetRegistry,
 )
-from tributo.data.writing.compatibility import ray_connector_write_request
 from tributo.data.writing.targets import LogicalWritePlan
 
 
@@ -429,54 +428,3 @@ def test_gateway_rejects_invalid_factory_result(
 
     with pytest.raises(WriteCapabilityError, match="expected WriteBinding"):
         WriteGateway(registry).execute(_request(), RayDataHandle(object()))
-
-
-def test_legacy_conversion_injects_overwrite_without_mutating_options() -> None:
-    options: dict[str, Any] = {"compression": "zstd"}
-    dataset = object()
-
-    request, handle = ray_connector_write_request(
-        dataset=dataset,
-        target_kind="parquet",
-        target="/tmp/output",
-        options=options,
-    )
-
-    assert request.mode is WriteMode.OVERWRITE
-    assert request.engine == "tributo.ray_data"
-    assert request.options == {"compression": "zstd"}
-    assert handle.dataset is dataset
-    assert options == {"compression": "zstd"}
-
-
-def test_legacy_conversion_preserves_explicit_mode() -> None:
-    request, _ = ray_connector_write_request(
-        dataset=object(),
-        target_kind="iceberg",
-        target="catalog.table",
-        options={"mode": "append"},
-    )
-
-    assert request.mode is WriteMode.APPEND
-
-
-def test_legacy_conversion_keeps_binding_id_out_of_native_options() -> None:
-    request, _ = ray_connector_write_request(
-        dataset=object(),
-        target_kind="parquet",
-        target="/tmp/output",
-        options={"binding_id": "test.ray.parquet", "compression": "zstd"},
-    )
-
-    assert request.binding_id == "test.ray.parquet"
-    assert request.options == {"compression": "zstd"}
-
-
-def test_legacy_conversion_rejects_invalid_mode_with_context() -> None:
-    with pytest.raises(ValueError, match="legacy write mode"):
-        ray_connector_write_request(
-            dataset=object(),
-            target_kind="parquet",
-            target="/tmp/output",
-            options={"mode": "APPEND"},
-        )

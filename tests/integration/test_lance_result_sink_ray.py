@@ -13,8 +13,6 @@ import ray
 import ray.data
 
 from tests.support.lance_predictor import HFLikePredictor
-from tributo.data.base import WriteMode
-from tributo.data.lance import LanceDataConnector
 from tributo.inference.contracts import (
     LanceResultSinkRequest,
     LanceVectorColumnSpec,
@@ -109,46 +107,5 @@ def test_custom_predictor_and_lance_create_append_overwrite() -> None:
         )
         assert lance.dataset(output_uri).to_table()["id"].to_pylist() == [9]
 
-    finally:
-        shutil.rmtree(output, ignore_errors=True)
-
-
-def test_lance_connector_uses_the_same_distributed_writer() -> None:
-    output = Path("/workspace/tributo-work") / f"lance-connector-{uuid.uuid4().hex}"
-    output_uri = str(output)
-    try:
-        dataset = _predict(_dataset(1, 3))
-        LanceDataConnector().write(
-            dataset,
-            path=output_uri,
-            mode=WriteMode.CREATE,
-            min_rows_per_file=1,
-            max_rows_per_file=10,
-        )
-        import lance
-
-        table = lance.dataset(output_uri).to_table()
-        assert table.num_rows == 2
-        assert table.schema.field("vector").type == pa.list_(pa.float32(), 2)
-    finally:
-        shutil.rmtree(output, ignore_errors=True)
-
-
-def test_lance_connector_always_writes_lance_for_non_vector_data() -> None:
-    output = Path("/workspace/tributo-work") / f"lance-plain-{uuid.uuid4().hex}"
-    output_uri = str(output)
-    try:
-        LanceDataConnector().write(
-            _dataset(1, 3),
-            path=output_uri,
-            mode=WriteMode.CREATE,
-            min_rows_per_file=1,
-            max_rows_per_file=10,
-        )
-        import lance
-
-        table = lance.dataset(output_uri).to_table()
-        assert table.column_names == ["id", "value"]
-        assert table.num_rows == 2
     finally:
         shutil.rmtree(output, ignore_errors=True)

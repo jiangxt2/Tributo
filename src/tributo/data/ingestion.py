@@ -276,7 +276,7 @@ class HandleOwnership(str, Enum):
 
 @PublicAPI(stability="alpha")
 class PhysicalSplitSummary(BaseModel):
-    """Credential-free summary supplied by the actual native Connector."""
+    """Credential-free summary supplied by the selected native Binding."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 

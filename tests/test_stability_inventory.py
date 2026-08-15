@@ -78,13 +78,7 @@ STABILITY_MAP: dict[str, str] = {
     "tributo.training.onnx_exporter": "deprecated",
     "tributo.training.exporters": "deprecated",
     # Data — beta
-    "tributo.data.base": "beta",
-    "tributo.data.lance": "beta",
-    "tributo.data.registry": "beta",
     "tributo.data.source_config": "beta",
-    "tributo.data.parquet": "alpha",
-    "tributo.data.iceberg": "beta",
-    "tributo.data.csv": "beta",
     "tributo.data.provider_registry": "beta",
     "tributo.data.refs": "beta",
     # Data — alpha candidate ingestion contract
@@ -93,6 +87,7 @@ STABILITY_MAP: dict[str, str] = {
     "tributo.data.handle_adapters": "alpha",
     "tributo.data.contracts.handles": "alpha",
     "tributo.data.contracts.modes": "beta",
+    "tributo.data.contracts.storage": "beta",
     "tributo.data.transform_ir": "alpha",
     # Data — beta
     "tributo.data.provider": "beta",
