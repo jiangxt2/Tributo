@@ -1311,6 +1311,7 @@ def prepare_algorithm_distribution(
     )
 
 
+@DeveloperAPI
 def algorithm_runtime_env_patch(
     prepared: PreparedAlgorithmDistribution,
     *,
@@ -1359,8 +1360,6 @@ def algorithm_runtime_env_patch(
 
 
 __all__ = [
-    "PreparedAlgorithmDistribution",
-    "SUPPORTED_RAY_VERSION",
     "algorithm_runtime_env_patch",
     "prepare_algorithm_distribution",
 ]
