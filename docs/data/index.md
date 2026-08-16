@@ -56,8 +56,8 @@ selects `binding_id` explicitly.
 | Local/S3 Lance | Native reader | Native reader | Verified |
 | PostgreSQL structured table | Native SQL reader | Native SQL reader | Verified |
 | HDFS Parquet/CSV | Native reader with PyArrow HDFS | No locked public reader | Adapted; cluster gate pending |
-| ClickHouse | No selected Binding | `daft-olap-connectors` | Adapter only; external package and database gates pending |
-| Doris | `ray-doris` | `daft-olap-connectors` | Adapter only; external packages and database gates pending |
+| ClickHouse | No selected Binding | External `daft-clickhouse` wheel | Adapter only; external package and database gates pending |
+| Doris | `ray-doris` | External `daft-doris` wheel | Adapter only; external package and database gates pending |
 | ORC or Hive external table | No locked public reader | No locked public reader | Unsupported, fail-closed |
 
 “Verified” means the current combination has semantic Conformance and real

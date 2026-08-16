@@ -139,7 +139,7 @@ class StubIngestionGateway:
             binding_distribution=distribution,
             binding_distribution_version="2.55.1"
             if distribution == "ray"
-            else "0.7.21",
+            else "0.7.23",
             capability_version=1,
         )
 
@@ -157,7 +157,7 @@ class StubIngestionGateway:
         else:
             self.last_daft_frame = StubDaftFrame(self.columns)
             handle = DaftDataFrameHandle(self.last_daft_frame)
-            engine_version = "0.7.21"
+            engine_version = "0.7.23"
         receipt = IngestionPlanReceipt(
             request_digest=descriptor.request_digest,
             engine_id=descriptor.engine_id,

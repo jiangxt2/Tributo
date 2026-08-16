@@ -1,4 +1,4 @@
-"""Daft OLAP Bindings delegating to the independent connector package."""
+"""Shared Daft SQL bindings for independent database connector packages."""
 
 from __future__ import annotations
 
@@ -30,10 +30,11 @@ from tributo.data.transform_compiler import (
     apply_pipeline_to_daft_df,
 )
 from tributo.exceptions import JobConfigurationError
+from tributo.util.annotations import PublicAPI, Stability
 
 
 @dataclass(frozen=True)
-class _DaftOlapNativePlan:
+class _DaftSqlNativePlan:
     dataframe: Any
     input_schema: pa.Schema
     transforms: CompiledPipeline
@@ -41,13 +42,25 @@ class _DaftOlapNativePlan:
     transport_id: str
 
 
-class _DaftOlapBinding:
+class _DaftSqlBinding:
     connector_id: ClassVar[str]
+    package_name: ClassVar[str]
     reader_api: ClassVar[str]
 
     def compile(self, request: BindingCompileRequest) -> BindingCompilation:
         with binding_stage("validate_capabilities"):
             plan = require_sql_table(request.plan, self.connector_id)
+            if plan.sharding.mode is SqlShardMode.PARALLEL:
+                raise BindingStageError.framework_diagnostic(
+                    "validate_capabilities",
+                    error_type=JobConfigurationError,
+                    diagnostic_code="parallel_sql_read_unsupported",
+                    diagnostic=(
+                        "The Daft SQL Binding supports partitioning.mode "
+                        "'single' or 'auto'; explicit 'parallel' with shard "
+                        "columns is unsupported"
+                    ),
+                )
             if (
                 plan.sharding.mode is SqlShardMode.SINGLE
                 and request.read_options.target_parallelism is not None
@@ -58,10 +71,19 @@ class _DaftOlapBinding:
                     diagnostic_code="single_sql_read_rejects_parallelism_hint",
                     diagnostic=(
                         "A single SQL read cannot honor target_parallelism; "
-                        "set partitioning.mode to 'auto' or 'parallel', or "
-                        "remove target_parallelism"
+                        "set partitioning.mode to 'auto' or remove "
+                        "target_parallelism"
                     ),
                 )
+            if self.connector_id == "doris":
+                protocol = str(request.runtime_options.get("protocol") or "mysql")
+                if protocol not in {"mysql", "flight"}:
+                    raise BindingStageError.framework_diagnostic(
+                        "validate_capabilities",
+                        error_type=JobConfigurationError,
+                        diagnostic_code="unsupported_doris_transport",
+                        diagnostic=("Doris transport must be 'mysql' or 'flight'"),
+                    )
         with binding_stage("classify_transforms"):
             decisions = residual_decisions(request.transforms)
         with binding_stage("build_native_plan"):
@@ -71,9 +93,7 @@ class _DaftOlapBinding:
 
     def _build(
         self, request: BindingCompileRequest, plan: SqlScan
-    ) -> _DaftOlapNativePlan:
-        from daft_olap import read_clickhouse, read_doris
-
+    ) -> _DaftSqlNativePlan:
         target = resolve_sql_target(plan, request.runtime_options)
         options: dict[str, Any] = {
             "host": target.host,
@@ -93,11 +113,16 @@ class _DaftOlapBinding:
         )
         if target_tasks is not None:
             options["target_tasks"] = target_tasks
+
         if self.connector_id == "clickhouse":
+            from daft_clickhouse import read_clickhouse
+
             options["port"] = target.port
             dataframe = read_clickhouse(**options)
             transport_id = "clickhouse_native"
         else:
+            from daft_doris import read_doris
+
             protocol = str(request.runtime_options.get("protocol") or "mysql")
             options["transport"] = protocol
             options["mysql_port"] = target.port
@@ -109,11 +134,12 @@ class _DaftOlapBinding:
                 options["flight_port"] = int(flight_port)
             dataframe = read_doris(**options)
             transport_id = protocol
+
         schema = canonical_engine_schema(dataframe.schema())
         transforms = ConcreteTransformCompiler().compile(
             request.transforms, TransformBackend.DAFT, schema
         )
-        return _DaftOlapNativePlan(
+        return _DaftSqlNativePlan(
             dataframe,
             schema,
             transforms,
@@ -121,9 +147,9 @@ class _DaftOlapBinding:
             transport_id,
         )
 
-    @staticmethod
     def _wrap(
-        native_plan: _DaftOlapNativePlan,
+        self,
+        native_plan: _DaftSqlNativePlan,
         decisions: tuple[TransformDecision, ...],
     ) -> BindingCompilation:
         transformed = apply_pipeline_to_daft_df(
@@ -144,17 +170,23 @@ class _DaftOlapBinding:
             schema_fingerprint=schema_fingerprint(output_schema),
             metadata_fetched=True,
             physical_splits=PhysicalSplitSummary(
-                detail="database splits and batches are delegated to daft-olap-connectors"
+                detail=(
+                    f"database splits and batches are delegated to {self.package_name}"
+                )
             ),
             diagnostics=("database metadata I/O was used for schema inference",),
         )
 
 
-class DaftClickHouseBinding(_DaftOlapBinding):
+@PublicAPI(stability=Stability.ALPHA)
+class DaftClickHouseBinding(_DaftSqlBinding):
     connector_id = "clickhouse"
-    reader_api = "daft_olap.read_clickhouse"
+    package_name = "daft-clickhouse"
+    reader_api = "daft_clickhouse.read_clickhouse"
 
 
-class DaftDorisBinding(_DaftOlapBinding):
+@PublicAPI(stability=Stability.ALPHA)
+class DaftDorisBinding(_DaftSqlBinding):
     connector_id = "doris"
-    reader_api = "daft_olap.read_doris"
+    package_name = "daft-doris"
+    reader_api = "daft_doris.read_doris"

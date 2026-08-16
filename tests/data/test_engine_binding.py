@@ -45,7 +45,7 @@ _TEST_BINDING_ID = "test.ray.parquet"
 @pytest.fixture(autouse=True)
 def installed_versions(monkeypatch: pytest.MonkeyPatch) -> None:
     versions = {
-        "daft": "0.7.21",
+        "daft": "0.7.23",
         "pyiceberg": "0.11.1",
         "ray": "2.55.1",
         "test-binding": "1.2.3",
@@ -726,6 +726,70 @@ def test_transform_decision_rejects_inconsistent_state() -> None:
         )
 
 
+def test_daft_sql_descriptors_use_new_package_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        builtin_bindings,
+        "_distribution_version",
+        lambda name: {
+            "daft-clickhouse": "0.1.0a1",
+            "daft-doris": "0.1.0a1",
+        }.get(name),
+    )
+
+    clickhouse = builtin_bindings._daft_clickhouse_descriptor()
+    doris = builtin_bindings._daft_doris_descriptor()
+
+    assert clickhouse.key.binding_id == "daft_clickhouse.daft.clickhouse"
+    assert clickhouse.distribution_name == "daft-clickhouse"
+    assert clickhouse.dependency_distributions == ("clickhouse-connect",)
+    assert doris.key.binding_id == "daft_doris.daft.doris"
+    assert doris.distribution_name == "daft-doris"
+    assert doris.dependency_distributions == ("PyMySQL",)
+
+
+def test_missing_daft_sql_packages_report_new_install_hints(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(builtin_bindings, "_DEFAULT_BINDINGS", None)
+    versions = {
+        "daft": "0.7.23",
+        "ray": "2.55.1",
+        "tributo": "1.0.0",
+    }
+    monkeypatch.setattr(
+        builtin_bindings, "_distribution_version", lambda name: versions.get(name)
+    )
+
+    bindings = builtin_bindings.default_engine_bindings()
+
+    with pytest.raises(
+        EngineNotAvailableError,
+        match=r"daft_clickhouse\.daft\.clickhouse.*local daft-clickhouse.*tributo\[clickhouse\]",
+    ):
+        bindings.resolve(
+            BindingKey(
+                "tributo.daft",
+                ScanKind.SQL,
+                "clickhouse",
+                "daft_clickhouse.daft.clickhouse",
+            )
+        )
+    with pytest.raises(
+        EngineNotAvailableError,
+        match=r"daft_doris\.daft\.doris.*local daft-doris.*tributo\[mysql\]",
+    ):
+        bindings.resolve(
+            BindingKey(
+                "tributo.daft",
+                ScanKind.SQL,
+                "doris",
+                "daft_doris.daft.doris",
+            )
+        )
+
+
 def test_incompatible_optional_daft_does_not_disable_ray(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -773,7 +837,7 @@ def test_incompatible_ray_does_not_disable_daft(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(builtin_bindings, "_DEFAULT_BINDINGS", None)
-    versions = {"ray": "2.54.0", "daft": "0.7.21", "tributo": "1.0.0"}
+    versions = {"ray": "2.54.0", "daft": "0.7.23", "tributo": "1.0.0"}
     monkeypatch.setattr(
         builtin_bindings, "_distribution_version", lambda name: versions.get(name)
     )
@@ -815,7 +879,7 @@ def test_missing_postgresql_dependency_does_not_disable_daft(
     monkeypatch.setattr(builtin_bindings, "_DEFAULT_BINDINGS", None)
     versions = {
         "ray": "2.55.1",
-        "daft": "0.7.21",
+        "daft": "0.7.23",
         "tributo": "1.0.0",
         "psycopg": "3.3.4",
         "psycopg-binary": "3.3.4",

@@ -36,7 +36,7 @@ from tributo.data.writing.contracts import (
 from tributo.data.writing.targets import LogicalWritePlan
 
 RAY_ENGINE_VERSION = "2.55.1"
-DAFT_ENGINE_VERSION = "0.7.21"
+DAFT_ENGINE_VERSION = "0.7.23"
 
 
 def _ray_descriptor(
