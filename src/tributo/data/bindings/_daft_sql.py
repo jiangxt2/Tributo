@@ -30,6 +30,7 @@ from tributo.data.transform_compiler import (
     apply_pipeline_to_daft_df,
 )
 from tributo.exceptions import JobConfigurationError
+from tributo.util.annotations import PublicAPI, Stability
 
 
 @dataclass(frozen=True)
@@ -177,12 +178,14 @@ class _DaftSqlBinding:
         )
 
 
+@PublicAPI(stability=Stability.ALPHA)
 class DaftClickHouseBinding(_DaftSqlBinding):
     connector_id = "clickhouse"
     package_name = "daft-clickhouse"
     reader_api = "daft_clickhouse.read_clickhouse"
 
 
+@PublicAPI(stability=Stability.ALPHA)
 class DaftDorisBinding(_DaftSqlBinding):
     connector_id = "doris"
     package_name = "daft-doris"
