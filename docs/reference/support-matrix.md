@@ -44,8 +44,8 @@ compatible profile, while the generated `Validated profiles` column remains
 | PostgreSQL structured table reads | Verified | Ray uses a single public SQL read and fails closed on parallel shard requirements; Daft may use native partition hints |
 | ClickHouse/Doris raw SQL | Unsupported | Legacy shapes return a credential-free migration error; use structured table input or execute SQL outside Tributo ingestion |
 | HDFS Parquet/CSV reads | Adapter only | Ray binding exists; real HDFS/JVM/worker gate is pending |
-| ClickHouse reads | Adapter only | Requires unpublished `daft-olap-connectors` and real-database Conformance; provider partition discovery is distinct from engine auto-routing |
-| Doris reads | Adapter only | Requires unpublished `ray-doris` or `daft-olap-connectors` and real-database Conformance; tablet planning remains provider/binding-owned |
+| ClickHouse reads | Adapter only | Requires an externally installed `daft-clickhouse` wheel and real-database Conformance; provider partition discovery is distinct from engine auto-routing |
+| Doris reads | Adapter only | Requires `ray-doris` or an externally installed `daft-doris` wheel and real-database Conformance; tablet planning remains provider/binding-owned |
 | ORC and Hive external-table reads | Not implemented | Locked Ray/Daft versions expose no validated public reader |
 | Third-party ingestion Provider/Binding SPI | Implemented | Installed packages use `tributo.ingestion_providers` plus `tributo.ingestion_bindings`; bad plugins are isolated, duplicate routes never replace built-ins, and Binding selection can constrain filesystem, catalog, and storage format |
 | Lance output | Implemented as a generic ResultSink path | User Predictor owns vector semantics; the sink does not pool, normalize, or automatically invoke the separate vector-index workflow |

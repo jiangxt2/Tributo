@@ -129,7 +129,7 @@ class _ExternalHiveBinding:
             engine_version = "2.55.1"
         else:
             handle = DaftDataFrameHandle(object())
-            engine_version = "0.7.21"
+            engine_version = "0.7.23"
         return BindingCompilation(
             handle=handle,
             engine_version=engine_version,
@@ -153,7 +153,7 @@ def test_new_hive_provider_and_bindings_require_no_consumer_change(
     expected_handle: type[RayDataHandle] | type[DaftDataFrameHandle],
 ) -> None:
     versions = {
-        "daft": "0.7.21",
+        "daft": "0.7.23",
         "external-hive-connector": "1.0.0",
         "ray": "2.55.1",
     }
@@ -181,7 +181,7 @@ def test_new_hive_provider_and_bindings_require_no_consumer_change(
             distribution_name="external-hive-connector",
             distribution_version="1.0.0",
             engine_version_spec=(
-                "==2.55.1" if engine_id.endswith("ray_data") else "==0.7.21"
+                "==2.55.1" if engine_id.endswith("ray_data") else "==0.7.23"
             ),
             constraints=BindingPlanConstraints(
                 catalog_ids=frozenset({"hive"}),

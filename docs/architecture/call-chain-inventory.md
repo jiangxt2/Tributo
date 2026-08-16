@@ -279,7 +279,7 @@ credential-safe descriptor validation and atomic registration
 WriteBinding selection; native dependency import occurs at factory/execute
 ```
 
-Selected optional integrations (`ray-doris`, `daft-olap-connectors`) also have
+Selected optional integrations (`ray-doris`, `daft-doris`, `daft-clickhouse`) also have
 thin built-in descriptors and explicit install diagnostics. Their adapters are
 not support claims until their external packages and infrastructure gates pass.
 

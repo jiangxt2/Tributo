@@ -222,7 +222,7 @@ def test_daft_binding_calls_public_reader_and_keeps_native_handle(
     monkeypatch.setattr("daft.read_parquet", read_parquet)
     monkeypatch.setattr(
         "tributo.data.bindings.daft_parquet.importlib.metadata.version",
-        lambda name: "0.7.21",
+        lambda name: "0.7.23",
     )
 
     result = DaftParquetBinding().compile(_request())

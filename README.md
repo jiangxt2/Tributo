@@ -117,8 +117,8 @@ dialect or backend you use:
 | Local/S3 Iceberg and Lance | Ray Data / Daft public readers | `tributo[data,data-daft]` | Alpha; real dual-engine Conformance |
 | PostgreSQL structured table | Ray Data / Daft SQL readers | `tributo[postgresql,data-daft]` | Alpha; real PostgreSQL Conformance |
 | HDFS Parquet/CSV | Ray Data + PyArrow Hadoop filesystem | Ray runtime with HDFS libraries | Adapter present; cluster gate pending |
-| ClickHouse | independent `daft-olap-connectors` | external package | Adapter present; package/infrastructure gates pending |
-| Doris | independent `ray-doris` / `daft-olap-connectors` | external packages | Adapters present; package/infrastructure gates pending |
+| ClickHouse | independent local `daft-clickhouse` wheel | `tributo[clickhouse]` plus the connector wheel | Adapter present; package/infrastructure gates pending |
+| Doris | independent `ray-doris` / local `daft-doris` wheel | `tributo[mysql]` or `tributo[doris-flight]` plus the connector wheel | Adapters present; package/infrastructure gates pending |
 | ORC / Hive external tables | no locked public reader path | — | Unsupported |
 
 Provider/binding presence is not a support claim. ClickHouse, Doris, HDFS, and Hive are

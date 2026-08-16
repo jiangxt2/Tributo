@@ -11,13 +11,11 @@ import pytest
 
 from tributo.data.bindings._postgresql import compile_table_query
 from tributo.data.bindings._sql_shared import resolve_sql_target
+from tributo.data.bindings.daft_clickhouse import DaftClickHouseBinding
 from tributo.data.bindings.daft_csv import DaftCsvBinding
+from tributo.data.bindings.daft_doris import DaftDorisBinding
 from tributo.data.bindings.daft_iceberg import DaftIcebergBinding
 from tributo.data.bindings.daft_lance import DaftLanceBinding
-from tributo.data.bindings.daft_olap import (
-    DaftClickHouseBinding,
-    DaftDorisBinding,
-)
 from tributo.data.bindings.daft_postgresql import DaftPostgreSqlBinding
 from tributo.data.bindings.ray_csv import RayCsvBinding
 from tributo.data.bindings.ray_doris import RayDorisBinding
@@ -105,7 +103,7 @@ def _request(
     ("binding", "engine_version", "handle_type"),
     [
         (RayCsvBinding(), "2.55.1", RayDataHandle),
-        (DaftCsvBinding(), "0.7.21", DaftDataFrameHandle),
+        (DaftCsvBinding(), "0.7.23", DaftDataFrameHandle),
     ],
 )
 def test_csv_bindings_use_public_engine_readers(
@@ -259,7 +257,7 @@ def test_daft_iceberg_binding_delegates_catalog_and_scan(
     )
     monkeypatch.setattr(
         "tributo.data.bindings.daft_iceberg.importlib.metadata.version",
-        lambda name: "0.7.21",
+        lambda name: "0.7.23",
     )
 
     plan = _iceberg_plan()
@@ -292,7 +290,7 @@ def test_daft_iceberg_binding_delegates_catalog_and_scan(
     ("binding", "engine_version", "handle_type"),
     [
         (RayLanceBinding(), "2.55.1", RayDataHandle),
-        (DaftLanceBinding(), "0.7.21", DaftDataFrameHandle),
+        (DaftLanceBinding(), "0.7.23", DaftDataFrameHandle),
     ],
 )
 def test_lance_bindings_use_public_engine_readers(
@@ -347,17 +345,16 @@ def test_lance_bindings_reject_iceberg_snapshot_refs(
     assert exc_info.value.diagnostic_code == "unsupported_lance_snapshot_ref"
 
 
-def test_daft_olap_default_auto_sharding_is_delegated(
+def test_daft_sql_default_auto_sharding_is_delegated(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[dict[str, Any]] = []
-    module = ModuleType("daft_olap")
+    module = ModuleType("daft_clickhouse")
     module.read_clickhouse = lambda **kwargs: calls.append(kwargs) or _DaftDataFrame()
-    module.read_doris = lambda **kwargs: _DaftDataFrame()
-    monkeypatch.setitem(sys.modules, "daft_olap", module)
+    monkeypatch.setitem(sys.modules, "daft_clickhouse", module)
     monkeypatch.setattr(
-        "tributo.data.bindings.daft_olap.importlib.metadata.version",
-        lambda name: "0.7.21",
+        "tributo.data.bindings._daft_sql.importlib.metadata.version",
+        lambda name: "0.7.23",
     )
     plan = SqlScan(
         provider_id="tributo.clickhouse",
@@ -380,7 +377,7 @@ def test_daft_olap_default_auto_sharding_is_delegated(
     assert calls[0]["split"] == "auto"
 
 
-def test_daft_olap_single_read_rejects_parallelism_with_actionable_modes() -> None:
+def test_daft_sql_single_read_rejects_parallelism_with_actionable_modes() -> None:
     plan = SqlScan(
         provider_id="tributo.clickhouse",
         connector_id="clickhouse",
@@ -389,13 +386,30 @@ def test_daft_olap_single_read_rejects_parallelism_with_actionable_modes() -> No
 
     with pytest.raises(
         BindingStageError,
-        match=("partitioning.mode to 'auto' or 'parallel'.*remove target_parallelism"),
+        match=("partitioning.mode to 'auto'.*remove target_parallelism"),
     ) as exc_info:
         DaftClickHouseBinding().compile(
             _request(plan, read_options=ReadOptions(target_parallelism=4))
         )
 
     assert exc_info.value.diagnostic_code == "single_sql_read_rejects_parallelism_hint"
+
+
+@pytest.mark.parametrize(
+    ("binding", "connector_id"),
+    [(DaftClickHouseBinding(), "clickhouse"), (DaftDorisBinding(), "doris")],
+)
+def test_daft_sql_parallel_reads_fail_closed(
+    binding: EngineBinding,
+    connector_id: str,
+) -> None:
+    with pytest.raises(
+        BindingStageError,
+        match="explicit 'parallel'.*unsupported",
+    ) as exc_info:
+        binding.compile(_request(_sql_plan(connector_id)))
+
+    assert exc_info.value.diagnostic_code == "parallel_sql_read_unsupported"
 
 
 def test_sql_binding_port_error_is_structured(
@@ -425,50 +439,65 @@ def _sql_plan(connector_id: str) -> SqlScan:
     )
 
 
+def _daft_auto_sql_plan(connector_id: str) -> SqlScan:
+    return SqlScan(
+        provider_id=f"tributo.{connector_id}",
+        connector_id=connector_id,
+        target=SqlTableRead(schema="analytics", table="events", projection=("id",)),
+        sharding=SqlShardRequirement(
+            mode=SqlShardMode.AUTO,
+            target_partitions=6,
+        ),
+    )
+
+
 @pytest.mark.parametrize(
-    ("binding", "connector_id", "reader_name", "transport_id"),
+    ("binding", "connector_id", "reader_name", "transport_id", "protocol"),
     [
         (
             DaftClickHouseBinding(),
             "clickhouse",
             "read_clickhouse",
             "clickhouse_native",
+            "mysql",
         ),
-        (DaftDorisBinding(), "doris", "read_doris", "mysql"),
+        (DaftDorisBinding(), "doris", "read_doris", "mysql", "mysql"),
+        (DaftDorisBinding(), "doris", "read_doris", "flight", "flight"),
     ],
 )
-def test_daft_olap_bindings_delegate_to_external_connector(
+def test_daft_sql_bindings_delegate_to_public_connector_facades(
     monkeypatch: pytest.MonkeyPatch,
     binding: EngineBinding,
     connector_id: str,
     reader_name: str,
     transport_id: str,
+    protocol: str,
 ) -> None:
     calls: list[dict[str, Any]] = []
-    module = ModuleType("daft_olap")
+    module_name = f"daft_{connector_id}"
+    module = ModuleType(module_name)
 
     def reader(**kwargs: Any) -> _DaftDataFrame:
         calls.append(kwargs)
         return _DaftDataFrame()
 
-    module.read_clickhouse = reader
-    module.read_doris = reader
-    monkeypatch.setitem(sys.modules, "daft_olap", module)
+    setattr(module, reader_name, reader)
+    monkeypatch.setitem(sys.modules, module_name, module)
     monkeypatch.setattr(
-        "tributo.data.bindings.daft_olap.importlib.metadata.version",
-        lambda name: "0.7.21",
+        "tributo.data.bindings._daft_sql.importlib.metadata.version",
+        lambda name: "0.7.23",
     )
 
     result = binding.compile(
         _request(
-            _sql_plan(connector_id),
+            _daft_auto_sql_plan(connector_id),
             runtime_options={
                 "host": "db.example",
                 "port": 8123 if connector_id == "clickhouse" else 9030,
                 "database": "analytics",
                 "user": "reader",
                 "password": "secret",
-                "protocol": "mysql",
+                "protocol": protocol,
             },
             read_options=ReadOptions(batch_size=128),
         )
@@ -478,7 +507,13 @@ def test_daft_olap_bindings_delegate_to_external_connector(
     assert calls[0]["host"] == "db.example"
     assert calls[0]["table"] == "events"
     assert calls[0]["target_tasks"] == 6
-    assert result.reader_api == f"daft_olap.{reader_name}"
+    assert calls[0]["batch_rows"] == 128
+    if connector_id == "clickhouse":
+        assert calls[0]["port"] == 8123
+    else:
+        assert calls[0]["mysql_port"] == 9030
+        assert calls[0]["transport"] == protocol
+    assert result.reader_api == f"{module_name}.{reader_name}"
     assert result.transport_id == transport_id
 
 
@@ -521,7 +556,7 @@ def test_ray_doris_binding_delegates_to_external_connector(
     ("binding", "engine_version", "handle_type"),
     [
         (RayPostgreSqlBinding(), "2.55.1", RayDataHandle),
-        (DaftPostgreSqlBinding(), "0.7.21", DaftDataFrameHandle),
+        (DaftPostgreSqlBinding(), "0.7.23", DaftDataFrameHandle),
     ],
 )
 def test_postgresql_bindings_delegate_to_public_sql_readers(

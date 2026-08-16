@@ -22,11 +22,19 @@ _DEFAULT_BINDINGS: EngineBindings | None = None
 _DEFAULT_BINDINGS_LOCK = threading.Lock()
 _RAY_VERSION_SPEC = "==2.55.1"
 _DAFT_VERSION_SPEC = ">=0.7.0,<0.8.0"
+_DAFT_SQL_VERSION_SPEC = ">=0.7.23,<0.7.24"
 _RAY_INSTALL_HINT = "pip install 'ray[default,serve,tune]==2.55.1'"
 _DAFT_INSTALL_HINT = "pip install 'tributo[data-daft]'"
 _DAFT_LANCE_INSTALL_HINT = "pip install 'tributo[data,data-daft]'"
 _DATA_INSTALL_HINT = "pip install 'tributo[data]'"
-_DAFT_OLAP_INSTALL_HINT = "pip install 'daft-olap-connectors[clickhouse,doris]'"
+_DAFT_CLICKHOUSE_INSTALL_HINT = (
+    "Install a local daft-clickhouse[clickhouse] wheel, then run "
+    "pip install 'tributo[clickhouse]'"
+)
+_DAFT_DORIS_INSTALL_HINT = (
+    "Install a local daft-doris[doris] wheel (or daft-doris[doris-flight] for Flight), "
+    "then run pip install 'tributo[mysql]' (or 'tributo[doris-flight]' for Flight)"
+)
 _RAY_DORIS_INSTALL_HINT = "pip install 'ray-doris[mysql,flight]'"
 _POSTGRESQL_INSTALL_HINT = "pip install 'tributo[postgresql]'"
 
@@ -262,33 +270,49 @@ def _daft_lance_descriptor() -> BindingDescriptor:
     )
 
 
-def _daft_olap_descriptor(connector_id: str) -> BindingDescriptor:
-    from tributo.data.bindings.daft_olap import (
-        DaftClickHouseBinding,
-        DaftDorisBinding,
-    )
+def _daft_clickhouse_descriptor() -> BindingDescriptor:
+    from tributo.data.bindings.daft_clickhouse import DaftClickHouseBinding
 
-    factory = (
-        DaftClickHouseBinding if connector_id == "clickhouse" else DaftDorisBinding
-    )
     return BindingDescriptor(
         key=BindingKey(
             "tributo.daft",
             ScanKind.SQL,
-            connector_id,
-            f"daft_olap.daft.{connector_id}",
+            "clickhouse",
+            "daft_clickhouse.daft.clickhouse",
         ),
-        factory=factory,
+        factory=DaftClickHouseBinding,
         capabilities=frozenset({SourceCapability.PROJECTION}),
-        distribution_name="daft-olap-connectors",
-        distribution_version=(
-            _distribution_version("daft-olap-connectors") or "0.1.0a1"
-        ),
-        engine_version_spec=_DAFT_VERSION_SPEC,
+        distribution_name="daft-clickhouse",
+        distribution_version=_distribution_version("daft-clickhouse") or "0.1.0a1",
+        engine_version_spec=_DAFT_SQL_VERSION_SPEC,
+        dependency_distributions=("clickhouse-connect",),
         supported_read_hints=frozenset(
             {ReadHint.TARGET_PARALLELISM, ReadHint.BATCH_SIZE}
         ),
-        install_hint=_DAFT_OLAP_INSTALL_HINT,
+        install_hint=_DAFT_CLICKHOUSE_INSTALL_HINT,
+    )
+
+
+def _daft_doris_descriptor() -> BindingDescriptor:
+    from tributo.data.bindings.daft_doris import DaftDorisBinding
+
+    return BindingDescriptor(
+        key=BindingKey(
+            "tributo.daft",
+            ScanKind.SQL,
+            "doris",
+            "daft_doris.daft.doris",
+        ),
+        factory=DaftDorisBinding,
+        capabilities=frozenset({SourceCapability.PROJECTION}),
+        distribution_name="daft-doris",
+        distribution_version=_distribution_version("daft-doris") or "0.1.0a1",
+        engine_version_spec=_DAFT_SQL_VERSION_SPEC,
+        dependency_distributions=("PyMySQL",),
+        supported_read_hints=frozenset(
+            {ReadHint.TARGET_PARALLELISM, ReadHint.BATCH_SIZE}
+        ),
+        install_hint=_DAFT_DORIS_INSTALL_HINT,
     )
 
 
@@ -570,24 +594,33 @@ def default_engine_bindings() -> EngineBindings:
                 None,
                 ("pylance", "daft-lance"),
             ),
-            *(
-                (
-                    lambda connector_id=connector_id: _daft_olap_descriptor(
-                        connector_id
-                    ),
-                    BindingKey(
-                        "tributo.daft",
-                        ScanKind.SQL,
-                        connector_id,
-                        f"daft_olap.daft.{connector_id}",
-                    ),
-                    "daft",
-                    _DAFT_VERSION_SPEC,
-                    _DAFT_OLAP_INSTALL_HINT,
-                    None,
-                    ("daft-olap-connectors",),
-                )
-                for connector_id in ("clickhouse", "doris")
+            (
+                _daft_clickhouse_descriptor,
+                BindingKey(
+                    "tributo.daft",
+                    ScanKind.SQL,
+                    "clickhouse",
+                    "daft_clickhouse.daft.clickhouse",
+                ),
+                "daft",
+                _DAFT_SQL_VERSION_SPEC,
+                _DAFT_CLICKHOUSE_INSTALL_HINT,
+                None,
+                ("daft-clickhouse", "clickhouse-connect"),
+            ),
+            (
+                _daft_doris_descriptor,
+                BindingKey(
+                    "tributo.daft",
+                    ScanKind.SQL,
+                    "doris",
+                    "daft_doris.daft.doris",
+                ),
+                "daft",
+                _DAFT_SQL_VERSION_SPEC,
+                _DAFT_DORIS_INSTALL_HINT,
+                None,
+                ("daft-doris", "PyMySQL"),
             ),
             (
                 _ray_doris_descriptor,
