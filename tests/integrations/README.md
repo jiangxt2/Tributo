@@ -6,10 +6,11 @@ project. They never reuse a host Ray runtime, an existing MLflow server, or a
 pre-existing container. `ci/test-suites.json` owns their impact rules and
 reports required evidence, but no GitHub Actions event executes these suites.
 
-The data-ingestion image installs database drivers through Tributo extras. The
-unpublished `daft-clickhouse` and `daft-doris` connectors are external wheel
-prerequisites and are not resolved by Tributo's `uv.lock`; the relevant runtime
-must install the local wheel before running the corresponding E2E entry point.
+The data-ingestion image installs database drivers and the v1.0 database
+connectors through Tributo extras. `daft-clickhouse==1.0`,
+`daft-doris==1.0`, and `ray-doris==1.0` are resolved by `uv.lock` and included
+in the canonical full runtime image. A custom external wheelhouse is only for
+packages outside that locked set.
 
 ---
 
@@ -20,8 +21,9 @@ must install the local wheel before running the corresponding E2E entry point.
 | Model-export golden path | `../integration/test_walking_skeleton.py` | `manual_external` | Ray Data Parquet → XGBoost → ONNX + UBJ S3 Bundle → BundleReader → batch inference → Ray Serve HTTP, plus MLflow provenance | Docker only; the runner creates all infrastructure |
 | First-party export conformance | `../training/exporters/test_first_party_conformance.py` | `manual_external` | XGBoost, Torch, Hugging Face, quantizer, validator, and checkpoint-source contracts in the pinned Linux image | Docker only; executed by the model-export runner |
 | S3/MinIO contract | `../integration/test_export_s3.py`, `../integration/test_minio_compat.py` | `ci_fast` Moto / `manual_external` MinIO | Manifest-last publication, Lease/CAS, alias, GC, path-style access, and conditional writes | Ephemeral Moto in CI; run-owned MinIO externally |
+| Runtime image gate | `../../scripts/run_runtime_image_it.sh`, `jobs/runtime_image_gate_job.py` | `manual_external` | Pinned full image, first-party and Alpha imports on driver/worker, Ray Data, Ray Jobs, and image attestations | Docker Buildx + two-node Ray cluster on a matching native host architecture |
 | MLflow Hook | `test_e2e_mlflow.py` | `manual_external` | Committed Bundle upload, replay deduplication, explicit run reuse, and failure semantics | Isolated model-export runner |
-| ClickHouse E2E | `test_e2e_clickhouse.py` | `quarantine` | ClickHouse table → Daft ClickHouse Binding → explicit Daft-to-Ray adapter → XGBoost distributed training → MLflow → ONNX | Lifecycle and ownership contract pending |
+| ClickHouse E2E | `test_e2e_clickhouse.py` | `quarantine` | ClickHouse table → Daft ClickHouse Binding → explicit Daft-to-Ray adapter → XGBoost distributed training → MLflow → ONNX | Full image or `tributo[clickhouse]`; lifecycle and ownership contract pending |
 | Dual-engine Docker | `test_data_ingestion_dual_engine.py` | `manual_external` | Local Parquet, full ETL chain, typed handles, worker-version evidence | Docker Ray cluster + Daft |
 | Lance vector index | `test_lance_vector_index.py` | `manual_external` | Distributed IVF_FLAT/IVF_PQ build, append coverage, global Top-K, fallback, optimization, compaction, Ray Jobs, and S3 result delivery | Docker Ray cluster + Lance-Ray + MinIO |
 | File conformance | `../integration/test_data_ingestion_conformance.py` | `manual_external` | Local/MinIO Parquet and CSV through Ray Data and Daft | Local Ray runtime + MinIO |

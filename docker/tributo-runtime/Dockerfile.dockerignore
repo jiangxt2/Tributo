@@ -1,0 +1,8 @@
+**
+!pyproject.toml
+!uv.lock
+!README.md
+!src/
+!src/**
+!tools/
+!tools/generate_distributions.py

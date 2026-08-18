@@ -5,8 +5,9 @@
 运行方式：
     docker exec ray-head python /opt/tributo/tests/integration/test_e2e_multi_class.py
 
-前提：Docker 集群已启动，含 Ray / Daft / 已安装本地 wheel 的 daft-clickhouse /
-ClickHouse (8123) / MLflow (5000)。
+前提：Docker 集群已启动，运行时通过完整镜像或
+`tributo[clickhouse]` / `uv sync --extra clickhouse` 安装了
+`daft-clickhouse==1.0`，并包含 ClickHouse (8123) / MLflow (5000)。
 """
 
 from __future__ import annotations

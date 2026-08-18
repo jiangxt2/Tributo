@@ -7,6 +7,7 @@ Choose one execution boundary and follow its guide from start to finish.
 
 installation
 quickstart
+../how-to/runtime-images
 ```
 
 - Use the local quickstart to validate a formal algorithm and Bundle without

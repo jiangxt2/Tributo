@@ -105,9 +105,22 @@ def test_s3_unsupported_format_raises():
         pass
 
 
-def test_doris_requires_independent_ray_doris_binding() -> None:
+def test_doris_requires_independent_ray_doris_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Tributo never falls back to its former in-process MySQL reader."""
-    with pytest.raises(EngineNotAvailableError, match=r"ray-doris\[mysql,flight\]"):
+    import tributo.data.bindings as builtin_bindings
+
+    installed_version = builtin_bindings._distribution_version
+    monkeypatch.setattr(builtin_bindings, "_DEFAULT_BINDINGS", None)
+    monkeypatch.setattr(
+        builtin_bindings,
+        "_distribution_version",
+        lambda name: None if name == "ray-doris" else installed_version(name),
+    )
+    with pytest.raises(
+        EngineNotAvailableError, match=r"ray-doris==1\.0.*tributo\[mysql\]"
+    ):
         load_ray_dataset_from_source(
             {
                 "type": "sql",

@@ -19,7 +19,11 @@ Pydantic, ONNX Runtime, PyArrow, pandas, and S3 filesystem support.
 | Ray Data table formats | `python -m pip install "tributo[data]"` |
 | Daft ingestion | `python -m pip install "tributo[data,data-daft]"` |
 | PostgreSQL ingestion | `python -m pip install "tributo[postgresql]"` |
+| ClickHouse via Daft | `python -m pip install "tributo[clickhouse]"` |
+| Doris via Daft/Ray Data | `python -m pip install "tributo[mysql]"` |
+| Doris Flight via Daft/Ray Data | `python -m pip install "tributo[doris-flight]"` |
 | Distributed training | `python -m pip install "tributo[training]"` |
+| BayesOpt search for Ray Tune | `python -m pip install "tributo[tune]"` |
 | Explainability | `python -m pip install "tributo[explainability]"` |
 | Lance vector indexing | `python -m pip install "tributo[vector-index]"` |
 | Torch model export | `python -m pip install "tributo[model-export-torch]"` |
@@ -30,7 +34,14 @@ Pydantic, ONNX Runtime, PyArrow, pandas, and S3 filesystem support.
 
 An extra installs dependencies. It does not turn a protocol, adapter, or
 reserved problem type into a verified implementation. Check the
-[support matrix](../reference/support-matrix.md) before deployment.
+[support matrix](../reference/support-matrix.md) before deployment. Ray Tune
+itself is included by the core Ray dependency; the `tune` extra adds the
+optional BayesOpt search implementation. The `clickhouse` extra installs
+`daft-clickhouse==1.0`; `mysql` installs `daft-doris==1.0` and
+`ray-doris==1.0` for their explicit engine routes, while `doris-flight` adds
+their Flight dependencies. The equivalent uv commands are
+`uv sync --extra clickhouse`, `uv sync --extra mysql`, and
+`uv sync --extra doris-flight`.
 
 ## Prepare a source checkout
 

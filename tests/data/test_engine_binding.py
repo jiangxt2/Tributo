@@ -733,8 +733,8 @@ def test_daft_sql_descriptors_use_new_package_identity(
         builtin_bindings,
         "_distribution_version",
         lambda name: {
-            "daft-clickhouse": "0.1.0a1",
-            "daft-doris": "0.1.0a1",
+            "daft-clickhouse": "1.0",
+            "daft-doris": "1.0",
         }.get(name),
     )
 
@@ -766,7 +766,7 @@ def test_missing_daft_sql_packages_report_new_install_hints(
 
     with pytest.raises(
         EngineNotAvailableError,
-        match=r"daft_clickhouse\.daft\.clickhouse.*local daft-clickhouse.*tributo\[clickhouse\]",
+        match=r"daft_clickhouse\.daft\.clickhouse.*daft-clickhouse.*tributo\[clickhouse\]",
     ):
         bindings.resolve(
             BindingKey(
@@ -778,7 +778,7 @@ def test_missing_daft_sql_packages_report_new_install_hints(
         )
     with pytest.raises(
         EngineNotAvailableError,
-        match=r"daft_doris\.daft\.doris.*local daft-doris.*tributo\[mysql\]",
+        match=r"daft_doris\.daft\.doris.*daft-doris.*tributo\[mysql\]",
     ):
         bindings.resolve(
             BindingKey(

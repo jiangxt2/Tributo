@@ -18,6 +18,7 @@ automation eligibility.
 | Lance vector index | Vector-index API, storage profiles, and Ray Jobs request contract | `unit` contracts | `lance-vector-cluster` |
 | Tune and explainability | Capability declarations and typed job configuration | `unit` contracts | `tune-cluster` and `explainability-cluster` |
 | Distributed algorithms | Algorithm descriptors, execution profiles, and portable receipts | `unit` and `unit-integration-contracts` | `distributed-algorithm-cluster` |
+| Full runtime image for CPU validation | Pinned Ray/uv base, locked first-party extras, Alpha import closure, and `ImageProfile` attestation | `unit` contracts | `runtime-image` |
 
 External suite names describe required evidence, not GitHub Actions jobs.
 Quarantined MLflow, serving, streaming, and legacy standalone tests do not
@@ -44,8 +45,8 @@ compatible profile, while the generated `Validated profiles` column remains
 | PostgreSQL structured table reads | Verified | Ray uses a single public SQL read and fails closed on parallel shard requirements; Daft may use native partition hints |
 | ClickHouse/Doris raw SQL | Unsupported | Legacy shapes return a credential-free migration error; use structured table input or execute SQL outside Tributo ingestion |
 | HDFS Parquet/CSV reads | Adapter only | Ray binding exists; real HDFS/JVM/worker gate is pending |
-| ClickHouse reads | Adapter only | Requires an externally installed `daft-clickhouse` wheel and real-database Conformance; provider partition discovery is distinct from engine auto-routing |
-| Doris reads | Adapter only | Requires `ray-doris` or an externally installed `daft-doris` wheel and real-database Conformance; tablet planning remains provider/binding-owned |
+| ClickHouse reads | Adapter only | Uses locked `daft-clickhouse==1.0` through `tributo[clickhouse]`; real-database Conformance is still required, and provider partition discovery is distinct from engine auto-routing |
+| Doris reads | Adapter only | Ray routes use locked `ray-doris==1.0`; Daft routes use locked `daft-doris==1.0`; real-database Conformance is still required and tablet planning remains provider/binding-owned |
 | ORC and Hive external-table reads | Not implemented | Locked Ray/Daft versions expose no validated public reader |
 | Third-party ingestion Provider/Binding SPI | Implemented | Installed packages use `tributo.ingestion_providers` plus `tributo.ingestion_bindings`; bad plugins are isolated, duplicate routes never replace built-ins, and Binding selection can constrain filesystem, catalog, and storage format |
 | Lance output | Implemented as a generic ResultSink path | User Predictor owns vector semantics; the sink does not pool, normalize, or automatically invoke the separate vector-index workflow |
@@ -151,6 +152,17 @@ tensors; it does not apply DNN/PU preprocessing implicitly.
 | Versioning | Semantic Versioning |
 | Third-party Provider `normalize()+open()` | Independent Provider SPI retained; canonical Gateway requires `plan()` plus `EngineBinding`, and does not fallback or emit the removed adapter warning |
 | Third-party bounded source | `ProviderSourceConfig` plus versioned Provider/Binding descriptors; no consumer-module source branches |
+
+## Runtime images
+
+| Capability | Status | Boundary |
+| --- | --- | --- |
+| Full Tributo runtime image for CPU validation | Alpha, directly buildable | Linux `arm64`/`amd64`, defaulting to the native host architecture; Python 3.12, Ray 2.55.1, locked dependency closure, and all first-party runtime extras including Alpha modules. Linux PyTorch resolution may include transitive CUDA/NVIDIA distributions, but no GPU support is claimed |
+| Custom connector wheelhouse variant | Alpha, optional extension | An external wheelhouse remains available for packages outside the locked v1.0 connector set; it is not required for the canonical ClickHouse/Doris image and does not change the Tributo lockfile |
+| Runtime image attestation | Alpha | `manifest.json`, `image-profile.json`, normalized distribution inventory, and sealed `org.tributo.manifest-sha256` label |
+| Runtime image Ray Jobs gate | Alpha, validation gate | Requires a unique two-node Docker Ray cluster on a native host architecture; verifies driver/worker imports, Ray Data, Jobs API submission, and v1.0 ClickHouse/Doris package presence. `linux/amd64` requires a matching native host |
+| GPU runtime image | Not implemented | The Linux dependency closure may contain transitive CUDA/NVIDIA distributions from PyTorch, but no GPU driver, scheduling, NCCL, or GPU compatibility contract has been validated |
+| HDFS/ORC/Hive runtime additions | Not included | No validated provider/runtime contract in the current image |
 
 For symbol-level compatibility promises, consult the
 [API stability inventory](../STABILITY.md).

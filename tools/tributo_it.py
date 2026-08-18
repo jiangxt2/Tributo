@@ -70,6 +70,16 @@ EXCLUDED_DIRECTORY_NAMES = {
 EXCLUDED_FILE_NAMES = {".coverage", ".pypirc", "id_rsa", "id_ed25519"}
 PROJECT_PREFIXES = frozenset({"tributo-ingestion", "tributo-lance-vector"})
 DIGEST_REFERENCE_PATTERN = re.compile(r"^.+:[^/@]+@sha256:[0-9a-f]{64}$")
+LOCAL_RUNTIME_BASE_IMAGE = "tributo-ray-base:2.55.1-py312"
+LOCAL_RUNTIME_UV_IMAGE = "tributo-uv:0.11.23"
+DOCKER_PROXY_VARIABLES = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+)
 
 
 class TributoITError(RuntimeError):
@@ -99,6 +109,16 @@ class RuntimeProfile:
     @property
     def uv_image(self) -> str:
         return str(self.definition["uv_image"])
+
+    @property
+    def base_image_mirror(self) -> str | None:
+        value = self.definition.get("base_image_mirror")
+        return str(value) if value is not None else None
+
+    @property
+    def uv_image_mirror(self) -> str | None:
+        value = self.definition.get("uv_image_mirror")
+        return str(value) if value is not None else None
 
     @property
     def tool_image(self) -> str:
@@ -153,10 +173,11 @@ def _run(
     capture_output: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     print(f"+ {shlex.join(str(part) for part in args)}", flush=True)
+    command_env = _docker_environment(env) if args and args[0] == "docker" else env
     result = subprocess.run(
         [str(part) for part in args],
         cwd=cwd,
-        env=env,
+        env=command_env,
         text=True,
         capture_output=capture_output,
         check=False,
@@ -168,6 +189,14 @@ def _run(
             f"{shlex.join(str(part) for part in args)}"
             + (f"\n{details}" if details else "")
         )
+    return result
+
+
+def _docker_environment(env: dict[str, str] | None = None) -> dict[str, str]:
+    """Return a Docker environment without PandaFan proxy variables."""
+    result = dict(os.environ if env is None else env)
+    for variable in DOCKER_PROXY_VARIABLES:
+        result.pop(variable, None)
     return result
 
 
@@ -228,6 +257,16 @@ def load_profile(
         str(definition["tool_image"]),
         str(definition["uv_image"]),
     ]
+    mirror_fields = [
+        definition.get("base_image_mirror"),
+        definition.get("uv_image_mirror"),
+    ]
+    if any(value is not None for value in mirror_fields):
+        if any(value is None for value in mirror_fields):
+            raise TributoITError(
+                f"runtime profile {name!r} must define both base/uv image mirrors"
+            )
+        image_fields.extend(str(value) for value in mirror_fields)
     invalid_images = [
         reference
         for reference in image_fields
@@ -308,6 +347,9 @@ def runtime_identity(profile: RuntimeProfile, platform: str) -> RuntimeIdentity:
             "version_contract",
         )
     }
+    for key in ("base_image_mirror", "uv_image_mirror"):
+        if key in profile.definition:
+            runtime_definition[key] = profile.definition[key]
     parts = [
         ("schema", b"tributo-it-runtime-v2"),
         ("profile", _canonical_json(runtime_definition)),
@@ -368,6 +410,9 @@ def _version_check_code(identity: RuntimeIdentity) -> str:
         ("pylance", "pylance"),
         ("lance_ray", "lance-ray"),
         ("pyarrow", "pyarrow"),
+        ("daft_clickhouse", "daft-clickhouse"),
+        ("daft_doris", "daft-doris"),
+        ("ray_doris", "ray-doris"),
     ):
         if key in contract:
             checks.append(
@@ -415,6 +460,8 @@ def validate_runtime_image(
             "docker",
             "run",
             "--rm",
+            "--platform",
+            identity.platform,
             "--pull",
             "never",
             "--entrypoint",
@@ -428,6 +475,25 @@ def validate_runtime_image(
     if not image_id.startswith("sha256:"):
         raise TributoITError(f"runtime image has invalid ID: {image_id!r}")
     return image_id
+
+
+def _domestic_mirror_reference(reference: str) -> str:
+    """Map Docker Hub/GHCR references to the configured domestic mirrors."""
+    image, digest = reference.split("@", 1)
+    parts = image.split("/", 1)
+    if len(parts) == 2 and (
+        "." in parts[0] or ":" in parts[0] or parts[0] == "localhost"
+    ):
+        registry, remainder = parts
+    else:
+        registry, remainder = "docker.io", image
+    mirror_registry = {
+        "docker.io": "docker.m.daocloud.io",
+        "ghcr.io": "ghcr.m.daocloud.io",
+    }.get(registry)
+    if mirror_registry is None:
+        return reference
+    return f"{mirror_registry}/{remainder}@{digest}"
 
 
 def _docker_daemon_identity() -> str:
@@ -643,14 +709,77 @@ def _pull_registry_runtime(
         time.sleep(min(10.0, max(0.0, remaining)))
 
 
+def _prepare_mirrored_image(
+    *,
+    mirror: str,
+    canonical: str,
+    local: str,
+    platform: str,
+) -> None:
+    """Pull, verify, and locally tag one digest-pinned domestic mirror image."""
+    _run(["docker", "pull", "--platform", platform, mirror], capture_output=False)
+    inspected = _image_inspect(mirror)
+    if inspected is None:
+        raise TributoITError(f"mirror image is unavailable after pull: {mirror}")
+    actual_platform = f"{inspected.get('Os', '')}/{inspected.get('Architecture', '')}"
+    if normalize_platform(actual_platform) != normalize_platform(platform):
+        raise TributoITError(
+            f"mirror image platform mismatch for {mirror}: "
+            f"expected={platform}, actual={actual_platform}"
+        )
+    expected_digest = canonical.rsplit("@", 1)[-1]
+    repo_digests = [str(value) for value in inspected.get("RepoDigests") or []]
+    if not any(value.rsplit("@", 1)[-1] == expected_digest for value in repo_digests):
+        raise TributoITError(
+            f"mirror image digest mismatch for {mirror}: "
+            f"expected={expected_digest}, repo_digests={repo_digests}"
+        )
+    _run(["docker", "tag", mirror, local])
+
+
+def _prepare_runtime_build_inputs(
+    identity: RuntimeIdentity,
+) -> tuple[str, str]:
+    """Prepare domestic mirror inputs when a runtime profile declares them."""
+    profile = identity.profile
+    if profile.base_image_mirror is None and profile.uv_image_mirror is None:
+        return profile.base_image, profile.uv_image
+    if profile.base_image_mirror is None or profile.uv_image_mirror is None:
+        raise TributoITError(
+            f"runtime profile {profile.name!r} must define both base/uv image mirrors"
+        )
+    _prepare_mirrored_image(
+        mirror=profile.base_image_mirror,
+        canonical=profile.base_image,
+        local=LOCAL_RUNTIME_BASE_IMAGE,
+        platform=identity.platform,
+    )
+    _prepare_mirrored_image(
+        mirror=profile.uv_image_mirror,
+        canonical=profile.uv_image,
+        local=LOCAL_RUNTIME_UV_IMAGE,
+        platform=identity.platform,
+    )
+    return LOCAL_RUNTIME_BASE_IMAGE, LOCAL_RUNTIME_UV_IMAGE
+
+
 def _build_runtime(identity: RuntimeIdentity) -> str:
     labels = _expected_labels(identity)
+    base_image, uv_image = _prepare_runtime_build_inputs(identity)
     descriptor, metadata_name = tempfile.mkstemp(
         prefix="tributo-buildx-", suffix=".json"
     )
     os.close(descriptor)
     metadata_file = Path(metadata_name)
     try:
+        # The full runtime Dockerfile declares this named context even when no
+        # external connector wheels are requested.  Supplying an empty context
+        # here keeps the generic IT helper compatible with that Dockerfile and
+        # does not alter the source snapshot or image contents.
+        wheelhouse_context = tempfile.TemporaryDirectory(
+            prefix="tributo-it-wheelhouse-"
+        )
+        wheelhouse = wheelhouse_context.name
         command = [
             "docker",
             "buildx",
@@ -665,38 +794,50 @@ def _build_runtime(identity: RuntimeIdentity) -> str:
             "--metadata-file",
             str(metadata_file),
             "--build-arg",
-            f"BASE_IMAGE={identity.profile.base_image}",
+            f"BASE_IMAGE={base_image}",
             "--build-arg",
-            f"UV_IMAGE={identity.profile.uv_image}",
+            f"UV_IMAGE={uv_image}",
+            "--build-context",
+            f"external-wheelhouse={wheelhouse}",
         ]
-        for key, value in sorted(labels.items()):
-            command.extend(("--label", f"{key}={value}"))
-        for cache_from in filter(
-            None, os.environ.get("TRIBUTO_IT_BUILDX_CACHE_FROM", "").splitlines()
-        ):
-            command.extend(("--cache-from", cache_from))
-        for cache_to in filter(
-            None, os.environ.get("TRIBUTO_IT_BUILDX_CACHE_TO", "").splitlines()
-        ):
-            command.extend(("--cache-to", cache_to))
-        command.append(str(identity.profile.root))
-        _run(command, capture_output=False)
-        if metadata_file.stat().st_size == 0:
-            raise TributoITError("Buildx did not produce its required metadata file")
-        metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
-        print(
-            "Buildx metadata: "
-            + json.dumps(
-                {
-                    key: metadata[key]
-                    for key in sorted(metadata)
-                    if key in {"containerimage.digest", "containerimage.config.digest"}
-                },
-                sort_keys=True,
-            ),
-            flush=True,
-        )
-        return validate_runtime_image(identity)
+        if identity.profile.base_image_mirror is not None:
+            command.extend(
+                ("--build-arg", f"TRIBUTO_BASE_IMAGE={identity.profile.base_image}")
+            )
+        try:
+            for key, value in sorted(labels.items()):
+                command.extend(("--label", f"{key}={value}"))
+            for cache_from in filter(
+                None, os.environ.get("TRIBUTO_IT_BUILDX_CACHE_FROM", "").splitlines()
+            ):
+                command.extend(("--cache-from", cache_from))
+            for cache_to in filter(
+                None, os.environ.get("TRIBUTO_IT_BUILDX_CACHE_TO", "").splitlines()
+            ):
+                command.extend(("--cache-to", cache_to))
+            command.append(str(identity.profile.root))
+            _run(command, capture_output=False)
+            if metadata_file.stat().st_size == 0:
+                raise TributoITError(
+                    "Buildx did not produce its required metadata file"
+                )
+            metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
+            print(
+                "Buildx metadata: "
+                + json.dumps(
+                    {
+                        key: metadata[key]
+                        for key in sorted(metadata)
+                        if key
+                        in {"containerimage.digest", "containerimage.config.digest"}
+                    },
+                    sort_keys=True,
+                ),
+                flush=True,
+            )
+            return validate_runtime_image(identity)
+        finally:
+            wheelhouse_context.cleanup()
     finally:
         metadata_file.unlink(missing_ok=True)
 
@@ -768,6 +909,7 @@ def ensure_digest_image(reference: str) -> str:
         )
     expected_digest = reference.split("@", 1)[1]
     readable_tag = reference.split("@", 1)[0]
+    mirror_reference = _domestic_mirror_reference(reference)
     tagged = _image_inspect(readable_tag)
     if tagged is not None:
         tagged_repo_digests = [str(value) for value in tagged.get("RepoDigests") or []]
@@ -779,10 +921,13 @@ def ensure_digest_image(reference: str) -> str:
                 f"refusing to overwrite {readable_tag}"
             )
 
-    inspected = _image_inspect(reference) or tagged
+    inspected = _image_inspect(reference) or _image_inspect(mirror_reference) or tagged
     if inspected is None:
-        _run(["docker", "pull", reference], capture_output=False)
-        inspected = _image_inspect(reference)
+        _run(
+            ["docker", "pull", "--platform", docker_platform(), mirror_reference],
+            capture_output=False,
+        )
+        inspected = _image_inspect(mirror_reference)
     if inspected is None:
         raise TributoITError(
             f"third-party image is unavailable after pull: {reference}"
@@ -803,6 +948,21 @@ def ensure_digest_image(reference: str) -> str:
     if tagged is None or tagged.get("Id") != image_id:
         raise TributoITError(f"could not bind readable third-party tag: {readable_tag}")
     return image_id
+
+
+def _local_digest_reference(reference: str) -> str:
+    """Return the locally resolvable pinned reference after mirror preparation."""
+    expected_digest = reference.rsplit("@", 1)[-1]
+    for candidate in (reference, _domestic_mirror_reference(reference)):
+        inspected = _image_inspect(candidate)
+        if inspected is None:
+            continue
+        repo_digests = [str(value) for value in inspected.get("RepoDigests") or []]
+        if any(value.rsplit("@", 1)[-1] == expected_digest for value in repo_digests):
+            return candidate
+    raise TributoITError(
+        f"no locally resolvable pinned reference after image preparation: {reference}"
+    )
 
 
 def _excluded(relative: Path, *, is_directory: bool) -> bool:
@@ -1048,6 +1208,9 @@ def _compose_environment(
     project: str,
     runtime: PreparedRuntime,
     profile: RuntimeProfile,
+    *,
+    tool_image: str,
+    minio_image: str,
 ) -> dict[str, str]:
     env = os.environ.copy()
     env.update(
@@ -1055,8 +1218,8 @@ def _compose_environment(
             "COMPOSE_PROJECT_NAME": project,
             "TRIBUTO_IT_RUNTIME_IMAGE": runtime.identity.local_tag,
             "TRIBUTO_IT_SOURCE_ROOT": str(ROOT),
-            "TRIBUTO_IT_TOOL_IMAGE": profile.tool_image,
-            "TRIBUTO_IT_MINIO_IMAGE": profile.minio_image,
+            "TRIBUTO_IT_TOOL_IMAGE": tool_image,
+            "TRIBUTO_IT_MINIO_IMAGE": minio_image,
         }
     )
     return env
@@ -1085,6 +1248,9 @@ def validate_compose_contract(
     config: dict[str, Any],
     runtime: PreparedRuntime,
     profile: RuntimeProfile,
+    *,
+    tool_image: str | None = None,
+    minio_image: str | None = None,
 ) -> None:
     """Validate the resolved config rather than trusting YAML inheritance."""
     services = config.get("services")
@@ -1116,16 +1282,18 @@ def validate_compose_contract(
 
     source_init = services["source-init"]
     workspace_init = services["workspace-init"]
-    if source_init.get("image") != profile.tool_image:
+    expected_tool_image = tool_image or profile.tool_image
+    expected_minio_image = minio_image or profile.minio_image
+    if source_init.get("image") != expected_tool_image:
         raise TributoITError("source-init must use the pinned tool image")
-    if workspace_init.get("image") != profile.tool_image:
+    if workspace_init.get("image") != expected_tool_image:
         raise TributoITError("workspace-init must use the pinned tool image")
     if source_init.get("restart") != "no":
         raise TributoITError('source-init must set restart: "no"')
     source_input = _volume_mount(source_init, "/host-source")
     if source_input is None or not source_input.get("read_only"):
         raise TributoITError("source-init checkout input must be read-only")
-    if services["minio"].get("image") != profile.minio_image:
+    if services["minio"].get("image") != expected_minio_image:
         raise TributoITError("MinIO must use its pinned readable tag@digest")
     runtime_users = {
         name
@@ -1455,7 +1623,7 @@ def _run_streamed(command: Sequence[str], env: dict[str, str], log_path: Path) -
         process = subprocess.Popen(
             list(command),
             cwd=ROOT,
-            env=env,
+            env=_docker_environment(env) if command and command[0] == "docker" else env,
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -1560,9 +1728,23 @@ def _run_docker_ray_suite(
         )
         ensure_digest_image(profile.tool_image)
         ensure_digest_image(profile.minio_image)
-        env = _compose_environment(project, prepared, profile)
+        tool_image = _local_digest_reference(profile.tool_image)
+        minio_image = _local_digest_reference(profile.minio_image)
+        env = _compose_environment(
+            project,
+            prepared,
+            profile,
+            tool_image=tool_image,
+            minio_image=minio_image,
+        )
         config = resolved_compose_config(env)
-        validate_compose_contract(config, prepared, profile)
+        validate_compose_contract(
+            config,
+            prepared,
+            profile,
+            tool_image=tool_image,
+            minio_image=minio_image,
+        )
         _run(
             _compose_args(
                 "up",
