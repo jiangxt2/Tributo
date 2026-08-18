@@ -19,6 +19,28 @@ class _Explanation:
     base_values = np.asarray([0.5, 0.6])
 
 
+class _DynamicExplanation:
+    values = np.asarray([[[0.1], [1.0]], [[0.1], [2.0]]])
+    data = np.asarray([[10.0, 20.0], [30.0, 40.0]])
+
+    def base_values(self, label: float) -> float:
+        return 0.5 if label == 0 else 0.6
+
+
+class _ArrayDynamicExplanation:
+    values = np.asarray([[[0.1], [1.0]], [[0.1], [2.0]]])
+    data = np.asarray([[10.0, 20.0], [30.0, 40.0]])
+
+    def __init__(self) -> None:
+        self.base_values = np.asarray(
+            [self._base_value, self._base_value], dtype=object
+        )
+
+    @staticmethod
+    def _base_value(label: float) -> float:
+        return 0.5 if label == 0 else 0.6
+
+
 def test_shap_long_rows_use_top_k_and_preserve_provenance() -> None:
     request = _request(limits={"top_k": 1})
     prepared = PreparedExplainer(
@@ -63,6 +85,60 @@ def test_tree_log_loss_requires_labels_at_adapter_boundary() -> None:
             model_digest="a" * 64,
             request=request,
         )
+
+
+def test_tree_log_loss_materialises_dynamic_base_values() -> None:
+    request = _request(
+        backend="tree",
+        output_target="log_loss",
+        label_column="label",
+        reference={"uri": "/data/reference.npy"},
+    )
+    prepared = PreparedExplainer(
+        backend="tree",
+        exactness="exact",
+        explain=lambda batch, **kwargs: _DynamicExplanation(),
+        feature_names=("feature_a", "feature_b"),
+    )
+
+    rows = ShapAdapter().explain_batch(
+        prepared,
+        np.asarray([[10.0, 20.0], [30.0, 40.0]], dtype=np.float32),
+        input_ids=("row-1", "row-2"),
+        model_digest="a" * 64,
+        request=request,
+        labels=np.asarray([0, 1]),
+    )
+
+    assert [row.base_value for row in rows[::2]] == [0.5, 0.6]
+    assert [row.model_output for row in rows[::2]] == [1.6, 2.7]
+
+
+def test_tree_log_loss_materialises_array_dynamic_base_values() -> None:
+    request = _request(
+        backend="tree",
+        output_target="log_loss",
+        label_column="label",
+        reference={"uri": "/data/reference.npy"},
+    )
+    prepared = PreparedExplainer(
+        backend="tree",
+        exactness="exact",
+        explain=lambda batch, **kwargs: _ArrayDynamicExplanation(),
+        feature_names=("feature_a", "feature_b"),
+    )
+
+    rows = ShapAdapter().explain_batch(
+        prepared,
+        np.asarray([[10.0, 20.0], [30.0, 40.0]], dtype=np.float32),
+        input_ids=("row-1", "row-2"),
+        model_digest="a" * 64,
+        request=request,
+        labels=np.asarray([0, 1]),
+    )
+
+    assert [row.base_value for row in rows[::2]] == [0.5, 0.6]
+    assert [row.model_output for row in rows[::2]] == [1.6, 2.7]
 
 
 def test_sensitive_feature_values_are_opt_in() -> None:

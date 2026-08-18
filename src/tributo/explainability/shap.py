@@ -269,7 +269,7 @@ class ShapAdapter:
         data = getattr(explanation, "data", batch)
         data_array = np.asarray(data)
         base_values = _normalise_base_values(
-            getattr(explanation, "base_values", None), values
+            getattr(explanation, "base_values", None), values, labels=labels
         )
         if request.output_target == "log_loss":
             model_outputs = values.sum(axis=1) + base_values
@@ -394,10 +394,33 @@ def _tree_model_output(output_target: str) -> str | None:
     }.get(output_target, output_target)
 
 
-def _normalise_base_values(raw: Any, values: np.ndarray) -> np.ndarray:
+def _normalise_base_values(
+    raw: Any,
+    values: np.ndarray,
+    *,
+    labels: np.ndarray | None = None,
+) -> np.ndarray:
     if raw is None:
         return np.zeros((values.shape[0], values.shape[2]), dtype=np.float64)
+    if callable(raw):
+        if labels is None:
+            raise ValueError("callable SHAP base_values require labels")
+        raw = np.asarray([raw(label) for label in labels])
     array = np.asarray(raw)
+    if array.dtype == object:
+        dynamic_values = array.reshape(-1)
+        if any(callable(value) for value in dynamic_values):
+            if labels is None:
+                raise ValueError("callable SHAP base_values require labels")
+            if not all(callable(value) for value in dynamic_values):
+                raise ValueError("SHAP base_values contain mixed callable values")
+            if array.ndim != 1 or array.shape[0] != values.shape[0]:
+                raise ValueError(
+                    "callable SHAP base_values must contain one value per sample"
+                )
+            array = np.asarray(
+                [value(label) for value, label in zip(array, labels, strict=True)]
+            )
     if array.ndim == 0:
         return np.full((values.shape[0], values.shape[2]), float(array))
     if array.ndim == 1:

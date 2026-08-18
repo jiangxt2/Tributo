@@ -1,24 +1,21 @@
-## Purpose
+<!-- Thank you for contributing to Tributo! -->
+<!-- Please review CONTRIBUTING.md before opening a pull request. -->
+<!-- Remove these instructions before submitting your PR. -->
 
-<!-- Clearly describe what this PR does and why. -->
+## Description
 
-Closes #
+<!-- Briefly describe what this PR changes and why. Mention user-facing,
+API, or breaking changes when applicable. -->
 
-## What Changes
+## Related issues
 
-<!-- Brief bullet list of changes. -->
+<!-- Link related issues, if any. -->
 
--
+## Additional information
 
-## Test Plan
-
-<!-- How did you test? Include commands if applicable. -->
-
-- [ ] Unit tests pass
-- [ ] Lint passes (`ruff check .`)
-- [ ] Integration tests pass (if applicable)
-
-## Open Source Checklist
-
-- [ ] No internal credentials, URLs, or tokens exposed
-- [ ] New external dependencies reviewed for license compatibility
+<!-- Include when applicable:
+- Tests run and their results, including pending or unavailable integration tests
+- User-facing, API, or breaking changes and migration notes
+- New or changed dependencies and license review status
+- Documentation, screenshots, risks, or known limitations
+-->
