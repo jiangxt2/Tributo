@@ -123,6 +123,32 @@ def test_profile_rejects_mutable_minio_image(tmp_path: Path) -> None:
         tributo_it.load_profile(profile.name, root=tmp_path)
 
 
+def test_domestic_mirror_reference_maps_supported_registries() -> None:
+    digest = "sha256:" + "a" * 64
+
+    assert tributo_it._domestic_mirror_reference(f"minio/minio:latest@{digest}") == (
+        f"docker.m.daocloud.io/minio/minio:latest@{digest}"
+    )
+    assert (
+        tributo_it._domestic_mirror_reference(f"ghcr.io/astral-sh/uv:0.11.23@{digest}")
+        == f"ghcr.m.daocloud.io/astral-sh/uv:0.11.23@{digest}"
+    )
+    custom = f"quay.io/example/image:1@{digest}"
+    assert tributo_it._domestic_mirror_reference(custom) == custom
+
+
+def test_docker_command_environment_removes_pandafan_proxy_variables(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:10080")
+    monkeypatch.setenv("http_proxy", "http://127.0.0.1:10080")
+
+    assert all(
+        variable not in tributo_it._docker_environment()
+        for variable in tributo_it.DOCKER_PROXY_VARIABLES
+    )
+
+
 @pytest.mark.parametrize(
     "project",
     [

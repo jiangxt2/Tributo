@@ -18,6 +18,7 @@ auth
 autodoc
 backend
 backends
+Buildx
 backpressure
 backpropagation
 BaseModel
@@ -27,6 +28,7 @@ BayesOpt
 benchmarked
 boto
 botocore
+buildable
 bundle
 BundleModelReference
 BundleRef
@@ -136,6 +138,7 @@ JSON
 json
 Kafka
 Kubernetes
+KubeRay
 kwargs
 Lance
 pylance
@@ -147,6 +150,7 @@ Lifecycle
 lifecycle
 logit
 logits
+lockfile
 lookalike
 Makefile
 macOS

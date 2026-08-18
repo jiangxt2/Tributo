@@ -55,6 +55,9 @@ print(client.get_status(job_id))
 
 [Read the full quickstart](https://tributo.readthedocs.io/en/latest/getting-started/quickstart/).
 
+For a sealed Ray runtime containing the first-party dependency closure, see
+the [runtime image guide](https://tributo.readthedocs.io/en/latest/how-to/runtime-images/).
+
 ---
 
 ## Architecture
@@ -88,6 +91,9 @@ uv sync
 # With XGBoost training + ONNX export
 uv sync --extra training
 
+# With BayesOpt search for Ray Tune
+uv sync --extra tune
+
 # With data formats (Lance / Iceberg)
 uv sync --extra data
 
@@ -117,14 +123,15 @@ dialect or backend you use:
 | Local/S3 Iceberg and Lance | Ray Data / Daft public readers | `tributo[data,data-daft]` | Alpha; real dual-engine Conformance |
 | PostgreSQL structured table | Ray Data / Daft SQL readers | `tributo[postgresql,data-daft]` | Alpha; real PostgreSQL Conformance |
 | HDFS Parquet/CSV | Ray Data + PyArrow Hadoop filesystem | Ray runtime with HDFS libraries | Adapter present; cluster gate pending |
-| ClickHouse | independent local `daft-clickhouse` wheel | `tributo[clickhouse]` plus the connector wheel | Adapter present; package/infrastructure gates pending |
-| Doris | independent `ray-doris` / local `daft-doris` wheel | `tributo[mysql]` or `tributo[doris-flight]` plus the connector wheel | Adapters present; package/infrastructure gates pending |
+| ClickHouse | `daft-clickhouse==1.0` | `tributo[clickhouse]` or `uv sync --extra clickhouse` | Adapter only; the full image contains the v1.0 package, while real-database Conformance remains the support gate |
+| Doris | `ray-doris==1.0` / `daft-doris==1.0` | `tributo[mysql]` or `tributo[doris-flight]` | Adapter only; Ray routes require `ray-doris`, Daft routes require `daft-doris`, and real-database Conformance remains the support gate |
 | ORC / Hive external tables | no locked public reader path | — | Unsupported |
 
-Provider/binding presence is not a support claim. ClickHouse, Doris, HDFS, and Hive are
-reported as available only after their locked external dependencies and real
-infrastructure gates pass. Tributo never installs optional providers or bindings at
-runtime.
+Provider/binding presence is not a support claim. The canonical full image
+contains the locked v1.0 ClickHouse and Doris connector packages, but those
+paths remain adapter-only until their real-database Conformance gates pass.
+HDFS and Hive still require their own external dependency and infrastructure
+gates. Tributo never installs optional providers or bindings at runtime.
 
 ---
 
@@ -204,6 +211,9 @@ uv run tributo serve streaming status
 ### Hyperparameter tuning with Ray Tune
 
 Random search / BayesOpt with FIFO / ASHA / HyperBand schedulers.
+BayesOpt requires the optional `tune` extra (`uv sync --extra tune` or
+`python -m pip install "tributo[tune]"`); the full runtime image already
+contains it.
 Tune trials execute setup and fit only: they report the configured metric and
 checkpoint without publishing production Bundles. After selecting parameters,
 run the Trainer explicitly to publish the single production Bundle.

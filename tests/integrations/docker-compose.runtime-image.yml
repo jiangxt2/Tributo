@@ -1,0 +1,46 @@
+x-ray-common: &ray-common
+  image: ${TRIBUTO_RUNTIME_IMAGE:?TRIBUTO_RUNTIME_IMAGE is required}
+  pull_policy: never
+  init: true
+  shm_size: 2gb
+  working_dir: /workspace/tributo-src
+  environment:
+    PYTHONDONTWRITEBYTECODE: "1"
+    PYTHONPATH: /workspace/tributo-src/src:/workspace/tributo-src
+    RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO: "0"
+    TRIBUTO_RAY_DASHBOARD_URL: http://127.0.0.1:8265
+    TRIBUTO_RUNTIME_PLATFORM: ${TRIBUTO_RUNTIME_PLATFORM:?TRIBUTO_RUNTIME_PLATFORM is required}
+  volumes:
+    - ${TRIBUTO_IMAGE_SOURCE_ROOT:?TRIBUTO_IMAGE_SOURCE_ROOT is required}:/workspace/tributo-src:ro
+
+services:
+  ray-head:
+    <<: *ray-common
+    command:
+      - ray
+      - start
+      - --head
+      - --port=6379
+      - --dashboard-host=0.0.0.0
+      - --num-cpus=1
+      - --block
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - ray status --address=127.0.0.1:6379 >/dev/null 2>&1
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
+
+  ray-worker:
+    <<: *ray-common
+    command:
+      - ray
+      - start
+      - --address=ray-head:6379
+      - --num-cpus=2
+      - --block
+    depends_on:
+      ray-head:
+        condition: service_healthy

@@ -80,3 +80,48 @@ def test_dockerfiles_and_compose_consume_the_version_contract() -> None:
     assert "mlflow-data:/mlflow" in compose
     assert "--artifacts-destination" in compose
     assert "--default-artifact-root" not in compose
+
+
+def test_full_runtime_profile_matches_the_image_builder_contract() -> None:
+    profiles = json.loads(
+        (ROOT / "tests/integrations/runtime-profiles.json").read_text()
+    )["profiles"]
+    profile = profiles["runtime-full"]
+    dockerfile = (ROOT / profile["dockerfile"]).read_text()
+    config = json.loads((ROOT / "tools/tributo-runtime-full.json").read_text())
+    locked = _locked_versions()
+
+    assert profile["base_image"] == config["base_image"]
+    assert profile["base_image_mirror"] == config["base_image_mirror"]
+    assert profile["uv_image"] == config["uv_image"]
+    assert profile["uv_image_mirror"] == config["uv_image_mirror"]
+    assert (
+        profile["base_image"].rsplit("@", 1)[1]
+        == profile["base_image_mirror"].rsplit("@", 1)[1]
+    )
+    assert (
+        profile["uv_image"].rsplit("@", 1)[1]
+        == profile["uv_image_mirror"].rsplit("@", 1)[1]
+    )
+    assert profile["extras"] == config["runtime_extras"]
+    assert profile["python_version"] == "3.12"
+    assert profile["version_contract"]["ray"] == "2.55.1"
+    for package, contract_key in {
+        "daft-clickhouse": "daft_clickhouse",
+        "daft-doris": "daft_doris",
+        "ray-doris": "ray_doris",
+    }.items():
+        assert profile["version_contract"][contract_key] == locked[package]
+    for extra in config["runtime_extras"]:
+        assert f"--extra {extra}" in dockerfile
+    assert "--no-default-groups" in dockerfile
+    assert "--no-dev" in dockerfile
+    assert "TRIBUTO_BASE_IMAGE" in dockerfile
+    assert "COPY --from=external-wheelhouse" in dockerfile
+
+    runner = (ROOT / "scripts/run_runtime_image_it.sh").read_text()
+    assert 'case "$runtime_platform" in' in runner
+    assert 'export TRIBUTO_RUNTIME_PLATFORM="$runtime_platform"' in runner
+    assert "-u HTTP_PROXY" in runner
+    assert "-u http_proxy" in runner
+    assert "--wait-timeout 180" in runner

@@ -28,14 +28,17 @@ _DAFT_INSTALL_HINT = "pip install 'tributo[data-daft]'"
 _DAFT_LANCE_INSTALL_HINT = "pip install 'tributo[data,data-daft]'"
 _DATA_INSTALL_HINT = "pip install 'tributo[data]'"
 _DAFT_CLICKHOUSE_INSTALL_HINT = (
-    "Install a local daft-clickhouse[clickhouse] wheel, then run "
-    "pip install 'tributo[clickhouse]'"
+    "Install daft-clickhouse==1.0 with Tributo: "
+    "pip install 'tributo[clickhouse]' (or uv sync --extra clickhouse)"
 )
 _DAFT_DORIS_INSTALL_HINT = (
-    "Install a local daft-doris[doris] wheel (or daft-doris[doris-flight] for Flight), "
-    "then run pip install 'tributo[mysql]' (or 'tributo[doris-flight]' for Flight)"
+    "Install daft-doris==1.0 with Tributo: pip install 'tributo[mysql]' "
+    "(or uv sync --extra mysql); use 'tributo[doris-flight]' for Flight"
 )
-_RAY_DORIS_INSTALL_HINT = "pip install 'ray-doris[mysql,flight]'"
+_RAY_DORIS_INSTALL_HINT = (
+    "Install ray-doris==1.0 with Tributo: pip install 'tributo[mysql]' "
+    "(or uv sync --extra mysql); use 'tributo[doris-flight]' for Flight"
+)
 _POSTGRESQL_INSTALL_HINT = "pip install 'tributo[postgresql]'"
 
 
@@ -283,7 +286,7 @@ def _daft_clickhouse_descriptor() -> BindingDescriptor:
         factory=DaftClickHouseBinding,
         capabilities=frozenset({SourceCapability.PROJECTION}),
         distribution_name="daft-clickhouse",
-        distribution_version=_distribution_version("daft-clickhouse") or "0.1.0a1",
+        distribution_version=_distribution_version("daft-clickhouse") or "1.0",
         engine_version_spec=_DAFT_SQL_VERSION_SPEC,
         dependency_distributions=("clickhouse-connect",),
         supported_read_hints=frozenset(
@@ -306,7 +309,7 @@ def _daft_doris_descriptor() -> BindingDescriptor:
         factory=DaftDorisBinding,
         capabilities=frozenset({SourceCapability.PROJECTION}),
         distribution_name="daft-doris",
-        distribution_version=_distribution_version("daft-doris") or "0.1.0a1",
+        distribution_version=_distribution_version("daft-doris") or "1.0",
         engine_version_spec=_DAFT_SQL_VERSION_SPEC,
         dependency_distributions=("PyMySQL",),
         supported_read_hints=frozenset(
@@ -329,8 +332,9 @@ def _ray_doris_descriptor() -> BindingDescriptor:
         factory=RayDorisBinding,
         capabilities=frozenset({SourceCapability.PROJECTION}),
         distribution_name="ray-doris",
-        distribution_version=_distribution_version("ray-doris") or "0.1.0a1",
+        distribution_version=_distribution_version("ray-doris") or "1.0",
         engine_version_spec=_RAY_VERSION_SPEC,
+        dependency_distributions=("PyMySQL",),
         supported_read_hints=frozenset(
             {
                 ReadHint.TARGET_PARALLELISM,
@@ -634,7 +638,7 @@ def default_engine_bindings() -> EngineBindings:
                 _RAY_VERSION_SPEC,
                 _RAY_DORIS_INSTALL_HINT,
                 None,
-                ("ray-doris",),
+                ("ray-doris", "PyMySQL"),
             ),
             (
                 _ray_postgresql_descriptor,

@@ -58,6 +58,15 @@
       "domains": ["code", "docs", "storage"]
     },
     {
+      "name": "runtime-image",
+      "patterns": [
+        "docker/**",
+        "tools/tributo-runtime-full.json",
+        "tools/build_tributo_image.py"
+      ],
+      "domains": ["code", "storage"]
+    },
+    {
       "name": "tests",
       "patterns": ["tests/**", "scripts/**", "tools/**"],
       "domains": ["code", "storage"]
@@ -159,6 +168,45 @@
       "markers": ["ci_safe"],
       "log_contract": "pytest terminal output; skips and missing JUnit evidence fail the suite",
       "rationale": "Dedicated bounded shard for integration-named modules that exercise local contracts without external infrastructure."
+    },
+    {
+      "id": "runtime-image",
+      "owner": "core",
+      "domain": "runtime-image",
+      "tier": "manual_external",
+      "workflow": "external",
+      "owns_tests": true,
+      "entrypoint": ["bash", "scripts/run_runtime_image_it.sh"],
+      "args": [],
+      "extras": ["dev"],
+      "test_paths": [
+        "docker/tributo-runtime/Dockerfile",
+        "scripts/run_runtime_image_it.sh",
+        "tests/integrations/docker-compose.runtime-image.yml",
+        "tests/integrations/jobs/runtime_image_gate_job.py",
+        "tests/tools/test_build_tributo_image.py",
+        "tools/build_tributo_image.py",
+        "tools/tributo-runtime-full.json"
+      ],
+      "trigger_domains": [],
+      "trigger_paths": [
+        "docker/tributo-runtime/**",
+        "scripts/run_runtime_image_it.sh",
+        "tests/integrations/docker-compose.runtime-image.yml",
+        "tests/integrations/jobs/runtime_image_gate_job.py",
+        "tests/integrations/runtime-profiles.json",
+        "tests/tools/test_build_tributo_image.py",
+        "tools/build_tributo_image.py",
+        "tools/tributo-runtime-full.json",
+        "pyproject.toml",
+        "uv.lock"
+      ],
+      "requires": ["docker", "multi_node_ray", "ray_jobs"],
+      "budget_seconds": 1800,
+      "ci_allowed": false,
+      "forbid_skips": true,
+      "log_contract": "/tmp/tributo-runtime-image-it-*/compose.log and image attestations",
+      "rationale": "The pinned full image and its Ray Jobs worker closure require one isolated multi-node Docker gate."
     },
     {
       "id": "documentation-api",

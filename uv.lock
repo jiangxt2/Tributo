@@ -309,6 +309,22 @@ wheels = [
 ]
 
 [[package]]
+name = "bayesian-optimization"
+version = "1.4.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "colorama" },
+    { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'" },
+    { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64' or sys_platform != 'darwin'" },
+    { name = "scikit-learn" },
+    { name = "scipy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9a/37/e34b70e97b83393d98bb53cdfcf0213af29ac5932d6752bbf2abbda5b998/bayesian-optimization-1.4.3.tar.gz", hash = "sha256:f9a448e1b52d961301cbc953ce4199709f6c26b1c88994c9b4dadb7752a64550", size = 27803, upload-time = "2023-04-25T21:58:35.41Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/45/cf/3016b660afca02c6ecca3c1cc6d8df3b8f1a6ff4878103204d0aa6b4c769/bayesian_optimization-1.4.3-py3-none-any.whl", hash = "sha256:2719272d5825f1ba7d7609f3b1c1fdca13eba1b7ad52a5ca2e62f34154ecae28", size = 18346, upload-time = "2023-04-25T21:58:33.498Z" },
+]
+
+[[package]]
 name = "blinker"
 version = "1.9.0"
 source = { registry = "https://pypi.org/simple" }
@@ -844,6 +860,47 @@ lance = [
 ]
 ray = [
     { name = "ray", extra = ["client", "data"] },
+]
+
+[[package]]
+name = "daft-clickhouse"
+version = "1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "daft" },
+    { name = "pyarrow" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b6/0b/4857e4746fdbe8f1cd911854e4e4821d1650b7f2c55efb558fcbad2707aa/daft_clickhouse-1.0.tar.gz", hash = "sha256:053ee0b740eb68246b48c3cf7bcce8eb8e9766e6c9530968a80f3b0fa08ce77a", size = 169506, upload-time = "2026-08-17T14:44:58.758Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a9/b2/c32e73be7521cbd0e6eb5fbbe00114a5dcb637265a7db1e5f7a94bf6af15/daft_clickhouse-1.0-py3-none-any.whl", hash = "sha256:6b3ce6d2dc30fb0c282cfa99f14faa41887e139f31424f16ebc8b4d090ee1c7f", size = 51936, upload-time = "2026-08-17T14:44:57.553Z" },
+]
+
+[package.optional-dependencies]
+clickhouse = [
+    { name = "clickhouse-connect", extra = ["arrow", "async"] },
+]
+
+[[package]]
+name = "daft-doris"
+version = "1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "daft" },
+    { name = "pyarrow" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3e/cd/b8f2453d39f5af496c66c16d23baa59be82eb1b815726696db7f39495086/daft_doris-1.0.tar.gz", hash = "sha256:43450c9088c5f25ac25934ac896b4c4c8a1c7df15e6680559b299d668fd3cf4a", size = 88745, upload-time = "2026-08-17T15:05:54.317Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/bd/2b/78c76b5fd313051841b4cc800f7495e01a4c123963f9eeb2c2d0dc57e474/daft_doris-1.0-py3-none-any.whl", hash = "sha256:72a19e2f300a955ac7a12a263ae9a0a332019126c9efa7b04800575e96b51593", size = 66653, upload-time = "2026-08-17T15:05:52.826Z" },
+]
+
+[package.optional-dependencies]
+doris = [
+    { name = "pymysql" },
+]
+doris-flight = [
+    { name = "adbc-driver-flightsql" },
+    { name = "adbc-driver-manager" },
+    { name = "pymysql" },
 ]
 
 [[package]]
@@ -3759,6 +3816,24 @@ tune = [
 ]
 
 [[package]]
+name = "ray-doris"
+version = "1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pymysql" },
+    { name = "ray", extra = ["data"] },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c0/9e/e254d027970f261075d2687181381bebd379d7f12cbd34d90549a4dda402/ray_doris-1.0.tar.gz", hash = "sha256:898bed3d511089a1166f0f793fde7e4c12450fe303ce2732bb722312f22de3bd", size = 127207, upload-time = "2026-08-17T14:44:45.409Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/59/ca/bb18462b40f9a42f8c2c57b65062c346225c7695ba45c1838673c6089f7b/ray_doris-1.0-py3-none-any.whl", hash = "sha256:055c8e08fdd7b2903d5e88ccd0e78660e3f74095ce6b88ae46b38bac3330df5b", size = 51323, upload-time = "2026-08-17T14:44:44.319Z" },
+]
+
+[package.optional-dependencies]
+flight = [
+    { name = "adbc-driver-flightsql" },
+]
+
+[[package]]
 name = "redis"
 version = "8.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -4484,6 +4559,7 @@ causal = [
 ]
 clickhouse = [
     { name = "clickhouse-connect", extra = ["arrow", "async"] },
+    { name = "daft-clickhouse", extra = ["clickhouse"] },
 ]
 data = [
     { name = "lance-ray" },
@@ -4508,7 +4584,9 @@ dev = [
 doris-flight = [
     { name = "adbc-driver-flightsql" },
     { name = "adbc-driver-manager" },
+    { name = "daft-doris", extra = ["doris-flight"] },
     { name = "pymysql" },
+    { name = "ray-doris", extra = ["flight"] },
 ]
 explainability = [
     { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'" },
@@ -4577,7 +4655,9 @@ model-export-torch = [
     { name = "torch" },
 ]
 mysql = [
+    { name = "daft-doris", extra = ["doris"] },
     { name = "pymysql" },
+    { name = "ray-doris" },
 ]
 postgresql = [
     { name = "psycopg", extra = ["binary"] },
@@ -4604,6 +4684,8 @@ test-integration = [
     { name = "boto3" },
     { name = "clickhouse-connect", extra = ["arrow", "async"] },
     { name = "daft", extra = ["lance", "ray"] },
+    { name = "daft-clickhouse", extra = ["clickhouse"] },
+    { name = "daft-doris", extra = ["doris"] },
     { name = "lance-ray" },
     { name = "ml-dtypes" },
     { name = "mlflow" },
@@ -4616,6 +4698,7 @@ test-integration = [
     { name = "pylance" },
     { name = "pymysql" },
     { name = "pytest" },
+    { name = "ray-doris" },
     { name = "requests" },
     { name = "skl2onnx" },
     { name = "sqlalchemy" },
@@ -4626,6 +4709,8 @@ training = [
     { name = "boto3" },
     { name = "clickhouse-connect", extra = ["arrow", "async"] },
     { name = "daft", extra = ["lance", "ray"] },
+    { name = "daft-clickhouse", extra = ["clickhouse"] },
+    { name = "daft-doris", extra = ["doris"] },
     { name = "lance-ray" },
     { name = "ml-dtypes" },
     { name = "onnx", version = "1.19.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13'" },
@@ -4636,10 +4721,14 @@ training = [
     { name = "pyiceberg" },
     { name = "pylance" },
     { name = "pymysql" },
+    { name = "ray-doris" },
     { name = "skl2onnx" },
     { name = "sqlalchemy" },
     { name = "sqlglot" },
     { name = "xgboost" },
+]
+tune = [
+    { name = "bayesian-optimization" },
 ]
 vector-index = [
     { name = "boto3" },
@@ -4673,11 +4762,15 @@ requires-dist = [
     { name = "adbc-driver-flightsql", marker = "extra == 'doris-flight'", specifier = ">=1.6,<2" },
     { name = "adbc-driver-manager", marker = "extra == 'doris-flight'", specifier = ">=1.6,<2" },
     { name = "aiohttp", specifier = ">=3.13.4" },
+    { name = "bayesian-optimization", marker = "extra == 'tune'", specifier = "==1.4.3" },
     { name = "boto3", marker = "extra == 's3'", specifier = ">=1.42.91" },
     { name = "click", specifier = ">=8.0.0" },
     { name = "clickhouse-connect", extras = ["arrow", "async"], marker = "extra == 'clickhouse'", specifier = ">=1.5,<1.6" },
     { name = "confluent-kafka", marker = "extra == 'streaming-inference'", specifier = ">=2.3.0" },
     { name = "daft", extras = ["lance", "ray"], marker = "extra == 'data-daft'", specifier = ">=0.7.23,<0.7.24" },
+    { name = "daft-clickhouse", extras = ["clickhouse"], marker = "extra == 'clickhouse'", specifier = "==1.0" },
+    { name = "daft-doris", extras = ["doris"], marker = "extra == 'mysql'", specifier = "==1.0" },
+    { name = "daft-doris", extras = ["doris-flight"], marker = "extra == 'doris-flight'", specifier = "==1.0" },
     { name = "dowhy", marker = "extra == 'causal'", specifier = ">=0.11.0" },
     { name = "econml", marker = "extra == 'causal'", specifier = ">=0.15.0" },
     { name = "grpcio", marker = "extra == 'grpc'", specifier = ">=1.60.0" },
@@ -4712,6 +4805,8 @@ requires-dist = [
     { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.1.0" },
     { name = "ray", extras = ["default", "serve", "tune"], specifier = "==2.55.1" },
     { name = "ray", extras = ["serve"], marker = "extra == 'streaming-inference'" },
+    { name = "ray-doris", marker = "extra == 'mysql'", specifier = "==1.0" },
+    { name = "ray-doris", extras = ["flight"], marker = "extra == 'doris-flight'", specifier = "==1.0" },
     { name = "requests", specifier = ">=2.33.0" },
     { name = "requests", marker = "extra == 'test-integration'", specifier = ">=2.25.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6.0,<1.0" },
@@ -4739,7 +4834,7 @@ requires-dist = [
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.12.20250516" },
     { name = "xgboost", marker = "extra == 'training'", specifier = ">=2.1.0" },
 ]
-provides-extras = ["dev", "data", "data-daft", "vector-index", "postgresql", "clickhouse", "mysql", "doris-flight", "s3", "model-export", "model-export-torch", "hf", "model-export-hf", "training", "explainability", "identity", "streaming", "grpc", "registry", "graph", "causal", "streaming-inference", "test-integration"]
+provides-extras = ["dev", "data", "data-daft", "vector-index", "postgresql", "clickhouse", "mysql", "doris-flight", "s3", "model-export", "model-export-torch", "hf", "model-export-hf", "training", "tune", "explainability", "identity", "streaming", "grpc", "registry", "graph", "causal", "streaming-inference", "test-integration"]
 
 [package.metadata.requires-dev]
 dev = [
