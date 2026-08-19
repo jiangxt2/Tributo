@@ -134,11 +134,20 @@ contract is approved.
 
 `output_format="lance"` selects a generic Lance ResultSink. Declare
 `output_vector_columns` when fixed-size floating-point vector validation is
-required. The sink builds a credential-safe `WriteRequest` and selects the
-stable `tributo.ray.lance` Binding. That Binding currently delegates all
-data-plane work to `lance_ray.write_lance(stream=False)` and records the schema
-fingerprint in the sink receipt; it does not probe a post-write dataset version
-or build an ANN index. A Lance table may contain ordinary columns as well as
+required. For declared columns, the sink accepts an exact `FixedSizeList`, a
+fixed-shape Ray V1/V2 tensor, or a one-dimensional Arrow fixed-shape tensor.
+The declared dimension and dtype must match exactly; the sink does not flatten
+higher-rank tensors or perform dtype conversion. It normalizes accepted tensor
+columns to Lance `FixedSizeList` columns in the existing distributed Arrow
+validation step. Only declared vector columns are converted; if another column
+in a worker batch differs from the driver target schema, the sink fails instead
+of coercing that column.
+
+The sink builds a credential-safe `WriteRequest` and selects the stable
+`tributo.ray.lance` Binding. That Binding delegates the physical write to
+`lance_ray.write_lance(stream=False)`. The sink receipt records the normalized
+schema fingerprint; the sink does not probe a post-write dataset version or
+build an ANN index. A Lance table may contain ordinary columns as well as
 user-produced vectors.
 
 Direct `LanceResultSinkRequest` construction defaults to provider-native `create`.

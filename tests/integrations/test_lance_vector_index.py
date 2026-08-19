@@ -36,6 +36,11 @@ import pyarrow.fs as pafs
 import pyarrow.parquet as pq
 import ray
 
+from tributo.inference.contracts import (
+    LanceResultSinkRequest,
+    LanceVectorColumnSpec,
+)
+from tributo.integrations.sinks.lance import LanceResultSink
 from tributo.job import TributoClient
 from tributo.vector_index.contracts import (
     CoverageStatus,
@@ -68,6 +73,23 @@ _DIMENSION = 8
 _ROWS_PER_FRAGMENT = 512
 _INITIAL_FRAGMENTS = 4
 _PROFILE = "vector_it"
+
+
+class _EmbeddingPredictor:
+    """Return a conventional two-dimensional NumPy embedding batch."""
+
+    def __call__(self, batch: pa.Table) -> dict[str, np.ndarray]:
+        row_ids = np.asarray(batch.column("id").to_pylist(), dtype=np.int64)
+        return {
+            "id": row_ids,
+            "group": np.asarray(
+                ["even" if row_id % 2 == 0 else "odd" for row_id in row_ids]
+            ),
+            "vector": np.asarray(
+                [_vector_for(int(row_id)) for row_id in row_ids],
+                dtype=np.float32,
+            ),
+        }
 
 
 def _configure_cluster() -> None:
@@ -164,20 +186,54 @@ def _table(row_ids: list[int], *, duplicate_query: bool = False) -> pa.Table:
 
 
 def _write_initial_dataset(uri: str, storage_options: dict[str, str]) -> list[int]:
-    all_ids: list[int] = []
-    for fragment in range(_INITIAL_FRAGMENTS):
-        start = fragment * _ROWS_PER_FRAGMENT
-        row_ids = list(range(start, start + _ROWS_PER_FRAGMENT))
-        all_ids.extend(row_ids)
-        lance.write_dataset(
-            _table(row_ids),
-            uri,
-            mode="overwrite" if fragment == 0 else "append",
-            storage_options=storage_options,
-        )
+    row_ids = list(range(_INITIAL_FRAGMENTS * _ROWS_PER_FRAGMENT))
+    source = ray.data.from_items(
+        [{"id": row_id} for row_id in row_ids],
+        override_num_blocks=_INITIAL_FRAGMENTS,
+    )
+    embeddings = source.map_batches(
+        _EmbeddingPredictor,
+        batch_format="pyarrow",
+        batch_size=128,
+    )
+    inferred_schema = embeddings.schema()
+    arrow_schema = getattr(inferred_schema, "base_schema", inferred_schema)
+    assert isinstance(arrow_schema, pa.Schema)
+    ray_vector_type = arrow_schema.field("vector").type
+    assert getattr(ray_vector_type, "extension_name", None) in {
+        "ray.data.arrow_tensor",
+        "ray.data.arrow_tensor_v2",
+    }
+
+    LanceResultSink().write(
+        embeddings,
+        LanceResultSinkRequest(
+            uri=uri,
+            storage_profile=_PROFILE,
+            mode="create",
+            min_rows_per_file=_ROWS_PER_FRAGMENT,
+            max_rows_per_file=_ROWS_PER_FRAGMENT,
+            vector_columns=(
+                LanceVectorColumnSpec(name="vector", dimension=_DIMENSION),
+            ),
+        ),
+        run_id="distributed-embedding-it",
+        plan_digest="e" * 64,
+    )
+
     dataset = lance.LanceDataset(uri, storage_options=storage_options)
-    assert len(dataset.get_fragments()) == _INITIAL_FRAGMENTS
-    return all_ids
+    assert dataset.schema.field("vector").type == pa.list_(pa.float32(), _DIMENSION)
+    persisted = dataset.to_table(columns=["id", "group", "vector"]).sort_by("id")
+    assert persisted.num_rows == len(row_ids)
+    assert [int(value) for value in persisted["id"].to_pylist()] == row_ids
+    np.testing.assert_allclose(
+        np.asarray(persisted["vector"].to_pylist(), dtype=np.float32),
+        np.asarray([_vector_for(row_id) for row_id in row_ids], dtype=np.float32),
+    )
+    # Ray may split each input block into multiple batches, and Lance-Ray may
+    # materialize those batches as separate fragments.
+    assert len(dataset.get_fragments()) >= _INITIAL_FRAGMENTS
+    return row_ids
 
 
 def _build_with_concurrent_append(

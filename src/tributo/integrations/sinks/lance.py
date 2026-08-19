@@ -30,6 +30,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_RAY_FIXED_SHAPE_TENSOR_EXTENSION_NAMES = frozenset(
+    {
+        "ray.data.arrow_tensor",
+        "ray.data.arrow_tensor_v2",
+    }
+)
+
 
 class _StorageProfileResolverLike(Protocol):
     def resolve(self, profile: str | None) -> StorageProfile: ...
@@ -40,12 +47,13 @@ class LanceResultSink:
     """Write a Ray Dataset through the shared native write Gateway.
 
     The sink is deliberately explicit: it always writes Lance, regardless of
-    whether the output contains a vector column.  Vector schema checks apply
-    only to columns declared by ``request.vector_columns``; model semantics
-    remain the responsibility of the caller's Predictor.  The Gateway selects
-    the stable Ray Lance Binding; the selected provider owns all data-plane and
-    save-mode behavior.  All callers use this same boundary; the sink does not
-    expose a format-specific compatibility facade.
+    whether the output contains a vector column.  Vector schema checks and
+    supported fixed-shape tensor normalization apply only to columns declared
+    by ``request.vector_columns``; model semantics remain the responsibility
+    of the caller's Predictor.  The Gateway selects the stable Ray Lance
+    Binding; the selected provider owns physical writes and save-mode behavior.
+    All callers use this same boundary; the sink does not expose a format-specific
+    compatibility facade.
     """
 
     api_version: ClassVar[int] = 1
@@ -64,7 +72,7 @@ class LanceResultSink:
         run_id: str,
         plan_digest: str,
     ) -> ResultSinkReceipt:
-        """Validate the declared Arrow schema and materialize a Lance table."""
+        """Normalize the declared Arrow vectors and materialize a Lance table."""
         from tributo.inference.contracts import (
             LanceResultSinkRequest,
             ResultSinkReceipt,
@@ -75,14 +83,18 @@ class LanceResultSink:
                 f"Lance result sink cannot write {request.sink_id!r}"
             )
         arrow_schema = _arrow_schema(dataset.schema())
-        _validate_vector_schema(arrow_schema, request)
+        target_schema = _canonical_vector_schema(arrow_schema, request)
         runtime_s3 = _runtime_s3(
             self._storage_resolver, request.storage_profile, request.uri
         )
         try:
             if request.vector_columns:
                 dataset = dataset.map_batches(
-                    partial(validate_vector_batch, request=request),
+                    partial(
+                        _normalize_vector_batch,
+                        request=request,
+                        target_schema=target_schema,
+                    ),
                     batch_format="pyarrow",
                 )
             options: dict[str, Any] = {
@@ -125,7 +137,7 @@ class LanceResultSink:
                 source_error_type or type(exc).__name__
             ) from None
 
-        fingerprint = schema_fingerprint(arrow_schema)
+        fingerprint = schema_fingerprint(target_schema)
         result_id = _result_id(
             run_id=run_id,
             plan_digest=plan_digest,
@@ -172,29 +184,115 @@ def _runtime_s3(
     return profile
 
 
-def _validate_vector_schema(schema: pa.Schema, request: LanceResultSinkRequest) -> None:
+def _canonical_vector_schema(
+    schema: pa.Schema, request: LanceResultSinkRequest
+) -> pa.Schema:
+    fields = list(schema)
     for spec in request.vector_columns:
         if spec.name not in schema.names:
             raise ResultWriteError(
                 f"Lance vector column {spec.name!r} is missing from the output schema"
             )
+        field_index = schema.get_field_index(spec.name)
         field = schema.field(spec.name)
         data_type = field.type
-        if not pa.types.is_fixed_size_list(data_type):
+        vector_type = _fixed_vector_type(data_type)
+        if vector_type is None:
             raise ResultWriteError(
-                f"Lance vector column {spec.name!r} must use fixed_size_list"
+                f"Lance vector column {spec.name!r} has unsupported type {data_type}; "
+                "expected fixed_size_list or a supported fixed-shape tensor type"
             )
-        if data_type.list_size != spec.dimension:
+        shape, value_type = vector_type
+        if shape != (spec.dimension,):
             raise ResultWriteError(
-                f"Lance vector column {spec.name!r} has dimension "
-                f"{data_type.list_size}, expected {spec.dimension}"
+                f"Lance vector column {spec.name!r} has shape {shape}, expected "
+                f"one-dimensional vectors of dimension {spec.dimension}"
             )
         expected_type = getattr(pa, spec.dtype)()
-        if data_type.value_type != expected_type:
+        if value_type != expected_type:
             raise ResultWriteError(
                 f"Lance vector column {spec.name!r} has dtype "
-                f"{data_type.value_type}, expected {spec.dtype}"
+                f"{value_type}, expected {spec.dtype}"
             )
+        if not pa.types.is_fixed_size_list(data_type):
+            fields[field_index] = pa.field(
+                field.name,
+                pa.list_(expected_type, spec.dimension),
+                nullable=field.nullable,
+                metadata=field.metadata,
+            )
+    return pa.schema(fields, metadata=schema.metadata)
+
+
+def _fixed_vector_type(
+    data_type: pa.DataType,
+) -> tuple[tuple[int, ...], pa.DataType] | None:
+    if pa.types.is_fixed_size_list(data_type):
+        return (data_type.list_size,), data_type.value_type
+    if isinstance(data_type, pa.FixedShapeTensorType):
+        return tuple(data_type.shape), data_type.value_type
+    if not isinstance(data_type, pa.ExtensionType):
+        return None
+    if data_type.extension_name not in _RAY_FIXED_SHAPE_TENSOR_EXTENSION_NAMES:
+        return None
+    shape = getattr(data_type, "shape", None)
+    value_type = getattr(data_type, "value_type", None)
+    if shape is None or not isinstance(value_type, pa.DataType):
+        return None
+    try:
+        normalized_shape = tuple(int(dimension) for dimension in shape)
+    except (TypeError, ValueError):
+        return None
+    return normalized_shape, value_type
+
+
+def _normalize_vector_batch(
+    batch: pa.Table,
+    *,
+    request: LanceResultSinkRequest,
+    target_schema: pa.Schema,
+) -> pa.Table:
+    batch_target_schema = _canonical_vector_schema(batch.schema, request)
+    if not batch_target_schema.equals(target_schema, check_metadata=True):
+        raise ResultWriteError(
+            "Lance vector batch schema does not match the driver target schema: "
+            f"{_schema_mismatch_reason(batch_target_schema, target_schema)}"
+        )
+    try:
+        normalized = (
+            batch
+            if batch.schema.equals(target_schema, check_metadata=True)
+            else batch.cast(batch_target_schema)
+        )
+    except (pa.ArrowException, ValueError) as exc:
+        from tributo.inference._credential_safety import safe_exception_summary
+
+        raise ResultWriteError(
+            "Lance vector batch cannot be normalized to the declared schema: "
+            f"{type(exc).__name__}: {safe_exception_summary(exc)}"
+        ) from None
+    return validate_vector_batch(normalized, request)
+
+
+def _schema_mismatch_reason(actual: pa.Schema, expected: pa.Schema) -> str:
+    if actual.names != expected.names:
+        return f"field names or order are {actual.names!r}, expected {expected.names!r}"
+    for actual_field, expected_field in zip(actual, expected, strict=True):
+        if actual_field.type != expected_field.type:
+            return (
+                f"field {actual_field.name!r} has type {actual_field.type}, "
+                f"expected {expected_field.type}"
+            )
+        if actual_field.nullable != expected_field.nullable:
+            return (
+                f"field {actual_field.name!r} has nullable={actual_field.nullable}, "
+                f"expected nullable={expected_field.nullable}"
+            )
+        if actual_field.metadata != expected_field.metadata:
+            return f"field {actual_field.name!r} metadata differs"
+    if actual.metadata != expected.metadata:
+        return "schema metadata differs"
+    return "schemas differ"
 
 
 def validate_vector_batch(batch: pa.Table, request: LanceResultSinkRequest) -> pa.Table:
