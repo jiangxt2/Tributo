@@ -296,8 +296,10 @@ class LanceVectorColumnSpec(_FrozenContract):
 class LanceResultSinkRequest(_FrozenContract):
     """Configuration for explicit Lance result materialization.
 
-    Tributo validates only the Arrow schema contract declared here.  It does
-    not infer model task semantics, pooling, normalization, or vector metadata.
+    Tributo validates the Arrow schema contract declared here and normalizes
+    supported fixed-shape Ray or Arrow tensor columns to Lance fixed-size list
+    columns.  It does not infer model task semantics, pooling, normalization,
+    dtype conversion, or vector metadata.
     Direct requests default to provider-native ``create``.  The legacy
     ``InferenceConfig`` pipeline separately retains its historical
     ``overwrite`` default for compatibility.  Tributo does not add stricter
