@@ -50,6 +50,13 @@ that driver calls existing in-process training or batch-inference APIs. Worker
 side broker cancellation, arbitrary execution context, a generic Core consume
 loop, and durable workflow semantics are outside the Alpha contract.
 
+Trusted deployment configuration may supply an execution-driver package through
+the generic Ray Jobs runtime-environment arguments on `submit_ray_job`. Core
+only forwards explicitly declared modules and requirements; it does not inspect
+broker payloads, discover provider installations, or resolve dependencies. This
+deployment mechanism is separate from Broker API v1 and does not change
+`BROKER_API_VERSION`.
+
 `submission_id` is the primary Ray Jobs identity for admission, status, logs,
 and stop. `ray_job_id` is optional execution metadata and is populated only
 from a real Ray `JobDetails.job_id`; Core never substitutes `submission_id` for

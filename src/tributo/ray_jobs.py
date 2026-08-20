@@ -157,13 +157,21 @@ def submit_ray_job(
     env_vars: dict[str, str] | None = None,
     project_root: Path | None = None,
     extra_excludes: list[str] | None = None,
+    extra_py_modules: list[str | Path] | None = None,
+    runtime_pip_packages: list[str] | None = None,
     metadata: dict[str, str] | None = None,
     request_digest: str | None = None,
     entrypoint_num_cpus: float | None = None,
     entrypoint_num_gpus: float | None = None,
     entrypoint_memory: int | None = None,
 ) -> RayJobSubmission:
-    """Submit one deterministic Ray Job and reconcile an ambiguous response."""
+    """Submit one deterministic Ray Job and reconcile an ambiguous response.
+
+    ``extra_py_modules`` and ``runtime_pip_packages`` are trusted deployment
+    configuration, not broker task payload fields. Core forwards these values
+    without discovering providers or resolving dependencies. Runtime pip
+    packages cannot be combined with algorithm artifact pip distribution.
+    """
 
     if not entrypoint.strip():
         raise ValueError("entrypoint must not be empty")
@@ -192,6 +200,8 @@ def submit_ray_job(
         project_root=project_root,
         env_vars=job_env,
         extra_excludes=extra_excludes,
+        extra_py_modules=extra_py_modules,
+        runtime_pip_packages=runtime_pip_packages,
     )
     client = _get_submission_client(dashboard_url)
     return _submit_ray_job_with_client(

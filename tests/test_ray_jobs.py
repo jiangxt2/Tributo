@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -17,11 +17,6 @@ from tributo.ray_jobs import (
 )
 
 
-def _runtime_env(*args: Any, **kwargs: Any) -> dict[str, Any]:
-    del args
-    return {"env_vars": kwargs.get("env_vars", {})}
-
-
 def test_submission_identity_is_workload_neutral_and_ray_job_id_is_real() -> None:
     client = MagicMock()
     client.submit_job.return_value = "ray-api-return-value"
@@ -31,7 +26,11 @@ def test_submission_identity_is_workload_neutral_and_ray_job_id_is_real() -> Non
 
     with (
         patch("tributo.ray_jobs._get_submission_client", return_value=client),
-        patch("tributo.ray_jobs.build_runtime_env", side_effect=_runtime_env),
+        patch(
+            "tributo.ray_jobs.build_runtime_env",
+            autospec=True,
+            return_value={"env_vars": {}},
+        ),
     ):
         result = submit_ray_job(
             "python -m provider.driver",
@@ -48,6 +47,73 @@ def test_submission_identity_is_workload_neutral_and_ray_job_id_is_real() -> Non
     assert client.submit_job.call_args.kwargs["submission_id"] == result.submission_id
 
 
+def test_submit_ray_job_forwards_trusted_runtime_env_extensions(
+    tmp_path: Path,
+) -> None:
+    client = MagicMock()
+    client.get_job_info.return_value = type(
+        "JobInfo", (), {"job_id": "ray-core-job-2"}
+    )()
+    extensions: list[str | Path] = [
+        tmp_path / "driver.whl",
+        "s3://artifacts/support.zip",
+    ]
+    packages = ["driver-runtime==1.2.3", "/artifacts/support.whl"]
+    built_runtime_env = {
+        "py_modules": [str(tmp_path / "tributo"), *map(str, extensions)],
+        "pip": list(packages),
+    }
+
+    with (
+        patch("tributo.ray_jobs._get_submission_client", return_value=client),
+        patch(
+            "tributo.ray_jobs.build_runtime_env",
+            autospec=True,
+            return_value=built_runtime_env,
+        ) as build_runtime_env_mock,
+    ):
+        result = submit_ray_job(
+            "python -m extension.execution_driver",
+            operation_namespace="broker",
+            run_id="run-2",
+            attempt_id="attempt-3",
+            env_vars={"DEPLOYMENT_MODE": "trusted"},
+            project_root=tmp_path,
+            extra_excludes=["local-cache/**"],
+            extra_py_modules=extensions,
+            runtime_pip_packages=packages,
+            metadata={"operation_type": "training"},
+            request_digest="digest-2",
+            entrypoint_num_cpus=1.5,
+            entrypoint_num_gpus=0.5,
+            entrypoint_memory=1024,
+        )
+
+    build_runtime_env_mock.assert_called_once_with(
+        project_root=tmp_path,
+        env_vars={
+            "DEPLOYMENT_MODE": "trusted",
+            "TRIBUTO_RUN_ID": "run-2",
+            "TRIBUTO_ATTEMPT_ID": "attempt-3",
+            "TRIBUTO_SUBMISSION_ID": result.submission_id,
+        },
+        extra_excludes=["local-cache/**"],
+        extra_py_modules=extensions,
+        runtime_pip_packages=packages,
+    )
+    submit_call = client.submit_job.call_args.kwargs
+    assert submit_call["runtime_env"] is built_runtime_env
+    assert submit_call["metadata"] == {
+        "operation_type": "training",
+        "tributo.request_digest": "digest-2",
+    }
+    assert submit_call["submission_id"] == result.submission_id
+    assert submit_call["entrypoint_num_cpus"] == 1.5
+    assert submit_call["entrypoint_num_gpus"] == 0.5
+    assert submit_call["entrypoint_memory"] == 1024
+    assert result.ray_job_id == "ray-core-job-2"
+
+
 def test_ambiguous_submission_reconciles_by_submission_id() -> None:
     client = MagicMock()
     client.submit_job.side_effect = TimeoutError("response lost")
@@ -56,7 +122,11 @@ def test_ambiguous_submission_reconciles_by_submission_id() -> None:
 
     with (
         patch("tributo.ray_jobs._get_submission_client", return_value=client),
-        patch("tributo.ray_jobs.build_runtime_env", side_effect=_runtime_env),
+        patch(
+            "tributo.ray_jobs.build_runtime_env",
+            autospec=True,
+            return_value={"env_vars": {}},
+        ),
     ):
         result = submit_ray_job(
             "python -m provider.driver",
@@ -74,7 +144,11 @@ def test_request_digest_is_optional_metadata_not_submission_identity() -> None:
 
     with (
         patch("tributo.ray_jobs._get_submission_client", return_value=client),
-        patch("tributo.ray_jobs.build_runtime_env", side_effect=_runtime_env),
+        patch(
+            "tributo.ray_jobs.build_runtime_env",
+            autospec=True,
+            return_value={"env_vars": {}},
+        ),
     ):
         first = submit_ray_job(
             "python -m provider.driver",
