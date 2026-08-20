@@ -86,6 +86,35 @@ operation whose lease has expired can be reclaimed only with
 `force_resume=true`, after confirming that the previous driver is no longer
 active.
 
+## Select XGBoost outputs
+
+For an XGBoost native `gbtree` or `dart` model, `model_output`, `raw`, and
+`raw_margin` use the Booster contribution API with exact TreeSHAP and the
+strict output shapes supported by XGBoost 2.1 or newer. The final contribution
+column is recorded as the base value, and Tributo verifies that the base value
+plus feature contributions reconstructs each raw model output. Linear boosters
+are rejected because their native contributions are not TreeSHAP. Probability,
+log-loss, and requests with reference data continue to use SHAP TreeExplainer.
+
+Multi-class requests explain every class by default. The request's
+`output_target` must match the value declared by the Bundle descriptor. With the
+default export configuration above, set `output_selection` to `predicted` to
+retain only the class selected by the raw model margins:
+
+```json
+{
+  "output_target": "model_output",
+  "output_selection": "predicted"
+}
+```
+
+The output keeps the original class index, such as `output_7`; it is not
+renumbered after selection. `limits.top_k` is evaluated against that selected
+class. Binary classifiers have one margin contribution group, so `predicted`
+and `all` produce the same output space. The `predicted` policy is not accepted
+for regression, probability, log-loss, requests with reference data, or
+model-agnostic requests.
+
 ## Read results
 
 Results are written as sharded Parquet in long format. `result_uri` in the
@@ -96,7 +125,8 @@ another attempt's files. Each row identifies an input, output, and feature and
 includes the contribution, base value, output semantics, backend, exactness,
 model digest, and optional preprocessor/feature map digests. `receipt.json`
 records the result digest, row and byte counts, reference provenance,
-dependency versions, and the declared access/privacy/retention policy.
+dependency versions, output selection, and the declared
+access/privacy/retention policy.
 
 Consumers should read the `result_uri` and `receipt_uri` from the persisted
 operation record, or use the returned receipt, rather than assuming that the

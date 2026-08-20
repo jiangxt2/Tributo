@@ -56,6 +56,18 @@ def test_request_model_role_is_resolved_from_bundle_descriptor_by_default() -> N
     assert request.model_role is None
 
 
+def test_output_selection_defaults_to_all_and_is_serializable() -> None:
+    request = _request()
+    assert request.output_selection == "all"
+    assert request.model_dump(mode="json")["output_selection"] == "all"
+
+    predicted = _request(output_selection="predicted")
+    assert predicted.output_selection == "predicted"
+
+    with pytest.raises(ValidationError, match="output_selection"):
+        _request(output_selection="unsupported")
+
+
 def test_operation_store_uri_is_local_and_credential_free() -> None:
     request = _request(operation_store_uri="file:///tmp/tributo-operations")
     assert request.operation_store_uri == "file:///tmp/tributo-operations"
@@ -271,4 +283,35 @@ def test_result_policy_is_explicit_and_serializable() -> None:
 def test_planner_preflights_known_explanation_byte_budget() -> None:
     request = _request(limits={"max_explanation_bytes": 100})
     with pytest.raises(ValueError, match="estimated explanation output"):
-        ExplainabilityPlanner.preflight_limits(request, input_rows=10)
+        ExplainabilityPlanner.preflight_limits(
+            request,
+            input_rows=10,
+            output_count=2,
+        )
+
+
+def test_planner_uses_explicit_multiclass_output_bound_and_selection() -> None:
+    all_outputs = ExplainabilityPlanner.preflight_limits(
+        _request(),
+        input_rows=10,
+        output_count=10,
+    )
+    predicted = ExplainabilityPlanner.preflight_limits(
+        _request(output_selection="predicted"),
+        input_rows=10,
+        output_count=10,
+    )
+
+    assert all_outputs["estimated_output_count"] == 10
+    assert all_outputs["estimated_output_rows"] == 200
+    assert predicted["estimated_output_count"] == 1
+    assert predicted["estimated_output_rows"] == 20
+
+
+def test_planner_rejects_non_positive_output_count() -> None:
+    with pytest.raises(ValueError, match="output_count"):
+        ExplainabilityPlanner.preflight_limits(
+            _request(),
+            input_rows=10,
+            output_count=0,
+        )

@@ -217,6 +217,7 @@ def run_batch_explainability(
     result_bytes = 0
     try:
         _validate_request_against_descriptor(manifest, request)
+        output_count = _explanation_output_count_upper_bound(manifest, request)
         selection = resolver.describe(request.input)
         opened = resolver.open(selection)
         dataset = opened.dataset
@@ -227,7 +228,11 @@ def run_batch_explainability(
                     f"input rows {input_rows} exceed limits.max_rows="
                     f"{request.limits.max_rows}"
                 )
-        ExplainabilityPlanner.preflight_limits(request, input_rows=input_rows)
+        ExplainabilityPlanner.preflight_limits(
+            request,
+            input_rows=input_rows,
+            output_count=output_count,
+        )
 
         explained = dataset.map_batches(
             worker,
@@ -417,6 +422,7 @@ def _make_receipt(
         exactness=exactness,
         feature_view=request.feature_view,
         output_target=request.output_target,
+        output_selection=request.output_selection,
         input_rows=input_rows,
         explanation_rows=explanation_rows,
         result_uri=result_uri,
@@ -458,7 +464,14 @@ class ExplainabilityBatchWorker:
         self._runtime: BundleModelRuntime | None = None
         self._artifact_stack = ExitStack()
         self._context = self._load_context(request)
-        plan = ExplainabilityPlanner(registry).plan(self._context, request)
+        plan = ExplainabilityPlanner(registry).plan(
+            self._context,
+            request,
+            output_count=_explanation_output_count_upper_bound(
+                self._manifest,
+                request,
+            ),
+        )
         self._plan = plan
         self._prepared = plan.adapter().prepare(self._context, request)
 
@@ -941,6 +954,49 @@ def _selected_artifact(manifest: Any, request: ExplainabilityRequest) -> Any:
         raise ValueError(
             f"Bundle role {role!r} points to missing artifact {target_name!r}"
         ) from exc
+
+
+def _explanation_output_count_upper_bound(
+    manifest: Any,
+    request: ExplainabilityRequest,
+) -> int:
+    """Resolve a safe attribution-output bound from a verified manifest."""
+    artifact = _selected_artifact(manifest, request)
+    if artifact.flavor_id != "xgboost-native-v1":
+        return 1 if request.output_target in {"raw", "raw_margin"} else 2
+
+    signature = getattr(manifest, "output_signature", None)
+    fields = tuple(getattr(signature, "output_fields", ()))
+    probability_fields = tuple(
+        field
+        for field in fields
+        if str(getattr(field, "name", "")).lower()
+        in {"probability", "probabilities", "proba", "scores"}
+    )
+    prediction_fields = tuple(
+        field
+        for field in fields
+        if str(getattr(field, "name", "")).lower() in {"prediction", "predictions"}
+    )
+    task_type = getattr(getattr(manifest, "source_info", None), "task_type", None)
+    if task_type == "regression":
+        candidates = prediction_fields
+    elif task_type == "classification":
+        candidates = probability_fields
+    else:
+        candidates = probability_fields or prediction_fields
+    if len(candidates) != 1:
+        raise ValueError(
+            "XGBoost native explainability requires one typed probability or "
+            "prediction output signature"
+        )
+    shape = tuple(getattr(candidates[0], "shape", ()))
+    if len(shape) != 2 or not isinstance(shape[1], int) or shape[1] < 1:
+        raise ValueError(
+            "XGBoost native explainability requires a fixed output dimension "
+            "in the typed manifest signature"
+        )
+    return shape[1]
 
 
 def _model_digest(manifest: Any, request: ExplainabilityRequest) -> str:

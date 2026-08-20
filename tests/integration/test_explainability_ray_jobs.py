@@ -28,7 +28,6 @@ from tributo.exporting.bundle_reader import BundleReader
 from tributo.exporting.manifest import (
     ExportManifestV2,
     ManifestExecution,
-    ManifestSignature,
     ManifestSourceInfo,
 )
 from tributo.exporting.models import (
@@ -208,7 +207,7 @@ def test_onnx_model_agnostic_shap_ray_job_writes_long_parquet_and_receipt(
 def test_xgboost_ubj_tree_shap_ray_job_writes_exact_attributions(
     objective: str,
 ) -> None:
-    """Run the real XGBoost UBJ + TreeExplainer path in a Ray actor."""
+    """Run the native XGBoost TreeSHAP path in a Ray actor."""
     import xgboost
 
     shared_root = Path(
@@ -230,12 +229,19 @@ def test_xgboost_ubj_tree_shap_ray_job_writes_exact_attributions(
             "max_depth": 2,
             "eta": 0.5,
         }
+        class_count = 2
         if objective == "multi:softprob":
-            training_params["num_class"] = 3
+            class_count = 3
+            training_params["num_class"] = class_count
         booster = xgboost.train(
             training_params,
             xgboost.DMatrix(X, label=y, feature_names=["feature_a", "feature_b"]),
             num_boost_round=4,
+        )
+        expected_margins = booster.predict(
+            xgboost.DMatrix(X, feature_names=["feature_a", "feature_b"]),
+            output_margin=True,
+            strict_shape=True,
         )
         model_bytes = bytes(booster.save_raw(raw_format="ubj"))
         artifact_dir = root / "bundle" / "artifacts" / "native"
@@ -262,14 +268,45 @@ def test_xgboost_ubj_tree_shap_ray_job_writes_exact_attributions(
             backend="tree",
             model_role="explainability_model",
         )
+        checkpoint_contract = ExportCheckpointV1(
+            trainer_type="xgboost",
+            architecture_id="xgboost",
+            input_schema=(
+                CheckpointField(
+                    name="float_input",
+                    dtype="float32",
+                    shape=("batch", X.shape[1]),
+                ),
+            ),
+            output_schema=(
+                CheckpointField(name="label", dtype="int64", shape=("batch",)),
+                CheckpointField(
+                    name="probabilities",
+                    dtype="float32",
+                    shape=("batch", class_count),
+                ),
+            ),
+            task_type="classification",
+            framework="xgboost",
+            framework_version=xgboost.__version__,
+            preprocessing={"type": "none"},
+            checkpoint_format_version=1,
+        )
+        input_signature, output_signature = checkpoint_contract.to_manifest_signatures()
         manifest = ExportManifestV2(
             bundle_id="bundle-tree-it",
             status="succeeded",
             canonical_uri=str(root / "bundle"),
             tributo_version="1.0.0",
-            source_info=ManifestSourceInfo(source_kind="xgboost_result"),
-            input_signature=ManifestSignature(),
-            output_signature=ManifestSignature(),
+            source_info=ManifestSourceInfo(
+                source_kind="xgboost_result",
+                framework=checkpoint_contract.framework,
+                framework_version=checkpoint_contract.framework_version,
+                architecture_id=checkpoint_contract.architecture_id,
+                task_type=checkpoint_contract.task_type,
+            ),
+            input_signature=input_signature,
+            output_signature=output_signature,
             artifacts=(artifact,),
             roles={"explainability_model": "native"},
             execution=ManifestExecution(execution_id="exec-tree-it"),
@@ -290,6 +327,7 @@ def test_xgboost_ubj_tree_shap_ray_job_writes_exact_attributions(
             input_dir / "part-0.parquet",
         )
         result_dir = root / "tree-explanations"
+        output_selection = "predicted" if objective == "multi:softprob" else "all"
         request = ExplainabilityRequest(
             bundle_uri=str(root / "bundle"),
             input=IngestionRequest(
@@ -299,6 +337,7 @@ def test_xgboost_ubj_tree_shap_ray_job_writes_exact_attributions(
             feature_columns=("feature_a", "feature_b"),
             input_id_column="entity_id",
             backend="tree",
+            output_selection=output_selection,
             result_uri=str(result_dir),
             operation_store_uri=str(root / "operations"),
             request_id=f"tree-request-{uuid.uuid4().hex}",
@@ -327,7 +366,8 @@ def test_xgboost_ubj_tree_shap_ray_job_writes_exact_attributions(
         assert receipt["status"] == "succeeded"
         assert receipt["backend"] == "tree"
         assert receipt["exactness"] == "exact"
-        assert receipt["explanation_rows"] > 0
+        assert receipt["output_selection"] == output_selection
+        assert receipt["explanation_rows"] == len(X) * X.shape[1]
         result_files = sorted(result_path.glob("*.parquet"))
         result_table = pa.concat_tables([pq.read_table(path) for path in result_files])
         assert result_table.num_rows == receipt["explanation_rows"]
@@ -335,6 +375,27 @@ def test_xgboost_ubj_tree_shap_ray_job_writes_exact_attributions(
             "feature_a",
             "feature_b",
         }
+        result_rows = result_table.to_pylist()
+        expected_output_indexes = (
+            np.argmax(expected_margins, axis=1)
+            if objective == "multi:softprob"
+            else np.zeros(len(X), dtype=np.int64)
+        )
+        for row_index, (input_id, output_index) in enumerate(
+            zip((201, 202, 203, 204), expected_output_indexes, strict=True)
+        ):
+            selected = [row for row in result_rows if row["input_id"] == str(input_id)]
+            assert len(selected) == X.shape[1]
+            assert {row["output_id"] for row in selected} == {f"output_{output_index}"}
+            assert len({row["base_value"] for row in selected}) == 1
+            assert len({row["model_output"] for row in selected}) == 1
+            reconstructed = (
+                sum(row["contribution"] for row in selected) + selected[0]["base_value"]
+            )
+            assert reconstructed == pytest.approx(selected[0]["model_output"])
+            assert selected[0]["model_output"] == pytest.approx(
+                expected_margins[row_index, output_index]
+            )
         _assert_persisted_succeeded_operation(root, request.request_id)
     finally:
         import shutil

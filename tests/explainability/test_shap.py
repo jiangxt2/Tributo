@@ -7,8 +7,9 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
+from tributo.explainability import shap as shap_module
 from tributo.explainability.protocols import ExplainableModelContext, PreparedExplainer
-from tributo.explainability.shap import ShapAdapter
+from tributo.explainability.shap import ShapAdapter, _NativeTreeExplainer
 
 from .test_contracts import _request
 
@@ -41,6 +42,18 @@ class _ArrayDynamicExplanation:
         return 0.5 if label == 0 else 0.6
 
 
+class _MultiOutputExplanation:
+    values = np.asarray(
+        [
+            [[10.0, 0.1], [0.2, 5.0]],
+            [[4.0, 0.1], [0.2, 3.0]],
+        ]
+    )
+    data = np.asarray([[10.0, 20.0], [30.0, 40.0]])
+    base_values = np.asarray([[-10.0, 0.0], [0.0, -3.0]])
+    model_outputs = values.sum(axis=1) + base_values
+
+
 def test_shap_long_rows_use_top_k_and_preserve_provenance() -> None:
     request = _request(limits={"top_k": 1})
     prepared = PreparedExplainer(
@@ -62,6 +75,51 @@ def test_shap_long_rows_use_top_k_and_preserve_provenance() -> None:
     assert all(row.model_digest == "a" * 64 for row in rows)
     assert [row.model_output for row in rows] == [1.6, 2.7]
     assert all(row.feature_value is None for row in rows)
+
+
+def test_predicted_selection_preserves_class_id_and_ranks_selected_output() -> None:
+    request = _request(output_selection="predicted", limits={"top_k": 1})
+    prepared = PreparedExplainer(
+        backend="tree",
+        exactness="exact",
+        explain=lambda batch, **_: _MultiOutputExplanation(),
+        feature_names=("feature_a", "feature_b"),
+    )
+
+    rows = ShapAdapter().explain_batch(
+        prepared,
+        np.asarray([[10.0, 20.0], [30.0, 40.0]], dtype=np.float32),
+        input_ids=("row-1", "row-2"),
+        model_digest="a" * 64,
+        request=request,
+    )
+
+    assert [(row.feature_name, row.output_id) for row in rows] == [
+        ("feature_b", "output_1"),
+        ("feature_a", "output_0"),
+    ]
+
+
+def test_binary_predicted_selection_is_the_single_output() -> None:
+    request = _request(output_selection="predicted")
+    prepared = PreparedExplainer(
+        backend="tree",
+        exactness="exact",
+        explain=lambda batch, **_: _Explanation(),
+        feature_names=("feature_a", "feature_b"),
+        predict=lambda batch: np.asarray([1.6, 2.7]),
+    )
+
+    rows = ShapAdapter().explain_batch(
+        prepared,
+        np.asarray([[10.0, 20.0], [30.0, 40.0]], dtype=np.float32),
+        input_ids=("row-1", "row-2"),
+        model_digest="a" * 64,
+        request=request,
+    )
+
+    assert len(rows) == 4
+    assert {row.output_id for row in rows} == {"output_0"}
 
 
 def test_tree_log_loss_requires_labels_at_adapter_boundary() -> None:
@@ -218,6 +276,233 @@ def test_tree_support_rejects_unknown_output_target() -> None:
     )
     assert decision.supported is False
     assert "output_target" in decision.reason
+
+
+def test_tree_support_rejects_predicted_selection_outside_native_classification() -> (
+    None
+):
+    regression = ExplainableModelContext(
+        bundle_uri="/models/bundle",
+        model_role="inference",
+        artifact_name="native",
+        artifact_format="ubj",
+        flavor_id="xgboost-native-v1",
+        artifact_path=None,
+        objective="reg:squarederror",
+    )
+    regression_decision = ShapAdapter.supports(
+        regression,
+        _request(backend="tree", output_selection="predicted"),
+    )
+    assert regression_decision.supported is False
+    assert "classification objective" in regression_decision.reason
+
+    classification = replace(regression, objective="binary:logistic")
+    probability_decision = ShapAdapter.supports(
+        classification,
+        _request(
+            backend="tree",
+            output_target="probability",
+            output_selection="predicted",
+            reference={"uri": "/reference.npy"},
+        ),
+    )
+    assert probability_decision.supported is False
+    assert "native XGBoost raw" in probability_decision.reason
+
+
+def test_native_prepare_does_not_load_shap(monkeypatch) -> None:
+    pytest.importorskip("xgboost")
+
+    class FakeBooster:
+        feature_names = ["feature_a", "feature_b"]
+
+        @staticmethod
+        def save_config():
+            return '{"learner":{"gradient_booster":{"name":"gbtree"}}}'
+
+    context = ExplainableModelContext(
+        bundle_uri="/models/bundle",
+        model_role="inference",
+        artifact_name="native",
+        artifact_format="ubj",
+        flavor_id="xgboost-native-v1",
+        artifact_path=None,
+        model_object=FakeBooster(),
+        feature_names=("feature_a", "feature_b"),
+        objective="binary:logistic",
+    )
+
+    def fail_if_loaded():
+        raise AssertionError("native XGBoost TreeSHAP must not load SHAP")
+
+    monkeypatch.setattr(shap_module, "_require_shap", fail_if_loaded)
+    prepared = ShapAdapter().prepare(context, _request(backend="tree"))
+    assert isinstance(prepared.explain, _NativeTreeExplainer)
+
+
+def test_native_prepare_rejects_non_tree_booster() -> None:
+    pytest.importorskip("xgboost")
+
+    class FakeBooster:
+        feature_names = ["feature_a", "feature_b"]
+
+        @staticmethod
+        def save_config():
+            return '{"learner":{"gradient_booster":{"name":"gblinear"}}}'
+
+    context = ExplainableModelContext(
+        bundle_uri="/models/bundle",
+        model_role="inference",
+        artifact_name="native",
+        artifact_format="ubj",
+        flavor_id="xgboost-native-v1",
+        artifact_path=None,
+        model_object=FakeBooster(),
+        feature_names=("feature_a", "feature_b"),
+        objective="binary:logistic",
+    )
+
+    with pytest.raises(ValueError, match="gbtree or dart"):
+        ShapAdapter().prepare(context, _request(backend="tree"))
+
+
+def test_native_tree_shap_rejects_non_strict_contribution_shape() -> None:
+    pytest.importorskip("xgboost")
+
+    class FakeBooster:
+        feature_types = None
+
+        @staticmethod
+        def predict(matrix, **kwargs):
+            rows = matrix.num_row()
+            if kwargs.get("pred_contribs"):
+                return np.zeros((rows, 3), dtype=np.float32)
+            return np.zeros((rows, 1), dtype=np.float32)
+
+    explainer = _NativeTreeExplainer(
+        FakeBooster(),
+        feature_names=("feature_a", "feature_b"),
+        objective="binary:logistic",
+    )
+    with pytest.raises(ValueError, match="strict shape contract"):
+        explainer(np.asarray([[0.0, 1.0]], dtype=np.float32))
+
+
+def test_real_xgboost_native_tree_shap_supports_regression() -> None:
+    xgboost = pytest.importorskip("xgboost")
+    X = np.asarray([[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0]])
+    y = np.asarray([0.0, 1.0, 1.0, 2.0])
+    matrix = xgboost.DMatrix(
+        X,
+        label=y,
+        feature_names=["feature_a", "feature_b"],
+    )
+    booster = xgboost.train(
+        {"objective": "reg:squarederror", "max_depth": 2, "eta": 0.5},
+        matrix,
+        num_boost_round=4,
+    )
+    context = ExplainableModelContext(
+        bundle_uri="/models/bundle",
+        model_role="native",
+        artifact_name="native",
+        artifact_format="ubj",
+        flavor_id="xgboost-native-v1",
+        artifact_path=None,
+        model_object=booster,
+        feature_names=("feature_a", "feature_b"),
+        objective="reg:squarederror",
+    )
+    request = _request(backend="tree", output_target="raw_margin")
+
+    rows = ShapAdapter().explain_batch(
+        ShapAdapter().prepare(context, request),
+        X,
+        input_ids=("0", "1", "2", "3"),
+        model_digest="a" * 64,
+        request=request,
+    )
+
+    assert len(rows) == len(X) * X.shape[1]
+    assert {row.output_id for row in rows} == {"output_0"}
+    expected = booster.predict(matrix, output_margin=True, strict_shape=True)
+    for row_index in range(len(X)):
+        selected = rows[row_index * X.shape[1] : (row_index + 1) * X.shape[1]]
+        reconstructed = sum(row.contribution for row in selected) + float(
+            selected[0].base_value
+        )
+        assert reconstructed == pytest.approx(float(expected[row_index, 0]))
+
+
+def test_real_xgboost_native_tree_shap_selects_multiclass_output() -> None:
+    xgboost = pytest.importorskip("xgboost")
+    X = np.asarray(
+        [
+            [0.0, 0.0],
+            [0.0, 1.0],
+            [1.0, 0.0],
+            [1.0, 1.0],
+            [2.0, 0.0],
+            [2.0, 1.0],
+        ],
+        dtype=np.float32,
+    )
+    y = np.asarray([0, 0, 1, 1, 2, 2], dtype=np.float32)
+    matrix = xgboost.DMatrix(
+        X,
+        label=y,
+        feature_names=["feature_a", "feature_b"],
+    )
+    booster = xgboost.train(
+        {
+            "objective": "multi:softprob",
+            "num_class": 3,
+            "max_depth": 2,
+            "eta": 0.5,
+        },
+        matrix,
+        num_boost_round=6,
+    )
+    context = ExplainableModelContext(
+        bundle_uri="/models/bundle",
+        model_role="native",
+        artifact_name="native",
+        artifact_format="ubj",
+        flavor_id="xgboost-native-v1",
+        artifact_path=None,
+        model_object=booster,
+        feature_names=("feature_a", "feature_b"),
+        objective="multi:softprob",
+    )
+    all_request = _request(backend="tree")
+    predicted_request = _request(
+        backend="tree",
+        output_selection="predicted",
+    )
+    adapter = ShapAdapter()
+    all_rows = adapter.explain_batch(
+        adapter.prepare(context, all_request),
+        X,
+        input_ids=tuple(str(index) for index in range(len(X))),
+        model_digest="a" * 64,
+        request=all_request,
+    )
+    predicted_rows = adapter.explain_batch(
+        adapter.prepare(context, predicted_request),
+        X,
+        input_ids=tuple(str(index) for index in range(len(X))),
+        model_digest="a" * 64,
+        request=predicted_request,
+    )
+
+    assert len(all_rows) == len(X) * X.shape[1] * 3
+    assert len(predicted_rows) == len(X) * X.shape[1]
+    margins = booster.predict(matrix, output_margin=True, strict_shape=True)
+    expected_outputs = np.argmax(margins, axis=1)
+    for row_index, output_index in enumerate(expected_outputs):
+        selected = predicted_rows[row_index * X.shape[1] : (row_index + 1) * X.shape[1]]
+        assert {row.output_id for row in selected} == {f"output_{output_index}"}
 
 
 def test_real_xgboost_tree_shap_checks_raw_and_probability_outputs() -> None:

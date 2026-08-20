@@ -20,9 +20,12 @@ from tributo.explainability.contracts import (
 from tributo.explainability.executor import (
     _attempt_result_uri,
     _build_onnx_inputs,
+    _explanation_output_count_upper_bound,
     _LeaseHeartbeat,
     _load_reference,
+    _make_receipt,
     _manifest_role_digest,
+    _operation_idempotency_key,
     _operation_store_for_request,
     _resolve_xgboost_feature_names,
     _schema_signature,
@@ -158,6 +161,63 @@ def test_tree_descriptor_resolves_explainability_role_when_request_omits_role() 
     _validate_request_against_descriptor(manifest, request)
 
 
+@pytest.mark.parametrize(
+    ("task_type", "field_name", "shape", "expected"),
+    [
+        ("classification", "probabilities", ("batch", 10), 10),
+        ("classification", "probabilities", ("batch", 2), 2),
+        ("regression", "prediction", ("batch", 1), 1),
+    ],
+)
+def test_xgboost_output_bound_comes_from_typed_manifest_signature(
+    task_type: str,
+    field_name: str,
+    shape: tuple[str | int, ...],
+    expected: int,
+) -> None:
+    request = ExplainabilityRequest(
+        bundle_uri="/models/bundle",
+        input=IngestionRequest(
+            source=ParquetSourceConfig(path="/data/input.parquet"), engine="ray"
+        ),
+        backend="tree",
+        result_uri="/data/explanations",
+        request_id="request-output-bound",
+    )
+    artifact = SimpleNamespace(name="native", flavor_id="xgboost-native-v1")
+    manifest = SimpleNamespace(
+        roles={"explainability_model": "native"},
+        artifacts=(artifact,),
+        source_info=SimpleNamespace(task_type=task_type),
+        output_signature=SimpleNamespace(
+            output_fields=(SimpleNamespace(name=field_name, shape=shape),)
+        ),
+    )
+
+    assert _explanation_output_count_upper_bound(manifest, request) == expected
+
+
+def test_xgboost_output_bound_requires_a_fixed_typed_signature() -> None:
+    request = ExplainabilityRequest(
+        bundle_uri="/models/bundle",
+        input=IngestionRequest(
+            source=ParquetSourceConfig(path="/data/input.parquet"), engine="ray"
+        ),
+        backend="tree",
+        result_uri="/data/explanations",
+        request_id="request-missing-output-bound",
+    )
+    manifest = SimpleNamespace(
+        roles={"explainability_model": "native"},
+        artifacts=(SimpleNamespace(name="native", flavor_id="xgboost-native-v1"),),
+        source_info=SimpleNamespace(task_type="classification"),
+        output_signature=SimpleNamespace(output_fields=()),
+    )
+
+    with pytest.raises(ValueError, match="typed probability or prediction"):
+        _explanation_output_count_upper_bound(manifest, request)
+
+
 def test_descriptorless_bundle_is_rejected_before_worker_loading() -> None:
     request = ExplainabilityRequest(
         bundle_uri="/models/bundle",
@@ -260,6 +320,11 @@ def test_executor_writes_every_attempt_to_its_isolated_result_uri(monkeypatch) -
     )
     monkeypatch.setattr(
         executor_module,
+        "_explanation_output_count_upper_bound",
+        lambda _manifest, _request: 1,
+    )
+    monkeypatch.setattr(
+        executor_module,
         "_selected_backend",
         lambda _manifest, _request: ("tree", "exact"),
     )
@@ -306,6 +371,61 @@ def test_executor_writes_every_attempt_to_its_isolated_result_uri(monkeypatch) -
     assert record.receipt_uri == record.result_uri + "/receipt.json"
     assert record.result_uri.startswith("/data/explanations/attempts/")
     assert record.result_uri != request.result_uri
+
+
+def test_receipt_and_idempotency_record_output_selection() -> None:
+    request = ExplainabilityRequest(
+        bundle_uri="/models/bundle",
+        input=IngestionRequest(
+            source=ParquetSourceConfig(path="/data/input.parquet"), engine="ray"
+        ),
+        backend="tree",
+        output_selection="predicted",
+        result_uri="/data/explanations",
+        request_id="request-output-selection",
+    )
+    artifact = SimpleNamespace(
+        name="native",
+        flavor_id="xgboost-native-v1",
+        tree_digest="b" * 64,
+        files=(),
+    )
+    manifest = SimpleNamespace(
+        bundle_id="bundle-output-selection",
+        roles={"explainability_model": "native"},
+        artifacts=(artifact,),
+        explainability=None,
+    )
+    receipt = _make_receipt(
+        manifest=manifest,
+        request=request,
+        operation_id="operation-output-selection",
+        bundle_digest="a" * 64,
+        selected_backend="tree",
+        exactness="exact",
+        input_rows=1,
+        explanation_rows=2,
+        result_digest="c" * 64,
+        result_bytes=128,
+        result_uri="/data/explanations/attempts/lease",
+        status="succeeded",
+        reference_provider=SimpleNamespace(),
+    )
+    assert receipt.output_selection == "predicted"
+
+    all_key = _operation_idempotency_key(
+        manifest,
+        request.model_copy(update={"output_selection": "all"}),
+        bundle_digest="a" * 64,
+        reference_provider=SimpleNamespace(),
+    )
+    predicted_key = _operation_idempotency_key(
+        manifest,
+        request,
+        bundle_digest="a" * 64,
+        reference_provider=SimpleNamespace(),
+    )
+    assert all_key != predicted_key
 
 
 def test_xgboost_feature_order_is_checked_without_sidecar() -> None:
