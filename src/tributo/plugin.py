@@ -907,17 +907,21 @@ def _broker_contract_issues(cls: Any) -> tuple[str, ...]:
     issues: list[str] = []
     if not isinstance(cls, type):
         return ("provider class",)
-    if not isinstance(getattr(cls, "api_version", None), int):
+    if type(getattr(cls, "api_version", None)) is not int:
         issues.append("api_version")
-    if not isinstance(getattr(cls, "broker_id", None), str):
+    broker_id = getattr(cls, "broker_id", None)
+    if not isinstance(broker_id, str) or not broker_id.strip():
         issues.append("broker_id")
     capabilities = getattr(cls, "capabilities", None)
-    if not isinstance(capabilities, frozenset):
+    if not isinstance(capabilities, frozenset) or not all(
+        isinstance(value, str) and bool(value.strip()) for value in capabilities
+    ):
         issues.append("capabilities")
+    if getattr(cls, "stability", None) not in {"alpha", "beta", "stable"}:
+        issues.append("stability")
     for method in (
         "validate_config",
         "create_runtime",
-        "create_cancellation_checker",
     ):
         if not callable(getattr(cls, method, None)):
             issues.append(method)
@@ -946,16 +950,16 @@ def discover_broker_plugins(
             cls = ep.load()
         except Exception as exc:
             logger.warning(
-                "Failed to load broker plugin %r (%s)",
+                "Failed to load broker plugin %r (%s; %s)",
                 ep.name,
                 ep.value,
-                exc_info=True,
+                type(exc).__name__,
             )
             _record_diagnostic(
                 diagnostics,
                 "tributo.brokers",
                 ep.name,
-                f"Failed to load entry point: {exc}",
+                f"Failed to load entry point ({type(exc).__name__})",
                 error_type=type(exc).__name__,
             )
             continue
@@ -1016,7 +1020,7 @@ def resolve_broker_plugin(broker_id: str) -> type[Any]:
 
     ep = matches[0]
     try:
-        cls = ep.load()
+        cls = cast(type[Any], ep.load())
     except Exception as exc:
         raise JobConfigurationError(
             f"Failed to load broker {broker_id!r} ({type(exc).__name__})"
@@ -1040,4 +1044,4 @@ def resolve_broker_plugin(broker_id: str) -> type[Any]:
             f"Broker entry-point name {ep.name!r} does not match broker_id "
             f"{cls.broker_id!r}"
         )
-    return cls
+    return cast(type[Any], cls)

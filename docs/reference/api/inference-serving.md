@@ -299,10 +299,16 @@ documentation for every public stability tier.
 ```{autofunction} tributo.inference.job_runner.submit_inference_request
 ```
 
+```{autofunction} tributo.inference.job_runner.submit_inference_request_with_identity
+```
+
 ```{autofunction} tributo.inference.job_runner.submit_inference_request_with_retry
 ```
 
 ```{autofunction} tributo.inference.job_runner.submit_resolved_inference
+```
+
+```{autofunction} tributo.inference.job_runner.submit_resolved_inference_with_identity
 ```
 
 ```{autofunction} tributo.inference.job_runner.wait_for_job

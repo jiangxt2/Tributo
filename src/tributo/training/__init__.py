@@ -57,6 +57,7 @@ if TYPE_CHECKING:
         JobAttempt,
         TrainingJobResult,
         submit_training_job,
+        submit_training_job_with_identity,
         submit_training_job_with_retry,
         wait_for_job,
     )
@@ -67,7 +68,11 @@ if TYPE_CHECKING:
     )
     from tributo.training.registry import get_trainer, list_trainers, register
     from tributo.training.tune_runner import TuneRunner, extract_best_params
-    from tributo.training.xgboost_trainer import build_trainer, run_training_from_json
+    from tributo.training.xgboost_trainer import (
+        build_trainer,
+        run_training_from_json,
+        run_training_result_with_config,
+    )
 
 _LAZY_EXPORTS = {
     "get_trainer": ("tributo.training.registry", "get_trainer"),
@@ -86,6 +91,10 @@ _LAZY_EXPORTS = {
         "tributo.training.job_submitter",
         "submit_training_job_with_retry",
     ),
+    "submit_training_job_with_identity": (
+        "tributo.training.job_submitter",
+        "submit_training_job_with_identity",
+    ),
     "wait_for_job": ("tributo.training.job_submitter", "wait_for_job"),
     "TuneRunner": ("tributo.training.tune_runner", "TuneRunner"),
     "extract_best_params": (
@@ -96,6 +105,10 @@ _LAZY_EXPORTS = {
     "run_training_from_json": (
         "tributo.training.xgboost_trainer",
         "run_training_from_json",
+    ),
+    "run_training_result_with_config": (
+        "tributo.training.xgboost_trainer",
+        "run_training_result_with_config",
     ),
     "DNNTrainerImpl": ("tributo.training.dnn_trainer", "DNNTrainerImpl"),
     "run_dnn_training_from_json": (
@@ -162,6 +175,7 @@ __all__ = [
     "JobAttempt",
     "TrainingJobResult",
     "submit_training_job",
+    "submit_training_job_with_identity",
     "submit_training_job_with_retry",
     "wait_for_job",
     "export_to_onnx",
@@ -177,6 +191,7 @@ __all__ = [
     "warn_search_space_conflicts",
     "build_trainer",
     "run_training_from_json",
+    "run_training_result_with_config",
 ]
 
 if importlib.util.find_spec("torch") is not None:

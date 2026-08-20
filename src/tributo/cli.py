@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 class _LazyTributoGroup(click.Group):
-    """Load the broker command module only when the broker command is used."""
+    """Load the broker command module only when that command is selected."""
 
     def get_command(self, ctx: click.Context, cmd_name: str) -> click.Command | None:
         if cmd_name == "broker":
@@ -47,13 +47,13 @@ class _LazyTributoGroup(click.Group):
         ctx: click.Context,
         formatter: click.HelpFormatter,
     ) -> None:
-        """Render broker help from a lightweight placeholder."""
+        """Render root help without importing the broker command module."""
         commands: list[tuple[str, click.Command]] = []
         for command_name in self.list_commands(ctx):
             command = (
                 click.Command(
                     "broker",
-                    help="Discover and run explicitly selected message broker plugins.",
+                    help="Discover and validate explicitly selected broker providers.",
                 )
                 if command_name == "broker"
                 else self.get_command(ctx, command_name)

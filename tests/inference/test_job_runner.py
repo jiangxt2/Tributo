@@ -13,6 +13,7 @@ from tests.inference.test_executor import _plan
 from tributo.inference.contracts import ResolvedInference
 from tributo.inference.job_runner import (
     map_ray_job_status,
+    submit_inference_job,
     submit_inference_request,
     submit_inference_request_with_retry,
     submit_resolved_inference,
@@ -32,8 +33,6 @@ class TestSubmitInferenceJob:
             "tributo.inference.job_runner.JobSubmissionClient",
             return_value=mock_client,
         ):
-            from tributo.inference.job_runner import submit_inference_job
-
             submit_inference_job(
                 config_path="jobs/inference.yaml",
                 dashboard_url="http://127.0.0.1:8265",
@@ -54,8 +53,6 @@ class TestSubmitInferenceJob:
                 "tributo.inference.job_runner.JobSubmissionClient",
                 return_value=mock_client,
             ):
-                from tributo.inference.job_runner import submit_inference_job
-
                 submit_inference_job(
                     config_path="jobs/inference.yaml",
                     dashboard_url="http://127.0.0.1:8265",
@@ -75,14 +72,12 @@ class TestSubmitInferenceJob:
             "tributo.inference.job_runner.JobSubmissionClient",
             side_effect=side_effects,
         ) as mock_constructor:
-            from tributo.inference.job_runner import submit_inference_job
-
             job_id = submit_inference_job(
                 config_path="jobs/inference.yaml",
                 dashboard_url="http://127.0.0.1:8265",
             )
 
-        assert job_id == "job-123"
+        assert job_id.startswith("tributo-infer-")
         assert mock_constructor.call_count == 2
 
 
@@ -113,7 +108,7 @@ class TestResolvedRequestSubmission:
         ):
             job_id = submit_resolved_inference(plan)
 
-        assert job_id == "job-frozen"
+        assert job_id == plan.submission_id
         assert client.submit_job.call_args.kwargs["submission_id"] == plan.submission_id
 
     def test_frozen_plan_is_transported_without_re_resolution_in_job(self) -> None:
@@ -135,7 +130,7 @@ class TestResolvedRequestSubmission:
         ):
             job_id = submit_inference_request(object(), resolver=resolver)
 
-        assert job_id == "job-1"
+        assert job_id == plan.submission_id
         resolver.resolve.assert_called_once()
         call = client.submit_job.call_args.kwargs
         assert call["submission_id"] == plan.submission_id

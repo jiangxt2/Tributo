@@ -117,7 +117,7 @@ class InferenceResolver:
             if os.environ.get("TRIBUTO_JOB_KIND") == "inference"
             else None
         ) or "attempt-1"
-        submission_id = generate_submission_id("infer", run_id, attempt_id, plan_digest)
+        submission_id = generate_submission_id("infer", run_id, attempt_id)
 
         return ResolvedInference(
             plan_digest=plan_digest,

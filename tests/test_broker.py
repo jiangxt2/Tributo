@@ -1,32 +1,26 @@
-"""Core Broker SPI, lazy discovery, runner, and worker-context tests."""
+"""Core Broker API v1 and lazy provider-discovery tests."""
 
 from __future__ import annotations
 
-import json
-from typing import Any, ClassVar
-from unittest.mock import MagicMock
+import operator
+from typing import Any, ClassVar, cast
 
 import pytest
 
+import tributo.integrations.broker as broker_contract
 import tributo.plugin as plugin
 from tributo.exceptions import JobConfigurationError
 from tributo.integrations.broker import (
     BROKER_API_VERSION,
+    BrokerError,
     BrokerPlugin,
     BrokerRuntime,
-    CancellationChecker,
-    CancellationSpec,
-    JobResult,
     Message,
     TaskConsumer,
     TaskDisposition,
     TaskOutcome,
 )
-from tributo.integrations.broker_registry import (
-    BrokerRegistry,
-    rebuild_cancellation_checker,
-)
-from tributo.integrations.broker_runner import BrokerRunner, BrokerRunnerState
+from tributo.integrations.broker_registry import BrokerRegistry
 
 
 class _EntryPoint:
@@ -42,69 +36,67 @@ class _EntryPoint:
 
 
 class _Consumer(TaskConsumer):
-    def __init__(self, messages: list[Message]) -> None:
-        self.messages = messages
-        self.acked: list[Message] = []
-        self.retried: list[Message] = []
-
     def poll(self, timeout_ms: int = 5000) -> Message | None:
         del timeout_ms
-        return self.messages.pop(0) if self.messages else None
+        return None
 
     def ack(self, message: Message) -> None:
-        self.acked.append(message)
-
-    def retry(self, message: Message, error: str | None = None) -> None:
-        del error
-        self.retried.append(message)
+        del message
 
 
 class _Runtime(BrokerRuntime):
-    def __init__(self, consumer: _Consumer, outcome: TaskOutcome) -> None:
-        self._consumer = consumer
-        self.outcome = outcome
-
-    @property
-    def consumer(self) -> _Consumer:
-        return self._consumer
+    consumer = _Consumer()
 
     def handle(self, message: Message) -> TaskOutcome:
         del message
-        return self.outcome
+        return TaskOutcome(TaskDisposition.ACK)
 
 
 class _Plugin(BrokerPlugin):
     api_version: ClassVar[int] = BROKER_API_VERSION
     broker_id: ClassVar[str] = "fake"
     capabilities: ClassVar[frozenset[str]] = frozenset({"task-consumer"})
-    runtime: _Runtime
+    stability: ClassVar[str] = "alpha"
 
     def validate_config(self, config, *, check_connectivity=False) -> None:
         del config, check_connectivity
 
     def create_runtime(self, config) -> _Runtime:
         del config
-        return self.runtime
-
-    def create_cancellation_checker(
-        self, spec: CancellationSpec
-    ) -> CancellationChecker:
-        return _Checker(spec.job_id)
+        return _Runtime()
 
 
-class _Checker(CancellationChecker):
-    def __init__(self, job_id: str) -> None:
-        self.job_id = job_id
+def test_message_keeps_payload_opaque_and_metadata_restricted() -> None:
+    payload = object()
+    message = Message(
+        payload,
+        "delivery-1",
+        metadata={"attempt": "1"},
+    )
 
-    def is_cancelled(self, job_id: str) -> bool:
-        return job_id == self.job_id
+    assert message.payload is payload
+    assert message.metadata == {"attempt": "1"}
+    with pytest.raises(TypeError):
+        operator.setitem(message.metadata, "attempt", "2")
+    with pytest.raises(ValueError, match="string keys and values"):
+        Message(
+            {},
+            "delivery-2",
+            metadata=cast(Any, {"attempt": 1}),
+        )
 
 
-def test_cancellation_spec_is_json_safe_and_rejects_client_objects() -> None:
-    spec = CancellationSpec("fake", "job-1", {"secret_ref": "env:REDIS_PASSWORD"})
-    assert json.loads(json.dumps(spec.as_dict()))["job_id"] == "job-1"
-    with pytest.raises(ValueError, match="JSON serializable"):
-        CancellationSpec("fake", "job-1", {"client": object()})
+def test_task_outcome_is_not_a_workload_result_contract() -> None:
+    outcome = TaskOutcome(
+        TaskDisposition.RETRY,
+        BrokerError(code="RAY_UNAVAILABLE", sanitized_message="retry later"),
+    )
+
+    assert outcome.error is not None
+    assert outcome.error.code == "RAY_UNAVAILABLE"
+    assert not hasattr(outcome, "result")
+    assert not hasattr(broker_contract, "JobResult")
+    assert not hasattr(broker_contract, "EventReporter")
 
 
 def test_discovery_is_lazy_and_records_import_diagnostics(monkeypatch) -> None:
@@ -113,7 +105,7 @@ def test_discovery_is_lazy_and_records_import_diagnostics(monkeypatch) -> None:
         "_iter_entry_points",
         lambda group: iter(
             [
-                _EntryPoint("broken", ImportError("redis secret")),
+                _EntryPoint("broken", ImportError("optional dependency unavailable")),
                 _EntryPoint("fake", _Plugin),
             ]
             if group == "tributo.brokers"
@@ -121,37 +113,46 @@ def test_discovery_is_lazy_and_records_import_diagnostics(monkeypatch) -> None:
         ),
     )
     diagnostics = []
-    classes = plugin.discover_broker_plugins(diagnostics)
-    assert classes == [_Plugin]
+
+    assert plugin.discover_broker_plugins(diagnostics) == [_Plugin]
     assert diagnostics[0].entry_point_name == "broken"
-    assert "redis secret" in diagnostics[0].reason
+    assert diagnostics[0].error_type == "ImportError"
+    assert "optional dependency unavailable" not in diagnostics[0].reason
 
 
-def test_discovery_rejects_non_frozen_capabilities(monkeypatch) -> None:
-    class _TupleCapabilitiesPlugin(_Plugin):
-        capabilities = ("task-consumer",)
-
+@pytest.mark.parametrize(
+    ("attribute", "value"),
+    [
+        ("capabilities", ("task-consumer",)),
+        ("stability", "prototype"),
+    ],
+)
+def test_discovery_rejects_invalid_provider_metadata(
+    monkeypatch, attribute: str, value: object
+) -> None:
+    invalid = type("InvalidPlugin", (_Plugin,), {attribute: value})
     monkeypatch.setattr(
         plugin,
         "_iter_entry_points",
-        lambda group: iter(
-            [_EntryPoint("tuple", _TupleCapabilitiesPlugin)]
+        lambda group: (
+            iter([_EntryPoint("fake", invalid)])
             if group == "tributo.brokers"
-            else []
+            else iter(())
         ),
     )
     diagnostics = []
+
     assert plugin.discover_broker_plugins(diagnostics) == []
-    assert "capabilities" in diagnostics[0].reason
+    assert attribute in diagnostics[0].reason
 
 
-def test_discovery_rejects_api_version_and_entrypoint_identity_mismatch(
+def test_discovery_rejects_version_and_entrypoint_identity_mismatch(
     monkeypatch,
 ) -> None:
-    class _WrongVersionPlugin(_Plugin):
+    class _WrongVersion(_Plugin):
         api_version = BROKER_API_VERSION + 1
 
-    class _WrongIdentityPlugin(_Plugin):
+    class _WrongIdentity(_Plugin):
         broker_id = "other"
 
     monkeypatch.setattr(
@@ -159,135 +160,42 @@ def test_discovery_rejects_api_version_and_entrypoint_identity_mismatch(
         "_iter_entry_points",
         lambda group: iter(
             [
-                _EntryPoint("wrong-version", _WrongVersionPlugin),
-                _EntryPoint("fake", _WrongIdentityPlugin),
+                _EntryPoint("wrong-version", _WrongVersion),
+                _EntryPoint("fake", _WrongIdentity),
             ]
             if group == "tributo.brokers"
             else []
         ),
     )
     diagnostics = []
+
     assert plugin.discover_broker_plugins(diagnostics) == []
-    assert len(diagnostics) == 2
     assert "api_version" in diagnostics[0].reason
     assert "does not match broker_id" in diagnostics[1].reason
 
 
-def test_explicit_broker_filtered_by_tributo_plugins_fails_closed(monkeypatch) -> None:
+def test_explicit_disabled_provider_fails_closed(monkeypatch) -> None:
     monkeypatch.setenv("TRIBUTO_PLUGINS", "another")
     monkeypatch.setattr(
-        plugin, "_iter_entry_points", lambda group: iter([_EntryPoint("fake", _Plugin)])
+        plugin,
+        "_iter_entry_points",
+        lambda _group: iter([_EntryPoint("fake", _Plugin)]),
     )
+
     with pytest.raises(JobConfigurationError, match="disabled"):
         plugin.resolve_broker_plugin("fake")
 
 
-def test_registry_reports_duplicate_broker_ids(monkeypatch) -> None:
+def test_registry_reports_metadata_and_duplicate_ids(monkeypatch) -> None:
     monkeypatch.setattr(
         "tributo.integrations.broker_registry.discover_broker_plugins",
         lambda _diagnostics: [_Plugin, _Plugin],
     )
     registry = BrokerRegistry()
-    assert len(registry.list()) == 1
+
+    descriptors = registry.list()
+
+    assert descriptors[0].broker_id == "fake"
+    assert descriptors[0].stability == "alpha"
+    assert descriptors[0].capabilities == ("task-consumer",)
     assert registry.diagnostics()[0].reason == "Duplicate broker_id discovered"
-
-
-def test_runner_acks_only_ack_outcome_and_has_lifecycle_state() -> None:
-    message = Message("job-1", {})
-    consumer = _Consumer([message])
-    plugin_instance = _Plugin()
-    plugin_instance.runtime = _Runtime(
-        consumer,
-        TaskOutcome(
-            TaskDisposition.ACK,
-            result=JobResult("job-1", "accepted", run_id="job-1"),
-        ),
-    )
-    runner = BrokerRunner(plugin_instance, {})
-    assert runner.state == BrokerRunnerState.STOPPED
-    assert runner.run_once() is True
-    assert runner.state == BrokerRunnerState.READY
-    assert consumer.acked == [message]
-    runner.close()
-    assert runner.state == BrokerRunnerState.STOPPED
-
-
-def test_runner_retains_retryable_message() -> None:
-    message = Message("job-1", {})
-    consumer = _Consumer([message])
-    plugin_instance = _Plugin()
-    plugin_instance.runtime = _Runtime(
-        consumer,
-        TaskOutcome(TaskDisposition.RETRY, error="ray unavailable"),
-    )
-    runner = BrokerRunner(plugin_instance, {})
-    assert runner.run_once() is True
-    assert consumer.acked == []
-    assert consumer.retried == [message]
-
-
-def test_runner_rejects_without_acknowledging() -> None:
-    message = Message("job-1", {})
-    consumer = _Consumer([message])
-    plugin_instance = _Plugin()
-    plugin_instance.runtime = _Runtime(
-        consumer,
-        TaskOutcome(TaskDisposition.REJECT, error="poison"),
-    )
-    runner = BrokerRunner(plugin_instance, {})
-    assert runner.run_once() is True
-    assert consumer.acked == []
-    assert consumer.retried == []
-
-
-def test_runner_contains_ack_failure_and_enters_reconnect() -> None:
-    message = Message("job-1", {})
-    consumer = _Consumer([message])
-    consumer.ack = MagicMock(side_effect=ConnectionError("redis down"))
-    plugin_instance = _Plugin()
-    plugin_instance.runtime = _Runtime(
-        consumer,
-        TaskOutcome(TaskDisposition.ACK),
-    )
-    runner = BrokerRunner(
-        plugin_instance,
-        {},
-        backoff_initial=0.001,
-        backoff_max=0.001,
-        sleep=lambda _delay: None,
-    )
-    assert runner.run_once() is True
-    assert runner.state == BrokerRunnerState.RECONNECTING
-    consumer.ack.assert_called_once_with(message)
-
-
-def test_runner_graceful_stop_stops_next_poll() -> None:
-    consumer = _Consumer([])
-    plugin_instance = _Plugin()
-    plugin_instance.runtime = _Runtime(
-        consumer,
-        TaskOutcome(TaskDisposition.ACK),
-    )
-    runner = BrokerRunner(plugin_instance, {})
-    runner.start()
-    runner.request_stop()
-    assert runner.state == BrokerRunnerState.STOPPING
-    assert runner.run_once() is False
-    runner.close()
-    assert runner.state == BrokerRunnerState.STOPPED
-
-
-def test_worker_checker_rebuilt_from_spec(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "tributo.integrations.broker_registry.BrokerRegistry.resolve",
-        lambda _self, broker_id: _Plugin(),
-    )
-    checker = rebuild_cancellation_checker(
-        {"broker_id": "fake", "job_id": "job-1", "options": {}}
-    )
-    assert isinstance(checker, _Checker)
-    assert checker.is_cancelled("job-1") is True
-
-
-def test_missing_cancellation_context_keeps_training_context_empty() -> None:
-    assert rebuild_cancellation_checker(None) is None

@@ -1,58 +1,66 @@
-# Broker plugin boundary
+# Broker provider boundary
 
 ## Status
 
-Accepted
+Accepted for the Alpha API.
 
 ## Context
 
-Tributo needs an optional control-plane integration for internal Redis
-Streams tasks, lifecycle events, and cooperative cancellation. Redis Streams
-is not a bounded data source or a streaming inference input. Future Kafka and
-RabbitMQ providers should be able to use the same extension mechanism without
-adding their client libraries to Tributo Core.
+Tributo needs optional message-broker integrations without becoming a message
+queue platform. A broker task is a control-plane admission request; bounded
+data ingestion, unbounded inference streams, training, inference, Bundle
+publication, and result sinks retain their existing Tributo contracts.
+
+Transport clients and external wire protocols must remain independently
+installable. Core must be usable and testable without Redis, Kafka, RabbitMQ,
+or another provider dependency.
 
 ## Decision
 
-Tributo Core owns only a transport-neutral, beta Broker SPI, lazy entry-point
-discovery, explicit provider resolution, a generic runner, and JSON-safe Ray
-execution-context plumbing. Redis and KnoVa protocol models live in an
-independently installable provider wheel.
+Core owns a deliberately small Broker API v1 with Alpha stability:
 
-The Core contract has these safety rules:
+- `BrokerPlugin` discovery, structural version checks, capability metadata,
+  stability metadata, explicit config validation, and runtime construction;
+- opaque `Message` payloads with a delivery token and restricted string
+  metadata;
+- `TaskConsumer`, `BrokerRuntime`, `TaskDisposition`, and a minimal
+  `TaskOutcome` with an optional credential-safe `BrokerError`;
+- workload-neutral `RayJobSubmission` identity and deterministic submission
+  IDs derived from an operation namespace, `run_id`, and `attempt_id`;
+- ambiguous Ray submission reconciliation plus status and stop operations
+  keyed by `submission_id`.
 
-- ordinary Tributo startup and execution never import or connect to a broker;
-- discovery is fail-open with diagnostics, while explicitly selected brokers
-  fail closed when missing, disabled, or invalid;
-- broker configuration is passed as provider-owned JSON; Core does not define
-  Redis/Kafka/RabbitMQ fields or perform network probes implicitly;
-- cancellation checkers are reconstructed in Ray workers from serializable
-  specs; clients, sockets, pools, and secrets are never serialized;
-- provider submission must bind the business task ID to `run_id` and use a
-  deterministic submission ID per execution attempt. Transport delivery
-  retries must not become new execution attempts: the first Redis provider
-  reuses `attempt-1` and the same submission ID until an explicit business
-  retry is authorized after a terminal execution failure;
-- temporary transport/submission failures retain the task for recovery;
-  permanently invalid messages are best-effort reported as FAILED and then
-  acknowledged even if reporting is unavailable;
-- a missing or invalid outer `job_id` is permanently invalid and never becomes
-  a shared sentinel identity. Its FAILED event goes to a provider-owned
-  invalid-event stream and carries the delivery ID instead;
-- provider reporters implement the Core `EventReporter` method signatures;
-  provider-specific fields such as KnoVa error codes use explicit extension
-  methods. Reporter warnings are time-window rate limited;
-- reporter failure cannot turn successful training or Bundle publication into
-  a failed computation.
+`BROKER_API_VERSION = 1` checks structural compatibility; it does not imply a
+Beta or long-term compatibility promise. Discovery is lazy and fail-open with
+diagnostics. Explicit resolution and configuration validation fail closed.
+Discovery never instantiates a provider or performs connectivity checks.
 
-The first Redis provider supports training tasks only. It reports lifecycle
-events from the Ray Job driver and replays metrics history after training;
-real-time metric sinks are a later extension.
+The following concerns belong to provider packages:
+
+- broker connections, polling, acknowledgments, re-delivery, recovery, dead
+  letters, cancellation watchers, and the production consume CLI/runtime;
+- external request and event schemas, operation mapping, capability profiles,
+  credential references, error mapping, redaction, and event durability;
+- structured terminal-event publication from existing `TrainingResult`,
+  `InferenceResult`, Bundle, and result-sink receipts.
+
+Core does not define a workload registry or an external operation schema.
+Providers submit one thin execution-driver Ray Job through the generic helper;
+that driver calls existing in-process training or batch-inference APIs. Worker
+side broker cancellation, arbitrary execution context, a generic Core consume
+loop, and durable workflow semantics are outside the Alpha contract.
+
+`submission_id` is the primary Ray Jobs identity for admission, status, logs,
+and stop. `ray_job_id` is optional execution metadata and is populated only
+from a real Ray `JobDetails.job_id`; Core never substitutes `submission_id` for
+it. An optional credential-free `request_digest` may be recorded as Ray
+metadata, but Core does not persist it or promise cross-restart conflict
+detection.
 
 ## Consequences
 
-The Core public surface can evolve independently of transport implementations,
-and normal Tributo installations remain free of Redis dependencies. Provider
-packages must publish their own protocol and infrastructure contract tests,
-and a provider wheel must be installed in the Ray runtime when worker-side
-cancellation or provider entrypoints are used.
+Normal Tributo installations remain free of broker dependencies, and a
+provider can evolve transport and protocol behavior independently. Providers
+must own their infrastructure and healthy-path tests. The first release does
+not promise exactly-once execution, durable terminal events, high availability,
+or complete pending-message recovery.

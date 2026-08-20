@@ -36,8 +36,8 @@ class TributoClient:
 
     Example:
         >>> client = TributoClient("http://127.0.0.1:8265")
-        >>> job_id = client.submit(entrypoint="python script.py")
-        >>> status = client.get_status(job_id)
+        >>> submission_id = client.submit(entrypoint="python script.py")
+        >>> status = client.get_status(submission_id)
     """
 
     def __init__(self, address: str):
@@ -88,7 +88,7 @@ class TributoClient:
                 ``working_dir`` upload.
 
         Returns:
-            Job ID string.
+            Ray Jobs submission identity.
 
         Raises:
             JobSubmissionError: If submission fails.
@@ -147,7 +147,8 @@ class TributoClient:
         """Get the status of a submitted job.
 
         Args:
-            job_id: The job ID to query.
+            job_id: Ray Jobs submission identity to query. The parameter name
+                is retained for compatibility.
 
         Returns:
             Job status string (e.g. ``"RUNNING"``, ``"SUCCEEDED"``).
@@ -166,7 +167,8 @@ class TributoClient:
         """Get logs for a submitted job.
 
         Args:
-            job_id: The job ID to query.
+            job_id: Ray Jobs submission identity to query. The parameter name
+                is retained for compatibility.
 
         Returns:
             Job logs as a string.
@@ -184,7 +186,8 @@ class TributoClient:
         """Stop a running job.
 
         Args:
-            job_id: The job ID to stop.
+            job_id: Ray Jobs submission identity to stop. The parameter name
+                is retained for compatibility.
 
         Returns:
             True if the job was stopped successfully.

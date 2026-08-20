@@ -1,47 +1,42 @@
-"""Lazy registry and worker-side reconstruction helpers for brokers."""
+"""Lazy discovery and explicit resolution for broker providers."""
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from tributo.exceptions import JobConfigurationError
 from tributo.exporting.models import PluginLoadDiagnostic
-from tributo.integrations.broker import (
-    BrokerPlugin,
-    CancellationChecker,
-    CancellationSpec,
-)
+from tributo.integrations.broker import BrokerPlugin
 from tributo.plugin import discover_broker_plugins, resolve_broker_plugin
 from tributo.util.annotations import PublicAPI
 
-logger = logging.getLogger(__name__)
 
-
+@PublicAPI(stability="alpha")
 @dataclass(frozen=True)
 class BrokerDescriptor:
-    """Metadata exposed by ``tributo broker list`` without instantiation."""
+    """Side-effect-free metadata reported for one installed provider."""
 
     broker_id: str
     api_version: int
     capabilities: tuple[str, ...]
+    stability: str
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="alpha")
 class BrokerRegistry:
-    """Resolve explicitly selected provider plugins on demand."""
+    """Resolve only explicitly selected providers, failing closed on errors."""
 
     def __init__(self) -> None:
         self._diagnostics: list[PluginLoadDiagnostic] = []
 
     def diagnostics(self) -> tuple[PluginLoadDiagnostic, ...]:
-        """Return non-fatal discovery diagnostics from the last listing."""
+        """Return non-fatal diagnostics from the most recent listing."""
         return tuple(self._diagnostics)
 
     def list(self) -> tuple[BrokerDescriptor, ...]:
-        """List discoverable brokers without constructing or connecting them."""
+        """List providers without constructing them or connecting to a broker."""
         self._diagnostics.clear()
         descriptors: list[BrokerDescriptor] = []
         seen: set[str] = set()
@@ -57,18 +52,18 @@ class BrokerRegistry:
                 )
                 continue
             seen.add(broker_id)
-            capabilities = getattr(cls, "capabilities", frozenset())
             descriptors.append(
                 BrokerDescriptor(
                     broker_id=broker_id,
                     api_version=cls.api_version,
-                    capabilities=tuple(sorted(str(value) for value in capabilities)),
+                    capabilities=tuple(sorted(cls.capabilities)),
+                    stability=cls.stability,
                 )
             )
         return tuple(descriptors)
 
     def resolve(self, broker_id: str) -> BrokerPlugin:
-        """Load one explicitly selected provider, failing closed on errors."""
+        """Load and instantiate one explicitly selected provider."""
         cls = resolve_broker_plugin(broker_id)
         try:
             plugin = cls()
@@ -76,7 +71,7 @@ class BrokerRegistry:
             raise JobConfigurationError(
                 f"Failed to initialize broker {broker_id!r} ({type(exc).__name__})"
             ) from exc
-        return plugin
+        return cast(BrokerPlugin, plugin)
 
     def validate(
         self,
@@ -85,7 +80,7 @@ class BrokerRegistry:
         *,
         check_connectivity: bool = False,
     ) -> BrokerPlugin:
-        """Resolve and delegate provider-owned config validation."""
+        """Resolve a provider and delegate its config validation."""
         plugin = self.resolve(broker_id)
         try:
             plugin.validate_config(
@@ -101,37 +96,4 @@ class BrokerRegistry:
         return plugin
 
 
-def rebuild_cancellation_checker(
-    value: Mapping[str, Any] | CancellationSpec | None,
-) -> CancellationChecker | None:
-    """Rebuild a checker in a Ray worker from JSON-safe config.
-
-    This helper is intentionally fail-open: a missing or unavailable broker
-    must not change ordinary training into a failed training run.  The error
-    is logged with the broker and job identity, while secrets remain in the
-    provider-owned config boundary.
-    """
-    if value is None:
-        return None
-    try:
-        spec = (
-            value
-            if isinstance(value, CancellationSpec)
-            else CancellationSpec.from_mapping(value)
-        )
-        plugin = BrokerRegistry().resolve(spec.broker_id)
-        return plugin.create_cancellation_checker(spec)
-    except Exception:
-        broker_id = getattr(value, "broker_id", None)
-        if isinstance(value, Mapping):
-            broker_id = value.get("broker_id", broker_id)
-        job_id = getattr(value, "job_id", None)
-        if isinstance(value, Mapping):
-            job_id = value.get("job_id", job_id)
-        logger.warning(
-            "Unable to rebuild cancellation checker: broker=%s job_id=%s",
-            broker_id,
-            job_id,
-            exc_info=True,
-        )
-        return None
+__all__ = ["BrokerDescriptor", "BrokerRegistry"]
