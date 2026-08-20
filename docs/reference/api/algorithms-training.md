@@ -589,6 +589,9 @@ documentation for every public stability tier.
 ```{autofunction} tributo.training.job_submitter.submit_training_job
 ```
 
+```{autofunction} tributo.training.job_submitter.submit_training_job_with_identity
+```
+
 ```{autofunction} tributo.training.job_submitter.submit_training_job_with_retry
 ```
 
@@ -707,4 +710,7 @@ documentation for every public stability tier.
 ```
 
 ```{autofunction} tributo.training.xgboost_trainer.run_training_from_json
+```
+
+```{autofunction} tributo.training.xgboost_trainer.run_training_result_with_config
 ```

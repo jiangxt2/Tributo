@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import importlib
 import json
 import runpy
@@ -126,6 +127,23 @@ def test_generated_public_api_reference_covers_source_inventory() -> None:
         for page in public_api_generator.expected_pages(inventory).values()
     )
     assert check_pages(inventory) == []
+
+
+def test_public_api_inventory_classifies_exceptions_by_base_class() -> None:
+    tree = ast.parse(
+        """class BrokerError:
+    pass
+
+class ActualError(Exception):
+    pass
+"""
+    )
+    classes = [node for node in tree.body if isinstance(node, ast.ClassDef)]
+
+    assert [public_api_generator._is_exception_class(node) for node in classes] == [
+        False,
+        True,
+    ]
 
 
 def test_api_reference_validation_reuses_source_inventory(

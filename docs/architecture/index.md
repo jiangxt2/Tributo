@@ -18,4 +18,5 @@ benchmark-protocol
 version-policy
 decision-log
 ../adr/001-data-and-bundle-contracts
+../adr/002-broker-plugin-boundary
 ```

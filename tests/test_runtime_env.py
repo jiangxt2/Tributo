@@ -48,3 +48,13 @@ def test_runtime_env_debug_log_never_exposes_environment_values(
     assert "PYTHONPATH" not in runtime_env["env_vars"]
     assert profile_payload not in caplog.text
     assert "TRIBUTO_STORAGE_PROFILE_MODEL" in caplog.text
+
+
+def test_default_runtime_env_does_not_add_extension_dependencies(tmp_path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='test'\n", encoding="utf-8"
+    )
+    (tmp_path / "tributo").mkdir()
+    runtime_env = build_runtime_env(project_root=tmp_path)
+    assert runtime_env["py_modules"] == [str(tmp_path / "tributo")]
+    assert "pip" not in runtime_env

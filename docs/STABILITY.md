@@ -27,6 +27,7 @@ This page provides module-level guidance and deprecation notes.
 | `tributo.config` — `AlgorithmExecutionConfig` and nested algorithm execution models | `alpha` | Strict JSON envelope shared by local Ray and Kubernetes-hosted Ray execution |
 | `tributo.job` — `TributoClient` | `stable` | Primary Ray Jobs client |
 | `tributo.job` — `RayJob` | `stable` annotation with runtime deprecation warning | Use `TributoClient`; the annotation and warning conflict is documented without changing the public contract in this documentation update |
+| `tributo.ray_jobs` | `alpha` | Workload-neutral submission identity, ambiguous-submit reconciliation, status, logs, and stop helpers |
 | `tributo.exceptions` — core exceptions | `stable` | ``TributoError`` and 16 common subtypes |
 | `tributo.exceptions` — `ResultMaterializationError` | `alpha` | Credential-safe lazy inference action failure |
 | `tributo.exceptions` — Bundle/Plugin exceptions | `beta` | ``BundleExportError``, ``BundleCommitBusyError``, ``AliasConflict``, ``UnsupportedArtifactFormat``, ``PostPublishCallbackError``, ``PluginLoadIssue`` |
@@ -204,6 +205,8 @@ from the legacy setup-only propagation rule.
 | `tributo.integrations.model_importers.*` | `alpha` | Canonical ModelImporter protocol/registry plus explicit MLflow and typed artifact-to-Bundle implementations |
 | `tributo.integrations.sinks.parquet` | `alpha` | Parquet inference ResultSink adapter |
 | `tributo.integrations.sinks.lance` | `alpha` | Generic Lance inference ResultSink adapter |
+| `tributo.integrations.broker` | `alpha` | Minimal transport-neutral Broker API v1; transport implementations and consume loops are external |
+| `tributo.integrations.broker_registry` | `alpha` | Lazy broker discovery and explicit provider resolution |
 
 ### Inference (tributo.inference.*)
 

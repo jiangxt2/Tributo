@@ -26,8 +26,7 @@ documentation for every public stability tier.
 ```{autoexception} tributo._common.dependencies.DependencyUnavailableError
 ```
 
-```{autoclass} tributo._common.dependencies.MissingOptionalDependency
-:no-members:
+```{autoexception} tributo._common.dependencies.MissingOptionalDependency
 ```
 
 ```{autofunction} tributo._common.dependencies.probe_dependency
@@ -73,8 +72,7 @@ documentation for every public stability tier.
 
 ## `tributo.exceptions`
 
-```{autoclass} tributo.exceptions.AliasConflict
-:no-members:
+```{autoexception} tributo.exceptions.AliasConflict
 ```
 
 ```{autoexception} tributo.exceptions.ArtifactCorruptedError
@@ -131,8 +129,7 @@ documentation for every public stability tier.
 ```{autoexception} tributo.exceptions.ModelSchemaMismatchError
 ```
 
-```{autoclass} tributo.exceptions.PluginLoadIssue
-:no-members:
+```{autoexception} tributo.exceptions.PluginLoadIssue
 ```
 
 ```{autoexception} tributo.exceptions.PostPublishCallbackError
@@ -159,8 +156,7 @@ documentation for every public stability tier.
 ```{autoexception} tributo.TributoError
 ```
 
-```{autoclass} tributo.exceptions.UnsupportedArtifactFormat
-:no-members:
+```{autoexception} tributo.exceptions.UnsupportedArtifactFormat
 ```
 
 
@@ -172,4 +168,23 @@ documentation for every public stability tier.
 
 ```{autoclass} tributo.TributoClient
 :no-members:
+```
+
+
+## `tributo.ray_jobs`
+
+```{autoclass} tributo.ray_jobs.RayJobSubmission
+:no-members:
+```
+
+```{autofunction} tributo.ray_jobs.get_ray_job_logs
+```
+
+```{autofunction} tributo.ray_jobs.get_ray_job_status
+```
+
+```{autofunction} tributo.ray_jobs.stop_ray_job
+```
+
+```{autofunction} tributo.ray_jobs.submit_ray_job
 ```

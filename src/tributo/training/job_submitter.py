@@ -6,7 +6,6 @@ remain owned by the cluster image or an explicit Ray runtime environment.
 
 from __future__ import annotations
 
-import logging
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -20,13 +19,19 @@ from tributo._common.retry import retry_with_exponential_backoff
 from tributo._common.submission_id import generate_submission_id
 from tributo.algorithms.api import EnvironmentSpec
 from tributo.algorithms.api.artifacts import AlgorithmArtifact, ImageProfile
+from tributo.ray_jobs import RayJobSubmission, _submit_ray_job_with_client
 from tributo.util.annotations import PublicAPI
 
-logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT = 180
 JobAttemptStatus = Literal["PENDING", "RUNNING", "SUCCEEDED", "FAILED", "STOPPED"]
 TerminalJobStatus = Literal["SUCCEEDED", "FAILED", "STOPPED"]
-_RESERVED_ENV_KEYS = frozenset({"TRIBUTO_RUN_ID", "TRIBUTO_ATTEMPT_ID"})
+_RESERVED_ENV_KEYS = frozenset(
+    {
+        "TRIBUTO_RUN_ID",
+        "TRIBUTO_ATTEMPT_ID",
+        "TRIBUTO_SUBMISSION_ID",
+    }
+)
 
 
 def _resolve_algorithm_dependencies(
@@ -49,7 +54,7 @@ class JobAttempt(BaseModel):
     run_id: str = Field(..., min_length=1)
     attempt_id: str = Field(..., min_length=1)
     submission_id: str = Field(..., min_length=1)
-    job_id: str = Field(..., min_length=1)
+    ray_job_id: str | None = Field(default=None, min_length=1)
     attempt_number: int = Field(..., ge=1)
     status: JobAttemptStatus
     retryable: bool = False
@@ -63,7 +68,8 @@ class TrainingJobResult(BaseModel):
 
     run_id: str = Field(..., min_length=1)
     bundle_id: str = Field(..., min_length=1)
-    job_id: str = Field(..., min_length=1)
+    submission_id: str = Field(..., min_length=1)
+    ray_job_id: str | None = Field(default=None, min_length=1)
     status: TerminalJobStatus
     logs: str = ""
     attempts: tuple[JobAttempt, ...] = ()
@@ -106,35 +112,21 @@ def _submit_training_job_attempt(
     runtime_env: dict[str, Any],
     run_id: str,
     attempt_id: str,
+    submission_id: str,
     metadata: dict[str, str] | None = None,
-) -> tuple[str, str]:
-    """Submit one stable attempt and reconcile ambiguous server responses."""
-    submission_id = generate_submission_id("train", run_id, attempt_id)
-    try:
-        job_id = client.submit_job(
-            entrypoint=entrypoint,
-            runtime_env=runtime_env,
-            metadata=metadata,
-            submission_id=submission_id,
-        )
-    except Exception as exc:
-        # The request may have reached Ray before the client observed an
-        # error.  Query the deterministic submission ID before considering a
-        # retry; inventing another ID here could run the same attempt twice.
-        try:
-            status = client.get_job_status(submission_id)
-        except Exception as query_exc:
-            raise exc from query_exc
-        if status is None:
-            raise exc from None
-        logger.warning(
-            "Reconciled submission %s after ambiguous error (status=%s)",
-            submission_id,
-            _status_name(status),
-        )
-        return submission_id, submission_id
-    logger.info("Submitted training job %s: %s", job_id, entrypoint)
-    return str(job_id), submission_id
+    request_digest: str | None = None,
+) -> RayJobSubmission:
+    """Submit one stable attempt through the workload-neutral Core helper."""
+    return _submit_ray_job_with_client(
+        client,
+        entrypoint=entrypoint,
+        runtime_env=runtime_env,
+        run_id=run_id,
+        attempt_id=attempt_id,
+        submission_id=submission_id,
+        metadata=metadata,
+        request_digest=request_digest,
+    )
 
 
 @PublicAPI(stability="beta")
@@ -152,6 +144,7 @@ def submit_training_job(
     image_profile: ImageProfile | None = None,
     declared_dependencies: tuple[str, ...] = (),
     environment: EnvironmentSpec | None = None,
+    request_digest: str | None = None,
 ) -> str:
     """Submit a training job via the Ray Jobs API.
 
@@ -178,21 +171,62 @@ def submit_training_job(
         declared_dependencies: Additional PEP 508 constraints to preflight.
         environment: Optional formal or ``from_sklearn()`` EnvironmentSpec;
             its dependencies are merged into the same preflight.
+        request_digest: Optional credential-free request digest stored only as
+            Ray submission metadata.
 
     Returns:
-        Submitted job ID on success.
+        Deterministic Ray Jobs submission identity on success.
 
     Raises:
         RuntimeError: Submission failed.
     """
+    return submit_training_job_with_identity(
+        entrypoint,
+        dashboard_url=dashboard_url,
+        env_vars=env_vars,
+        project_root=project_root,
+        extra_excludes=extra_excludes,
+        run_id=run_id,
+        attempt_id=attempt_id,
+        metadata=metadata,
+        algorithm_artifact=algorithm_artifact,
+        image_profile=image_profile,
+        declared_dependencies=declared_dependencies,
+        environment=environment,
+        request_digest=request_digest,
+    ).submission_id
+
+
+@PublicAPI(stability="alpha")
+def submit_training_job_with_identity(
+    entrypoint: str,
+    *,
+    dashboard_url: str = DEFAULT_DASHBOARD_URL,
+    env_vars: dict[str, str] | None = None,
+    project_root: Path | None = None,
+    extra_excludes: list[str] | None = None,
+    run_id: str | None = None,
+    attempt_id: str | None = None,
+    metadata: dict[str, str] | None = None,
+    algorithm_artifact: AlgorithmArtifact | None = None,
+    image_profile: ImageProfile | None = None,
+    declared_dependencies: tuple[str, ...] = (),
+    environment: EnvironmentSpec | None = None,
+    request_digest: str | None = None,
+) -> RayJobSubmission:
+    """Submit one attempt and return workload-neutral Ray Jobs identity."""
     resolved_run_id = _resolve_run_id(entrypoint, env_vars, run_id)
     resolved_attempt_id = attempt_id or "attempt-1"
+    submission_id = generate_submission_id(
+        "train", resolved_run_id, resolved_attempt_id
+    )
     _validate_metadata(metadata)
     job_env_vars = dict(env_vars or {})
     job_env_vars.update(
         {
             "TRIBUTO_RUN_ID": resolved_run_id,
             "TRIBUTO_ATTEMPT_ID": resolved_attempt_id,
+            "TRIBUTO_SUBMISSION_ID": submission_id,
         }
     )
     runtime_env = build_runtime_env(
@@ -208,15 +242,16 @@ def submit_training_job(
     )
 
     client = _get_submission_client(dashboard_url)
-    job_id, _submission_id = _submit_training_job_attempt(
+    return _submit_training_job_attempt(
         client,
         entrypoint=entrypoint,
         runtime_env=runtime_env,
         run_id=resolved_run_id,
         attempt_id=resolved_attempt_id,
+        submission_id=submission_id,
         metadata=metadata,
+        request_digest=request_digest,
     )
-    return job_id
 
 
 @PublicAPI(stability="beta")
@@ -237,6 +272,7 @@ def submit_training_job_with_retry(
     image_profile: ImageProfile | None = None,
     declared_dependencies: tuple[str, ...] = (),
     environment: EnvironmentSpec | None = None,
+    request_digest: str | None = None,
 ) -> TrainingJobResult:
     """Submit, reconcile and optionally retry a training run.
 
@@ -268,8 +304,10 @@ def submit_training_job_with_retry(
 
     for attempt_number in range(1, max_attempts + 1):
         attempt_id = f"attempt-{attempt_number}"
+        submission_id = generate_submission_id("train", resolved_run_id, attempt_id)
         attempt_env_vars = dict(job_env_vars)
         attempt_env_vars["TRIBUTO_ATTEMPT_ID"] = attempt_id
+        attempt_env_vars["TRIBUTO_SUBMISSION_ID"] = submission_id
         runtime_env = build_runtime_env(
             project_root=project_root,
             env_vars=attempt_env_vars,
@@ -281,17 +319,19 @@ def submit_training_job_with_retry(
                 environment,
             ),
         )
-        job_id, submission_id = _submit_training_job_attempt(
+        submission = _submit_training_job_attempt(
             client,
             entrypoint=entrypoint,
             runtime_env=runtime_env,
             run_id=resolved_run_id,
             attempt_id=attempt_id,
+            submission_id=submission_id,
             metadata=metadata,
+            request_digest=request_digest,
         )
         last_result = wait_for_job(
             client,
-            job_id,
+            submission.submission_id,
             timeout=timeout,
             poll_interval=poll_interval,
         )
@@ -307,8 +347,8 @@ def submit_training_job_with_retry(
             JobAttempt(
                 run_id=resolved_run_id,
                 attempt_id=attempt_id,
-                submission_id=submission_id,
-                job_id=job_id,
+                submission_id=submission.submission_id,
+                ray_job_id=submission.ray_job_id,
                 attempt_number=attempt_number,
                 status=status_name,
                 retryable=retryable,
@@ -325,7 +365,8 @@ def submit_training_job_with_retry(
     return TrainingJobResult(
         run_id=resolved_run_id,
         bundle_id=bundle_id_for_request(resolved_run_id),
-        job_id=attempts[-1].job_id,
+        submission_id=attempts[-1].submission_id,
+        ray_job_id=attempts[-1].ray_job_id,
         status=cast(TerminalJobStatus, final_status),
         logs=str(last_result.get("logs", "")),
         attempts=tuple(attempts),
@@ -360,7 +401,8 @@ def wait_for_job(
 
     Args:
         client: Ray Jobs API client.
-        job_id: Job ID to wait for.
+        job_id: Ray Jobs submission identity to wait for. The parameter name
+            is retained for compatibility.
         timeout: Maximum wait time in seconds.
         poll_interval: Polling interval in seconds.
 

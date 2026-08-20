@@ -18,6 +18,7 @@ from tributo._common.retry import retry_with_exponential_backoff
 from tributo._common.submission_id import generate_submission_id
 from tributo.inference.contracts import InferenceRequest, ResolvedInference
 from tributo.inference.resolver import InferenceResolver
+from tributo.ray_jobs import RayJobSubmission, _submit_ray_job_with_client
 from tributo.util.annotations import PublicAPI
 
 logger = logging.getLogger(__name__)
@@ -52,7 +53,7 @@ class InferenceJobAttempt(BaseModel):
     run_id: str = Field(min_length=1)
     attempt_id: str = Field(min_length=1)
     submission_id: str = Field(min_length=1)
-    job_id: str = Field(min_length=1)
+    ray_job_id: str | None = Field(default=None, min_length=1)
     attempt_number: int = Field(ge=1)
     status: InferenceJobStatus
     retryable: bool = False
@@ -69,7 +70,8 @@ class InferenceJobResult(BaseModel):
     )
 
     run_id: str = Field(min_length=1)
-    job_id: str = Field(min_length=1)
+    submission_id: str = Field(min_length=1)
+    ray_job_id: str | None = Field(default=None, min_length=1)
     status: TerminalInferenceJobStatus
     logs: str = ""
     attempts: tuple[InferenceJobAttempt, ...] = ()
@@ -105,9 +107,7 @@ def submit_inference_job(
     resolved_run_id = run_id or generate_submission_id(
         "infer-run", config_path, str(sorted((env_vars or {}).items()))
     )
-    submission_id = generate_submission_id(
-        "infer", resolved_run_id, attempt_id, config_path
-    )
+    submission_id = generate_submission_id("infer", resolved_run_id, attempt_id)
     job_env = dict(env_vars or {})
     job_env.update(
         {
@@ -125,14 +125,20 @@ def submit_inference_job(
         f"python -m tributo.inference.batch_job --config {shlex.quote(config_path)}"
     )
     client = _get_submission_client(dashboard_url)
-    job_id = _submit_attempt(
+    submission = _submit_attempt(
         client,
         entrypoint=entrypoint,
         runtime_env=runtime_env,
+        run_id=resolved_run_id,
+        attempt_id=attempt_id,
         submission_id=submission_id,
     )
-    logger.info("Submitted inference job %s: config=%s", job_id, config_path)
-    return job_id
+    logger.info(
+        "Submitted inference job %s: config=%s",
+        submission.submission_id,
+        config_path,
+    )
+    return submission.submission_id
 
 
 @PublicAPI(stability="alpha")
@@ -144,17 +150,35 @@ def submit_inference_request(
     project_root: Path | None = None,
     resolver: InferenceResolver | None = None,
 ) -> str:
-    """Resolve once, serialize the credential-free plan, and submit it."""
+    """Resolve once and return the accepted Ray Jobs submission identity."""
+    return submit_inference_request_with_identity(
+        request,
+        dashboard_url=dashboard_url,
+        env_vars=env_vars,
+        project_root=project_root,
+        resolver=resolver,
+    ).submission_id
+
+
+@PublicAPI(stability="alpha")
+def submit_inference_request_with_identity(
+    request: InferenceRequest,
+    *,
+    dashboard_url: str = DEFAULT_DASHBOARD_URL,
+    env_vars: dict[str, str] | None = None,
+    project_root: Path | None = None,
+    resolver: InferenceResolver | None = None,
+) -> RayJobSubmission:
+    """Resolve once, freeze the plan, and return complete submission identity."""
     _validate_env_vars(env_vars)
     plan = (resolver or InferenceResolver()).resolve(request)
     client = _get_submission_client(dashboard_url)
-    job_id, _ = _submit_resolved_plan(
+    return _submit_resolved_plan(
         client,
         plan=plan,
         env_vars=env_vars,
         project_root=project_root,
     )
-    return job_id
 
 
 @PublicAPI(stability="alpha")
@@ -165,16 +189,32 @@ def submit_resolved_inference(
     env_vars: dict[str, str] | None = None,
     project_root: Path | None = None,
 ) -> str:
-    """Submit an already-frozen plan without re-resolving external aliases."""
+    """Submit an already-frozen plan and return its submission identity."""
+    return submit_resolved_inference_with_identity(
+        plan,
+        dashboard_url=dashboard_url,
+        env_vars=env_vars,
+        project_root=project_root,
+    ).submission_id
+
+
+@PublicAPI(stability="alpha")
+def submit_resolved_inference_with_identity(
+    plan: ResolvedInference,
+    *,
+    dashboard_url: str = DEFAULT_DASHBOARD_URL,
+    env_vars: dict[str, str] | None = None,
+    project_root: Path | None = None,
+) -> RayJobSubmission:
+    """Submit a frozen plan and return workload-neutral Ray Jobs identity."""
     _validate_env_vars(env_vars)
     client = _get_submission_client(dashboard_url)
-    job_id, _ = _submit_resolved_plan(
+    return _submit_resolved_plan(
         client,
         plan=plan,
         env_vars=env_vars,
         project_root=project_root,
     )
-    return job_id
 
 
 @PublicAPI(stability="alpha")
@@ -201,7 +241,7 @@ def submit_inference_request_with_retry(
 
     for attempt_number in range(1, max_attempts + 1):
         plan = _plan_for_attempt(first_plan, attempt_number)
-        job_id, submission_id = _submit_resolved_plan(
+        submission = _submit_resolved_plan(
             client,
             plan=plan,
             env_vars=env_vars,
@@ -209,7 +249,7 @@ def submit_inference_request_with_retry(
         )
         last = wait_for_job(
             client,
-            job_id,
+            submission.submission_id,
             timeout=timeout,
             poll_interval=poll_interval,
         )
@@ -225,8 +265,8 @@ def submit_inference_request_with_retry(
             InferenceJobAttempt(
                 run_id=plan.run_id,
                 attempt_id=plan.attempt_id,
-                submission_id=submission_id,
-                job_id=job_id,
+                submission_id=submission.submission_id,
+                ray_job_id=submission.ray_job_id,
                 attempt_number=attempt_number,
                 status=status,
                 retryable=retryable,
@@ -240,7 +280,8 @@ def submit_inference_request_with_retry(
     final_status = cast(TerminalInferenceJobStatus, attempts[-1].status)
     return InferenceJobResult(
         run_id=first_plan.run_id,
-        job_id=attempts[-1].job_id,
+        submission_id=attempts[-1].submission_id,
+        ray_job_id=attempts[-1].ray_job_id,
         status=final_status,
         logs=str(last.get("logs", "")),
         attempts=tuple(attempts),
@@ -254,7 +295,7 @@ def _submit_resolved_plan(
     plan: ResolvedInference,
     env_vars: dict[str, str] | None,
     project_root: Path | None,
-) -> tuple[str, str]:
+) -> RayJobSubmission:
     plan = ResolvedInference.model_validate(plan.model_dump(mode="python"))
     encoded_plan = base64.urlsafe_b64encode(
         plan.model_dump_json().encode("utf-8")
@@ -281,22 +322,25 @@ def _submit_resolved_plan(
         project_root=project_root,
         env_vars=job_env,
     )
-    job_id = _submit_attempt(
+    submission = _submit_attempt(
         client,
         entrypoint=(
             "python -m tributo.inference.batch_job "
             "--resolved-plan-env TRIBUTO_INFERENCE_PLAN_B64"
         ),
         runtime_env=runtime_env,
+        run_id=plan.run_id,
+        attempt_id=plan.attempt_id,
         submission_id=plan.submission_id,
+        request_digest=plan.plan_digest,
     )
     logger.info(
-        "Submitted inference attempt %s for run %s as Ray job %s",
+        "Submitted inference attempt %s for run %s as submission %s",
         plan.attempt_id,
         plan.run_id,
-        job_id,
+        submission.submission_id,
     )
-    return job_id, plan.submission_id
+    return submission
 
 
 def _submit_attempt(
@@ -304,38 +348,27 @@ def _submit_attempt(
     *,
     entrypoint: str,
     runtime_env: dict[str, Any],
+    run_id: str,
+    attempt_id: str,
     submission_id: str,
-) -> str:
-    try:
-        return str(
-            client.submit_job(
-                entrypoint=entrypoint,
-                runtime_env=runtime_env,
-                submission_id=submission_id,
-            )
-        )
-    except Exception as exc:
-        try:
-            status = client.get_job_status(submission_id)
-        except Exception as query_exc:
-            raise exc from query_exc
-        if status is None:
-            raise exc from None
-        logger.warning(
-            "Reconciled inference submission %s after ambiguous error (status=%s)",
-            submission_id,
-            _ray_status_name(status),
-        )
-        return submission_id
+    request_digest: str | None = None,
+) -> RayJobSubmission:
+    return _submit_ray_job_with_client(
+        client,
+        entrypoint=entrypoint,
+        runtime_env=runtime_env,
+        run_id=run_id,
+        attempt_id=attempt_id,
+        submission_id=submission_id,
+        request_digest=request_digest,
+    )
 
 
 def _plan_for_attempt(
     first_plan: ResolvedInference, attempt_number: int
 ) -> ResolvedInference:
     attempt_id = f"attempt-{attempt_number}"
-    submission_id = generate_submission_id(
-        "infer", first_plan.run_id, attempt_id, first_plan.plan_digest
-    )
+    submission_id = generate_submission_id("infer", first_plan.run_id, attempt_id)
     return first_plan.model_copy(
         update={"attempt_id": attempt_id, "submission_id": submission_id}
     )
@@ -408,7 +441,9 @@ __all__ = [
     "map_ray_job_status",
     "submit_inference_job",
     "submit_inference_request",
+    "submit_inference_request_with_identity",
     "submit_inference_request_with_retry",
     "submit_resolved_inference",
+    "submit_resolved_inference_with_identity",
     "wait_for_job",
 ]

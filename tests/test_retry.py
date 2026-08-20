@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import tributo.training.job_submitter as training_job_submitter
 from tributo._common.retry import retry_with_exponential_backoff
 
 
@@ -89,19 +90,17 @@ class TestJobRunnerRetryIntegration:
         client_mock = MagicMock()
         client_mock.submit_job.return_value = "job-456"
 
-        import tributo.training.job_submitter as tjs
-
         with patch.object(
-            tjs,
+            training_job_submitter,
             "JobSubmissionClient",
             side_effect=[
                 ConnectionError("timeout"),
                 client_mock,
             ],
         ) as mock_jsc:
-            job_id = tjs.submit_training_job("python train.py")
+            job_id = training_job_submitter.submit_training_job("python train.py")
 
-        assert job_id == "job-456"
+        assert job_id.startswith("tributo-train-")
         assert mock_jsc.call_count == 2
 
 

@@ -107,6 +107,19 @@ def _decorator_stability(decorator: ast.expr) -> str | None:
     )
 
 
+def _is_exception_class(node: ast.ClassDef) -> bool:
+    """Classify exception types from their bases, not their domain name."""
+    base_names = [
+        base.id
+        if isinstance(base, ast.Name)
+        else base.attr
+        if isinstance(base, ast.Attribute)
+        else ""
+        for base in node.bases
+    ]
+    return any(name.endswith(("Error", "Exception")) for name in base_names)
+
+
 def build_inventory(source_root: Path = SOURCE_ROOT) -> tuple[PublicSymbol, ...]:
     """Return every top-level source object annotated with ``@PublicAPI``."""
     symbols: list[PublicSymbol] = []
@@ -135,11 +148,7 @@ def build_inventory(source_root: Path = SOURCE_ROOT) -> tuple[PublicSymbol, ...]
                     f"{path}:{node.lineno}: unsupported stability {stability!r}"
                 )
             if isinstance(node, ast.ClassDef):
-                kind = (
-                    "exception"
-                    if node.name.endswith(("Error", "Exception"))
-                    else "class"
-                )
+                kind = "exception" if _is_exception_class(node) else "class"
             else:
                 kind = "function"
             symbols.append(
@@ -164,7 +173,7 @@ def component_for(symbol: PublicSymbol) -> str:
     """Route a public symbol to one user-facing component page."""
     parts = symbol.module.split(".")
     package = parts[1] if len(parts) > 1 else "core"
-    if package in {"config", "exceptions", "job", "_common"}:
+    if package in {"config", "exceptions", "job", "ray_jobs", "_common"}:
         return "core"
     if package in {"data", "streaming"}:
         return "data"

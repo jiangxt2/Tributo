@@ -23,6 +23,7 @@ from tributo.training.xgboost_trainer import (
     _managed_resume_checkpoint,
     _merge_xgb_eval_results,
     _populate_xgb_eval_metrics,
+    run_training_result_with_config,
 )
 
 
@@ -67,6 +68,29 @@ def test_managed_resume_checkpoint_cleans_directory_on_failure(tmp_path: Path) -
             raise OSError("report failed")
 
     assert not checkpoint_dir.exists()
+
+
+def test_in_process_training_entrypoint_returns_training_result(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "tributo.training.xgboost_trainer.run_training_with_config",
+        lambda _config: {
+            "model_uri": "file:///tmp/bundle",
+            "bundle_uri": "file:///tmp/bundle",
+            "metrics": {"accuracy": 0.9},
+            "legacy_artifact_uri": None,
+            "training_status": "succeeded",
+            "bundle_status": "succeeded",
+            "hook_status": "not_configured",
+            "execution_id": "execution-1",
+            "status": "succeeded",
+        },
+    )
+
+    result = run_training_result_with_config({})
+
+    assert result.training_status == "succeeded"
+    assert result.bundle_uri == "file:///tmp/bundle"
+    assert result.execution_id == "execution-1"
 
 
 class TestS3Config:

@@ -40,7 +40,9 @@ from tributo.inference.contracts import (
 from tributo.inference.job_runner import (
     submit_inference_job,
     submit_inference_request,
+    submit_inference_request_with_identity,
     submit_resolved_inference,
+    submit_resolved_inference_with_identity,
 )
 from tributo.inference.pipeline import (
     InferenceConfig,
@@ -72,5 +74,7 @@ __all__ = [
     "XGBoostONNXPredictor",
     "submit_inference_job",
     "submit_inference_request",
+    "submit_inference_request_with_identity",
     "submit_resolved_inference",
+    "submit_resolved_inference_with_identity",
 ]
