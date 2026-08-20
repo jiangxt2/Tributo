@@ -38,21 +38,28 @@ class ExplainabilityPlanner:
 
     @staticmethod
     def preflight_limits(
-        request: ExplainabilityRequest, *, input_rows: int
+        request: ExplainabilityRequest,
+        *,
+        input_rows: int,
+        output_count: int,
     ) -> dict[str, int | float]:
         """Reject a request whose known upper bound exceeds its byte budget."""
+        if output_count < 1:
+            raise ValueError("output_count must be positive")
         limit = request.limits.max_explanation_bytes
         feature_count = min(
             len(request.feature_columns) or request.limits.max_features or 1,
             request.limits.max_features or len(request.feature_columns) or 1,
         )
-        output_count = 1 if request.output_target in {"raw", "raw_margin"} else 2
+        effective_output_count = (
+            1 if request.output_selection == "predicted" else output_count
+        )
         background_rows = (
             request.limits.max_background_rows
             or (request.reference.rows if request.reference is not None else None)
             or 1
         )
-        estimated_rows = input_rows * feature_count * output_count
+        estimated_rows = input_rows * feature_count * effective_output_count
         estimated_bytes = estimated_rows * 512
         if limit is not None and estimated_bytes > limit:
             raise ValueError(
@@ -70,6 +77,7 @@ class ExplainabilityPlanner:
         return {
             "estimated_output_rows": estimated_rows,
             "estimated_output_bytes": estimated_bytes,
+            "estimated_output_count": effective_output_count,
             "estimated_background_rows": background_rows,
             "batch_size": request.resource_policy.batch_size,
             "concurrency": request.resource_policy.concurrency,
@@ -79,6 +87,8 @@ class ExplainabilityPlanner:
         self,
         context: ExplainableModelContext,
         request: ExplainabilityRequest,
+        *,
+        output_count: int,
     ) -> ExplainabilityPlan:
         adapter_id = f"{request.explainer}-v1"
         adapter = self._registry.get(adapter_id)
@@ -101,6 +111,7 @@ class ExplainabilityPlanner:
             resource_requirements=self.preflight_limits(
                 request,
                 input_rows=0,
+                output_count=output_count,
             ),
         )
 

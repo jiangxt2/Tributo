@@ -247,6 +247,7 @@ class ExplainabilityRequest(_FrozenContract):
     backend: Literal["auto", "tree", "model_agnostic", "deep", "gradient"] = "auto"
     feature_view: Literal["raw", "transformed", "model_input"] = "raw"
     output_target: str = Field(default="model_output", min_length=1)
+    output_selection: Literal["all", "predicted"] = "all"
     label_column: str | None = Field(default=None, min_length=1)
     allow_approximate: bool = False
     reference: ReferenceBinding | None = None
@@ -358,6 +359,7 @@ class ExplainabilityReceipt(_FrozenContract):
     exactness: Literal["exact", "approximate", "conditional"]
     feature_view: Literal["raw", "transformed", "model_input"]
     output_target: str = Field(min_length=1)
+    output_selection: Literal["all", "predicted"] = "all"
     execution_profile: str = Field(default="batch", min_length=1)
     input_rows: int = Field(default=0, ge=0)
     explanation_rows: int = Field(default=0, ge=0)
