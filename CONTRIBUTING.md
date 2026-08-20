@@ -40,6 +40,33 @@ environment and do not install tools implicitly.
 - Follow the PR template (`.github/PULL_REQUEST_TEMPLATE.md`).
 - All checks (lint, tests) must pass before merge.
 
+## Design proposals
+
+Use the [`design-docs/`](design-docs/) process before implementation when a
+change affects a public API or persisted contract, crosses component ownership
+boundaries, introduces distributed failure or security semantics, adds an
+execution engine or extension point, or requires compatibility and migration
+decisions.
+
+Start with a feature issue that establishes the problem and use cases. Changes
+to the product boundary use a `[SCOPE]` issue as defined by
+[`docs/architecture/product-scope.md`](docs/architecture/product-scope.md).
+Then open a draft pull request containing only a proposal copied from
+[`design-docs/template.md`](design-docs/template.md) and any supporting images.
+Use line comments to review design details and keep unresolved decisions in the
+proposal's open-questions section.
+
+A maintainer must explicitly accept the design before its pull request merges.
+Implement the accepted design in a separate pull request and link both records.
+Acceptance approves the direction; it does not establish that a capability is
+implemented or supported. Update architecture, API, support, and user
+documentation when the behavior and its required evidence are delivered.
+
+A design proposal is normally unnecessary for a contract-preserving bug fix,
+local refactor, test addition, or documentation correction. See
+[`design-docs/README.md`](design-docs/README.md) for the complete lifecycle,
+status rules, review criteria, and document responsibilities.
+
 ## Code Style
 
 We use [ruff](https://docs.astral.sh/ruff/) for linting and formatting. Run
