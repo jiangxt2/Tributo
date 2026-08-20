@@ -1,8 +1,9 @@
 """Ray runtime environment builder.
 
 Ships application code through Ray-managed ``working_dir`` and ``py_modules``.
-Python package dependencies remain owned by the cluster image or an explicit
-Ray runtime environment instead of being merged from unrelated environments.
+Python package dependencies remain owned by the cluster image, trusted runtime
+configuration, or an explicit algorithm artifact instead of being merged from
+unrelated environments.
 """
 
 from __future__ import annotations
@@ -66,6 +67,8 @@ def build_runtime_env(
     project_root: Path | None = None,
     package_name: str = "tributo",
     extra_excludes: list[str] | None = None,
+    extra_py_modules: list[str | Path] | None = None,
+    runtime_pip_packages: list[str] | None = None,
     env_vars: dict[str, str] | None = None,
     pythonpath: str | None = None,
     algorithm_artifact: AlgorithmArtifact | None = None,
@@ -79,13 +82,14 @@ def build_runtime_env(
        older version baked into the image;
     2. ``working_dir`` uploads the project root, providing entrypoint scripts;
 
-    Package dependencies must be installed in the cluster image or supplied by
-    an explicit, preflighted offline Ray runtime environment. When
-    ``algorithm_artifact`` is present, the builder validates the Wheel or
-    Bundle against ``image_profile`` and owns the artifact-related
-    ``working_dir``, ``py_modules``, ``pip``, and ``excludes`` fields. It never
-    derives package paths from the submitting process or combines unrelated
-    ``site-packages`` trees.
+    Package dependencies must be installed in the cluster image, supplied by
+    trusted deployment configuration, or distributed through an explicit,
+    preflighted algorithm artifact. Extension inputs must not be derived from
+    an untrusted task payload. Core copies them without scanning the submitting
+    process or resolving dependencies. When ``algorithm_artifact`` is present,
+    the builder validates the Wheel or Bundle against ``image_profile`` and
+    owns the artifact-related ``working_dir``, ``py_modules``, ``pip``, and
+    ``excludes`` fields.
 
     Args:
         project_root: Project root directory. When ``None``, walks up to find
@@ -93,6 +97,12 @@ def build_runtime_env(
         package_name: Package name to upload for priority override, defaults to
             ``tributo``.
         extra_excludes: Additional directories/files to exclude (glob patterns).
+        extra_py_modules: Trusted extension modules appended after the Tributo
+            Core package in caller-provided order. Paths are converted to
+            strings. Do not populate this from a broker task payload.
+        runtime_pip_packages: Trusted extension requirements copied to Ray's
+            ``pip`` runtime environment. Core does not resolve them. This must
+            not be combined with ``algorithm_artifact``.
         env_vars: Additional environment variables.
         pythonpath: Optional cluster-visible ``PYTHONPATH`` to append to an
             explicitly supplied value. ``None`` leaves ``PYTHONPATH`` untouched.
@@ -109,6 +119,10 @@ def build_runtime_env(
         A dict that can be passed directly to
         ``JobSubmissionClient.submit_job(runtime_env=...)``.
 
+    Raises:
+        ValueError: ``runtime_pip_packages`` and ``algorithm_artifact`` both
+            request ownership of Ray's ``pip`` runtime environment.
+
     Example:
         >>> from tributo._common.runtime_env import build_runtime_env
         >>> runtime_env = build_runtime_env()
@@ -117,6 +131,11 @@ def build_runtime_env(
         ...     runtime_env=runtime_env,
         ... )
     """
+    if runtime_pip_packages and algorithm_artifact is not None:
+        raise ValueError(
+            "runtime_pip_packages cannot be combined with algorithm_artifact"
+        )
+
     if project_root is None:
         try:
             root = find_project_root()
@@ -158,10 +177,15 @@ def build_runtime_env(
     runtime_env: dict[str, Any] = {
         "working_dir": str(root),
         "excludes": excludes,
-        "py_modules": [str(src_pkg)],
+        "py_modules": [
+            str(src_pkg),
+            *(str(module) for module in extra_py_modules or ()),
+        ],
     }
     if merged_env_vars:
         runtime_env["env_vars"] = merged_env_vars
+    if runtime_pip_packages:
+        runtime_env["pip"] = list(runtime_pip_packages)
 
     if algorithm_artifact is None and (
         image_profile is not None or declared_dependencies
@@ -204,9 +228,9 @@ def build_runtime_env(
         runtime_env["env_vars"] = merged_env_vars
 
     logger.debug(
-        "Built runtime_env: working_dir=%s, py_modules=%s, env_var_keys=%s",
-        runtime_env["working_dir"],
-        runtime_env["py_modules"],
+        "Built runtime_env: py_module_count=%d, has_pip=%s, env_var_keys=%s",
+        len(runtime_env["py_modules"]),
+        "pip" in runtime_env,
         sorted(merged_env_vars),
     )
     return runtime_env

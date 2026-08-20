@@ -379,17 +379,22 @@ def test_offline_wheelhouse_requires_image_pip(tmp_path: Path) -> None:
         prepare_algorithm_distribution(artifact, profile)
 
 
-def test_build_runtime_env_combines_tributo_and_code_wheel(tmp_path: Path) -> None:
+def test_build_runtime_env_orders_core_extension_and_code_wheel(
+    tmp_path: Path,
+) -> None:
     wheel = _write_wheel(tmp_path, "demo-algorithm")
     artifact = AlgorithmArtifact(source=str(wheel))
+    extension_module = tmp_path / "execution-driver.whl"
 
     runtime_env = build_runtime_env(
         algorithm_artifact=artifact,
         image_profile=_profile(),
+        extra_py_modules=[extension_module],
     )
 
-    assert len(runtime_env["py_modules"]) == 2
-    assert runtime_env["py_modules"][-1] == str(wheel)
+    assert len(runtime_env["py_modules"]) == 3
+    assert Path(runtime_env["py_modules"][0]).name == "tributo"
+    assert runtime_env["py_modules"][-2:] == [str(extension_module), str(wheel)]
     working_dir = Path(runtime_env["working_dir"])
     assert (working_dir / "pyproject.toml").is_file()
 
