@@ -90,6 +90,26 @@ def _ray_job_id(client: JobSubmissionClient, submission_id: str) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def _reconcile_ambiguous_submission(
+    client: JobSubmissionClient,
+    submission_id: str,
+    request_digest: str | None,
+) -> str | None:
+    """Accept an ambiguous response only for the exact submitted payload."""
+    if request_digest is None:
+        raise RuntimeError(
+            "Ambiguous Ray admission cannot be reconciled without request_digest"
+        )
+    info = client.get_job_info(submission_id)
+    metadata = getattr(info, "metadata", None)
+    if not isinstance(metadata, dict):
+        raise RuntimeError("Ray JobDetails metadata is unavailable for reconciliation")
+    if metadata.get(_REQUEST_DIGEST_METADATA_KEY) != request_digest:
+        raise RuntimeError("Ray JobDetails request_digest mismatch")
+    value = getattr(info, "job_id", None)
+    return value if isinstance(value, str) and value else None
+
+
 def _submit_ray_job_with_client(
     client: JobSubmissionClient,
     *,
@@ -115,6 +135,7 @@ def _submit_ray_job_with_client(
             raise ValueError("request_digest must not be empty")
         job_metadata[_REQUEST_DIGEST_METADATA_KEY] = request_digest
 
+    reconciled_job_id: str | None = None
     try:
         client.submit_job(
             entrypoint=entrypoint,
@@ -132,6 +153,12 @@ def _submit_ray_job_with_client(
             raise submit_error from query_error
         if status is None:
             raise submit_error from None
+        try:
+            reconciled_job_id = _reconcile_ambiguous_submission(
+                client, submission_id, request_digest
+            )
+        except Exception as reconcile_error:
+            raise reconcile_error from submit_error
         logger.warning(
             "Reconciled Ray submission %s after an ambiguous submit response",
             submission_id,
@@ -141,7 +168,11 @@ def _submit_ray_job_with_client(
         run_id=run_id,
         attempt_id=attempt_id,
         submission_id=submission_id,
-        ray_job_id=_ray_job_id(client, submission_id),
+        ray_job_id=(
+            reconciled_job_id
+            if reconciled_job_id is not None
+            else _ray_job_id(client, submission_id)
+        ),
         request_digest=request_digest,
     )
 
@@ -164,6 +195,7 @@ def submit_ray_job(
     entrypoint_num_cpus: float | None = None,
     entrypoint_num_gpus: float | None = None,
     entrypoint_memory: int | None = None,
+    execution_context: Any | None = None,
 ) -> RayJobSubmission:
     """Submit one deterministic Ray Job and reconcile an ambiguous response.
 
@@ -196,13 +228,16 @@ def submit_ray_job(
             "TRIBUTO_SUBMISSION_ID": submission_id,
         }
     )
-    runtime_env = build_runtime_env(
-        project_root=project_root,
-        env_vars=job_env,
-        extra_excludes=extra_excludes,
-        extra_py_modules=extra_py_modules,
-        runtime_pip_packages=runtime_pip_packages,
-    )
+    runtime_env_kwargs: dict[str, Any] = {
+        "project_root": project_root,
+        "env_vars": job_env,
+        "extra_excludes": extra_excludes,
+        "extra_py_modules": extra_py_modules,
+        "runtime_pip_packages": runtime_pip_packages,
+    }
+    if execution_context is not None:
+        runtime_env_kwargs["execution_context"] = execution_context
+    runtime_env = build_runtime_env(**runtime_env_kwargs)
     client = _get_submission_client(dashboard_url)
     return _submit_ray_job_with_client(
         client,

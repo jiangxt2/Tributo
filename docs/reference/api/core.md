@@ -90,6 +90,9 @@ documentation for every public stability tier.
 ```{autoexception} tributo.DataSourceError
 ```
 
+```{autoexception} tributo.exceptions.EmptyDatasetError
+```
+
 ```{autoexception} tributo.exceptions.EmptyInputError
 ```
 

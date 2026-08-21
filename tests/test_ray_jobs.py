@@ -118,7 +118,11 @@ def test_ambiguous_submission_reconciles_by_submission_id() -> None:
     client = MagicMock()
     client.submit_job.side_effect = TimeoutError("response lost")
     client.get_job_status.return_value = JobStatus.RUNNING
-    client.get_job_info.side_effect = LookupError("driver not created")
+    client.get_job_info.return_value = type(
+        "JobInfo",
+        (),
+        {"job_id": "ray-job-1", "metadata": {"tributo.request_digest": "d1"}},
+    )()
 
     with (
         patch("tributo.ray_jobs._get_submission_client", return_value=client),
@@ -132,10 +136,39 @@ def test_ambiguous_submission_reconciles_by_submission_id() -> None:
             "python -m provider.driver",
             operation_namespace="broker",
             run_id="run-1",
+            request_digest="d1",
         )
 
     client.get_job_status.assert_called_once_with(result.submission_id)
-    assert result.ray_job_id is None
+    assert result.ray_job_id == "ray-job-1"
+
+
+@pytest.mark.parametrize("metadata", [None, {}, {"tributo.request_digest": "other"}])
+def test_ambiguous_submission_fails_closed_without_matching_job_metadata(
+    metadata: dict[str, str] | None,
+) -> None:
+    client = MagicMock()
+    client.submit_job.side_effect = TimeoutError("response lost")
+    client.get_job_status.return_value = JobStatus.RUNNING
+    client.get_job_info.return_value = type(
+        "JobInfo", (), {"job_id": "ray-job-1", "metadata": metadata}
+    )()
+
+    with (
+        patch("tributo.ray_jobs._get_submission_client", return_value=client),
+        patch(
+            "tributo.ray_jobs.build_runtime_env",
+            autospec=True,
+            return_value={"env_vars": {}},
+        ),
+        pytest.raises(RuntimeError, match="metadata|request_digest"),
+    ):
+        submit_ray_job(
+            "python -m provider.driver",
+            operation_namespace="broker",
+            run_id="run-1",
+            request_digest="expected",
+        )
 
 
 def test_request_digest_is_optional_metadata_not_submission_identity() -> None:

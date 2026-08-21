@@ -132,6 +132,10 @@ class BrokerRuntime(ABC):
         """Handle one message without applying transport ACK side effects."""
         ...
 
+    def maintain(self) -> None:
+        """Run one bounded provider reconciliation tick while streams are idle."""
+        return None
+
     def close(self) -> None:
         """Close provider resources."""
         self.consumer.close()
