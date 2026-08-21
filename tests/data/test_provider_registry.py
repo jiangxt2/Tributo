@@ -181,6 +181,10 @@ class TestResolveBuiltin:
                 "tributo.doris",
             ),
             (
+                {"type": "sql", "dialect": "hive", "sql": "SELECT 1"},
+                "tributo.hive",
+            ),
+            (
                 {
                     "type": "sql",
                     "dialect": "postgresql",

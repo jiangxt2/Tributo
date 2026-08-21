@@ -45,6 +45,7 @@ _CANONICAL_TYPE_ROUTES: dict[str, str] = {
     "csv": "tributo.csv",
     "sql_clickhouse": "tributo.clickhouse",
     "sql_doris": "tributo.doris",
+    "sql_hive": "tributo.hive",
     "sql_postgresql": "tributo.postgresql",
     "iceberg": "tributo.iceberg",
 }
