@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 from pydantic import ValidationError
@@ -24,6 +25,7 @@ from tributo.training.xgboost_trainer import (
     _merge_xgb_eval_results,
     _populate_xgb_eval_metrics,
     run_training_result_with_config,
+    run_training_with_config,
 )
 
 
@@ -91,6 +93,67 @@ def test_in_process_training_entrypoint_returns_training_result(monkeypatch) -> 
     assert result.training_status == "succeeded"
     assert result.bundle_uri == "file:///tmp/bundle"
     assert result.execution_id == "execution-1"
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        {"type": "s3", "uri": "s3://bucket/train.parquet", "format": "parquet"},
+        {
+            "type": "sql",
+            "dialect": "clickhouse",
+            "host": "clickhouse",
+            "database": "warehouse",
+            "sql": "SELECT * FROM train",
+        },
+    ],
+)
+def test_canonical_training_routes_source_to_canonical_loader(
+    monkeypatch: pytest.MonkeyPatch, source: dict[str, Any]
+) -> None:
+    canonical = MagicMock(return_value=object())
+    legacy = MagicMock(side_effect=AssertionError("legacy loader used"))
+    trainer = MagicMock()
+    trainer.run.return_value = {"status": "succeeded"}
+    monkeypatch.setattr(
+        "tributo.training.data_loader.load_ray_dataset_from_source", canonical
+    )
+    monkeypatch.setattr(
+        "tributo.training.data_loader.load_ray_dataset_from_config", legacy
+    )
+    monkeypatch.setattr(
+        "tributo.training.xgboost_trainer.XGBoostTrainerImpl",
+        MagicMock(return_value=trainer),
+    )
+
+    run_training_with_config({"data": {"source": source}})
+
+    canonical.assert_called_once_with(source)
+    legacy.assert_not_called()
+
+
+def test_legacy_training_still_routes_flat_config_to_legacy_loader(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    canonical = MagicMock(side_effect=AssertionError("canonical loader used"))
+    legacy = MagicMock(return_value=object())
+    trainer = MagicMock()
+    trainer.run.return_value = {"status": "succeeded"}
+    monkeypatch.setattr(
+        "tributo.training.data_loader.load_ray_dataset_from_source", canonical
+    )
+    monkeypatch.setattr(
+        "tributo.training.data_loader.load_ray_dataset_from_config", legacy
+    )
+    monkeypatch.setattr(
+        "tributo.training.xgboost_trainer.XGBoostTrainerImpl",
+        MagicMock(return_value=trainer),
+    )
+
+    run_training_with_config({"data": {"type": "csv", "path": "train.csv"}})
+
+    legacy.assert_called_once()
+    canonical.assert_not_called()
 
 
 class TestS3Config:

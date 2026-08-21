@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
+from tributo.training.lifecycle import TrainingLifecycle
 from tributo.training.xgboost_distributed_evaluation import (
     EvaluationConfig,
     batch_partial,
@@ -291,3 +292,76 @@ def test_training_loop_overrides_rank_local_counts_with_global_dataset_counts() 
     assert returned.metrics["row_count_val"] == 20
     assert returned.metrics["row_count_test"] == 20
     assert returned.metrics["eval_test_rows"] == 20
+
+
+def test_bundle_lifecycle_publishes_json_safe_global_training_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    splits: dict[str, MagicMock] = {}
+    for name, count in {"train": 160, "val": 20, "test": 20}.items():
+        dataset = MagicMock(name=name)
+        dataset.count.return_value = count
+        splits[name] = dataset
+    result = SimpleNamespace(
+        metrics={
+            "row_count_train": 80,
+            "eval_logloss": 0.25,
+            "eval_logloss_history": [0.4, 0.25],
+            "feature_importance": {"feature-a": 0.75},
+            "checkpoint_dir_name": "checkpoint_000001",
+        },
+        checkpoint=MagicMock(),
+    )
+    ray_trainer = MagicMock()
+    ray_trainer.fit.return_value = result
+    trainer = XGBoostTrainerImpl(
+        datasets=splits,
+        config={"ray": {"num_workers": 2}},
+        _progress=MagicMock(),
+    )
+    monkeypatch.setattr(trainer, "setup", lambda: None)
+
+    def mock_bundle_export(
+        _lifecycle: TrainingLifecycle,
+        _checkpoint: object,
+        _bundle_config: object,
+        _summary: dict[str, object],
+        *,
+        run_id: str | None = None,
+    ) -> SimpleNamespace:
+        del run_id
+        return SimpleNamespace(
+            status="succeeded",
+            canonical_uri="s3://bucket/bundles/run-1",
+            execution_id="execution-1",
+            hook_receipts=(),
+        )
+
+    monkeypatch.setattr(TrainingLifecycle, "_export_bundle", mock_bundle_export)
+
+    with (
+        patch(
+            "tributo.training.xgboost_trainer._build_trainer",
+            return_value=ray_trainer,
+        ),
+        patch(
+            "tributo.training.xgboost_distributed_evaluation.evaluate_dataset",
+            return_value={
+                "eval_test_rows": 20,
+                "eval_auc": 0.8,
+                "eval_precision": [0.7, 0.9],
+            },
+        ),
+    ):
+        summary = trainer.run("s3://bucket/bundles")
+
+    metrics = summary["metrics"]
+    assert metrics["row_count_train"] == 160
+    assert metrics["row_count_val"] == 20
+    assert metrics["row_count_test"] == 20
+    assert metrics["eval_test_rows"] == 20
+    assert metrics["eval_auc"] == pytest.approx(0.8)
+    assert metrics["eval_precision"] == [0.7, 0.9]
+    assert metrics["feature_importance"] == {"feature-a": 0.75}
+    assert metrics["checkpoint_dir_name"] == "checkpoint_000001"
+    json.dumps(metrics, allow_nan=False)

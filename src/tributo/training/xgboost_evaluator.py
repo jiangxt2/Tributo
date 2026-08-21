@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import logging
+import math
+from collections.abc import Mapping
+from numbers import Real
 from typing import Any
 
 import ray.data
@@ -84,6 +87,36 @@ def compute_metrics_summary(metrics: dict[str, Any]) -> dict[str, Any]:
         metrics: Metrics dictionary from ray.train.report.
 
     Returns:
-        Processed metrics dictionary (lists kept as-is, others converted to float).
+        Recursively JSON-safe metrics. Numeric values are converted to floats;
+        scalar metadata and nested metric arrays/mappings are preserved.
     """
-    return {k: (v if isinstance(v, list) else float(v)) for k, v in metrics.items()}
+
+    def json_safe(value: Any) -> Any:
+        if value is None or isinstance(value, (str, bool)):
+            return value
+        if isinstance(value, Real):
+            numeric = float(value)
+            if not math.isfinite(numeric):
+                raise ValueError("training metrics must contain only finite numbers")
+            return numeric
+        if isinstance(value, Mapping):
+            return {str(key): json_safe(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [json_safe(item) for item in value]
+
+        # numpy/pandas scalars and arrays expose one of these conversion hooks.
+        tolist = getattr(value, "tolist", None)
+        if callable(tolist):
+            converted = tolist()
+            if converted is not value:
+                return json_safe(converted)
+        item = getattr(value, "item", None)
+        if callable(item):
+            converted = item()
+            if converted is not value:
+                return json_safe(converted)
+        raise TypeError(
+            f"training metric value {type(value).__name__!r} is not JSON-safe"
+        )
+
+    return {str(key): json_safe(value) for key, value in metrics.items()}

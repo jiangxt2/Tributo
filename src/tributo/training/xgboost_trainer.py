@@ -493,13 +493,22 @@ class XGBoostTrainerImpl(BaseTrainer):
             count = getattr(dataset, "count", None)
             if callable(count):
                 metrics[f"row_count_{split_name}"] = int(count())
+        from tributo.training.xgboost_evaluator import compute_metrics_summary
+
+        summary_metrics = compute_metrics_summary(metrics)
+        # Bundle publication does not invoke the legacy export_model hook. Keep
+        # the driver-owned global metrics in the lifecycle summary so the
+        # resulting TrainingResult carries the same authoritative evaluation.
+        self._summary["metrics"] = summary_metrics
         logger.info(
             "Training done: n_features=%s, %s",
-            metrics.get("n_features", "?"),
+            summary_metrics.get("n_features", "?"),
             {
                 k: f"{float(v):.4f}"
-                for k, v in metrics.items()
-                if k != "n_features" and not isinstance(v, list)
+                for k, v in summary_metrics.items()
+                if k != "n_features"
+                and isinstance(v, (int, float))
+                and not isinstance(v, bool)
             },
         )
         return result
@@ -1389,7 +1398,10 @@ def run_training_with_config(config: dict[str, Any]) -> dict[str, Any]:
         A Bundle-backed training result containing ``bundle_uri`` and
         ``execution_id``.
     """
-    from tributo.training.data_loader import load_ray_dataset_from_config
+    from tributo.training.data_loader import (
+        load_ray_dataset_from_config,
+        load_ray_dataset_from_source,
+    )
 
     # Pydantic validation
     cfg = XGBoostTrainingConfig.model_validate(config)
@@ -1398,7 +1410,11 @@ def run_training_with_config(config: dict[str, Any]) -> dict[str, Any]:
     progress = TrainingProgress.from_environment()
     progress.report_phase(TrainingPhase.LOADING_DATA)
     logger.info("Loading data (type=%s)...", cfg.data.type)
-    ds = load_ray_dataset_from_config(cfg.data.model_dump())
+    ds = (
+        load_ray_dataset_from_source(cfg.data.source)
+        if cfg.data.source is not None
+        else load_ray_dataset_from_config(cfg.data.model_dump())
+    )
 
     # Execute training using XGBoostTrainerImpl
     trainer = XGBoostTrainerImpl(
