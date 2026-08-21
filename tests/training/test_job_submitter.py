@@ -22,9 +22,18 @@ def _runtime_env(*args, **kwargs):
 class TestStableSubmission:
     @pytest.mark.parametrize("status", [JobStatus.PENDING, JobStatus.RUNNING])
     def test_existing_active_attempt_is_reused(self, status: JobStatus) -> None:
+        request_digest = "request-digest"
         client = MagicMock()
         client.submit_job.side_effect = RuntimeError("submission already exists")
         client.get_job_status.return_value = status
+        client.get_job_info.return_value = type(
+            "JobInfo",
+            (),
+            {
+                "job_id": "ray-job-1",
+                "metadata": {"tributo.request_digest": request_digest},
+            },
+        )()
 
         with (
             patch(
@@ -40,6 +49,7 @@ class TestStableSubmission:
                 "python train.py",
                 run_id="run-1",
                 attempt_id="attempt-1",
+                request_digest=request_digest,
             )
 
         assert job_id.startswith("tributo-train-")
@@ -83,11 +93,17 @@ class TestStableSubmission:
     def test_existing_failed_attempt_is_reconciled_without_timestamp_retry(
         self,
     ) -> None:
+        request_digest = "request-digest"
         client = MagicMock()
         client.submit_job.side_effect = RuntimeError("submission already exists")
         client.get_job_status.return_value = JobStatus.FAILED
         client.get_job_info.return_value = type(
-            "JobInfo", (), {"job_id": "ray-job-1"}
+            "JobInfo",
+            (),
+            {
+                "job_id": "ray-job-1",
+                "metadata": {"tributo.request_digest": request_digest},
+            },
         )()
 
         with (
@@ -104,6 +120,7 @@ class TestStableSubmission:
                 "python train.py",
                 run_id="run-1",
                 attempt_id="attempt-1",
+                request_digest=request_digest,
             )
 
         assert submission.submission_id.startswith("tributo-train-")

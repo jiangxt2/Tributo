@@ -152,6 +152,14 @@ class TestResolvedRequestSubmission:
         client = MagicMock()
         client.submit_job.side_effect = TimeoutError("ambiguous")
         client.get_job_status.return_value = JobStatus.RUNNING
+        client.get_job_info.return_value = type(
+            "JobInfo",
+            (),
+            {
+                "job_id": "ray-job-1",
+                "metadata": {"tributo.request_digest": plan.plan_digest},
+            },
+        )()
 
         with (
             patch(
@@ -167,6 +175,7 @@ class TestResolvedRequestSubmission:
 
         assert job_id == plan.submission_id
         client.get_job_status.assert_called_once_with(plan.submission_id)
+        client.get_job_info.assert_called_once_with(plan.submission_id)
 
     def test_reserved_identity_environment_is_rejected(self) -> None:
         with pytest.raises(ValueError, match="reserved inference keys"):
