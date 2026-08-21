@@ -63,7 +63,7 @@ def split_dataset(
     if val_size <= 0 and test_size <= 0:
         return ds, None, None
 
-    ds = ds.randomize_block_order(seed=seed)
+    ds = ds.random_shuffle(seed=seed)
     train_frac = 1.0 - val_size - test_size
 
     if test_size > 0 and val_size > 0:

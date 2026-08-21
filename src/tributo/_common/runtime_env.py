@@ -8,7 +8,9 @@ unrelated environments.
 
 from __future__ import annotations
 
+import json
 import logging
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -74,6 +76,7 @@ def build_runtime_env(
     algorithm_artifact: AlgorithmArtifact | None = None,
     image_profile: ImageProfile | None = None,
     declared_dependencies: tuple[str, ...] = (),
+    execution_context: Mapping[str, Any] | Any | None = None,
 ) -> dict[str, Any]:
     """Build a runtime_env dict suitable for the Ray Jobs API.
 
@@ -114,6 +117,7 @@ def build_runtime_env(
             algorithm artifact is supplied.
         declared_dependencies: Additional PEP 508 constraints checked against
             the selected image or offline Wheelhouse.
+        execution_context: Versioned broker-neutral worker factory context.
 
     Returns:
         A dict that can be passed directly to
@@ -164,6 +168,10 @@ def build_runtime_env(
     merged_env_vars: dict[str, str] = {}
     if env_vars:
         merged_env_vars.update(env_vars)
+    if execution_context is not None:
+        merged_env_vars["TRIBUTO_EXECUTION_CONTEXT"] = _serialize_execution_context(
+            execution_context
+        )
 
     if pythonpath is not None:
         existing_paths = merged_env_vars.get("PYTHONPATH", "").split(":")
@@ -234,3 +242,13 @@ def build_runtime_env(
         sorted(merged_env_vars),
     )
     return runtime_env
+
+
+def _serialize_execution_context(context: Mapping[str, Any] | Any) -> str:
+    from tributo.training.execution_context import ExecutionContext
+
+    value = context.as_dict() if hasattr(context, "as_dict") else context
+    if not isinstance(value, Mapping):
+        raise TypeError("execution_context must be a mapping or expose as_dict()")
+    plain = ExecutionContext.from_mapping(value).as_dict()
+    return json.dumps(plain, sort_keys=True, separators=(",", ":"))

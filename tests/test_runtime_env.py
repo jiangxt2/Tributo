@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
@@ -9,12 +10,29 @@ import pytest
 
 from tributo._common.runtime_env import DEFAULT_EXCLUDES, build_runtime_env
 from tributo.algorithms.api.artifacts import AlgorithmArtifact
+from tributo.training.execution_context import TrainingControlSpec
 
 
 def test_runtime_env_does_not_inject_python_package_paths_by_default() -> None:
     runtime_env = build_runtime_env()
 
     assert "env_vars" not in runtime_env
+
+
+def test_runtime_env_serializes_validated_worker_execution_context() -> None:
+    runtime_env = build_runtime_env(
+        execution_context={
+            "cancellation": TrainingControlSpec(
+                "provider.controls:create_checker",
+                "job-1",
+                {"cancel_key": "cancel:job-1"},
+            ).as_dict()
+        }
+    )
+
+    value = json.loads(runtime_env["env_vars"]["TRIBUTO_EXECUTION_CONTEXT"])
+    assert value["schema"] == "tributo.execution-context"
+    assert value["cancellation"]["job_id"] == "job-1"
 
 
 def test_runtime_env_preserves_explicit_cluster_pythonpath() -> None:

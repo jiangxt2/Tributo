@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import shutil
 import tempfile
 from collections.abc import Iterator, Mapping
@@ -23,6 +24,13 @@ from tributo.integrations.algorithm_runtimes.legacy_descriptors import (
 )
 from tributo.training.base import BaseTrainer
 from tributo.training.checkpoint import ResumeConfig
+from tributo.training.execution_context import (
+    CancellationChecker,
+    ExecutionContext,
+    TrainingCancelledError,
+    TrainingEventReporter,
+)
+from tributo.training.progress import TrainingPhase, TrainingProgress
 from tributo.training.resource import (
     DEFAULT_BATCH_SIZE,
     BoundedCollector,
@@ -30,6 +38,7 @@ from tributo.training.resource import (
     estimate_row_bytes_from_schema,
     preflight_check,
 )
+from tributo.training.xgboost_distributed_evaluation import EvaluationConfig
 from tributo.util.annotations import PublicAPI
 
 if TYPE_CHECKING:
@@ -80,6 +89,78 @@ def _merge_xgb_eval_results(
 
 
 logger = logging.getLogger(__name__)
+
+
+class RoundMetricsReporter:
+    """Publish bounded, real-time XGBoost metrics from rank zero."""
+
+    def __init__(
+        self,
+        job_id: str,
+        reporter: TrainingEventReporter,
+        total_rounds: int,
+        *,
+        start_round: int = 0,
+    ) -> None:
+        self._job_id = job_id
+        self._reporter = reporter
+        self._total_rounds = total_rounds
+        self._start_round = start_round
+        self._interval = max(1, math.ceil(total_rounds / 100))
+        self._published: set[int] = set()
+        self._last_round = start_round
+        self._last_log: dict[str, dict[str, list[Any]]] = {}
+
+    def after_iteration(
+        self, epoch: int, evals_log: dict[str, dict[str, list[Any]]]
+    ) -> None:
+        round_number = self._start_round + epoch + 1
+        self._last_round = round_number
+        if evals_log:
+            self._last_log = evals_log
+        if (
+            round_number == 1
+            or round_number == self._total_rounds
+            or round_number % self._interval == 0
+        ):
+            self._publish(round_number, evals_log)
+
+    def after_training(
+        self,
+        final_round: int | None = None,
+        evals_log: dict[str, dict[str, list[Any]]] | None = None,
+    ) -> None:
+        """Always publish the actual last round, including early stopping."""
+        if final_round is not None:
+            self._last_round = final_round
+        if evals_log:
+            self._last_log = evals_log
+        if self._last_round and self._last_round not in self._published:
+            self._publish(self._last_round, self._last_log)
+
+    def _publish(
+        self, round_number: int, evals_log: dict[str, dict[str, list[Any]]]
+    ) -> None:
+        metrics: dict[str, Any] = {"round": round_number}
+        for eval_name, values_by_metric in evals_log.items():
+            for metric_name, values in values_by_metric.items():
+                if values:
+                    metrics[f"{eval_name}-{metric_name}"] = float(values[-1])
+        try:
+            self._reporter.report_metrics(
+                self._job_id,
+                metrics,
+                min(round_number / self._total_rounds, 1.0),
+            )
+        except Exception:
+            logger.warning(
+                "Failed to report round %d metrics for job %s",
+                round_number,
+                self._job_id,
+                exc_info=True,
+            )
+        finally:
+            self._published.add(round_number)
 
 
 @contextmanager
@@ -242,6 +323,7 @@ class XGBoostTrainingConfig(StrictConfigModel):
         default_factory=ResourceBudget,
         description="Single-worker materialization budget",
     )
+    evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
 
 
@@ -263,6 +345,12 @@ class XGBoostTrainerImpl(BaseTrainer):
         _validated_config: XGBoostTrainingConfig | None = None,
         **kwargs: Any,
     ) -> None:
+        progress = kwargs.pop("_progress", None)
+        self._progress: TrainingProgress = (
+            progress
+            if isinstance(progress, TrainingProgress)
+            else TrainingProgress.from_environment()
+        )
         super().__init__(datasets, config, run_config, **kwargs)
         self._train_config = _validated_config or XGBoostTrainingConfig.model_validate(
             config
@@ -279,6 +367,7 @@ class XGBoostTrainerImpl(BaseTrainer):
         if ds is None:
             raise ValueError("datasets must contain 'train' key")
 
+        self._progress.report_phase(TrainingPhase.FEATURE_ENGINEERING)
         label_col = self._train_config.data.label_col
         ds = filter_invalid_labels(ds, label_col=label_col)
 
@@ -286,6 +375,7 @@ class XGBoostTrainerImpl(BaseTrainer):
         if feature_columns:
             ds = ds.select_columns(feature_columns + [label_col])
 
+        self._progress.report_phase(TrainingPhase.DATA_SPLITTING)
         train_ds, val_ds, test_ds = split_dataset(
             ds,
             val_size=self._train_config.training.val_size,
@@ -371,9 +461,38 @@ class XGBoostTrainerImpl(BaseTrainer):
             run_name=run_name,
         )
 
+        self._progress.report_phase(TrainingPhase.TRAINING)
         logger.info("Starting XGBoost training...")
         result = trainer.fit()
-        metrics = result.metrics or {}
+        metrics = result.metrics if isinstance(result.metrics, dict) else {}
+        if cfg.evaluation.enabled and test_ds is not None:
+            from tributo.training.xgboost_distributed_evaluation import (
+                evaluate_dataset,
+            )
+
+            self._progress.report_phase(TrainingPhase.EVALUATING)
+            if result.checkpoint is None:
+                raise JobConfigurationError(
+                    "Training result omitted checkpoint required for full test "
+                    "evaluation"
+                )
+            metrics.update(
+                evaluate_dataset(
+                    test_ds,
+                    result.checkpoint,
+                    label_col=label_col,
+                    objective=cfg.model.objective,
+                    num_class=cfg.model.num_class,
+                    config=cfg.evaluation,
+                )
+            )
+
+        # Driver-owned Dataset objects are authoritative for global counts;
+        # worker-reported row values describe only rank-local shards.
+        for split_name, dataset in self.datasets.items():
+            count = getattr(dataset, "count", None)
+            if callable(count):
+                metrics[f"row_count_{split_name}"] = int(count())
         logger.info(
             "Training done: n_features=%s, %s",
             metrics.get("n_features", "?"),
@@ -469,6 +588,49 @@ class XGBoostTrainerImpl(BaseTrainer):
 # ── Training loop (Ray worker level) ──
 
 
+def _resolve_worker_cancellation() -> tuple[str | None, CancellationChecker | None]:
+    """Rebuild cancellation state inside each Ray worker process."""
+    context = ExecutionContext.from_environment()
+    if context.cancellation is None:
+        return None, None
+    try:
+        return context.cancellation.job_id, context.build_cancellation_checker()
+    except Exception:
+        logger.warning("Failed to create worker cancellation checker", exc_info=True)
+        return None, None
+
+
+def _resolve_worker_event_reporting(
+    world_rank: int,
+) -> tuple[str | None, TrainingEventReporter | None]:
+    """Build a reporter only on rank zero; reporting is an optional side effect."""
+    if world_rank != 0:
+        return None, None
+    context = ExecutionContext.from_environment()
+    if context.event_reporter is None:
+        return None, None
+    try:
+        return context.event_reporter.job_id, context.build_event_reporter()
+    except Exception:
+        logger.warning("Failed to create worker event reporter", exc_info=True)
+        return None, None
+
+
+def _raise_if_training_cancelled(
+    job_id: str | None, checker: CancellationChecker | None
+) -> None:
+    """Raise a dedicated failure instead of reporting early-stop success."""
+    if job_id is None or checker is None:
+        return
+    try:
+        cancelled = checker.is_cancelled(job_id)
+    except Exception:
+        logger.warning("Cancellation check failed for job %s", job_id, exc_info=True)
+        return
+    if cancelled:
+        raise TrainingCancelledError(f"Training job {job_id!r} was cancelled")
+
+
 def train_loop_per_worker(config: dict[str, Any]) -> None:
     """XGBoost training main loop executed by each Ray worker.
 
@@ -516,6 +678,9 @@ def train_loop_per_worker(config: dict[str, Any]) -> None:
     # concat_tables; rows are never truncated.
     budget = ResourceBudget.model_validate(config.get("resource") or {})
     worker_rank = ray.train.get_context().get_world_rank()
+    cancel_job_id, cancellation_checker = _resolve_worker_cancellation()
+    _raise_if_training_cancelled(cancel_job_id, cancellation_checker)
+    report_job_id, event_reporter = _resolve_worker_event_reporting(worker_rank)
     collector = BoundedCollector(
         budget,
         algorithm="xgboost",
@@ -741,6 +906,32 @@ def train_loop_per_worker(config: dict[str, Any]) -> None:
             _report_resume_checkpoint(model, completed_rounds, evals_log)
             return False
 
+    round_reporter = (
+        RoundMetricsReporter(
+            report_job_id,
+            event_reporter,
+            total_rounds=num_rounds,
+            start_round=start_round,
+        )
+        if report_job_id is not None and event_reporter is not None
+        else None
+    )
+
+    class _ControlCallback(xgboost.callback.TrainingCallback):
+        """Check cancellation every round before rank-zero metric publication."""
+
+        def after_iteration(
+            self,
+            model: xgboost.Booster,
+            epoch: int,
+            evals_log: dict[str, dict[str, list[Any]]],
+        ) -> bool:
+            del model
+            _raise_if_training_cancelled(cancel_job_id, cancellation_checker)
+            if round_reporter is not None:
+                round_reporter.after_iteration(epoch, evals_log)
+            return False
+
     evals_result: dict[str, dict[str, list[Any]]] = {}
     if initial_booster is not None and start_round >= num_rounds:
         booster = initial_booster
@@ -754,14 +945,34 @@ def train_loop_per_worker(config: dict[str, Any]) -> None:
             evals=evals,
             evals_result=current_evals_result,
             early_stopping_rounds=config.get("early_stopping_rounds"),
-            callbacks=[_ResumeCheckpointCallback()],
+            callbacks=[_ControlCallback(), _ResumeCheckpointCallback()],
             xgb_model=initial_booster,
         )
         evals_result = _merge_xgb_eval_results(
             resume_evals_result, current_evals_result
         )
 
+    _raise_if_training_cancelled(cancel_job_id, cancellation_checker)
+    if round_reporter is not None:
+        actual_rounds = max(
+            (
+                len(values)
+                for metrics_by_name in evals_result.values()
+                for values in metrics_by_name.values()
+            ),
+            default=int(booster.num_boosted_rounds()),
+        )
+        round_reporter.after_training(actual_rounds, evals_result)
+
     world_rank = ray.train.get_context().get_world_rank()
+
+    worker_progress = TrainingProgress(
+        reporter=event_reporter,
+        checker=cancellation_checker,
+        reporter_job_id=report_job_id,
+        cancellation_job_id=cancel_job_id,
+    )
+    worker_progress.report_phase(TrainingPhase.EVALUATING)
 
     # Build test DMatrix on *all* ranks so Ray Train doesn't hang
     # get_dataset_shard splits data across workers; every rank must
@@ -1184,6 +1395,8 @@ def run_training_with_config(config: dict[str, Any]) -> dict[str, Any]:
     cfg = XGBoostTrainingConfig.model_validate(config)
 
     # Load data
+    progress = TrainingProgress.from_environment()
+    progress.report_phase(TrainingPhase.LOADING_DATA)
     logger.info("Loading data (type=%s)...", cfg.data.type)
     ds = load_ray_dataset_from_config(cfg.data.model_dump())
 
@@ -1192,6 +1405,7 @@ def run_training_with_config(config: dict[str, Any]) -> dict[str, Any]:
         datasets={"train": ds},
         config=config,
         _validated_config=cfg,
+        _progress=progress,
     )
     if cfg.output.bundle_uri:
         from tributo.exporting.models import BundleOutputConfig
