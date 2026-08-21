@@ -61,8 +61,9 @@ The output directory contains:
 
 The builder never pushes an image. Publishing requires a separate reviewed
 workflow. The canonical configuration resolves `daft-clickhouse==1.0`,
-`daft-doris==1.0`, and `ray-doris==1.0` through the locked Tributo extras, so
-the normal image build does not require a local connector wheelhouse. The
+`daft-doris==1.0`, `ray-doris==1.0`, and `ray-hive==1.0` through the locked
+Tributo extras, so the normal image build does not require a local connector
+wheelhouse. The
 `external_wheelhouse` option remains available for packages outside the lock:
 it is copied into a named build context and installed with
 `pip --no-index --no-deps`; every wheel is recorded by filename,
@@ -75,13 +76,16 @@ The connector extras can also be installed outside Docker:
 pip install "tributo[clickhouse]"
 pip install "tributo[mysql]"          # Daft Doris + Ray Doris over MySQL
 pip install "tributo[doris-flight]"   # Daft/Ray Doris Flight dependencies
+pip install "tributo[hive-ray]"       # Ray HiveServer2 connector package
 ```
 
 The equivalent uv commands are `uv sync --extra clickhouse`,
-`uv sync --extra mysql`, and `uv sync --extra doris-flight`. A Doris test that
-selects `engine="tributo.daft"` needs `daft-doris`; a Ray Doris or generic
-training path that selects `engine="tributo.ray_data"` needs `ray-doris`.
-Tributo does not silently switch between those explicit engine routes.
+`uv sync --extra mysql`, `uv sync --extra doris-flight`, and
+`uv sync --extra hive-ray`. A Doris test that selects
+`engine="tributo.daft"` needs `daft-doris`; a Ray Doris or generic training
+path that selects `engine="tributo.ray_data"` needs `ray-doris`.
+`ray-hive` is packaged for the Ray-native runtime, but Tributo does not yet
+register a Hive Provider or Binding and does not silently add a Hive route.
 
 ## Run the image gate
 
@@ -108,9 +112,10 @@ directory, then removes only that Compose project and its volumes.
 
 The full image includes the first-party data, model export, training,
 Tune, serving, streaming, registry, vector-index, explainability, graph, and
-causal dependency closure. It does not include development/test dependencies,
-GPU compatibility or a GPU execution gate, HDFS/ORC/Hive connectors, or a
-KubeRay control plane. Linux PyTorch dependencies may still contain
+causal dependency closure, plus the external `ray-hive==1.0` HiveServer2
+connector package. It does not include development/test dependencies, GPU
+compatibility or a GPU execution gate, a Tributo-native Hive Provider/Binding,
+HDFS/ORC file readers, or a KubeRay control plane. Linux PyTorch dependencies may still contain
 CUDA/NVIDIA distributions; GPU drivers, GPU scheduling, and NCCL validation
 are outside this image contract.
 Kubernetes deployment remains the responsibility of the Ray/KubeRay

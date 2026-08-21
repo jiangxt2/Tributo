@@ -9,6 +9,7 @@
   "runtime_extras": [
     "data",
     "data-daft",
+    "hive-ray",
     "vector-index",
     "postgresql",
     "clickhouse",

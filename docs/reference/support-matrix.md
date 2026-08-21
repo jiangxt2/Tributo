@@ -47,7 +47,7 @@ compatible profile, while the generated `Validated profiles` column remains
 | HDFS Parquet/CSV reads | Adapter only | Ray binding exists; real HDFS/JVM/worker gate is pending |
 | ClickHouse reads | Adapter only | Uses locked `daft-clickhouse==1.0` through `tributo[clickhouse]`; real-database Conformance is still required, and provider partition discovery is distinct from engine auto-routing |
 | Doris reads | Adapter only | Ray routes use locked `ray-doris==1.0`; Daft routes use locked `daft-doris==1.0`; real-database Conformance is still required and tablet planning remains provider/binding-owned |
-| ORC and Hive external-table reads | Not implemented | Locked Ray/Daft versions expose no validated public reader |
+| ORC and Hive external-table reads | Not implemented | The full image includes external `ray-hive==1.0` for HiveServer2 reads; Tributo Provider/Binding routing and real Hive Conformance remain pending |
 | Third-party ingestion Provider/Binding SPI | Implemented | Installed packages use `tributo.ingestion_providers` plus `tributo.ingestion_bindings`; bad plugins are isolated, duplicate routes never replace built-ins, and Binding selection can constrain filesystem, catalog, and storage format |
 | Lance output | Implemented as a generic ResultSink path | Declared fixed-shape Ray/Arrow tensor columns are strictly validated and normalized to Lance `FixedSizeList`; the user Predictor still owns vector semantics, and the sink does not pool, mathematically normalize embedding values, change dtype, or automatically invoke the separate vector-index workflow |
 | Native bounded writes | Basic local/S3 native round-trips are implemented through `WriteGateway` for Ray/Daft Parquet, CSV, Iceberg, and Lance. Ray Lance delegates to locked `lance-ray==0.5.0`/PyLance 9; Daft delegates to `DataFrame.write_lance`. Mode support comes from the selected native Binding capability. Existing-target `CREATE`, missing-target `APPEND`, schema evolution, and empty writes remain provider-owned, are not Tributo guarantees, and are outside the current Gate | Tributo owns control-plane validation only; Ray Data, Daft, or an official native integration owns data-plane writes |
@@ -158,11 +158,11 @@ tensors; it does not apply DNN/PU preprocessing implicitly.
 | Capability | Status | Boundary |
 | --- | --- | --- |
 | Full Tributo runtime image for CPU validation | Alpha, directly buildable | Linux `arm64`/`amd64`, defaulting to the native host architecture; Python 3.12, Ray 2.55.1, locked dependency closure, and all first-party runtime extras including Alpha modules. Linux PyTorch resolution may include transitive CUDA/NVIDIA distributions, but no GPU support is claimed |
-| Custom connector wheelhouse variant | Alpha, optional extension | An external wheelhouse remains available for packages outside the locked v1.0 connector set; it is not required for the canonical ClickHouse/Doris image and does not change the Tributo lockfile |
+| Custom connector wheelhouse variant | Alpha, optional extension | An external wheelhouse remains available for packages outside the locked v1.0 connector set; it is not required for the canonical ClickHouse/Doris/Ray Hive image and does not change the Tributo lockfile |
 | Runtime image attestation | Alpha | `manifest.json`, `image-profile.json`, normalized distribution inventory, and sealed `org.tributo.manifest-sha256` label |
-| Runtime image Ray Jobs gate | Alpha, validation gate | Requires a unique two-node Docker Ray cluster on a native host architecture; verifies driver/worker imports, Ray Data, Jobs API submission, and v1.0 ClickHouse/Doris package presence. `linux/amd64` requires a matching native host |
+| Runtime image Ray Jobs gate | Alpha, validation gate | Requires a unique two-node Docker Ray cluster on a native host architecture; verifies driver/worker imports, Ray Data, Jobs API submission, and v1.0 ClickHouse/Doris/Ray Hive package presence. `linux/amd64` requires a matching native host |
 | GPU runtime image | Not implemented | The Linux dependency closure may contain transitive CUDA/NVIDIA distributions from PyTorch, but no GPU driver, scheduling, NCCL, or GPU compatibility contract has been validated |
-| HDFS/ORC/Hive runtime additions | Not included | No validated provider/runtime contract in the current image |
+| HDFS/ORC/Hive runtime additions | External package only | `ray-hive==1.0` is locked into the full image; no validated Tributo-native Provider/Binding or Hive runtime contract is claimed |
 
 For symbol-level compatibility promises, consult the
 [API stability inventory](../STABILITY.md).

@@ -58,13 +58,14 @@ selects `binding_id` explicitly.
 | HDFS Parquet/CSV | Native reader with PyArrow HDFS | No locked public reader | Adapted; cluster gate pending |
 | ClickHouse | No selected Binding | `daft-clickhouse==1.0` | Adapter only; install with `tributo[clickhouse]` or `uv sync --extra clickhouse`; real-database Conformance remains the support gate |
 | Doris | `ray-doris==1.0` | `daft-doris==1.0` | Adapter only; Ray routes use `ray-doris`, Daft routes use `daft-doris`, and the full runtime image contains both v1.0 packages |
-| ORC or Hive external table | No locked public reader | No locked public reader | Unsupported, fail-closed |
+| ORC or Hive external table | No built-in Tributo reader | `ray-hive==1.0` external package | Package-only image inclusion; Provider/Binding routing and Hive Conformance remain pending |
 
 “Verified” means the current combination has semantic Conformance and real
 storage or database evidence. It does not turn every engine/source combination
 into a supported path. See the [support matrix](../reference/support-matrix.md)
 for the exact boundary. Daft and Ray Doris are explicit engine routes; a
-missing `ray-doris` package does not silently fall back to Daft.
+missing `ray-doris` package does not silently fall back to Daft, and the
+presence of `ray-hive` does not silently register a Hive route.
 
 Credentials belong to runtime configuration. They must not appear in dataset
 identifiers, logical plans, receipts, logs, or public errors. Bounded providers

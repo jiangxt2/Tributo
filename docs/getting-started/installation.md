@@ -18,6 +18,7 @@ Pydantic, ONNX Runtime, PyArrow, pandas, and S3 filesystem support.
 | --- | --- |
 | Ray Data table formats | `python -m pip install "tributo[data]"` |
 | Daft ingestion | `python -m pip install "tributo[data,data-daft]"` |
+| HiveServer2 via Ray Data connector package | `python -m pip install "tributo[hive-ray]"` |
 | PostgreSQL ingestion | `python -m pip install "tributo[postgresql]"` |
 | ClickHouse via Daft | `python -m pip install "tributo[clickhouse]"` |
 | Doris via Daft/Ray Data | `python -m pip install "tributo[mysql]"` |
@@ -39,9 +40,11 @@ itself is included by the core Ray dependency; the `tune` extra adds the
 optional BayesOpt search implementation. The `clickhouse` extra installs
 `daft-clickhouse==1.0`; `mysql` installs `daft-doris==1.0` and
 `ray-doris==1.0` for their explicit engine routes, while `doris-flight` adds
-their Flight dependencies. The equivalent uv commands are
-`uv sync --extra clickhouse`, `uv sync --extra mysql`, and
-`uv sync --extra doris-flight`.
+their Flight dependencies. The `hive-ray` extra installs the external
+`ray-hive==1.0` HiveServer2 connector package; it does not register a Tributo
+Hive Provider or Binding. The equivalent uv commands are
+`uv sync --extra clickhouse`, `uv sync --extra mysql`,
+`uv sync --extra doris-flight`, and `uv sync --extra hive-ray`.
 
 ## Prepare a source checkout
 
