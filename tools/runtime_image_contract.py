@@ -15,6 +15,7 @@ REQUIRED_IMPORTS = (
     "tributo.registry",
     "tributo.pipeline",
     "daft",
+    "ray_hive",
     "lance_ray",
     "lance",
     "pyiceberg",
@@ -35,6 +36,7 @@ REQUIRED_IMPORTS = (
 
 REQUIRED_DISTRIBUTIONS = (
     "ray",
+    "ray-hive",
     "tributo",
     "daft",
     "lance-ray",
@@ -58,12 +60,15 @@ REQUIRED_DISTRIBUTIONS = (
     "ray-doris",
     "clickhouse-connect",
     "PyMySQL",
+    "thrift",
     "adbc-driver-manager",
     "adbc-driver-flightsql",
 )
 
 REQUIRED_DISTRIBUTION_VERSIONS = {
+    "ray-hive": "1.0",
     "daft-clickhouse": "1.0",
     "daft-doris": "1.0",
     "ray-doris": "1.0",
+    "thrift": "0.16.0",
 }

@@ -32,9 +32,11 @@ def worker_probe() -> dict[str, object]:
         "machine": platform.machine(),
         "ray": importlib.metadata.version("ray"),
         "tributo": importlib.metadata.version("tributo"),
+        "ray-hive": importlib.metadata.version("ray-hive"),
         "daft-clickhouse": importlib.metadata.version("daft-clickhouse"),
         "daft-doris": importlib.metadata.version("daft-doris"),
         "ray-doris": importlib.metadata.version("ray-doris"),
+        "thrift": importlib.metadata.version("thrift"),
     }
 
 
@@ -62,9 +64,11 @@ def main() -> None:
             "machine": expected_machine,
             "ray": "2.55.1",
             "tributo": "1.0.0",
+            "ray-hive": "1.0",
             "daft-clickhouse": "1.0",
             "daft-doris": "1.0",
             "ray-doris": "1.0",
+            "thrift": "0.16.0",
         }
         dataset = ray.data.from_items([{"value": 1}, {"value": 2}])
         assert dataset.count() == 2

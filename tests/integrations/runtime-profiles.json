@@ -36,6 +36,7 @@
       "extras": [
         "data",
         "data-daft",
+        "hive-ray",
         "vector-index",
         "postgresql",
         "clickhouse",
@@ -71,7 +72,9 @@
         "pyarrow": "19.0.1",
         "pylance": "9.0.0",
         "ray": "2.55.1",
-        "ray_doris": "1.0"
+        "ray_doris": "1.0",
+        "ray_hive": "1.0",
+        "thrift": "0.16.0"
       }
     }
   }

@@ -3834,6 +3834,21 @@ flight = [
 ]
 
 [[package]]
+name = "ray-hive"
+version = "1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyarrow" },
+    { name = "ray", extra = ["data"] },
+    { name = "thrift" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c3/60/5eac14fb14974ce76c1db585f2794fc9753101acc9e26d7c667f2deda8e1/ray_hive-1.0.tar.gz", hash = "sha256:9e97902a5f5ddc67573041ad58fe65b7b9390cd7a1565e38133834cac38726dd", size = 168820, upload-time = "2026-08-18T15:12:59.813Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/47/16/4cf49f8e1a9b588d555ec9f105f2c3a964cb22721cd4bec735d20e8653d4/ray_hive-1.0-py3-none-any.whl", hash = "sha256:a2ca53181046febb3047529359391e3b2c9f651109b869fc2c0e42fa2ffe60ae", size = 89194, upload-time = "2026-08-18T15:12:58.235Z" },
+]
+
+[[package]]
 name = "redis"
 version = "8.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -4424,6 +4439,15 @@ wheels = [
 ]
 
 [[package]]
+name = "thrift"
+version = "0.16.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "six" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e4/23/dd951c9883cb49a73b750bdfe91e39d78e8a3f1f7175608634f381a197d5/thrift-0.16.0.tar.gz", hash = "sha256:2b5b6488fcded21f9d312aa23c9ff6a0195d0f6ae26ddbd5ad9e3e25dfc14408", size = 59605, upload-time = "2022-03-31T14:54:06.866Z" }
+
+[[package]]
 name = "tokenizers"
 version = "0.22.2"
 source = { registry = "https://pypi.org/simple" }
@@ -4611,6 +4635,9 @@ grpc = [
 hf = [
     { name = "tokenizers" },
     { name = "transformers" },
+]
+hive-ray = [
+    { name = "ray-hive" },
 ]
 identity = [
     { name = "boto3" },
@@ -4807,6 +4834,7 @@ requires-dist = [
     { name = "ray", extras = ["serve"], marker = "extra == 'streaming-inference'" },
     { name = "ray-doris", marker = "extra == 'mysql'", specifier = "==1.0" },
     { name = "ray-doris", extras = ["flight"], marker = "extra == 'doris-flight'", specifier = "==1.0" },
+    { name = "ray-hive", marker = "extra == 'hive-ray'", specifier = "==1.0" },
     { name = "requests", specifier = ">=2.33.0" },
     { name = "requests", marker = "extra == 'test-integration'", specifier = ">=2.25.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6.0,<1.0" },
@@ -4834,7 +4862,7 @@ requires-dist = [
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.12.20250516" },
     { name = "xgboost", marker = "extra == 'training'", specifier = ">=2.1.0" },
 ]
-provides-extras = ["dev", "data", "data-daft", "vector-index", "postgresql", "clickhouse", "mysql", "doris-flight", "s3", "model-export", "model-export-torch", "hf", "model-export-hf", "training", "tune", "explainability", "identity", "streaming", "grpc", "registry", "graph", "causal", "streaming-inference", "test-integration"]
+provides-extras = ["dev", "data", "data-daft", "hive-ray", "vector-index", "postgresql", "clickhouse", "mysql", "doris-flight", "s3", "model-export", "model-export-torch", "hf", "model-export-hf", "training", "tune", "explainability", "identity", "streaming", "grpc", "registry", "graph", "causal", "streaming-inference", "test-integration"]
 
 [package.metadata.requires-dev]
 dev = [

@@ -56,6 +56,7 @@ RUN --mount=type=cache,target=/home/ray/.cache/uv,uid=1000,gid=100 \
     uv sync \
         --extra data \
         --extra data-daft \
+        --extra hive-ray \
         --extra vector-index \
         --extra postgresql \
         --extra clickhouse \

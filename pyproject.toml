@@ -61,6 +61,9 @@ data = [
 data-daft = [
     "daft[lance,ray]>=0.7.23,<0.7.24",
 ]
+hive-ray = [
+    "ray-hive==1.0",
+]
 vector-index = [
     "tributo[data,s3]",
     "pyarrow==19.0.1",

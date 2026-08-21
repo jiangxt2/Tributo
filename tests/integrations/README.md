@@ -9,7 +9,9 @@ reports required evidence, but no GitHub Actions event executes these suites.
 The data-ingestion image installs database drivers and the v1.0 database
 connectors through Tributo extras. `daft-clickhouse==1.0`,
 `daft-doris==1.0`, and `ray-doris==1.0` are resolved by `uv.lock` and included
-in the canonical full runtime image. A custom external wheelhouse is only for
+in the canonical full runtime image. The full image also includes the locked
+external `ray-hive==1.0` HiveServer2 package; package presence does not claim a
+Tributo Hive Provider/Binding. A custom external wheelhouse is only for
 packages outside that locked set.
 
 ---
