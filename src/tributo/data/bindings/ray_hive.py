@@ -30,6 +30,7 @@ from tributo.data.transform_compiler import (
     apply_pipeline_to_ray_ds,
 )
 from tributo.exceptions import JobConfigurationError
+from tributo.util.annotations import DeveloperAPI
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,7 @@ class _NativePlan:
     transforms: CompiledPipeline
 
 
+@DeveloperAPI
 class RayHiveBinding:
     """Compile a safe Hive query plan into bounded, distributed Ray tasks."""
 

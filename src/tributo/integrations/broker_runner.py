@@ -15,10 +15,12 @@ from tributo.integrations.broker import (
     TaskDisposition,
     TaskOutcome,
 )
+from tributo.util.annotations import DeveloperAPI
 
 logger = logging.getLogger(__name__)
 
 
+@DeveloperAPI
 class BrokerRunnerState(str, Enum):
     """Observable consumer process state."""
 
@@ -28,6 +30,7 @@ class BrokerRunnerState(str, Enum):
     CLOSED = "closed"
 
 
+@DeveloperAPI
 class BrokerRunner:
     """Drive poll, maintenance, outcome application, recovery, and reconnect."""
 

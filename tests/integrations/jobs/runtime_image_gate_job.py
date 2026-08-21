@@ -68,7 +68,7 @@ def main() -> None:
             "daft-clickhouse": "1.0",
             "daft-doris": "1.0",
             "ray-doris": "1.0",
-            "thrift": "0.16.0",
+            "thrift": "0.24.0",
         }
         dataset = ray.data.from_items([{"value": 1}, {"value": 2}])
         assert dataset.count() == 2

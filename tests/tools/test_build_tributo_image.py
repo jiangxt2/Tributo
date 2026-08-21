@@ -335,7 +335,7 @@ def test_manifest_core_contains_alpha_and_runtime_closure() -> None:
     assert "ray_hive" in core["required_imports"]
     assert "bayesian-optimization" in core["required_distributions"]
     assert core["required_distribution_versions"]["ray-hive"] == "1.0"
-    assert core["required_distribution_versions"]["thrift"] == "0.16.0"
+    assert core["required_distribution_versions"]["thrift"] == "0.24.0"
     assert core["pip_check_baseline"] == list(pip_check_baseline(config.platform))
     assert core["image_sources"]["base_image"]["mirror"] == BASE_IMAGE_MIRROR
     assert core["image_sources"]["uv_image"]["mirror"] == UV_IMAGE_MIRROR

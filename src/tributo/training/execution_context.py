@@ -16,15 +16,19 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
+from tributo.util.annotations import DeveloperAPI
+
 EXECUTION_CONTEXT_ENV = "TRIBUTO_EXECUTION_CONTEXT"
 EXECUTION_CONTEXT_SCHEMA = "tributo.execution-context"
 EXECUTION_CONTEXT_VERSION = 1
 
 
+@DeveloperAPI
 class TrainingCancelledError(RuntimeError):
     """Raised inside a training worker after a confirmed cooperative cancel."""
 
 
+@DeveloperAPI
 @runtime_checkable
 class CancellationChecker(Protocol):
     """Optional worker-side cancellation control."""
@@ -34,6 +38,7 @@ class CancellationChecker(Protocol):
         ...
 
 
+@DeveloperAPI
 @runtime_checkable
 class TrainingEventReporter(Protocol):
     """Optional worker/driver progress sink reconstructed from a factory."""
@@ -49,6 +54,7 @@ class TrainingEventReporter(Protocol):
         ...
 
 
+@DeveloperAPI
 @dataclass(frozen=True)
 class TrainingControlSpec:
     """Serializable reference to an independently installed control factory."""
@@ -73,6 +79,7 @@ class TrainingControlSpec:
         }
 
 
+@DeveloperAPI
 @dataclass(frozen=True)
 class ExecutionContext:
     """Serializable factories for optional worker-side training controls."""

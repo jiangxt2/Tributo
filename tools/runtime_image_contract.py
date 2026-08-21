@@ -70,5 +70,5 @@ REQUIRED_DISTRIBUTION_VERSIONS = {
     "daft-clickhouse": "1.0",
     "daft-doris": "1.0",
     "ray-doris": "1.0",
-    "thrift": "0.16.0",
+    "thrift": "0.24.0",
 }
