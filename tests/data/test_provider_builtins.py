@@ -12,11 +12,13 @@ from tributo.data.provider_builtins import (
     ClickHouseProvider,
     CsvProvider,
     DorisProvider,
+    HiveProvider,
     IcebergProvider,
     ParquetProvider,
     PostgreSqlProvider,
 )
 from tributo.data.refs import digest
+from tributo.data.scan_plan import ParameterizedQuery, SqlScan
 from tributo.data.source_config import (
     CanonicalSourceInput,
     ProviderSourceConfig,
@@ -780,7 +782,7 @@ class TestSqlProviderNormalize:
         assert isinstance(plan, SqlScan)
         assert plan.target == SqlTableRead(schema="feature_store", table="events")
 
-    @pytest.mark.parametrize("provider", [ClickHouseProvider(), DorisProvider()])
+    @pytest.mark.parametrize("provider", [DorisProvider()])
     def test_raw_sql_has_actionable_migration_error(
         self, provider: DataSourceProvider
     ) -> None:
@@ -803,6 +805,32 @@ class TestSqlProviderNormalize:
 
         assert raw_sql not in str(exc_info.value)
         assert "top-secret" not in str(exc_info.value)
+
+    @pytest.mark.parametrize(
+        ("provider", "dialect"),
+        [(ClickHouseProvider(), "clickhouse"), (HiveProvider(), "hive")],
+    )
+    def test_distributed_query_provider_uses_digest_only_plan(
+        self, provider: DataSourceProvider, dialect: str
+    ) -> None:
+        sql = "SELECT value FROM features WHERE tenant = %(tenant)s"
+        resolved = provider.normalize(
+            cfg(
+                {
+                    "type": "sql",
+                    "dialect": dialect,
+                    "sql": sql,
+                    "params": {"tenant": "acme"},
+                }
+            )
+        )
+
+        plan = provider.plan(resolved)
+
+        assert isinstance(plan, SqlScan)
+        assert isinstance(plan.target, ParameterizedQuery)
+        assert plan.target.query_digest == digest(sql)
+        assert sql not in repr(plan)
 
     def test_doris_builtin_shape(self) -> None:
         resolved = DorisProvider().normalize(

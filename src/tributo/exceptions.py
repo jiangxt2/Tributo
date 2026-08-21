@@ -68,6 +68,11 @@ class EngineNotAvailableError(DataSourceError):
     """Requested ingestion engine binding is missing or incompatible."""
 
 
+@PublicAPI(stability="stable")
+class EmptyDatasetError(DataSourceError):
+    """A training source query returned no rows."""
+
+
 # ── Inference exceptions (compatible with inference-protocol §5.5) ────────
 
 

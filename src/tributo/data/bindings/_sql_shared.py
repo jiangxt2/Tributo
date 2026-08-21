@@ -6,7 +6,12 @@ import os
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from tributo.data.scan_plan import LogicalScanPlan, SqlScan, SqlTableRead
+from tributo.data.scan_plan import (
+    LogicalScanPlan,
+    ParameterizedQuery,
+    SqlScan,
+    SqlTableRead,
+)
 from tributo.exceptions import JobConfigurationError
 
 _PORT_DEFAULTS = {"clickhouse": 8123, "doris": 9030, "postgresql": 5432}
@@ -36,6 +41,19 @@ def require_sql_table(plan: LogicalScanPlan, connector_id: str) -> SqlScan:
     ):
         raise JobConfigurationError(
             f"{connector_id} Binding requires a structured SqlTableRead"
+        )
+    return plan
+
+
+def require_parameterized_query(plan: LogicalScanPlan, connector_id: str) -> SqlScan:
+    """Require the digest-only query target; SQL text stays in runtime options."""
+    if (
+        not isinstance(plan, SqlScan)
+        or plan.connector_id != connector_id
+        or not isinstance(plan.target, ParameterizedQuery)
+    ):
+        raise JobConfigurationError(
+            f"{connector_id} Binding requires a ParameterizedQuery"
         )
     return plan
 

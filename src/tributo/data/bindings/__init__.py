@@ -40,6 +40,8 @@ _RAY_DORIS_INSTALL_HINT = (
     "(or uv sync --extra mysql); use 'tributo[doris-flight]' for Flight"
 )
 _POSTGRESQL_INSTALL_HINT = "pip install 'tributo[postgresql]'"
+_RAY_CLICKHOUSE_INSTALL_HINT = "pip install 'tributo[clickhouse]'"
+_RAY_HIVE_INSTALL_HINT = "pip install 'tributo[hive]'"
 
 
 def _distribution_version(name: str) -> str | None:
@@ -293,6 +295,52 @@ def _daft_clickhouse_descriptor() -> BindingDescriptor:
             {ReadHint.TARGET_PARALLELISM, ReadHint.BATCH_SIZE}
         ),
         install_hint=_DAFT_CLICKHOUSE_INSTALL_HINT,
+    )
+
+
+def _ray_clickhouse_descriptor() -> BindingDescriptor:
+    from tributo.data.bindings.ray_clickhouse import RayClickHouseBinding
+
+    return BindingDescriptor(
+        key=BindingKey(
+            "tributo.ray_data",
+            ScanKind.SQL,
+            "clickhouse",
+            "tributo.ray.clickhouse",
+        ),
+        factory=RayClickHouseBinding,
+        capabilities=frozenset(),
+        distribution_name="tributo",
+        distribution_version=_distribution_version("tributo") or "1.0.0",
+        engine_version_spec=_RAY_VERSION_SPEC,
+        dependency_distributions=("clickhouse-connect",),
+        supported_read_hints=frozenset(
+            {ReadHint.TARGET_PARALLELISM, ReadHint.BATCH_SIZE}
+        ),
+        install_hint=_RAY_CLICKHOUSE_INSTALL_HINT,
+    )
+
+
+def _ray_hive_descriptor() -> BindingDescriptor:
+    from tributo.data.bindings.ray_hive import RayHiveBinding
+
+    return BindingDescriptor(
+        key=BindingKey(
+            "tributo.ray_data",
+            ScanKind.SQL,
+            "hive",
+            "tributo.ray.hive",
+        ),
+        factory=RayHiveBinding,
+        capabilities=frozenset(),
+        distribution_name="tributo",
+        distribution_version=_distribution_version("tributo") or "1.0.0",
+        engine_version_spec=_RAY_VERSION_SPEC,
+        dependency_distributions=("PyHive", "thrift"),
+        supported_read_hints=frozenset(
+            {ReadHint.TARGET_PARALLELISM, ReadHint.BATCH_SIZE}
+        ),
+        install_hint=_RAY_HIVE_INSTALL_HINT,
     )
 
 
@@ -597,6 +645,34 @@ def default_engine_bindings() -> EngineBindings:
                 _DAFT_LANCE_INSTALL_HINT,
                 None,
                 ("pylance", "daft-lance"),
+            ),
+            (
+                _ray_clickhouse_descriptor,
+                BindingKey(
+                    "tributo.ray_data",
+                    ScanKind.SQL,
+                    "clickhouse",
+                    "tributo.ray.clickhouse",
+                ),
+                "ray",
+                _RAY_VERSION_SPEC,
+                _RAY_CLICKHOUSE_INSTALL_HINT,
+                None,
+                ("clickhouse-connect",),
+            ),
+            (
+                _ray_hive_descriptor,
+                BindingKey(
+                    "tributo.ray_data",
+                    ScanKind.SQL,
+                    "hive",
+                    "tributo.ray.hive",
+                ),
+                "ray",
+                _RAY_VERSION_SPEC,
+                _RAY_HIVE_INSTALL_HINT,
+                None,
+                ("PyHive", "thrift"),
             ),
             (
                 _daft_clickhouse_descriptor,

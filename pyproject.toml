@@ -77,6 +77,12 @@ clickhouse = [
     "clickhouse-connect[arrow,async]>=1.5,<1.6",
     "daft-clickhouse[clickhouse]==1.0",
 ]
+hive = [
+    "PyHive>=0.7.0,<0.8",
+    "thrift>=0.24.0,<1",
+    "thrift-sasl>=0.4.3,<1",
+    "pure-sasl>=0.6.2,<1",
+]
 mysql = [
     "PyMySQL>=1.2,<1.3",
     "daft-doris[doris]==1.0",
@@ -112,7 +118,7 @@ model-export-hf = [
     "tributo[model-export-torch,hf]",
 ]
 training = [
-    "tributo[clickhouse,data,data-daft,model-export,mysql,postgresql,s3]",
+    "tributo[clickhouse,data,data-daft,hive,model-export,mysql,postgresql,s3]",
     "xgboost>=2.1.0",
     "onnxmltools>=1.13.0",
     "skl2onnx>=1.17.0",

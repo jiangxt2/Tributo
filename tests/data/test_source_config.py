@@ -162,8 +162,28 @@ class TestLegacyClickHouse:
         )
         assert isinstance(result, SqlSourceConfig)
         assert result.dialect == "clickhouse"
-        assert result.sql == "SELECT 1"
 
+
+class TestLegacyHive:
+    def test_normalizes_distributed_hive_options(self) -> None:
+        result = LegacyConfigNormalizer.normalize(
+            {
+                "type": "hive",
+                "hive_host": "hive.example",
+                "hive_database": "warehouse",
+                "hive_sql": "SELECT * FROM features",
+                "hive_auth": "NOSASL",
+                "hive_hash_column": "entity_id",
+            }
+        )
+
+        assert isinstance(result, SqlSourceConfig)
+        assert result.dialect == "hive"
+        assert result.auth == "NOSASL"
+        assert result.hash_column == "entity_id"
+
+
+class TestLegacyClickHouseFull:
     def test_full(self) -> None:
         result = LegacyConfigNormalizer.normalize(
             {
@@ -212,10 +232,10 @@ class TestUnsupportedType:
     def test_unsupported(self) -> None:
         from tributo.data.source_config import RawSourceConfig
 
-        result = LegacyConfigNormalizer.normalize({"type": "hive", "key": "val"})
+        result = LegacyConfigNormalizer.normalize({"type": "third-party", "key": "val"})
         assert isinstance(result, RawSourceConfig)
-        assert result.type == "hive"
-        assert result.raw == {"type": "hive", "key": "val"}
+        assert result.type == "third-party"
+        assert result.raw == {"type": "third-party", "key": "val"}
 
     def test_builtin_type_rejected_from_raw(self) -> None:
         from tributo.data.source_config import RawSourceConfig

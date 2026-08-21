@@ -80,6 +80,13 @@ _SQL_OPTION_KEYS: frozenset[str] = frozenset(
         "columns",
         "partitioning",
         "protocol",
+        "auth",
+        "batch_size",
+        "shard_mode",
+        "hash_column",
+        "hash_shards",
+        "parallelism",
+        "sort_key",
     }
 )
 _LANCE_OPTION_KEYS: frozenset[str] = frozenset(
@@ -102,6 +109,7 @@ _DIALECT_DEFAULTS: dict[str, dict[str, int | str]] = {
     "clickhouse": {"port": 8123, "user": "default"},
     "doris": {"port": 9030, "user": "root"},
     "postgresql": {"port": 5432, "user": "postgres"},
+    "hive": {"port": 10000, "user": "default"},
 }
 
 
@@ -375,6 +383,13 @@ _SQL_OPTION_TYPES: dict[str, type] = {
     "password": str,
     "partitioning": dict,
     "protocol": str,
+    "auth": str,
+    "batch_size": int,
+    "shard_mode": str,
+    "hash_column": str,
+    "hash_shards": int,
+    "parallelism": int,
+    "sort_key": str,
 }
 _LANCE_OPTION_TYPES: dict[str, type] = {
     "columns": list,
@@ -1082,6 +1097,13 @@ class _SqlProvider(DataSourceProvider):
                 "table": source.table,
                 "protocol": source.protocol,
                 "params": source.params,
+                "auth": source.auth,
+                "batch_size": source.batch_size,
+                "shard_mode": source.shard_mode,
+                "hash_column": source.hash_column,
+                "hash_shards": source.hash_shards,
+                "parallelism": source.parallelism,
+                "sort_key": source.sort_key,
             }
             return ResolvedSource(
                 provider_id=self.provider_id,
@@ -1096,6 +1118,7 @@ class _SqlProvider(DataSourceProvider):
     def plan(self, resolved: ResolvedSource) -> "LogicalScanPlan":
         """Describe a bounded SQL query without exposing SQL text or credentials."""
         from tributo.data.scan_plan import (
+            ParameterizedQuery,
             SourceCapability,
             SqlScan,
             SqlShardMode,
@@ -1106,11 +1129,18 @@ class _SqlProvider(DataSourceProvider):
         query_digest = resolved.identity_options.get("sql_digest")
         table = resolved.identity_options.get("table")
         if isinstance(query_digest, str):
-            raise JobConfigurationError(
-                f"{self.provider_id}: raw SQL ingestion is not supported by the "
-                "engine-neutral read contract; configure a structured 'table' "
-                "source with columns and partitioning, or execute the query "
-                "outside Tributo ingestion"
+            if self._dialect() not in {"clickhouse", "hive"}:
+                raise JobConfigurationError(
+                    f"{self.provider_id}: raw SQL ingestion is not supported by the "
+                    "engine-neutral read contract; configure a structured 'table' "
+                    "source with columns and partitioning"
+                )
+            query_target = ParameterizedQuery(query_digest)
+            return SqlScan(
+                provider_id=self.provider_id,
+                connector_id=self._dialect(),
+                target=query_target,
+                sharding=SqlShardRequirement(mode=SqlShardMode.AUTO),
             )
         if not isinstance(table, str):
             raise JobConfigurationError(
@@ -1148,7 +1178,7 @@ class _SqlProvider(DataSourceProvider):
             schema = resolved.runtime_options.get("schema") or "public"
         else:
             schema = resolved.runtime_options.get("database")
-        target = SqlTableRead(
+        table_target = SqlTableRead(
             table=table,
             schema=str(schema or "") or None,
             projection=tuple(resolved.identity_options.get("columns", ())),
@@ -1168,7 +1198,7 @@ class _SqlProvider(DataSourceProvider):
         return SqlScan(
             provider_id=self.provider_id,
             connector_id=self._dialect(),
-            target=target,
+            target=table_target,
             sharding=sharding,
             required_capabilities=frozenset(required),
             options=plan_options,
@@ -1200,6 +1230,13 @@ class PostgreSqlProvider(_SqlProvider):
     aliases = frozenset({"postgresql"})
 
 
+class HiveProvider(_SqlProvider):
+    """Logical HiveServer2 source for the distributed Ray Binding."""
+
+    provider_id = "tributo.hive"
+    aliases = frozenset({"hive"})
+
+
 # ── Built-in registration (module import triggers registration) ──
 
 from tributo.data.provider_registry import register_provider  # noqa: E402
@@ -1212,5 +1249,6 @@ for _provider_cls in (
     ClickHouseProvider,
     DorisProvider,
     PostgreSqlProvider,
+    HiveProvider,
 ):
     register_provider(_provider_cls)

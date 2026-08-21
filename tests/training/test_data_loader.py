@@ -135,7 +135,7 @@ def test_doris_requires_independent_ray_doris_binding(
         )
 
 
-@pytest.mark.parametrize("dialect", ["clickhouse", "doris", "postgresql"])
+@pytest.mark.parametrize("dialect", ["doris", "postgresql"])
 def test_legacy_raw_sql_has_structured_source_migration_error(dialect: str) -> None:
     with pytest.raises(JobConfigurationError, match="structured 'table' source"):
         load_ray_dataset_from_source(

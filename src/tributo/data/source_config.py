@@ -19,7 +19,7 @@ from tributo.util.annotations import PublicAPI
 # Individual source configs
 # ---------------------------------------------------------------------------
 
-_SqlDialect = Literal["clickhouse", "doris", "postgresql", "mysql"]
+_SqlDialect = Literal["clickhouse", "doris", "postgresql", "mysql", "hive"]
 
 
 @PublicAPI(stability="beta")
@@ -97,6 +97,13 @@ class SqlSourceConfig(StrictConfigModel):
     params: dict[str, Any] | None = Field(default=None, repr=False)
     columns: list[str] | None = None
     partitioning: SqlPartitioning | None = None
+    auth: Literal["NONE", "NOSASL", "LDAP", "CUSTOM"] | None = None
+    batch_size: int | None = Field(default=None, ge=1)
+    shard_mode: Literal["auto", "hash", "offset"] | None = None
+    hash_column: str | None = None
+    hash_shards: int | None = Field(default=None, ge=1)
+    parallelism: int | None = Field(default=None, ge=-1)
+    sort_key: str | None = None
 
     @model_validator(mode="after")
     def _require_one_read_target(self) -> "SqlSourceConfig":
@@ -124,6 +131,19 @@ class SqlSourceConfig(StrictConfigModel):
             object.__setattr__(self, "protocol", "mysql")
         if self.dialect != "doris" and self.protocol is not None:
             raise ValueError("protocol is only valid for Doris table reads")
+        if self.dialect != "hive" and any(
+            value is not None
+            for value in (
+                self.auth,
+                self.batch_size,
+                self.shard_mode,
+                self.hash_column,
+                self.hash_shards,
+            )
+        ):
+            raise ValueError("Hive read options are only valid for Hive sources")
+        if self.sort_key is not None and self.dialect != "clickhouse":
+            raise ValueError("sort_key is only valid for ClickHouse sources")
         return self
 
 
@@ -338,6 +358,7 @@ _DIALECT_DEFAULTS: dict[str, dict[str, int | str]] = {
     "doris": {"port": 9030, "user": "root"},
     "postgresql": {"port": 5432, "user": "postgres"},
     "mysql": {"port": 3306, "user": "root"},
+    "hive": {"port": 10000, "user": "default"},
 }
 
 # Legacy ``type`` keys that map to SQL dialects.
@@ -346,6 +367,7 @@ _SQL_DIALECT_TYPES: dict[str, _SqlDialect] = {
     "doris": "doris",
     "postgresql": "postgresql",
     "mysql": "mysql",
+    "hive": "hive",
 }
 
 
@@ -477,6 +499,29 @@ class LegacyConfigNormalizer:
                 password=data_config.get("ch_password"),
                 sql=data_config.get("ch_sql", ""),
                 params=data_config.get("ch_sql_params"),
+                sort_key=data_config.get("ch_sort_key"),
+                parallelism=data_config.get("ch_parallelism"),
+            )
+        if dialect == "hive":
+            return SqlSourceConfig(
+                dialect=dialect,
+                host=data_config.get("hive_host"),
+                port=(
+                    int(data_config["hive_port"])
+                    if data_config.get("hive_port") is not None
+                    else None
+                ),
+                database=data_config.get("hive_database"),
+                user=data_config.get("hive_user"),
+                password=data_config.get("hive_password"),
+                auth=data_config.get("hive_auth", data_config.get("auth")),
+                sql=data_config.get("hive_sql", ""),
+                params=data_config.get("hive_sql_params"),
+                batch_size=data_config.get("hive_batch_size"),
+                shard_mode=data_config.get("hive_shard_mode"),
+                hash_column=data_config.get("hive_hash_column"),
+                hash_shards=data_config.get("hive_hash_shards"),
+                parallelism=data_config.get("hive_parallelism"),
             )
         return SqlSourceConfig(
             dialect=dialect,
