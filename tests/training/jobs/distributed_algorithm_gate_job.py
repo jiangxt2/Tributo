@@ -16,14 +16,14 @@ import ray
 
 
 class _BorrowedDockerRayRuntimeManager:
-    """Expose the IT-owned Docker cluster as local-profile test evidence only."""
+    """Expose the IT-owned Docker cluster as borrowed cluster evidence."""
 
     def open(self, _profile: object, **_kwargs: object) -> Any:
         from tributo.algorithms.api import ExecutionProfile, WorkerResources
         from tributo.algorithms.core import RayRuntimeManager, RayRuntimeSession
 
-        if _profile is not ExecutionProfile.LOCAL:
-            raise AssertionError("Docker gate only previews local-profile evidence")
+        if _profile is not ExecutionProfile.CLUSTER:
+            raise AssertionError("Docker gate requires the cluster profile")
         resources = _kwargs.get("resources_per_worker")
         worker_count = _kwargs.get("worker_count")
         if not isinstance(resources, WorkerResources) or not isinstance(
@@ -39,9 +39,10 @@ class _BorrowedDockerRayRuntimeManager:
 
         return RayRuntimeSession(
             self,
-            ExecutionProfile.LOCAL,
+            ExecutionProfile.CLUSTER,
             owned=False,
             cluster_resources=ray.cluster_resources(),
+            resource_preflight="validated",
         )
 
     def _release(self) -> None:
@@ -77,6 +78,23 @@ def _algorithm_config(
     storage_path = str(Path(bundle_uri).parent / f"ray-results-{algorithm}")
     if algorithm == "multinomial_nb":
         return {"alpha": 1.0, "output": output}
+    if algorithm == "third_party_binary_linear":
+        return {
+            "model": {"input_features": 2},
+            "optimizer": {"learning_rate": 0.1},
+            "training": {
+                "epochs": 2,
+                "batch_size": 8,
+                "prefetch_batches": 1,
+                "seed": 42,
+            },
+            "ray": {
+                "max_failures": 0,
+                "storage_path": storage_path,
+                "resume": {"checkpoint_interval": 1},
+            },
+            "output": output,
+        }
     if algorithm == "xgboost":
         return {
             "data": {"label_col": "label", "feature_columns": ["f0", "f1"]},
@@ -118,6 +136,22 @@ def _algorithm_config(
         "output": output,
     }
     if algorithm == "dnn":
+        config["features"].append(
+            {
+                "name": "segment",
+                "type": "sparse",
+                "vocab_size": 5,
+                "embedding_dim": 2,
+            }
+        )
+        config["features"].append(
+            {
+                "name": "numeric_code",
+                "type": "sparse",
+                "vocab_size": 5,
+                "embedding_dim": 2,
+            }
+        )
         config["loss"] = {"type": "bce"}
     elif algorithm == "pu":
         config["pu"] = {
@@ -166,7 +200,11 @@ def _execution_request(
                 name="train",
                 resolver_id=INGESTION_RESOLVER_ID,
                 reference=request_key,
-                feature_names=("f0", "f1"),
+                feature_names=(
+                    ("f0", "f1", "segment", "numeric_code")
+                    if algorithm == "dnn"
+                    else ("f0", "f1")
+                ),
                 label_name="label",
             ),
             algorithm_config=_algorithm_config(
@@ -190,6 +228,7 @@ def _execute(
     worker_count: int,
     runtime_manager: object | None = None,
     local_num_cpus: int | None = None,
+    expected_rows: int = 64,
 ) -> dict[str, Any]:
     from tributo.algorithms.api import ResultPolicy
     from tributo.algorithms.composition import build_algorithm_dispatcher
@@ -256,27 +295,37 @@ def _execute(
             raise AssertionError(f"{algorithm} did not prove local distribution")
         if worker_count == 1 and receipt.distributed:
             raise AssertionError(f"{algorithm} single worker claimed distribution")
-    elif profile == "kubernetes":
+    elif profile == "cluster":
         if receipt.runtime_owned:
-            raise AssertionError("Kubernetes Ray connection was marked owned")
-        if not receipt.distributed or not receipt.cross_node:
-            raise AssertionError(f"{algorithm} did not prove cross-node distribution")
-        if not receipt.kubernetes_distributed_supported:
-            raise AssertionError(f"{algorithm} did not prove Kubernetes support")
+            raise AssertionError("borrowed Ray cluster connection was marked owned")
+        if worker_count >= 2:
+            if not receipt.distributed or not receipt.cross_node:
+                raise AssertionError(
+                    f"{algorithm} did not prove cross-node distribution"
+                )
+            if not receipt.cluster_distributed:
+                raise AssertionError(f"{algorithm} did not prove cluster distribution")
+        elif receipt.distributed or receipt.cross_node or receipt.cluster_distributed:
+            raise AssertionError(
+                f"{algorithm} single worker claimed cluster distribution"
+            )
     elif worker_count >= 2 and (not receipt.distributed or not receipt.cross_node):
         raise AssertionError(f"{algorithm} did not prove cross-node distribution")
     elif worker_count == 1 and receipt.distributed:
         raise AssertionError(f"{algorithm} single worker claimed distribution")
-    if profile == "local" and receipt.kubernetes_distributed_supported:
-        raise AssertionError("Docker local-profile evidence masqueraded as Kubernetes")
+    if profile == "local" and receipt.cluster_distributed:
+        raise AssertionError("Docker local-profile evidence masqueraded as cluster")
     if receipt.driver_materialized_training_rows != 0:
         raise AssertionError("Driver materialized training rows")
     if len({worker.shard_id for worker in receipt.workers}) != worker_count:
         raise AssertionError(f"{algorithm} did not report unique shards")
     if sum(worker.rows_processed or 0 for worker in receipt.workers) <= 0:
         raise AssertionError(f"{algorithm} did not report processed rows")
-    if algorithm in {"dnn", "pu"}:
-        if sum(sum(worker.input_rows.values()) for worker in receipt.workers) != 64:
+    if algorithm in {"dnn", "pu", "third_party_binary_linear"}:
+        if (
+            sum(sum(worker.input_rows.values()) for worker in receipt.workers)
+            != expected_rows
+        ):
             raise AssertionError(f"{algorithm} did not prove complete input coverage")
         if any(
             worker.batch_count is None
@@ -333,9 +382,24 @@ def _execute(
         try:
             predictions = predictor.predict_batch(
                 [
-                    {"f0": 0.75, "f1": 0.60},
-                    {"f0": 1.10, "f1": 0.85},
-                    {"f0": 1.40, "f1": 1.00},
+                    {
+                        "f0": 0.75,
+                        "f1": 0.60,
+                        "segment": 0,
+                        "numeric_code": "001",
+                    },
+                    {
+                        "f0": 1.10,
+                        "f1": 0.85,
+                        "segment": 1,
+                        "numeric_code": "1",
+                    },
+                    {
+                        "f0": 1.40,
+                        "f1": 1.00,
+                        "segment": 2,
+                        "numeric_code": "10",
+                    },
                 ]
             )
         finally:
@@ -376,6 +440,20 @@ def _assert_dnn_single_multi_numerical_consistency(
         "label_encoders"
     ):
         raise AssertionError("DNN global categorical preprocessing depends on sharding")
+    expected_encoder = {
+        "segment": {str(index): index for index in range(4)},
+        "numeric_code": {"001": 0, "1": 1, "10": 2, "2": 3},
+    }
+    if single_preprocessor.get("label_encoders") != expected_encoder:
+        raise AssertionError(
+            "DNN categorical preprocessing differs from the deterministic reference: "
+            f"{single_preprocessor.get('label_encoders')}"
+        )
+    if single_preprocessor.get("label_encoder_key_types") != {
+        "segment": "int",
+        "numeric_code": "str",
+    }:
+        raise AssertionError("DNN categorical key type metadata is missing")
     single_norm = single_preprocessor.get("norm_params")
     multi_norm = multi_preprocessor.get("norm_params")
     if not isinstance(single_norm, dict) or not isinstance(multi_norm, dict):
@@ -482,8 +560,16 @@ def main() -> int:
     _assert_algorithm_distribution_environment()
     f0 = [abs(rng.gauss(1.0, 0.3)) for _ in range(64)]
     f1 = [abs(rng.gauss(0.8, 0.2)) for _ in range(64)]
+    segment = [index % 4 for index in range(64)]
+    numeric_code = [("001", "1", "2", "10")[index % 4] for index in range(64)]
     labels = [float(index % 4 == 0) for index in range(64)]
-    records = {"f0": f0, "f1": f1, "label": labels}
+    records = {
+        "f0": f0,
+        "f1": f1,
+        "segment": segment,
+        "numeric_code": numeric_code,
+        "label": labels,
+    }
     configured_root = os.environ.get("TRIBUTO_DISTRIBUTED_GATE_ROOT")
     root = configured_root or (
         f"/workspace/tributo-work/tributo-distributed-gate-{uuid.uuid4().hex}"
@@ -526,6 +612,17 @@ def main() -> int:
                 )
                 for worker_count in (1, 2)
             )
+            results.extend(
+                _execute(
+                    "third_party_binary_linear",
+                    data_path,
+                    f"{root}/bundle-torch-recipe-{worker_count}",
+                    profile="local",
+                    worker_count=worker_count,
+                    local_num_cpus=4,
+                )
+                for worker_count in (1, 2)
+            )
             dnn_results = [result for result in results if result["algorithm"] == "dnn"]
             _assert_dnn_single_multi_numerical_consistency(
                 next(result for result in dnn_results if result["worker_count"] == 1),
@@ -548,7 +645,7 @@ def main() -> int:
             )
             raise AssertionError("required artifact failure unexpectedly succeeded")
         else:
-            profile = "local"
+            profile = "cluster"
             runtime_manager = _BorrowedDockerRayRuntimeManager()
             _assert_third_party_descriptor_discovered()
             algorithms = [

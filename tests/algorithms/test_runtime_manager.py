@@ -106,32 +106,54 @@ def test_external_connection_is_never_implicitly_reused_as_local() -> None:
     assert ray.shutdown_calls == 0
 
 
-def test_explicit_external_kubernetes_connection_is_borrowed_not_shutdown() -> None:
+def test_explicit_external_cluster_connection_is_borrowed_not_shutdown() -> None:
     ray = FakeRay(initialized=True)
     manager = RayRuntimeManager(
         ray,
-        allow_external_kubernetes_connection=True,
+        allow_external_cluster_connection=True,
     )
 
-    session = manager.open(ExecutionProfile.KUBERNETES)
+    session = manager.open(ExecutionProfile.CLUSTER)
     assert session.owned is False
     assert session.runtime_owned is False
+    assert session.resource_preflight == "deferred_to_ray"
     session.close()
 
     assert ray.shutdown_calls == 0
 
 
-def test_kubernetes_connection_requires_verified_process_environment(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("KUBERNETES_SERVICE_HOST", raising=False)
+def test_cluster_connection_uses_ray_auto_without_provider_detection() -> None:
     ray = FakeRay()
     manager = RayRuntimeManager(ray)
 
-    with pytest.raises(AlgorithmConfigurationError, match="Kubernetes process"):
-        manager.open(ExecutionProfile.KUBERNETES)
+    session = manager.open(
+        ExecutionProfile.CLUSTER,
+        resources_per_worker=WorkerResources(num_cpus=32, num_gpus=8),
+        worker_count=16,
+    )
 
-    assert ray.init_calls == []
+    assert ray.init_calls == [{"address": "auto"}]
+    assert session.owned is True
+    assert session.runtime_owned is False
+    assert session.resource_preflight == "deferred_to_ray"
+    session.close()
+
+
+def test_legacy_kubernetes_connection_option_is_an_input_alias() -> None:
+    ray = FakeRay(initialized=True)
+
+    with pytest.deprecated_call(match="allow_external_kubernetes_connection"):
+        manager = RayRuntimeManager(
+            ray,
+            allow_external_kubernetes_connection=True,
+        )
+    with pytest.deprecated_call(match="execution profile 'kubernetes'"):
+        profile = ExecutionProfile("kubernetes")
+
+    session = manager.open(profile)
+    session.close()
+
+    assert ray.shutdown_calls == 0
 
 
 def test_resource_failure_closes_only_the_connection_started_by_manager() -> None:

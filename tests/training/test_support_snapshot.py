@@ -110,7 +110,7 @@ def test_unified_snapshot_exposes_native_first_party_support() -> None:
     assert all(by_name[name].tested for name in ("dnn", "pu", "xgboost"))
     assert all(by_name[name].supported for name in ("dnn", "pu", "xgboost"))
     assert all(
-        by_name[name].validated_execution_profiles == ("local",)
+        by_name[name].validated_execution_profiles == ("cluster", "local")
         for name in ("dnn", "pu", "xgboost")
     )
     assert all(by_name[name].stability == "alpha" for name in ("dnn", "pu", "xgboost"))

@@ -1,9 +1,9 @@
-"""Owned local Ray lifecycle and fail-closed cluster resource preflight."""
+"""Owned local Ray lifecycle and deployment-neutral cluster attachment."""
 
 from __future__ import annotations
 
-import os
 import threading
+import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import TracebackType
@@ -49,11 +49,13 @@ class RayRuntimeSession:
         *,
         owned: bool,
         cluster_resources: Mapping[str, float],
+        resource_preflight: str,
     ) -> None:
         self._manager = manager
         self.profile = profile
         self.owned = owned
         self.cluster_resources = FrozenDict(cluster_resources)
+        self.resource_preflight = resource_preflight
         self._closed = False
 
     @property
@@ -88,19 +90,34 @@ class RayRuntimeSession:
 
 @DeveloperAPI
 class RayRuntimeManager:
-    """Create ``local[*]`` or connect to Kubernetes without owning a cluster."""
+    """Create ``local[*]`` or attach to Ray without owning a remote cluster."""
 
     def __init__(
         self,
         ray_module: Any | None = None,
         *,
-        allow_external_kubernetes_connection: bool = False,
+        allow_external_cluster_connection: bool = True,
+        allow_external_kubernetes_connection: bool | None = None,
         default_local_options: LocalRuntimeOptions | None = None,
     ) -> None:
         self._ray_module = ray_module
-        self._allow_external_kubernetes_connection = (
-            allow_external_kubernetes_connection
-        )
+        if allow_external_kubernetes_connection is not None:
+            warnings.warn(
+                "allow_external_kubernetes_connection is deprecated; use "
+                "allow_external_cluster_connection",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            if allow_external_cluster_connection is not True:
+                raise AlgorithmConfigurationError(
+                    "pass only one external cluster connection option"
+                )
+            allow_external_cluster_connection = allow_external_kubernetes_connection
+        if not isinstance(allow_external_cluster_connection, bool):
+            raise AlgorithmConfigurationError(
+                "allow_external_cluster_connection must be a boolean"
+            )
+        self._allow_external_cluster_connection = allow_external_cluster_connection
         if default_local_options is not None and not isinstance(
             default_local_options, LocalRuntimeOptions
         ):
@@ -126,7 +143,7 @@ class RayRuntimeManager:
             resolved_profile = ExecutionProfile(profile)
         except (TypeError, ValueError) as exc:
             raise AlgorithmConfigurationError(
-                "execution profile must be 'local' or 'kubernetes'"
+                "execution profile must be 'local' or 'cluster'"
             ) from exc
         if (
             not isinstance(worker_count, int)
@@ -134,20 +151,12 @@ class RayRuntimeManager:
             or worker_count < 1
         ):
             raise AlgorithmConfigurationError("worker_count must be a positive integer")
-        if resolved_profile is ExecutionProfile.KUBERNETES and local_options:
+        if resolved_profile is ExecutionProfile.CLUSTER and local_options:
             raise AlgorithmConfigurationError(
-                "local runtime overrides are invalid for kubernetes"
+                "local runtime overrides are invalid for cluster execution"
             )
         if resolved_profile is ExecutionProfile.LOCAL and local_options is None:
             local_options = self._default_local_options
-        if resolved_profile is ExecutionProfile.KUBERNETES and not (
-            os.environ.get("KUBERNETES_SERVICE_HOST")
-            or self._allow_external_kubernetes_connection
-        ):
-            raise AlgorithmConfigurationError(
-                "kubernetes execution requires a verifiable Kubernetes process "
-                "environment before connecting to Ray"
-            )
         ray = self._ray()
         with self._lock:
             started_here = False
@@ -181,7 +190,15 @@ class RayRuntimeManager:
                     str(name): float(value)
                     for name, value in ray.cluster_resources().items()
                 }
-                if resources_per_worker is not None:
+                resource_preflight = (
+                    "validated"
+                    if resolved_profile is ExecutionProfile.LOCAL
+                    else "deferred_to_ray"
+                )
+                if (
+                    resources_per_worker is not None
+                    and resolved_profile is ExecutionProfile.LOCAL
+                ):
                     self.validate_resources(
                         resources_per_worker,
                         worker_count,
@@ -200,6 +217,7 @@ class RayRuntimeManager:
                 resolved_profile,
                 owned=self._manager_owned,
                 cluster_resources=cluster_resources,
+                resource_preflight=resource_preflight,
             )
 
     def _ray(self) -> Any:
@@ -225,12 +243,11 @@ class RayRuntimeManager:
                 "an externally initialized Ray connection cannot be proven to be "
                 "Tributo-owned local[*]; refusing implicit reuse"
             )
-        in_kubernetes = bool(os.environ.get("KUBERNETES_SERVICE_HOST"))
-        if not (in_kubernetes or self._allow_external_kubernetes_connection):
+        if not self._allow_external_cluster_connection:
             raise AlgorithmConfigurationError(
-                "an existing Ray connection is not verifiably inside Kubernetes"
+                "reuse of an externally initialized Ray cluster is disabled"
             )
-        self._active_profile = ExecutionProfile.KUBERNETES
+        self._active_profile = ExecutionProfile.CLUSTER
         self._manager_owned = False
 
     def _release(self) -> None:

@@ -24,7 +24,7 @@ This page provides module-level guidance and deprecation notes.
 | Module | Level | Notes |
 |--------|-------|-------|
 | `tributo.config` — `JobConfig` | `stable` | Ray Job submission config |
-| `tributo.config` — `AlgorithmExecutionConfig` and nested algorithm execution models | `alpha` | Strict JSON envelope shared by local Ray and Kubernetes-hosted Ray execution |
+| `tributo.config` — `AlgorithmExecutionConfig` and nested algorithm execution models | `alpha` | Strict JSON envelope shared by owned-local and attached-cluster Ray execution |
 | `tributo.job` — `TributoClient` | `stable` | Primary Ray Jobs client |
 | `tributo.job` — `RayJob` | `stable` annotation with runtime deprecation warning | Use `TributoClient`; the annotation and warning conflict is documented without changing the public contract in this documentation update |
 | `tributo.ray_jobs` | `alpha` | Workload-neutral submission identity, ambiguous-submit reconciliation, status, logs, and stop helpers |
@@ -98,10 +98,11 @@ from the legacy setup-only propagation rule.
 | `tributo.algorithms.builtin.torch_collective` | `alpha` | First-party DNN and PU Ray Train collective implementations |
 | `tributo.algorithms.builtin.xgboost_native` | `alpha` | First-party framework-native distributed XGBoost implementation |
 | `tributo.algorithms.core.builder` — `AlgorithmBuilder` | `alpha` | Provisional sklearn and Custom Ray Function registration builders |
-| `tributo.algorithms.core.runtime` | `alpha` | Owned local Ray lifecycle and fail-closed Kubernetes connection/resource preflight |
+| `tributo.algorithms.core.runtime` | `alpha` | Owned local Ray lifecycle and deployment-neutral attached-cluster connection |
 | `tributo.algorithms.composition` | `alpha` | Default formal Dispatcher composition root |
 | `tributo.algorithms.spi.execution` | `alpha` | Provisional operation and Runtime execution protocols |
 | `tributo.algorithms.spi.input` | `alpha` | Two-stage input resolution and Driver/Worker ownership contracts |
+| `tributo.algorithms.spi.torch` | `alpha` | Narrow model/loss/optimizer/metric recipe contract lowered to Ray Train |
 
 ### Data (tributo.data.*)
 
@@ -197,6 +198,7 @@ from the legacy setup-only propagation rule.
 | `tributo.integrations.validators.*` | `beta` | Built-in validator implementations |
 | `tributo.integrations.sources` | `beta` | Built-in source provider package |
 | `tributo.integrations.sources.*` | `beta` | Built-in source providers |
+| `tributo.integrations.sources.ray_torch_recipe` | `alpha` | Generic trusted Torch recipe checkpoint provider |
 | `tributo.integrations.storage` | `beta` | Built-in storage adapter package |
 | `tributo.integrations.storage.*` | `beta` | Built-in storage backends |
 | `tributo.integrations.hooks` | `beta` | Built-in Hook package |

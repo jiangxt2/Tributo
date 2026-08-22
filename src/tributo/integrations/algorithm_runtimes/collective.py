@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from typing import Any, cast
 
@@ -37,6 +38,12 @@ from tributo.util.annotations import DeveloperAPI
 RAY_TRAIN_COLLECTIVE_RUNTIME_ID = FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS[
     DistributionStrategy.RAY_TRAIN_COLLECTIVE
 ].runtime_id
+
+
+def _ray_run_name(algorithm: str, run_id: str) -> str:
+    """Bind Ray storage identity to the existing Tributo logical run."""
+    suffix = hashlib.sha256(run_id.encode("utf-8")).hexdigest()[:16]
+    return f"tributo-{algorithm}-{suffix}"
 
 
 def _collective_execution_result(
@@ -239,9 +246,15 @@ class RayTrainCollectiveRuntime:
         prepared = _prepare_datasets(envelope)
         try:
             from ray.train import FailureConfig, RunConfig, ScalingConfig
-            from ray.train.torch import TorchTrainer
+            from ray.train.torch import TorchConfig, TorchTrainer
 
-            from tributo.training.checkpoint import load_initial_checkpoint
+            from tributo.integrations.algorithm_runtimes.ray_data_config import (
+                ExactCoverageDataConfig,
+            )
+            from tributo.training.checkpoint import (
+                ResumeConfig,
+                checkpoint_config,
+            )
 
             plan = envelope.plan
             if plan.distribution_spec is None or not isinstance(
@@ -256,16 +269,19 @@ class RayTrainCollectiveRuntime:
                 resource_map["GPU"] = plan.runtime.num_gpus
             resource_map.update(plan.runtime.custom_resources)
             ray_config = plan.algorithm_config.get("ray", {})
-            storage_path = (
-                ray_config.get("storage_path")
-                if isinstance(ray_config, Mapping)
-                else None
-            )
-            max_failures = (
-                int(ray_config.get("max_failures", 0))
-                if isinstance(ray_config, Mapping)
-                else 0
-            )
+            if not isinstance(ray_config, Mapping):
+                raise AlgorithmConfigurationError("ray config must be a mapping")
+            storage_path = ray_config.get("storage_path")
+            max_failures = ray_config.get("max_failures", 0)
+            if (
+                not isinstance(max_failures, int)
+                or isinstance(max_failures, bool)
+                or max_failures < -1
+            ):
+                raise AlgorithmConfigurationError(
+                    "ray.max_failures must be -1 or a non-negative integer"
+                )
+            resume_config = ResumeConfig.model_validate(ray_config.get("resume", {}))
             datasets = algorithm.bind_datasets(prepared.views)
             if not isinstance(datasets, Mapping) or not datasets:
                 raise AlgorithmConfigurationError(
@@ -299,13 +315,15 @@ class RayTrainCollectiveRuntime:
                 ),
                 datasets=dict(cast(Mapping[str, Any], datasets)),
                 run_config=RunConfig(
-                    name=f"tributo-{plan.resolution.algorithm}",
+                    name=_ray_run_name(plan.resolution.algorithm, envelope.run_id),
                     storage_path=storage_path,
                     failure_config=FailureConfig(max_failures=max_failures),
+                    checkpoint_config=checkpoint_config(resume_config),
                 ),
-                resume_from_checkpoint=load_initial_checkpoint(
-                    plan.runtime.resume_from
+                torch_config=TorchConfig(
+                    backend=None if policy.backend == "auto" else policy.backend
                 ),
+                dataset_config=ExactCoverageDataConfig(),
             )
             result = trainer.fit()
             metrics = result.metrics or {}

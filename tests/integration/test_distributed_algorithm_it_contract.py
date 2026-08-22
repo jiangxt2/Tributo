@@ -16,6 +16,9 @@ _DISTRIBUTED_COMPOSE = (
 _PLUGIN_PYPROJECT = (
     _ROOT / "tests" / "fixtures" / "distributed_algorithm_plugin" / "pyproject.toml"
 )
+_TORCH_RECIPE_PLUGIN_PYPROJECT = (
+    _ROOT / "tests" / "fixtures" / "torch_recipe_algorithm_plugin" / "pyproject.toml"
+)
 
 
 def _shell_function(source: str, name: str) -> str:
@@ -34,6 +37,7 @@ def test_local_gate_owns_only_its_named_container_and_volumes() -> None:
     assert "create-source-snapshot" in runner
     assert "uv build" in runner
     assert "tests/fixtures/distributed_algorithm_plugin" in runner
+    assert "tests/fixtures/torch_recipe_algorithm_plugin" in runner
     assert "tributo-plugin.whl" in runner
     assert '"${SOURCE_VOLUME_NAME}:/workspace/tributo-src:ro"' in runner
     assert '"${PLUGIN_WHEEL}:/workspace/tributo-plugin.whl:ro"' in runner
@@ -64,6 +68,7 @@ def test_distributed_gate_uses_cached_images_and_scoped_compose_cleanup() -> Non
     assert "uv build" in runner
     assert "TRIBUTO_DISTRIBUTED_PLUGIN_WHEEL" in runner
     assert "tests/fixtures/offline_algorithm_dependency" in runner
+    assert "tests/fixtures/torch_recipe_algorithm_plugin" in runner
     assert "tests/fixtures/offline_algorithm_plugin" in runner
     assert "tools/build_algorithm_bundle.py" in runner
     assert (
@@ -83,6 +88,9 @@ def test_distributed_gate_uses_cached_images_and_scoped_compose_cleanup() -> Non
         in runner
     )
     assert "docker compose" in runner
+    assert "ensure_digest_image(p.tool_image)" in runner
+    assert 'TRIBUTO_IT_TOOL_IMAGE="${TOOL_IMAGE%%@*}"' in runner
+    assert 'TRIBUTO_IT_MINIO_IMAGE="${MINIO_IMAGE%%@*}"' in runner
     assert "down --volumes --remove-orphans" in runner
     assert "com.docker.compose.project=${PROJECT_NAME}" in runner
     assert "dangling=true" in runner
@@ -92,6 +100,8 @@ def test_distributed_gate_uses_cached_images_and_scoped_compose_cleanup() -> Non
     assert "report_global_image_changes || cleanup_status=1" not in runner
     assert "report_existing_container_changes || cleanup_status=1" not in runner
     assert "test_formal_distributed_algorithms_complete_on_ray_cluster" in runner
+    assert "test_out_of_tree_torch_recipe_completes_on_ray_cluster" in runner
+    assert "TRIBUTO_DISTRIBUTED_ALGORITHM_RERUN_FAILED_ONLY" in runner
     assert (
         "test_remote_offline_wheelhouse_archive_installs_on_driver_and_workers"
         in runner
@@ -116,11 +126,36 @@ def test_distributed_fixture_is_a_code_only_wheel() -> None:
 
     assert "dependencies" not in pyproject["project"]
     assert "tributo.algorithms" in pyproject["project"]["entry-points"]
+    assert set(pyproject["project"]["entry-points"]["tributo.algorithms"]) == {
+        "third_party_mean_regressor"
+    }
     assert "AlgorithmBuilder.from_distributed_algorithm" in fixture_source
     assert "MapReduceAlgorithm" in fixture_source
     assert "ResultPolicy.FIT_ONLY" in fixture_source
     assert "tributo.algorithms.builtin" not in fixture_source
     assert "exporter=" not in fixture_source
+
+
+def test_torch_recipe_fixture_is_a_code_only_low_code_wheel() -> None:
+    pyproject = tomllib.loads(
+        _TORCH_RECIPE_PLUGIN_PYPROJECT.read_text(encoding="utf-8")
+    )
+    fixture_source = (
+        _TORCH_RECIPE_PLUGIN_PYPROJECT.parent
+        / "src"
+        / "tributo_test_torch_recipe_algorithm"
+        / "__init__.py"
+    ).read_text(encoding="utf-8")
+
+    assert "dependencies" not in pyproject["project"]
+    assert "tributo.algorithms" in pyproject["project"]["entry-points"]
+    assert set(pyproject["project"]["entry-points"]["tributo.algorithms"]) == {
+        "third_party_binary_linear"
+    }
+    assert "AlgorithmBuilder.from_torch_recipe" in fixture_source
+    assert "TorchTrainingRecipe" in fixture_source
+    assert "train_loop_per_worker" not in fixture_source
+    assert "tributo.algorithms.builtin" not in fixture_source
 
 
 def test_concurrent_daemon_images_are_diagnostic_only(tmp_path: Path) -> None:

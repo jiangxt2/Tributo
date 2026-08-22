@@ -202,7 +202,34 @@ class FeatureTransformer:
             path: Save path.
         """
         path = Path(path)
-        state = {
+        state = self.to_state()
+        path.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+        logger.info("Saved FeatureTransformer to %s", path)
+
+    def to_state(self) -> dict[str, Any]:
+        """Return the bounded JSON-compatible preprocessing state."""
+        key_types: dict[str, str] = {}
+        for feature_name, mapping in self.label_encoders.items():
+            kinds = {
+                "bool"
+                if isinstance(key, (bool, np.bool_))
+                else "int"
+                if isinstance(key, (int, np.integer))
+                else "float"
+                if isinstance(key, (float, np.floating))
+                else "str"
+                if isinstance(key, (str, np.str_))
+                else "unsupported"
+                for key in mapping
+            }
+            if "unsupported" in kinds or len(kinds) > 1:
+                raise ValueError(
+                    f"Sparse feature {feature_name!r} has unsupported mixed "
+                    "category key types"
+                )
+            if kinds:
+                key_types[feature_name] = next(iter(kinds))
+        return {
             "features": [
                 {
                     "type": "sparse" if isinstance(f, SparseFeat) else "dense",
@@ -230,10 +257,58 @@ class FeatureTransformer:
                 }
                 for k, v in self.label_encoders.items()
             },
+            "label_encoder_key_types": key_types,
             "norm_params": self.norm_params,
         }
-        path.write_text(json.dumps(state, indent=2, ensure_ascii=False))
-        logger.info("Saved FeatureTransformer to %s", path)
+
+    @classmethod
+    def from_state(cls, state: dict[str, Any]) -> FeatureTransformer:
+        """Rebuild a fitted transformer from serialized state."""
+        features = features_from_dicts(state["features"])
+        transformer = cls(features)
+
+        def _legacy_convert_key(key: str) -> Any:
+            try:
+                return int(key)
+            except ValueError:
+                try:
+                    return float(key)
+                except ValueError:
+                    return key
+
+        key_types = state.get("label_encoder_key_types", {})
+        if not isinstance(key_types, dict):
+            raise ValueError("label_encoder_key_types must be a JSON object")
+
+        def _convert_key(feature_name: str, key: str) -> Any:
+            key_type = key_types.get(feature_name)
+            if key_type is None:
+                return _legacy_convert_key(key)
+            if key_type == "str":
+                return key
+            if key_type == "int":
+                return int(key)
+            if key_type == "float":
+                return float(key)
+            if key_type == "bool":
+                if key not in {"True", "False"}:
+                    raise ValueError(
+                        f"Invalid boolean category key for {feature_name!r}: {key!r}"
+                    )
+                return key == "True"
+            raise ValueError(
+                f"Unsupported category key type for {feature_name!r}: {key_type!r}"
+            )
+
+        transformer.label_encoders = {
+            feature_name: {
+                _convert_key(feature_name, raw): value for raw, value in mapping.items()
+            }
+            for feature_name, mapping in state["label_encoders"].items()
+        }
+        transformer.norm_params = state["norm_params"]
+        transformer.fitted = True
+        return transformer
 
     @classmethod
     def load(cls, path: str | Path) -> FeatureTransformer:
@@ -248,31 +323,6 @@ class FeatureTransformer:
         path = Path(path)
         state = json.loads(path.read_text())
 
-        # Rebuild feature column configuration
-        features = features_from_dicts(state["features"])
-
-        transformer = cls(features)
-
-        # Load label_encoders, try to convert string keys back to original types
-        def _try_convert_key(key: str) -> Any:
-            """Try to convert a string key back to its numeric type."""
-            try:
-                # Try converting to int
-                return int(key)
-            except ValueError:
-                try:
-                    # Try converting to float
-                    return float(key)
-                except ValueError:
-                    # Keep as string
-                    return key
-
-        transformer.label_encoders = {
-            k: {_try_convert_key(kk): vv for kk, vv in v.items()}
-            for k, v in state["label_encoders"].items()
-        }
-        transformer.norm_params = state["norm_params"]
-        transformer.fitted = True
-
+        transformer = cls.from_state(state)
         logger.info("Loaded FeatureTransformer from %s", path)
         return transformer

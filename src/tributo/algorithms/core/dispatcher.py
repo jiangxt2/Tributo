@@ -306,6 +306,7 @@ class AlgorithmDispatcher:
                 cast(ExecutionReceipt, receipt),
                 cluster_resources=dict(runtime_session.cluster_resources),
                 runtime_owned=runtime_session.runtime_owned,
+                resource_preflight=runtime_session.resource_preflight,
             )
             return replace(result, execution_receipt=updated_receipt)
 

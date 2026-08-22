@@ -29,7 +29,7 @@ def _collective_spec() -> DistributionSpec:
         supported_worker_range=WorkerRange(1, 8),
         supported_execution_profiles=(
             ExecutionProfile.LOCAL,
-            ExecutionProfile.KUBERNETES,
+            ExecutionProfile.CLUSTER,
         ),
         resources_per_worker=WorkerResources(num_cpus=2),
         input_distribution=InputDistribution.SHARDED,
@@ -50,7 +50,7 @@ def _map_reduce_spec() -> DistributionSpec:
         supported_worker_range=WorkerRange(1, 32),
         supported_execution_profiles=(
             ExecutionProfile.LOCAL,
-            ExecutionProfile.KUBERNETES,
+            ExecutionProfile.CLUSTER,
         ),
         resources_per_worker=WorkerResources(),
         input_distribution=InputDistribution.SHARDED,
@@ -117,7 +117,7 @@ def test_framework_native_requires_framework_owned_data_and_evidence() -> None:
         DistributionSpec(
             strategy=DistributionStrategy.FRAMEWORK_NATIVE,
             supported_worker_range=WorkerRange(1, 16),
-            supported_execution_profiles=(ExecutionProfile.KUBERNETES,),
+            supported_execution_profiles=(ExecutionProfile.CLUSTER,),
             resources_per_worker=WorkerResources(),
             input_distribution=InputDistribution.SHARDED,
             state_coordination=StateCoordination.FRAMEWORK_NATIVE,
@@ -144,3 +144,20 @@ def test_worker_resources_are_immutable_and_scale_per_worker() -> None:
 def test_standalone_is_not_an_execution_profile() -> None:
     with pytest.raises(ValueError):
         ExecutionProfile("standalone")
+
+
+def test_legacy_kubernetes_profile_deserializes_to_cluster() -> None:
+    payload = _collective_spec().to_dict()
+    payload["supported_execution_profiles"] = ["local", "kubernetes"]
+
+    with pytest.deprecated_call(match="use 'cluster'"):
+        restored = DistributionSpec.from_dict(payload)
+
+    assert restored.supported_execution_profiles == (
+        ExecutionProfile.CLUSTER,
+        ExecutionProfile.LOCAL,
+    )
+    assert restored.to_dict()["supported_execution_profiles"] == [
+        "cluster",
+        "local",
+    ]

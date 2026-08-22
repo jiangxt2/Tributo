@@ -1,0 +1,14 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tributo-test-torch-recipe-algorithm"
+version = "0.1.0"
+requires-python = ">=3.12,<3.14"
+
+[project.entry-points."tributo.algorithms"]
+third_party_binary_linear = "tributo_test_torch_recipe_algorithm:DESCRIPTOR"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tributo_test_torch_recipe_algorithm"]

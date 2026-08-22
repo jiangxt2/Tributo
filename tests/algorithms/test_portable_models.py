@@ -107,7 +107,7 @@ def _formal_descriptor(
         supported_worker_range=WorkerRange(1, 8),
         supported_execution_profiles=(
             ExecutionProfile.LOCAL,
-            ExecutionProfile.KUBERNETES,
+            ExecutionProfile.CLUSTER,
         ),
         resources_per_worker=WorkerResources(),
         policy=_formal_policy(strategy),
@@ -538,7 +538,7 @@ def test_distributed_builder_matches_manual_reference_contracts() -> None:
             supported_worker_range=WorkerRange(1, 8),
             supported_execution_profiles=(
                 ExecutionProfile.LOCAL,
-                ExecutionProfile.KUBERNETES,
+                ExecutionProfile.CLUSTER,
             ),
             resources_per_worker=WorkerResources(),
             input_distribution=InputDistribution.SHARDED,

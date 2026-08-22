@@ -4,7 +4,7 @@ The [local quickstart](../getting-started/quickstart.md) provides a complete
 Multinomial Naive Bayes example. Every formal request declares:
 
 - an algorithm and operation;
-- an explicit local or Kubernetes execution profile;
+- an explicit owned-local or attached-cluster execution profile;
 - worker count and optional reviewed resource overrides;
 - a bounded ingestion request and tabular roles;
 - algorithm-specific configuration, including an explicit Bundle destination.

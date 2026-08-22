@@ -356,6 +356,17 @@ documentation for every public stability tier.
 ```
 
 
+## `tributo.integrations.sources.ray_torch_recipe`
+
+```{autoclass} tributo.integrations.sources.ray_torch_recipe.RayTorchRecipeSourceProvider
+:no-members:
+```
+
+```{autoclass} tributo.integrations.sources.ray_torch_recipe.TorchRecipeSourceOptions
+:no-members:
+```
+
+
 ## `tributo.integrations.sources.ray_xgboost`
 
 ```{autoclass} tributo.integrations.sources.ray_xgboost.RayXGBoostSourceProvider

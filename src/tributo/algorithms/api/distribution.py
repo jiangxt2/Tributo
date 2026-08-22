@@ -11,6 +11,7 @@ import hashlib
 import json
 import math
 import re
+import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
@@ -86,12 +87,28 @@ def _qualified_reference(value: str, field_name: str) -> str:
 class ExecutionProfile(str, Enum):
     """Supported product execution targets.
 
-    ``LOCAL`` is the Spark ``local[*]``-like profile.  Docker and Ray
-    Standalone are intentionally not product profiles.
+    ``LOCAL`` is the Spark ``local[*]``-like owned runtime. ``CLUSTER`` is an
+    attached Ray runtime whose provisioning mechanism remains outside the
+    algorithm contract. Docker, Kubernetes, and VM providers are intentionally
+    not product profiles.
     """
 
     LOCAL = "local"
-    KUBERNETES = "kubernetes"
+    CLUSTER = "cluster"
+    # Source compatibility for callers that referenced the old enum member.
+    # Its serialized value is the deployment-neutral canonical value.
+    KUBERNETES = "cluster"
+
+    @classmethod
+    def _missing_(cls, value: object) -> ExecutionProfile | None:
+        if value == "kubernetes":
+            warnings.warn(
+                "execution profile 'kubernetes' is deprecated; use 'cluster'",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+            return cls.CLUSTER
+        return None
 
 
 @PublicAPI(stability="alpha")

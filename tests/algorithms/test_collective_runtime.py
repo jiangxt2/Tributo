@@ -14,6 +14,7 @@ from tributo.algorithms.api import (
 )
 from tributo.integrations.algorithm_runtimes.collective import (
     _collective_execution_result,
+    _ray_run_name,
     _worker_evidence,
 )
 
@@ -32,6 +33,14 @@ def _worker(rank: int, *, digest: str = "a" * 64) -> dict[str, object]:
         "model_state_digest": digest,
         "resources": {"num_cpus": 1.0, "num_gpus": 0.0, "custom": {}},
     }
+
+
+def test_ray_run_name_is_stable_and_separates_logical_runs() -> None:
+    first = _ray_run_name("external_recipe", "run-1")
+
+    assert first == _ray_run_name("external_recipe", "run-1")
+    assert first != _ray_run_name("external_recipe", "run-2")
+    assert first.startswith("tributo-external_recipe-")
 
 
 def test_collective_evidence_requires_unique_complete_synchronized_workers() -> None:

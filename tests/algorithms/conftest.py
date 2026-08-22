@@ -254,7 +254,7 @@ def map_reduce_registration() -> AlgorithmRegistration:
             supported_worker_range=WorkerRange(1, 8),
             supported_execution_profiles=(
                 ExecutionProfile.LOCAL,
-                ExecutionProfile.KUBERNETES,
+                ExecutionProfile.CLUSTER,
             ),
             resources_per_worker=WorkerResources(),
             input_distribution=InputDistribution.SHARDED,

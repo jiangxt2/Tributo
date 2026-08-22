@@ -1014,6 +1014,8 @@ def dnn_train_loop_per_worker(config: dict[str, Any]) -> None:
     resume_enabled = resume_cfg.effective_enabled
     checkpoint_interval = resume_cfg.checkpoint_interval
     resume_checkpoint = ray.train.get_checkpoint() if resume_enabled else None
+    if resume_checkpoint is None and resume_enabled:
+        resume_checkpoint = resume_cfg.checkpoint_path
     resume_transformer = None
     if resume_checkpoint is not None:
         with checkpoint_directory(resume_checkpoint) as checkpoint_dir:

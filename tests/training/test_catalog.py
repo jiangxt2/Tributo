@@ -472,7 +472,7 @@ class TestGetAlgorithmCatalog:
             "framework_native",
         )
         assert record.distribution_strategies == ("framework_native",)
-        assert record.execution_profiles == ("kubernetes", "local")
+        assert record.execution_profiles == ("cluster", "local")
         assert record.input_views == ("ray_data",)
         assert record.stability == "alpha"
 

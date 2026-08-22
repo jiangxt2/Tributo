@@ -43,6 +43,7 @@ from tributo.algorithms.api import (
 )
 from tributo.algorithms.composition import build_algorithm_dispatcher
 from tributo.algorithms.core.builder import AlgorithmBuilder
+from tributo.algorithms.spi import TorchTrainingRecipe
 
 __all__ = [
     "AlgorithmExecutionResult",
@@ -81,6 +82,7 @@ __all__ = [
     "StateCoordination",
     "StateCoordinationEvidence",
     "StateField",
+    "TorchTrainingRecipe",
     "UserExecutionContext",
     "WorkerExecutionEvidence",
     "WorkerRange",

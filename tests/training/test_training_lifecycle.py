@@ -717,6 +717,7 @@ class TestBundleMode:
         assert registry.list_all() == [
             "ray-dnn-v1",
             "ray-pu-v1",
+            "ray-torch-recipe-v1",
             "ray-xgboost-v1",
         ]
 
