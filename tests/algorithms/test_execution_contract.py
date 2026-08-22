@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import replace
 from types import SimpleNamespace
 from typing import cast
@@ -197,6 +199,73 @@ def test_cluster_distribution_requires_two_actual_nodes() -> None:
     assert same_node.cluster_distributed is False
     assert cross_node.cluster_distributed is True
     assert cross_node.to_dict()["cluster_distributed"] is True
+
+
+def test_staged_framework_composite_digest_proves_distribution() -> None:
+    details = {
+        "framework": "staged_composite",
+        "component_stage_count": 2,
+        "component_stages": "mu0,propensity",
+        "anchor_stage": "propensity",
+        "composition_digest": "d" * 64,
+        "stage.mu0.digest": "c" * 64,
+        "stage.mu0.rows": 4,
+        "stage.propensity.digest": "a" * 64,
+        "stage.propensity.rows": 8,
+    }
+    composite_digest = hashlib.sha256(
+        json.dumps(
+            {
+                "composition_digest": "d" * 64,
+                "stages": {
+                    "mu0": {"digest": "c" * 64, "rows": 4},
+                    "propensity": {"digest": "a" * 64, "rows": 8},
+                },
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    receipt = replace(
+        _receipt(ExecutionProfile.LOCAL),
+        strategy=DistributionStrategy.FRAMEWORK_NATIVE,
+        state=StateCoordinationEvidence(
+            coordination=StateCoordination.FRAMEWORK_NATIVE,
+            synchronized=True,
+            bounded=True,
+            global_model_digest=composite_digest,
+            details=details,
+        ),
+    )
+
+    assert {worker.model_state_digest for worker in receipt.workers} == {"a" * 64}
+    assert receipt.distributed is True
+
+
+def test_staged_framework_receipt_rejects_unbound_composite_digest() -> None:
+    receipt = replace(
+        _receipt(ExecutionProfile.LOCAL),
+        strategy=DistributionStrategy.FRAMEWORK_NATIVE,
+        state=StateCoordinationEvidence(
+            coordination=StateCoordination.FRAMEWORK_NATIVE,
+            synchronized=True,
+            bounded=True,
+            global_model_digest="c" * 64,
+            details={
+                "framework": "staged_composite",
+                "component_stage_count": 2,
+                "component_stages": "mu0,propensity",
+                "anchor_stage": "propensity",
+                "composition_digest": "d" * 64,
+                "stage.mu0.digest": "c" * 64,
+                "stage.mu0.rows": 4,
+                "stage.propensity.digest": "b" * 64,
+                "stage.propensity.rows": 8,
+            },
+        ),
+    )
+
+    assert receipt.distributed is False
 
 
 def test_local_receipt_cannot_defer_resource_preflight() -> None:

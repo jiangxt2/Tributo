@@ -367,6 +367,13 @@ documentation for every public stability tier.
 ```
 
 
+## `tributo.integrations.sources.ray_x_learner`
+
+```{autoclass} tributo.integrations.sources.ray_x_learner.RayXLearnerSourceProvider
+:no-members:
+```
+
+
 ## `tributo.integrations.sources.ray_xgboost`
 
 ```{autoclass} tributo.integrations.sources.ray_xgboost.RayXGBoostSourceProvider

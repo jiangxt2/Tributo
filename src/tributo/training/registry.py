@@ -108,6 +108,7 @@ class TrainingAlgorithmRegistry:
                 DNN_DESCRIPTOR,
                 MULTINOMIAL_NB_DESCRIPTOR,
                 PU_DESCRIPTOR,
+                X_LEARNER_DESCRIPTOR,
                 XGBOOST_DESCRIPTOR,
             )
             from tributo.plugin import (
@@ -165,6 +166,7 @@ class TrainingAlgorithmRegistry:
                 DNN_DESCRIPTOR,
                 PU_DESCRIPTOR,
                 MULTINOMIAL_NB_DESCRIPTOR,
+                X_LEARNER_DESCRIPTOR,
                 XGBOOST_DESCRIPTOR,
                 *discovered_algorithms,
             ):

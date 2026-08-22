@@ -22,11 +22,13 @@ from tributo.algorithms.builtin import (
     DNN_DESCRIPTOR,
     MULTINOMIAL_NB_DESCRIPTOR,
     PU_DESCRIPTOR,
+    X_LEARNER_DESCRIPTOR,
     XGBOOST_DESCRIPTOR,
     DistributedDNN,
     DistributedMultinomialNB,
     DistributedPU,
     DistributedXGBoost,
+    DistributedXLearner,
 )
 from tributo.algorithms.builtin.torch_collective import DNNTrainingRecipe
 from tributo.algorithms.spi import (
@@ -44,6 +46,7 @@ def test_first_party_descriptors_cover_all_builtin_training_algorithms() -> None
         PU_DESCRIPTOR,
         XGBOOST_DESCRIPTOR,
         MULTINOMIAL_NB_DESCRIPTOR,
+        X_LEARNER_DESCRIPTOR,
     )
 
     assert {descriptor.name for descriptor in descriptors} == {
@@ -51,6 +54,7 @@ def test_first_party_descriptors_cover_all_builtin_training_algorithms() -> None
         "pu",
         "xgboost",
         "multinomial_nb",
+        "x_learner",
     }
     for descriptor in descriptors:
         registration = descriptor.registration
@@ -79,6 +83,7 @@ def test_builtin_implementations_inherit_the_declared_strategy_interfaces() -> N
     assert issubclass(DistributedPU, CollectiveAlgorithm)
     assert issubclass(DistributedMultinomialNB, MapReduceAlgorithm)
     assert issubclass(DistributedXGBoost, FrameworkNativeAlgorithm)
+    assert issubclass(DistributedXLearner, FrameworkNativeAlgorithm)
 
     assert (
         DNN_DESCRIPTOR.registration.implementation.execution_mode
@@ -101,6 +106,21 @@ def test_builtin_implementations_inherit_the_declared_strategy_interfaces() -> N
     assert (
         XGBOOST_DESCRIPTOR.registration.implementation.execution_mode
         is ExecutionMode.FRAMEWORK_NATIVE
+    )
+    assert (
+        X_LEARNER_DESCRIPTOR.registration.implementation.execution_mode
+        is ExecutionMode.FRAMEWORK_NATIVE
+    )
+    assert X_LEARNER_DESCRIPTOR.registration.distribution_spec is not None
+    assert (
+        X_LEARNER_DESCRIPTOR.registration.distribution_spec.policy.component_stages
+        == (
+            "mu0",
+            "mu1",
+            "tau0",
+            "tau1",
+            "propensity",
+        )
     )
 
 
@@ -129,6 +149,7 @@ def test_registry_atomically_publishes_native_and_compatibility_implementations(
     assert len(by_name["pu"]) == 2
     assert len(by_name["xgboost"]) == 2
     assert len(by_name["multinomial_nb"]) == 1
+    assert len(by_name["x_learner"]) == 1
     assert {
         registration.distribution_spec.strategy
         for registrations_for_name in by_name.values()
@@ -147,6 +168,7 @@ def test_formal_topologies_do_not_reuse_legacy_data_parallel_meaning() -> None:
         PU_DESCRIPTOR.registration.distribution_spec.strategy.value,
         XGBOOST_DESCRIPTOR.registration.distribution_spec.strategy.value,
         MULTINOMIAL_NB_DESCRIPTOR.registration.distribution_spec.strategy.value,
+        X_LEARNER_DESCRIPTOR.registration.distribution_spec.strategy.value,
     } == {
         RuntimeTopology.RAY_TRAIN_COLLECTIVE.value,
         RuntimeTopology.FRAMEWORK_NATIVE.value,

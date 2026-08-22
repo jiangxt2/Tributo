@@ -18,6 +18,7 @@ from tributo.algorithms.spi import FrameworkNativeAlgorithm
 from tributo.integrations.algorithm_runtimes.framework_native import (
     _framework_execution_result,
     _validated_framework_evidence,
+    _validated_staged_framework_evidence,
 )
 
 
@@ -58,6 +59,57 @@ def test_framework_evidence_is_normalized_before_export() -> None:
 
     assert [worker["rank"] for worker in workers] == [0, 1]
     assert state["global_model_digest"] == "a" * 64
+
+
+def test_staged_framework_evidence_validates_each_component_and_composes_digest() -> (
+    None
+):
+    stages = {}
+    for name, digest in (
+        ("mu0", "a" * 64),
+        ("mu1", "b" * 64),
+        ("propensity", "c" * 64),
+    ):
+        payload = _evidence()
+        payload["workers"] = [_worker(0, digest=digest), _worker(1, digest=digest)]
+        payload["state"]["global_model_digest"] = digest
+        payload["expected_training_rows"] = 8
+        stages[name] = payload
+
+    workers, state = _validated_staged_framework_evidence(
+        {"stages": stages, "composition_digest": "d" * 64},
+        component_stages=("mu0", "mu1", "propensity"),
+        worker_count=2,
+        resources_per_worker=WorkerResources(),
+        expected_training_rows=8,
+    )
+
+    assert len(workers) == 2
+    assert len(state["global_model_digest"]) == 64
+    assert state["details"]["component_stages"] == "mu0,mu1,propensity"
+    assert state["details"]["composition_digest"] == "d" * 64
+
+
+def test_staged_framework_evidence_rejects_undeclared_or_missing_stage() -> None:
+    with pytest.raises(AlgorithmExecutionError, match="declared component stages"):
+        _validated_staged_framework_evidence(
+            {"stages": {"mu0": {}}, "composition_digest": "d" * 64},
+            component_stages=("mu0", "mu1"),
+            worker_count=2,
+            resources_per_worker=WorkerResources(),
+            expected_training_rows=8,
+        )
+
+
+def test_staged_framework_evidence_requires_composition_digest() -> None:
+    with pytest.raises(AlgorithmExecutionError, match="composition digest"):
+        _validated_staged_framework_evidence(
+            {"stages": {}},
+            component_stages=(),
+            worker_count=2,
+            resources_per_worker=WorkerResources(),
+            expected_training_rows=8,
+        )
 
 
 @pytest.mark.parametrize(

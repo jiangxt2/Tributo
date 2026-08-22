@@ -239,6 +239,13 @@ documentation for every public stability tier.
 ```
 
 
+## `tributo.algorithms.builtin.x_learner`
+
+```{autoclass} tributo.algorithms.builtin.x_learner.DistributedXLearner
+:no-members:
+```
+
+
 ## `tributo.algorithms.builtin.xgboost_native`
 
 ```{autoclass} tributo.algorithms.builtin.xgboost_native.DistributedXGBoost

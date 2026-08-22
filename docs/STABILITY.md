@@ -97,6 +97,7 @@ from the legacy setup-only propagation rule.
 | `tributo.algorithms.builtin.multinomial_nb` | `alpha` | Exact sufficient-statistics tree-MapReduce implementation of sklearn MultinomialNB |
 | `tributo.algorithms.builtin.torch_collective` | `alpha` | First-party DNN and PU Ray Train collective implementations |
 | `tributo.algorithms.builtin.xgboost_native` | `alpha` | First-party framework-native distributed XGBoost implementation |
+| `tributo.algorithms.builtin.x_learner` | `alpha` | First-party five-stage Ray Train XGBoost X-Learner implementation |
 | `tributo.algorithms.core.builder` — `AlgorithmBuilder` | `alpha` | Provisional sklearn and Custom Ray Function registration builders |
 | `tributo.algorithms.core.runtime` | `alpha` | Owned local Ray lifecycle and deployment-neutral attached-cluster connection |
 | `tributo.algorithms.composition` | `alpha` | Default formal Dispatcher composition root |
@@ -192,6 +193,7 @@ from the legacy setup-only propagation rule.
 | `tributo.integrations.algorithm_runtimes.framework_native` | `developer` | Internal framework-native distributed runtime adapter |
 | `tributo.integrations.algorithm_runtimes.map_reduce` | `developer` | Internal bounded tree-MapReduce runtime adapter |
 | `tributo.integrations.exporters.*` | `beta` | Built-in exporter implementations |
+| `tributo.integrations.exporters.x_learner` | `alpha` | Fixed X-Learner model and causal-report exporter adapters |
 | `tributo.integrations.flavors` | `beta` | Built-in runtime flavor package |
 | `tributo.integrations.flavors.onnx_runtime` | `beta` | ONNX Runtime flavor implementation |
 | `tributo.integrations.validators` | `beta` | Built-in validator package |
@@ -204,6 +206,8 @@ from the legacy setup-only propagation rule.
 | `tributo.integrations.hooks` | `beta` | Built-in Hook package |
 | `tributo.integrations.hooks.*` | `beta` | Built-in hooks (MLflow etc.) |
 | `tributo.integrations.flavors.xgboost_native` | `alpha` | Safe native JSON/UBJ XGBoost runtime flavor |
+| `tributo.integrations.flavors.x_learner` | `alpha` | Safe batch-only fixed-composition X-Learner runtime flavor |
+| `tributo.integrations.sources.ray_x_learner` | `alpha` | Five-checkpoint X-Learner ExportSource provider |
 | `tributo.integrations.model_importers.*` | `alpha` | Canonical ModelImporter protocol/registry plus explicit MLflow and typed artifact-to-Bundle implementations |
 | `tributo.integrations.sinks.parquet` | `alpha` | Parquet inference ResultSink adapter |
 | `tributo.integrations.sinks.lance` | `alpha` | Generic Lance inference ResultSink adapter |

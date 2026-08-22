@@ -113,6 +113,33 @@ def _algorithm_config(
             },
             "output": output,
         }
+    if algorithm == "x_learner":
+        return {
+            "data": {
+                "feature_columns": ["f0", "f1"],
+                "treatment_col": "treatment",
+                "outcome_col": "outcome",
+                "identity_col": "identity",
+            },
+            "model": {
+                "outcome": {"objective": "binary:logistic", "max_depth": 2},
+                "effect": {"objective": "reg:squarederror", "max_depth": 2},
+                "propensity": {"objective": "binary:logistic", "max_depth": 2},
+            },
+            "training": {
+                "num_rounds": 2,
+                "val_size": 0.125,
+                "test_size": 0.25,
+                "seed": 42,
+                "curve_points": 16,
+            },
+            "ray": {
+                "num_workers": worker_count,
+                "max_failures": 0,
+                "storage_path": storage_path,
+            },
+            "output": output,
+        }
     config: dict[str, Any] = {
         "features": [
             {"name": "f0", "type": "dense", "norm": "standard"},
@@ -203,9 +230,13 @@ def _execution_request(
                 feature_names=(
                     ("f0", "f1", "segment", "numeric_code")
                     if algorithm == "dnn"
-                    else ("f0", "f1")
+                    else (
+                        ("f0", "f1", "treatment", "identity")
+                        if algorithm == "x_learner"
+                        else ("f0", "f1")
+                    )
                 ),
-                label_name="label",
+                label_name=("outcome" if algorithm == "x_learner" else "label"),
             ),
             algorithm_config=_algorithm_config(
                 algorithm,
@@ -273,9 +304,10 @@ def _execute(
         with BundleReader().open_artifact(
             str(result.execution.outputs["bundle_uri"]), role="inference"
         ) as artifact:
-            model = artifact.path_for("model.onnx")
+            model_name = "x_learner.json" if algorithm == "x_learner" else "model.onnx"
+            model = artifact.path_for(model_name)
             if not model.is_file() or model.stat().st_size <= 0:
-                raise AssertionError(f"{algorithm} Bundle has no readable ONNX model")
+                raise AssertionError(f"{algorithm} Bundle has no readable model")
             if algorithm == "dnn":
                 raw_preprocessor = json.loads(
                     artifact.path_for("preprocessor.json").read_text(encoding="utf-8")
@@ -367,6 +399,42 @@ def _execute(
         and sum(worker.rows_processed or 0 for worker in receipt.workers) != 48
     ):
         raise AssertionError("XGBoost train shards did not cover the global split")
+    if algorithm == "x_learner":
+        stage_names = ("mu0", "mu1", "tau0", "tau1", "propensity")
+        details = receipt.state.details
+        for stage in stage_names:
+            if details.get(f"stage.{stage}.workers") != worker_count:
+                raise AssertionError(
+                    f"X-Learner stage {stage} did not report every worker"
+                )
+            node_count = details.get(f"stage.{stage}.nodes")
+            if profile == "cluster" and worker_count >= 2:
+                if not isinstance(node_count, int) or node_count < 2:
+                    raise AssertionError(
+                        f"X-Learner stage {stage} did not prove cross-node execution"
+                    )
+            elif node_count != 1:
+                raise AssertionError(
+                    f"X-Learner stage {stage} reported unexpected node count"
+                )
+            stage_rows = details.get(f"stage.{stage}.rows")
+            stage_digest = details.get(f"stage.{stage}.digest")
+            if not isinstance(stage_rows, int) or stage_rows < 1:
+                raise AssertionError(f"X-Learner stage {stage} has no row evidence")
+            if not isinstance(stage_digest, str) or len(stage_digest) != 64:
+                raise AssertionError(f"X-Learner stage {stage} has no digest evidence")
+        if details["stage.mu0.rows"] != details["stage.tau0.rows"]:
+            raise AssertionError("X-Learner control stage row coverage drifted")
+        if details["stage.mu1.rows"] != details["stage.tau1.rows"]:
+            raise AssertionError("X-Learner treated stage row coverage drifted")
+        if details["stage.propensity.rows"] != (
+            details["stage.mu0.rows"] + details["stage.mu1.rows"]
+        ):
+            raise AssertionError("X-Learner full-input stage row coverage drifted")
+        if result.execution.metrics.get("ate_definition") != "model_mean_cate":
+            raise AssertionError("X-Learner did not report its ATE definition")
+        if not isinstance(result.execution.metrics.get("qini"), (int, float)):
+            raise AssertionError("X-Learner did not report Qini")
     execution_summary = {
         "algorithm": algorithm,
         "worker_count": worker_count,
@@ -408,6 +476,65 @@ def _execute(
             prediction["probability"] for prediction in predictions
         ]
         execution_summary["preprocessor_state"] = preprocessor_state
+    if algorithm == "x_learner":
+        import numpy as np
+
+        from tributo.exporting.models import BundleRef
+        from tributo.inference.bundle_predictor import BundleBatchPredictor
+        from tributo.inference.contracts import (
+            InputBindingSpec,
+            OutputBindingSpec,
+            ResolvedModelSelection,
+            TensorInputBinding,
+            TensorOutputBinding,
+        )
+
+        predictor = BundleBatchPredictor(
+            ResolvedModelSelection(
+                bundle_ref=BundleRef(
+                    canonical_uri=str(result.execution.outputs["bundle_uri"]),
+                    bundle_id=str(result.execution.outputs["bundle_id"]),
+                    manifest_sha256=str(result.execution.outputs["manifest_sha256"]),
+                ),
+                role="inference",
+                flavor_id="x-learner-v1",
+                source_provenance="tributo-bundle",
+            ),
+            InputBindingSpec(
+                tensors=(
+                    TensorInputBinding(
+                        tensor_name="float_input",
+                        columns=("f0", "f1"),
+                        dtype="float32",
+                    ),
+                )
+            ),
+            OutputBindingSpec(
+                tensors=(
+                    TensorOutputBinding(
+                        tensor_name="cate",
+                        column="cate",
+                        semantic="score",
+                    ),
+                    TensorOutputBinding(
+                        tensor_name="quadrant",
+                        column="quadrant",
+                        semantic="label",
+                    ),
+                )
+            ),
+        )
+        try:
+            prediction = predictor(
+                {
+                    "f0": np.asarray([0.75, 1.40], dtype=np.float32),
+                    "f1": np.asarray([0.60, 1.00], dtype=np.float32),
+                }
+            )
+        finally:
+            predictor.close()
+        if prediction["cate"].shape != (2,) or prediction["quadrant"].shape != (2,):
+            raise AssertionError("X-Learner Bundle prediction shape is invalid")
     return execution_summary
 
 
@@ -563,12 +690,23 @@ def main() -> int:
     segment = [index % 4 for index in range(64)]
     numeric_code = [("001", "1", "2", "10")[index % 4] for index in range(64)]
     labels = [float(index % 4 == 0) for index in range(64)]
+    treatment = [index % 2 for index in range(64)]
+    outcome = [
+        float(
+            (f0[index] + (0.45 if treatment[index] and f1[index] > 0.75 else 0.0))
+            > 1.05
+        )
+        for index in range(64)
+    ]
     records = {
         "f0": f0,
         "f1": f1,
         "segment": segment,
         "numeric_code": numeric_code,
         "label": labels,
+        "treatment": treatment,
+        "outcome": outcome,
+        "identity": [f"user-{index:03d}" for index in range(64)],
     }
     configured_root = os.environ.get("TRIBUTO_DISTRIBUTED_GATE_ROOT")
     root = configured_root or (
@@ -579,6 +717,23 @@ def main() -> int:
         _stage_parquet(data_path, records)
         if mode == "local":
             _assert_third_party_descriptor_discovered()
+            only = os.environ.get("TRIBUTO_ALGORITHM_LOCAL_ONLY")
+            if only:
+                if only != "x_learner":
+                    raise ValueError("TRIBUTO_ALGORITHM_LOCAL_ONLY must be x_learner")
+                results = [
+                    _execute(
+                        "x_learner",
+                        data_path,
+                        f"{root}/bundle-x-learner-{worker_count}",
+                        profile="local",
+                        worker_count=worker_count,
+                        local_num_cpus=worker_count + 1,
+                    )
+                    for worker_count in (1, 2)
+                ]
+                print(f"RESULT: {json.dumps(results, sort_keys=True)}")
+                return 0
             results = [
                 _execute(
                     algorithm,
@@ -590,6 +745,16 @@ def main() -> int:
                 )
                 for algorithm in ("dnn", "pu", "xgboost", "multinomial_nb")
             ]
+            results.append(
+                _execute(
+                    "x_learner",
+                    data_path,
+                    f"{root}/bundle-x-learner-single",
+                    profile="local",
+                    worker_count=1,
+                    local_num_cpus=2,
+                )
+            )
             results.extend(
                 _execute(
                     algorithm,
@@ -600,6 +765,16 @@ def main() -> int:
                     local_num_cpus=4,
                 )
                 for algorithm in ("dnn", "multinomial_nb")
+            )
+            results.append(
+                _execute(
+                    "x_learner",
+                    data_path,
+                    f"{root}/bundle-x-learner-multi",
+                    profile="local",
+                    worker_count=2,
+                    local_num_cpus=3,
+                )
             )
             results.extend(
                 _execute(
@@ -653,6 +828,7 @@ def main() -> int:
                 "pu",
                 "xgboost",
                 "multinomial_nb",
+                "x_learner",
             ]
             results = [
                 _execute(

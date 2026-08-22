@@ -125,6 +125,49 @@ def test_framework_native_requires_framework_owned_data_and_evidence() -> None:
         )
 
 
+def test_framework_native_component_stages_are_canonical_and_round_trip() -> None:
+    policy = FrameworkNativePolicy(
+        framework="xgboost-x-learner",
+        evidence_collector_ref="tests.example:collect",
+        component_stages=("mu0", "mu1", "tau0", "tau1", "propensity"),
+    )
+    spec = DistributionSpec(
+        strategy=DistributionStrategy.FRAMEWORK_NATIVE,
+        supported_worker_range=WorkerRange(1, 8),
+        supported_execution_profiles=(ExecutionProfile.LOCAL,),
+        resources_per_worker=WorkerResources(),
+        input_distribution=InputDistribution.FRAMEWORK_OWNED,
+        state_coordination=StateCoordination.FRAMEWORK_NATIVE,
+        policy=policy,
+    )
+
+    restored = DistributionSpec.from_dict(spec.to_dict())
+
+    assert restored == spec
+    assert restored.policy.component_stages == policy.component_stages
+
+
+def test_empty_framework_component_stages_preserve_legacy_canonical_payload() -> None:
+    spec = DistributionSpec(
+        strategy=DistributionStrategy.FRAMEWORK_NATIVE,
+        supported_worker_range=WorkerRange(1, 8),
+        supported_execution_profiles=(ExecutionProfile.LOCAL,),
+        resources_per_worker=WorkerResources(),
+        input_distribution=InputDistribution.FRAMEWORK_OWNED,
+        state_coordination=StateCoordination.FRAMEWORK_NATIVE,
+        policy=FrameworkNativePolicy(
+            framework="xgboost",
+            evidence_collector_ref="tests.example:collect",
+        ),
+    )
+
+    payload = spec.to_dict()
+    assert "component_stages" not in payload["policy"]
+    restored = DistributionSpec.from_dict(payload)
+    assert restored.to_dict() == payload
+    assert restored.digest == spec.digest
+
+
 def test_worker_resources_are_immutable_and_scale_per_worker() -> None:
     resources = WorkerResources(
         num_cpus=1.5,

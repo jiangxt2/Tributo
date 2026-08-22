@@ -2,8 +2,8 @@
 
 Tributo provides a formal, framework-neutral algorithm execution contract and
 a compatibility Trainer lifecycle. First-party formal implementations cover
-distributed XGBoost, DNN, positive-unlabeled learning, and Multinomial Naive
-Bayes.
+distributed XGBoost, X-Learner causal uplift, DNN, positive-unlabeled learning,
+and Multinomial Naive Bayes.
 
 ## Start with a task
 
@@ -14,6 +14,7 @@ getting-started
 key-concepts
 ../how-to/training
 ../how-to/pu-learning
+../how-to/x-learner
 ../how-to/custom-distributed-algorithms
 ../training/index
 ```

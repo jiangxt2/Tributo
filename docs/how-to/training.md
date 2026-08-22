@@ -1,7 +1,7 @@
 # Training on Ray
 
-Run XGBoost, DNN, and PU through real distributed state coordination. XGBoost
-uses its framework-native collective protocol; formal DNN lowers a first-party
+Run XGBoost, X-Learner, DNN, and PU through real distributed state coordination.
+XGBoost and X-Learner use framework-native coordination; formal DNN lowers a first-party
 `TorchTrainingRecipe` to the common Ray-owned worker loop, while PU retains its
 specialized Ray Train/PyTorch DDP kernel. A one-worker local run is supported
 but is not reported as distributed training.
@@ -28,8 +28,9 @@ estimators are not automatically converted to distributed models.
 ## Default Bundle Publication
 
 First-party XGBoost, DNN, and PU trainers publish an immutable Bundle by
-default. The caller must provide an explicit destination; Tributo never writes
-a default Bundle into the current directory or a temporary directory.
+default. Formal X-Learner runs also require an explicit Bundle destination.
+Tributo never writes a default Bundle into the current directory or a temporary
+directory.
 
 ```python
 from tributo.exporting.models import BundleOutputConfig
@@ -131,6 +132,14 @@ supplying `onnx_path` without `bundle_uri` selects that legacy path and emits a
 `DeprecationWarning`. Combining `bundle_uri` with explicitly configured legacy
 output fields is rejected; the two destinations are never interpreted as
 aliases for one another.
+
+## X-Learner Causal Training
+
+Use the formal `x_learner` algorithm for binary-treatment, binary-outcome
+uplift modeling. It composes five native Ray Train XGBoost fits, reports CATE,
+four quadrants, Uplift, Qini, AUUC, and ATE, and publishes a batch-inference
+Bundle. See [Train an X-Learner uplift model](x-learner.md) for its input roles,
+fixed formula, configuration, output semantics, and limitations.
 
 ## DNN and PU Training
 

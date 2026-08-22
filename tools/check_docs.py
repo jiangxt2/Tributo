@@ -143,6 +143,7 @@ _RAY_HEADING_PROPER_NAMES = frozenset(
         "ONNX",
         "Ray",
         "Tributo",
+        "X-Learner",
     }
 )
 

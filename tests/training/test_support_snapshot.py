@@ -102,21 +102,19 @@ def test_unified_snapshot_exposes_native_first_party_support() -> None:
     snapshot = build_algorithm_support_snapshot(get_algorithm_catalog().list_records())
     by_name = {record.name: record for record in snapshot}
 
-    assert set(by_name) >= {"dnn", "pu", "xgboost"}
-    assert all(by_name[name].available for name in ("dnn", "pu", "xgboost"))
-    assert all(
-        not by_name[name].compatibility_only for name in ("dnn", "pu", "xgboost")
-    )
-    assert all(by_name[name].tested for name in ("dnn", "pu", "xgboost"))
-    assert all(by_name[name].supported for name in ("dnn", "pu", "xgboost"))
+    first_party = ("dnn", "pu", "xgboost", "x_learner")
+    assert set(by_name) >= set(first_party)
+    assert all(by_name[name].available for name in first_party)
+    assert all(not by_name[name].compatibility_only for name in first_party)
+    assert all(by_name[name].tested for name in first_party)
+    assert all(by_name[name].supported for name in first_party)
     assert all(
         by_name[name].validated_execution_profiles == ("cluster", "local")
-        for name in ("dnn", "pu", "xgboost")
+        for name in first_party
     )
-    assert all(by_name[name].stability == "alpha" for name in ("dnn", "pu", "xgboost"))
-    assert all(
-        by_name[name].native_migration_complete for name in ("dnn", "pu", "xgboost")
-    )
+    assert all(by_name[name].stability == "alpha" for name in first_party)
+    assert all(by_name[name].native_migration_complete for name in first_party)
     assert by_name["dnn"].distribution_strategies == ("ray_train_collective",)
     assert by_name["pu"].distribution_strategies == ("ray_train_collective",)
     assert by_name["xgboost"].distribution_strategies == ("framework_native",)
+    assert by_name["x_learner"].distribution_strategies == ("framework_native",)

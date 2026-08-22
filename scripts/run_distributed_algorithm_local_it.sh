@@ -216,6 +216,7 @@ docker create \
   --env PYTHONDONTWRITEBYTECODE=1 \
   --env PYTHONPATH=/workspace/tributo-plugin.whl:/workspace/tributo-torch-recipe.whl:/workspace/tributo-src/src:/workspace/tributo-src \
   --env TRIBUTO_DOCKER_ALGORITHM_LOCAL_IT=1 \
+  --env "TRIBUTO_ALGORITHM_LOCAL_ONLY=${TRIBUTO_ALGORITHM_LOCAL_ONLY:-}" \
   --env TMPDIR=/workspace/tributo-work/tmp \
   --env XDG_CACHE_HOME=/workspace/tributo-work/cache \
   --volume "${SOURCE_VOLUME_NAME}:/workspace/tributo-src:ro" \

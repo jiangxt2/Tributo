@@ -14,6 +14,7 @@ product-scope
 call-chain-inventory
 walking-skeleton
 ray-first-torch-recipes
+x-learner-causal-training
 migration-safety
 benchmark-protocol
 version-policy

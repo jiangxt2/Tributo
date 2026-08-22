@@ -25,6 +25,13 @@ from tributo.algorithms.builtin.torch_collective import (
     DistributedDNN,
     DistributedPU,
 )
+from tributo.algorithms.builtin.x_learner import (
+    X_LEARNER_DESCRIPTOR as X_LEARNER_DESCRIPTOR,
+)
+from tributo.algorithms.builtin.x_learner import (
+    X_LEARNER_REGISTRATION as X_LEARNER_REGISTRATION,
+)
+from tributo.algorithms.builtin.x_learner import DistributedXLearner
 from tributo.algorithms.builtin.xgboost_native import (
     XGBOOST_DESCRIPTOR as XGBOOST_DESCRIPTOR,
 )
@@ -40,4 +47,5 @@ __all__ = [
     "DistributedDNN",
     "DistributedPU",
     "DistributedXGBoost",
+    "DistributedXLearner",
 ]
