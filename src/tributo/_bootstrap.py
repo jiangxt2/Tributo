@@ -28,6 +28,10 @@ def first_party_export_plugins() -> tuple[
     from tributo.integrations.exporters.torch_safetensors import (
         TorchSafetensorsExporter,
     )
+    from tributo.integrations.exporters.x_learner import (
+        XLearnerCausalReportExporter,
+        XLearnerExporter,
+    )
     from tributo.integrations.exporters.xgboost_native import (
         XGBoostJSONExporter,
         XGBoostUBJExporter,
@@ -44,6 +48,8 @@ def first_party_export_plugins() -> tuple[
         TorchExportExporter,
         HuggingFaceONNXExporter,
         ONNXQuantizer,
+        XLearnerExporter,
+        XLearnerCausalReportExporter,
     )
     validators: tuple[type[ExportValidator], ...] = (ONNXRuntimeValidator,)
     return exporters, validators
@@ -56,6 +62,7 @@ def first_party_source_providers() -> tuple[type[ExportSourceProvider], ...]:
     from tributo.integrations.sources.ray_torch_recipe import (
         RayTorchRecipeSourceProvider,
     )
+    from tributo.integrations.sources.ray_x_learner import RayXLearnerSourceProvider
     from tributo.integrations.sources.ray_xgboost import RayXGBoostSourceProvider
 
     return (
@@ -63,15 +70,17 @@ def first_party_source_providers() -> tuple[type[ExportSourceProvider], ...]:
         RayDnnSourceProvider,
         RayPUSourceProvider,
         RayTorchRecipeSourceProvider,
+        RayXLearnerSourceProvider,
     )
 
 
 def first_party_model_flavors() -> tuple[type[BundleModelFlavor], ...]:
     """Return built-in executable flavors without entry-point metadata."""
     from tributo.integrations.flavors.onnx_runtime import ONNXRuntimeFlavor
+    from tributo.integrations.flavors.x_learner import XLearnerFlavor
     from tributo.integrations.flavors.xgboost_native import XGBoostNativeFlavor
 
-    return (ONNXRuntimeFlavor, XGBoostNativeFlavor)
+    return (ONNXRuntimeFlavor, XGBoostNativeFlavor, XLearnerFlavor)
 
 
 def first_party_bundle_storage_adapters(

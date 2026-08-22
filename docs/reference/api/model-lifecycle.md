@@ -477,6 +477,17 @@ documentation for every public stability tier.
 ```
 
 
+## `tributo.integrations.exporters.x_learner`
+
+```{autoclass} tributo.integrations.exporters.x_learner.XLearnerCausalReportExporter
+:no-members:
+```
+
+```{autoclass} tributo.integrations.exporters.x_learner.XLearnerExporter
+:no-members:
+```
+
+
 ## `tributo.integrations.exporters.xgboost_native`
 
 ```{autoclass} tributo.integrations.exporters.xgboost_native.XGBoostJSONExporter

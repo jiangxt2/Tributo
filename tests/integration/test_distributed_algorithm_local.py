@@ -47,7 +47,7 @@ def test_owned_local_runtime_executes_without_ray_jobs() -> None:
     output = process.stdout + process.stderr
     assert process.returncode == 0, output
     results = _result_from_output(output)
-    assert {(result["algorithm"], result["worker_count"]) for result in results} == {
+    expected = {
         ("dnn", 1),
         ("pu", 1),
         ("xgboost", 1),
@@ -58,7 +58,14 @@ def test_owned_local_runtime_executes_without_ray_jobs() -> None:
         ("third_party_mean_regressor", 2),
         ("third_party_binary_linear", 1),
         ("third_party_binary_linear", 2),
+        ("x_learner", 1),
+        ("x_learner", 2),
     }
+    if os.environ.get("TRIBUTO_ALGORITHM_LOCAL_ONLY") == "x_learner":
+        expected = {("x_learner", 1), ("x_learner", 2)}
+    assert {
+        (result["algorithm"], result["worker_count"]) for result in results
+    } == expected
     for result in results:
         receipt = result["receipt"]
         assert result["status"] == "succeeded"

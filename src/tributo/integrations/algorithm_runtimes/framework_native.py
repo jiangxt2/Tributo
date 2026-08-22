@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Mapping
 from typing import Any
 
@@ -170,6 +172,116 @@ def _validated_framework_evidence(
     )
 
 
+def _validated_staged_framework_evidence(
+    evidence: Mapping[str, Any],
+    *,
+    component_stages: tuple[str, ...],
+    worker_count: int,
+    resources_per_worker: WorkerResources,
+    expected_training_rows: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Validate a bounded, explicitly declared sequence of framework fits."""
+    raw_stages = evidence.get("stages")
+    if not isinstance(raw_stages, Mapping):
+        raise AlgorithmExecutionError(
+            "staged framework evidence requires a stages mapping"
+        )
+    if set(raw_stages) != set(component_stages):
+        raise AlgorithmExecutionError(
+            "staged framework evidence does not match declared component stages"
+        )
+    composition_digest = evidence.get("composition_digest")
+    if (
+        not isinstance(composition_digest, str)
+        or len(composition_digest) != 64
+        or any(character not in "0123456789abcdef" for character in composition_digest)
+    ):
+        raise AlgorithmExecutionError(
+            "staged framework evidence requires a canonical composition digest"
+        )
+    validated: dict[str, tuple[list[dict[str, Any]], dict[str, Any], int]] = {}
+    for stage in component_stages:
+        payload = raw_stages[stage]
+        if not isinstance(payload, Mapping):
+            raise AlgorithmExecutionError(
+                f"framework stage {stage!r} evidence must be a mapping"
+            )
+        stage_rows = payload.get("expected_training_rows")
+        if (
+            not isinstance(stage_rows, int)
+            or isinstance(stage_rows, bool)
+            or stage_rows < 1
+            or stage_rows > expected_training_rows
+        ):
+            raise AlgorithmExecutionError(
+                f"framework stage {stage!r} has invalid expected training rows"
+            )
+        workers, state = _validated_framework_evidence(
+            payload,
+            worker_count=worker_count,
+            resources_per_worker=resources_per_worker,
+            expected_training_rows=stage_rows,
+        )
+        validated[stage] = (workers, state, stage_rows)
+
+    full_coverage_stages = [
+        stage
+        for stage, (_, _, rows) in validated.items()
+        if rows == expected_training_rows
+    ]
+    if not full_coverage_stages:
+        raise AlgorithmExecutionError(
+            "staged framework evidence has no full-input anchor stage"
+        )
+    anchor = max(
+        full_coverage_stages,
+        key=lambda stage: (
+            len({item["node_id"] for item in validated[stage][0]}),
+            stage,
+        ),
+    )
+    digest_payload = {
+        "composition_digest": composition_digest,
+        "stages": {
+            stage: {
+                "digest": validated[stage][1]["global_model_digest"],
+                "rows": validated[stage][2],
+            }
+            for stage in component_stages
+        },
+    }
+    composite_digest = hashlib.sha256(
+        json.dumps(
+            digest_payload,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    details: dict[str, str | int | float | bool | None] = {
+        "framework": "staged_composite",
+        "component_stage_count": len(component_stages),
+        "component_stages": ",".join(component_stages),
+        "anchor_stage": anchor,
+        "composition_digest": composition_digest,
+    }
+    for stage in component_stages:
+        details[f"stage.{stage}.digest"] = str(
+            validated[stage][1]["global_model_digest"]
+        )
+        details[f"stage.{stage}.rows"] = validated[stage][2]
+        details[f"stage.{stage}.workers"] = len(validated[stage][0])
+        details[f"stage.{stage}.nodes"] = len(
+            {item["node_id"] for item in validated[stage][0]}
+        )
+    return validated[anchor][0], {
+        "coordination": StateCoordination.FRAMEWORK_NATIVE.value,
+        "synchronized": True,
+        "bounded": True,
+        "global_model_digest": composite_digest,
+        "details": details,
+    }
+
+
 def _algorithm(envelope: RuntimeExecutionEnvelope) -> FrameworkNativeAlgorithm:
     plan = envelope.plan
     spec = plan.distribution_spec
@@ -269,16 +381,33 @@ class FrameworkNativeRuntime:
                     "framework-native collect_evidence must return a mapping"
                 )
             plan = envelope.plan
-            workers, state = _validated_framework_evidence(
-                evidence,
-                worker_count=plan.runtime.worker_count,
-                resources_per_worker=WorkerResources(
-                    num_cpus=plan.runtime.num_cpus,
-                    num_gpus=plan.runtime.num_gpus,
-                    custom=plan.runtime.custom_resources,
-                ),
-                expected_training_rows=expected_training_rows,
+            resources = WorkerResources(
+                num_cpus=plan.runtime.num_cpus,
+                num_gpus=plan.runtime.num_gpus,
+                custom=plan.runtime.custom_resources,
             )
+            distribution = plan.distribution_spec
+            if distribution is None:
+                raise AlgorithmConfigurationError(
+                    "framework-native execution lost its DistributionSpec"
+                )
+            policy = distribution.policy
+            assert isinstance(policy, FrameworkNativePolicy)
+            if policy.component_stages:
+                workers, state = _validated_staged_framework_evidence(
+                    evidence,
+                    component_stages=policy.component_stages,
+                    worker_count=plan.runtime.worker_count,
+                    resources_per_worker=resources,
+                    expected_training_rows=expected_training_rows,
+                )
+            else:
+                workers, state = _validated_framework_evidence(
+                    evidence,
+                    worker_count=plan.runtime.worker_count,
+                    resources_per_worker=resources,
+                    expected_training_rows=expected_training_rows,
+                )
             execution = _framework_execution_result(
                 algorithm=algorithm,
                 result=result,

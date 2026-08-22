@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import re
 from collections.abc import Mapping
@@ -527,8 +529,66 @@ class ExecutionReceipt:
                 self.strategy is DistributionStrategy.RAY_MAP_REDUCE
                 or {worker.model_state_digest for worker in self.workers}
                 == {self.state.global_model_digest}
+                or self._staged_composite_matches_anchor()
             )
         )
+
+    def _staged_composite_matches_anchor(self) -> bool:
+        """Recompute staged state and bind receipt workers to its anchor model."""
+        if self.strategy is not DistributionStrategy.FRAMEWORK_NATIVE:
+            return False
+        details = self.state.details
+        stage_count = details.get("component_stage_count")
+        stage_names = details.get("component_stages")
+        anchor = details.get("anchor_stage")
+        composition_digest = details.get("composition_digest")
+        if (
+            details.get("framework") != "staged_composite"
+            or not isinstance(stage_count, int)
+            or isinstance(stage_count, bool)
+            or stage_count < 2
+            or not isinstance(stage_names, str)
+            or not isinstance(anchor, str)
+            or not isinstance(composition_digest, str)
+            or _DIGEST.fullmatch(composition_digest) is None
+        ):
+            return False
+        stages = tuple(stage_names.split(","))
+        if (
+            len(stages) != stage_count
+            or len(set(stages)) != stage_count
+            or any(not stage for stage in stages)
+            or anchor not in stages
+        ):
+            return False
+        digest_payload: dict[str, object] = {
+            "composition_digest": composition_digest,
+            "stages": {},
+        }
+        stage_payload = cast(dict[str, object], digest_payload["stages"])
+        for stage in stages:
+            digest = details.get(f"stage.{stage}.digest")
+            rows = details.get(f"stage.{stage}.rows")
+            if (
+                not isinstance(digest, str)
+                or _DIGEST.fullmatch(digest) is None
+                or not isinstance(rows, int)
+                or isinstance(rows, bool)
+                or rows < 1
+            ):
+                return False
+            stage_payload[stage] = {"digest": digest, "rows": rows}
+        anchor_digest = details.get(f"stage.{anchor}.digest")
+        if {worker.model_state_digest for worker in self.workers} != {anchor_digest}:
+            return False
+        composite = hashlib.sha256(
+            json.dumps(
+                digest_payload,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        return self.state.global_model_digest == composite
 
     @property
     def cross_node(self) -> bool:

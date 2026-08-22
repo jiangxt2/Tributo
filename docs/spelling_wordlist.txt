@@ -335,3 +335,8 @@ optimizers
 resumable
 subclassable
 unvalidated
+autoscaling
+handoff
+Qini
+Rabit
+stateful

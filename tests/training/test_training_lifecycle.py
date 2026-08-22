@@ -718,6 +718,7 @@ class TestBundleMode:
             "ray-dnn-v1",
             "ray-pu-v1",
             "ray-torch-recipe-v1",
+            "ray-x-learner-v1",
             "ray-xgboost-v1",
         ]
 

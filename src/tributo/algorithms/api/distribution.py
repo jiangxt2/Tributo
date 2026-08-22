@@ -358,6 +358,7 @@ class FrameworkNativePolicy:
     evidence_collector_ref: str
     manages_input_shards: bool = True
     manages_checkpoints: bool = True
+    component_stages: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.framework, str) or not self.framework:
@@ -365,6 +366,22 @@ class FrameworkNativePolicy:
         _qualified_reference(self.evidence_collector_ref, "evidence_collector_ref")
         _boolean(self.manages_input_shards, "manages_input_shards")
         _boolean(self.manages_checkpoints, "manages_checkpoints")
+        stages = tuple(self.component_stages)
+        if any(
+            not isinstance(stage, str)
+            or not stage
+            or stage.strip() != stage
+            or "," in stage
+            for stage in stages
+        ):
+            raise AlgorithmConfigurationError(
+                "framework-native component stages must be non-empty strings"
+            )
+        if len(stages) != len(set(stages)):
+            raise AlgorithmConfigurationError(
+                "framework-native component stages must be unique"
+            )
+        object.__setattr__(self, "component_stages", stages)
         if not self.manages_input_shards:
             raise AlgorithmConfigurationError(
                 "framework-native training must prove framework-owned input shards"
@@ -537,6 +554,8 @@ class DistributionSpec:
                 "manages_input_shards": self.policy.manages_input_shards,
                 "manages_checkpoints": self.policy.manages_checkpoints,
             }
+            if self.policy.component_stages:
+                policy["component_stages"] = list(self.policy.component_stages)
         return {
             "api_version": self.api_version,
             "strategy": self.strategy.value,
@@ -628,6 +647,13 @@ class DistributionSpec:
                     manages_checkpoints=_boolean(
                         policy_value["manages_checkpoints"],
                         "manages_checkpoints",
+                    ),
+                    component_stages=tuple(
+                        _string(stage, "component stage")
+                        for stage in _sequence(
+                            policy_value.get("component_stages", ()),
+                            "component_stages",
+                        )
                     ),
                 )
             else:

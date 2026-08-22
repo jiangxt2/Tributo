@@ -998,6 +998,7 @@ def _build_trainer(
     max_failures: int = 0,
     resume_from_checkpoint: Any | None = None,
     run_name: str,
+    dataset_config: Any | None = None,
 ) -> "XGBoostTrainer":
     """Build a Ray XGBoostTrainer with an explicit internal run identity.
 
@@ -1089,6 +1090,7 @@ def _build_trainer(
             checkpoint_config=checkpoint_config(resume_config),
         ),
         resume_from_checkpoint=resume_from_checkpoint,
+        dataset_config=dataset_config,
     )
 
 

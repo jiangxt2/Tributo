@@ -35,6 +35,9 @@ from tributo.algorithms.spi import FrameworkNativeAlgorithm
 from tributo.integrations.algorithm_runtimes.legacy_descriptors import (
     XGBOOST_DESCRIPTOR as LEGACY_XGBOOST_DESCRIPTOR,
 )
+from tributo.integrations.algorithm_runtimes.xgboost_stage import (
+    XGBoostEvidenceCollectorState,
+)
 from tributo.util.annotations import DeveloperAPI, PublicAPI
 
 _FRAMEWORK_NATIVE_CONTRACT = FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS[
@@ -43,22 +46,6 @@ _FRAMEWORK_NATIVE_CONTRACT = FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS[
 _RAY_TRAIN_INPUT = QualifiedReference.parse(
     _FRAMEWORK_NATIVE_CONTRACT.worker_input_adapter_ref
 )
-
-
-class _EvidenceCollectorState:
-    """Collect one bounded framework evidence record per worker rank."""
-
-    def __init__(self) -> None:
-        self._records: dict[int, dict[str, object]] = {}
-
-    def record(self, value: Mapping[str, object]) -> None:
-        rank = cast(int, value["rank"])
-        if rank in self._records:
-            raise ValueError(f"duplicate XGBoost worker evidence rank: {rank}")
-        self._records[rank] = dict(value)
-
-    def snapshot(self) -> list[dict[str, object]]:
-        return [self._records[rank] for rank in sorted(self._records)]
 
 
 @PublicAPI(stability="alpha")
@@ -166,7 +153,9 @@ class DistributedXGBoost(FrameworkNativeAlgorithm):
         )
 
         cfg = XGBoostTrainingConfig.model_validate(config)
-        collector_actor: Any = ray.remote(_EvidenceCollectorState).options(num_cpus=0)
+        collector_actor: Any = ray.remote(XGBoostEvidenceCollectorState).options(
+            num_cpus=0
+        )
         self._collector = collector_actor.remote()
         typed_datasets = cast(dict[str, Any], dict(datasets))
         label_col = cfg.data.label_col

@@ -230,6 +230,7 @@ def test_formal_distributed_algorithms_complete_on_ray_cluster(
             "dnn",
             "pu",
             "xgboost",
+            "x_learner",
             "multinomial_nb",
             "third_party_mean_regressor",
         }
