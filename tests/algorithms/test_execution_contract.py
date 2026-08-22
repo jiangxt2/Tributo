@@ -64,6 +64,9 @@ def _receipt(profile: ExecutionProfile) -> ExecutionReceipt:
             global_model_digest="a" * 64,
         ),
         artifact_ids=("bundle-1",),
+        resource_preflight=(
+            "validated" if profile is ExecutionProfile.LOCAL else "deferred_to_ray"
+        ),
     )
 
 
@@ -81,7 +84,7 @@ def test_execution_request_wraps_algorithm_request_without_duplicate_identity() 
 
 
 def test_execution_request_rejects_standalone() -> None:
-    with pytest.raises(AlgorithmConfigurationError, match="local.*kubernetes"):
+    with pytest.raises(AlgorithmConfigurationError, match="local.*cluster"):
         ExecutionRequest(
             algorithm_request=request_for("example", AlgorithmOperation.FIT),
             profile=cast(ExecutionProfile, "standalone"),
@@ -110,10 +113,12 @@ def test_local_multi_worker_proves_model_distribution_not_cross_node() -> None:
 
     assert receipt.distributed is True
     assert receipt.cross_node is False
-    assert receipt.kubernetes_distributed_supported is False
+    assert receipt.cluster_distributed is False
     assert receipt.runtime_owned is False
+    assert receipt.resource_preflight == "validated"
     assert receipt.to_dict()["distributed"] is True
     assert receipt.to_dict()["runtime_owned"] is False
+    assert receipt.to_dict()["resource_preflight"] == "validated"
 
 
 def test_coordinator_receipt_preserves_requested_alias_and_canonical_algorithm() -> (
@@ -182,15 +187,24 @@ def test_execution_receipt_requires_strict_integer_api_version(
         )
 
 
-def test_kubernetes_support_requires_two_actual_nodes() -> None:
-    same_node = _receipt(ExecutionProfile.KUBERNETES)
+def test_cluster_distribution_requires_two_actual_nodes() -> None:
+    same_node = _receipt(ExecutionProfile.CLUSTER)
     cross_node = replace(
         same_node,
         workers=(_worker(0, "node-a"), _worker(1, "node-b")),
     )
 
-    assert same_node.kubernetes_distributed_supported is False
-    assert cross_node.kubernetes_distributed_supported is True
+    assert same_node.cluster_distributed is False
+    assert cross_node.cluster_distributed is True
+    assert cross_node.to_dict()["cluster_distributed"] is True
+
+
+def test_local_receipt_cannot_defer_resource_preflight() -> None:
+    with pytest.raises(AlgorithmConfigurationError, match="local.*preflight"):
+        replace(
+            _receipt(ExecutionProfile.LOCAL),
+            resource_preflight="deferred_to_ray",
+        )
 
 
 @pytest.mark.parametrize(

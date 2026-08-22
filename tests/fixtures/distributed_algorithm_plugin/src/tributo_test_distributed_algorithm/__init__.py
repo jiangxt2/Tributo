@@ -227,7 +227,7 @@ DESCRIPTOR = AlgorithmBuilder.from_distributed_algorithm(
     supported_worker_range=WorkerRange(1, 32),
     supported_execution_profiles=(
         ExecutionProfile.LOCAL,
-        ExecutionProfile.KUBERNETES,
+        ExecutionProfile.CLUSTER,
     ),
     resources_per_worker=WorkerResources(num_cpus=1, num_gpus=0),
     policy=MapReducePolicy(
@@ -249,7 +249,7 @@ DESCRIPTOR = AlgorithmBuilder.from_distributed_algorithm(
     stability="alpha",
     tested=True,
     supported=True,
-    validated_execution_profiles=(ExecutionProfile.LOCAL,),
+    validated_execution_profiles=(ExecutionProfile.LOCAL, ExecutionProfile.CLUSTER),
     limitations=("CPU-only fit-only conformance fixture.",),
     is_default=True,
 )

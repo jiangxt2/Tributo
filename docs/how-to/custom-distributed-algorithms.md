@@ -215,6 +215,66 @@ artifact preflight. A non-empty `algorithm_ids` allowlist is enforced against
 an offline Bundle's manifest; an empty allowlist means that the Profile does
 not restrict the algorithm family.
 
+## Use a low-code PyTorch recipe
+
+For scalar-column dense tabular models, subclass `TorchTrainingRecipe` and implement only
+the four factories. The runtime stacks the feature columns declared by
+`InputBinding` into one float32 tensor and supplies the declared label and
+optional sample-weight roles.
+
+For multi-worker exact coverage, an exhausted rank can invoke `forward()` with
+a zero-row tensor while another rank consumes its final batch. The model must
+accept an empty leading batch dimension and return the corresponding empty
+output shape; no observed row is replayed as padding.
+
+```python
+from collections.abc import Mapping
+from typing import Any
+
+from tributo.algorithms import TorchTrainingRecipe
+
+
+class BinaryLinearRecipe(TorchTrainingRecipe):
+    def model_factory(self, config: Mapping[str, Any]) -> object:
+        import torch
+
+        return torch.nn.Linear(int(config["input_features"]), 1)
+
+    def loss_factory(self, config: Mapping[str, Any]) -> object:
+        import torch
+
+        return torch.nn.BCEWithLogitsLoss()
+
+    def optimizer_factory(self, model: object, config: Mapping[str, Any]) -> object:
+        import torch
+
+        return torch.optim.Adam(model.parameters(), lr=float(config["lr"]))
+
+    def metric_factories(self, config: Mapping[str, Any]):
+        import torch
+
+        return {
+            "accuracy": lambda prediction, target: (
+                (torch.sigmoid(prediction) >= 0.5) == target.bool()
+            )
+        }
+```
+
+Declare the reducer and use `AlgorithmBuilder.from_torch_recipe()` to lower the
+class to the existing Ray Train collective runtime. `train_loss` is added with
+the fixed `sum_count` reducer. The supported reducer set is `sum_count`,
+`weighted_mean`, `min`, and `max`; a weighted metric requires
+`InputBinding.sample_weight_name`.
+
+The complete independent package used by conformance lives under
+`tests/fixtures/torch_recipe_algorithm_plugin`. It contains no Tributo builtin,
+Ray worker loop, checkpoint upload, Bundle publisher, or deployment code.
+Default recipes receive a pre-bound training Dataset and do not own train/test
+splitting. Use the advanced recipe hooks only for a custom model invocation or
+loss call. Choose a framework adapter or `CollectiveAlgorithm` when the model
+needs a custom training step, multiple optimizers, framework callbacks, or
+special collectives.
+
 ## Choose the state coordination strategy
 
 Implement exactly one interface:

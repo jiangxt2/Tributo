@@ -1,0 +1,112 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tributo-ray-native-gate
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tributo-provision-workload
+  namespace: tributo-ray-native-gate
+data:
+  training.csv: |
+    message_count,call_duration,label
+    1,2,0
+    2,1,0
+    1,3,0
+    8,9,1
+    9,8,1
+    7,10,1
+    2,2,0
+    10,9,1
+  execution.json: |
+    {
+      "algorithm": "multinomial_nb",
+      "profile": "cluster",
+      "worker_count": 1,
+      "input": {
+        "ingestion": {
+          "source": {
+            "type": "csv",
+            "path": "/opt/tributo-gate/training.csv"
+          },
+          "engine": "ray"
+        },
+        "features": ["message_count", "call_duration"],
+        "label": "label"
+      },
+      "algorithm_config": {
+        "alpha": 1.0,
+        "output": {
+          "bundle_uri": "/tmp/tributo-provision-bundle"
+        }
+      }
+    }
+---
+apiVersion: ray.io/v1
+kind: RayJob
+metadata:
+  name: tributo-provision-gate
+  namespace: tributo-ray-native-gate
+spec:
+  entrypoint: tributo algo run --config /opt/tributo-gate/execution.json
+  shutdownAfterJobFinishes: true
+  ttlSecondsAfterFinished: 60
+  runtimeEnvYAML: |
+    env_vars:
+      PYTHONUNBUFFERED: "1"
+      RAY_ENABLE_UV_RUN_RUNTIME_ENV: "0"
+  rayClusterSpec:
+    rayVersion: "2.55.1"
+    headGroupSpec:
+      rayStartParams:
+        num-cpus: "0"
+      template:
+        spec:
+          containers:
+            - name: ray-head
+              image: tributo-runtime-full:local
+              imagePullPolicy: Never
+              volumeMounts:
+                - name: workload
+                  mountPath: /opt/tributo-gate
+                  readOnly: true
+              resources:
+                requests:
+                  cpu: 500m
+                  memory: 1Gi
+                limits:
+                  cpu: "1"
+                  memory: 2Gi
+          volumes:
+            - name: workload
+              configMap:
+                name: tributo-provision-workload
+    workerGroupSpecs:
+      - groupName: cpu-workers
+        replicas: 1
+        minReplicas: 1
+        maxReplicas: 1
+        rayStartParams:
+          num-cpus: "2"
+        template:
+          spec:
+            containers:
+              - name: ray-worker
+                image: tributo-runtime-full:local
+                imagePullPolicy: Never
+                volumeMounts:
+                  - name: workload
+                    mountPath: /opt/tributo-gate
+                    readOnly: true
+                resources:
+                  requests:
+                    cpu: "1"
+                    memory: 1Gi
+                  limits:
+                    cpu: "2"
+                    memory: 3Gi
+            volumes:
+              - name: workload
+                configMap:
+                  name: tributo-provision-workload

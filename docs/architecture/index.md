@@ -13,6 +13,7 @@ system-landscape
 product-scope
 call-chain-inventory
 walking-skeleton
+ray-first-torch-recipes
 migration-safety
 benchmark-protocol
 version-policy

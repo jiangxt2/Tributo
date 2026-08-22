@@ -182,6 +182,7 @@ def validate_distributed_algorithm_descriptor(
         CollectiveAlgorithm,
         FrameworkNativeAlgorithm,
         MapReduceAlgorithm,
+        TorchTrainingRecipe,
     )
 
     if not isinstance(descriptor, DistributedAlgorithmDescriptor):
@@ -206,11 +207,18 @@ def validate_distributed_algorithm_descriptor(
     if distribution_spec is None:
         raise TypeError("distributed descriptor lost its DistributionSpec")
     implementation_descriptor = registration.implementation
-    expected_base = {
+    expected_base: type = {
         DistributionStrategy.RAY_TRAIN_COLLECTIVE: CollectiveAlgorithm,
         DistributionStrategy.RAY_MAP_REDUCE: MapReduceAlgorithm,
         DistributionStrategy.FRAMEWORK_NATIVE: FrameworkNativeAlgorithm,
     }[distribution_spec.strategy]
+    if distribution_spec.strategy is DistributionStrategy.RAY_TRAIN_COLLECTIVE and str(
+        implementation_descriptor.executable_factory_ref
+    ) == (
+        "tributo.integrations.algorithm_runtimes.torch_recipe:"
+        "create_torch_recipe_algorithm"
+    ):
+        expected_base = TorchTrainingRecipe
     contract = FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS[distribution_spec.strategy]
     if implementation_descriptor.execution_mode is not contract.execution_mode:
         raise ValueError("implementation execution mode conflicts with strategy")

@@ -180,7 +180,7 @@ class LocalRayRuntimeConfig(StrictConfigModel):
 
 @PublicAPI(stability="alpha")
 class AlgorithmExecutionConfig(StrictConfigModel):
-    """One JSON envelope shared by local[*] and Kubernetes execution."""
+    """One JSON envelope shared by owned local and attached Ray execution."""
 
     algorithm: str = Field(min_length=1)
     profile: ExecutionProfile
@@ -195,8 +195,8 @@ class AlgorithmExecutionConfig(StrictConfigModel):
 
     @model_validator(mode="after")
     def validate_profile_options(self) -> AlgorithmExecutionConfig:
-        """Keep local runtime registration separate from Kubernetes requests."""
-        if self.profile is ExecutionProfile.KUBERNETES and self.local_runtime:
+        """Keep local runtime registration separate from cluster requests."""
+        if self.profile is ExecutionProfile.CLUSTER and self.local_runtime:
             raise ValueError("local_runtime is valid only when profile is 'local'")
         if self.resume_from is not None and not self.resume_from:
             raise ValueError("resume_from must be non-empty when configured")

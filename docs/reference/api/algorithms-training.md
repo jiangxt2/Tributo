@@ -364,6 +364,13 @@ documentation for every public stability tier.
 ```
 
 
+## `tributo.algorithms.spi.torch`
+
+```{autoclass} tributo.algorithms.spi.torch.TorchTrainingRecipe
+:no-members:
+```
+
+
 ## `tributo.integrations.algorithm_inputs.ingestion`
 
 ```{autoclass} tributo.integrations.algorithm_inputs.ingestion.IngestionInputInvocation

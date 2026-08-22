@@ -372,7 +372,7 @@ XGBOOST_REGISTRATION = AlgorithmRegistration(
         supported_worker_range=WorkerRange(1, 1024),
         supported_execution_profiles=(
             ExecutionProfile.LOCAL,
-            ExecutionProfile.KUBERNETES,
+            ExecutionProfile.CLUSTER,
         ),
         resources_per_worker=WorkerResources(num_cpus=1, num_gpus=0),
         input_distribution=InputDistribution.FRAMEWORK_OWNED,
@@ -396,7 +396,10 @@ XGBOOST_DESCRIPTOR = DistributedAlgorithmDescriptor(
     stability="alpha",
     tested=True,
     supported=True,
-    validated_execution_profiles=(ExecutionProfile.LOCAL,),
+    validated_execution_profiles=(
+        ExecutionProfile.LOCAL,
+        ExecutionProfile.CLUSTER,
+    ),
     limitations=(
         "CPU distributed training is supported; GPU requires a separate gate.",
         "Multi-worker checkpoint resume is not supported.",

@@ -56,6 +56,8 @@ def test_owned_local_runtime_executes_without_ray_jobs() -> None:
         ("multinomial_nb", 2),
         ("third_party_mean_regressor", 1),
         ("third_party_mean_regressor", 2),
+        ("third_party_binary_linear", 1),
+        ("third_party_binary_linear", 2),
     }
     for result in results:
         receipt = result["receipt"]
@@ -63,7 +65,7 @@ def test_owned_local_runtime_executes_without_ray_jobs() -> None:
         assert receipt["execution_profile"] == "local"
         assert receipt["runtime_owned"] is True
         assert receipt["cross_node"] is False
-        assert receipt["kubernetes_distributed_supported"] is False
+        assert receipt["cluster_distributed"] is False
         assert receipt["driver_materialized_training_rows"] == 0
         assert receipt["distributed"] is (result["worker_count"] >= 2)
         if result["algorithm"] == "third_party_mean_regressor":

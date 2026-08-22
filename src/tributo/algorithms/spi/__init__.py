@@ -26,6 +26,7 @@ from tributo.algorithms.spi.input import (
     WorkerInputAdapter,
     WorkerInputPayload,
 )
+from tributo.algorithms.spi.torch import TorchTrainingRecipe
 
 __all__ = [
     "AlgorithmExecutionContext",
@@ -48,6 +49,7 @@ __all__ = [
     "RuntimeInputBinding",
     "TabularBatchInputView",
     "Transformable",
+    "TorchTrainingRecipe",
     "WorkerInputAdapter",
     "WorkerInputPayload",
 ]

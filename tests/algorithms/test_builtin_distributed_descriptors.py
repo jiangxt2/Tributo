@@ -28,10 +28,12 @@ from tributo.algorithms.builtin import (
     DistributedPU,
     DistributedXGBoost,
 )
+from tributo.algorithms.builtin.torch_collective import DNNTrainingRecipe
 from tributo.algorithms.spi import (
     CollectiveAlgorithm,
     FrameworkNativeAlgorithm,
     MapReduceAlgorithm,
+    TorchTrainingRecipe,
 )
 from tributo.training.registry import TrainingAlgorithmRegistry
 
@@ -55,20 +57,24 @@ def test_first_party_descriptors_cover_all_builtin_training_algorithms() -> None
         distribution = registration.distribution_spec
         assert distribution is not None
         assert distribution.supported_execution_profiles == (
-            ExecutionProfile.KUBERNETES,
+            ExecutionProfile.CLUSTER,
             ExecutionProfile.LOCAL,
         )
         assert distribution.supported_worker_range.contains(1)
         assert distribution.supported_worker_range.contains(2)
         assert descriptor.tested is True
         assert descriptor.supported is True
-        assert descriptor.validated_execution_profiles == (ExecutionProfile.LOCAL,)
+        assert descriptor.validated_execution_profiles == (
+            ExecutionProfile.CLUSTER,
+            ExecutionProfile.LOCAL,
+        )
         assert registration.is_default is True
         assert registration.implementation.exporter_ref is not None
         assert registration.implementation.flavor_id is not None
 
 
 def test_builtin_implementations_inherit_the_declared_strategy_interfaces() -> None:
+    assert issubclass(DNNTrainingRecipe, TorchTrainingRecipe)
     assert issubclass(DistributedDNN, CollectiveAlgorithm)
     assert issubclass(DistributedPU, CollectiveAlgorithm)
     assert issubclass(DistributedMultinomialNB, MapReduceAlgorithm)
@@ -78,6 +84,12 @@ def test_builtin_implementations_inherit_the_declared_strategy_interfaces() -> N
         DNN_DESCRIPTOR.registration.implementation.execution_mode
         is ExecutionMode.COLLECTIVE
     )
+    assert str(DNN_DESCRIPTOR.registration.implementation.implementation_ref).endswith(
+        ":DNNTrainingRecipe"
+    )
+    assert str(
+        DNN_DESCRIPTOR.registration.implementation.executable_factory_ref
+    ).endswith(":create_torch_recipe_algorithm")
     assert (
         PU_DESCRIPTOR.registration.implementation.execution_mode
         is ExecutionMode.COLLECTIVE

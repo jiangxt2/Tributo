@@ -50,6 +50,7 @@ STABILITY_MAP: dict[str, str] = {
     "tributo.algorithms.core.runtime": "alpha",
     "tributo.algorithms.spi.execution": "alpha",
     "tributo.algorithms.spi.input": "alpha",
+    "tributo.algorithms.spi.torch": "alpha",
     # Util — stable
     "tributo.util.annotations": "stable",
     # Training — beta
@@ -153,6 +154,7 @@ STABILITY_MAP: dict[str, str] = {
     "tributo.integrations.model_importers.registry": "alpha",
     "tributo.integrations.validators": "beta",
     "tributo.integrations.sources": "beta",
+    "tributo.integrations.sources.ray_torch_recipe": "alpha",
     "tributo.integrations.storage": "beta",
     "tributo.integrations.hooks": "beta",
     "tributo.integrations.sinks.parquet": "alpha",

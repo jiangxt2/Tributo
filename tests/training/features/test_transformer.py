@@ -120,6 +120,32 @@ class TestFeatureTransformer:
             assert loaded.label_encoders == transformer.label_encoders
             assert loaded.norm_params == transformer.norm_params
 
+    def test_save_load_preserves_numeric_string_categories(self):
+        """Numeric-looking string categories must not be coerced to numbers."""
+        features = [SparseFeat(name="category", vocab_size=10)]
+        data = {"category": np.array(["1", "001", "2", "1"])}
+        transformer = FeatureTransformer(features).fit(data)
+
+        restored = FeatureTransformer.from_state(transformer.to_state())
+
+        assert restored.label_encoders == transformer.label_encoders
+        np.testing.assert_array_equal(
+            restored.transform(data)["category"],
+            transformer.transform(data)["category"],
+        )
+
+    def test_from_state_reads_legacy_numeric_encoder_keys(self):
+        """Pre-key-type checkpoints retain their historical numeric heuristic."""
+        restored = FeatureTransformer.from_state(
+            {
+                "features": [{"type": "sparse", "name": "category", "vocab_size": 10}],
+                "label_encoders": {"category": {"1": 0, "2": 1}},
+                "norm_params": {},
+            }
+        )
+
+        assert restored.label_encoders == {"category": {1: 0, 2: 1}}
+
     def test_transform_consistency(self):
         """测试转换一致性（fit_transform 和 transform 结果相同）。"""
         features = [

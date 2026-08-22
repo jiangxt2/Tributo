@@ -357,6 +357,46 @@ def test_independent_distributed_algorithm_package_passes_conformance(
     assert fixture.DESCRIPTOR.registration.implementation.flavor_id is None
 
 
+def test_independent_torch_recipe_package_passes_narrow_conformance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture_src = (
+        Path(__file__).parent / "fixtures" / "torch_recipe_algorithm_plugin" / "src"
+    )
+    monkeypatch.syspath_prepend(str(fixture_src))
+    fixture = importlib.import_module("tributo_test_torch_recipe_algorithm")
+    entry_point = _TrainerEntryPoint(
+        "third_party_binary_linear",
+        "tributo_test_torch_recipe_algorithm:DESCRIPTOR",
+        fixture.DESCRIPTOR,
+    )
+    _set_entry_points(monkeypatch, entry_point)
+    real_version = importlib.metadata.version
+
+    def package_version(name: str) -> str:
+        if name == "tributo-test-torch-recipe-algorithm":
+            return "0.1.0"
+        return real_version(name)
+
+    monkeypatch.setattr(importlib.metadata, "version", package_version)
+    diagnostics = []
+
+    descriptors = plugin.discover_algorithm_descriptors(diagnostics=diagnostics)
+    validated = plugin.validate_distributed_algorithm_descriptor(
+        fixture.DESCRIPTOR,
+        entry_point_name="third_party_binary_linear",
+    )
+
+    assert descriptors == [fixture.DESCRIPTOR]
+    assert validated is fixture.DESCRIPTOR
+    assert diagnostics == []
+    assert (
+        str(fixture.DESCRIPTOR.registration.implementation.executable_factory_ref)
+        == "tributo.integrations.algorithm_runtimes.torch_recipe:"
+        "create_torch_recipe_algorithm"
+    )
+
+
 def test_algorithm_artifact_plugin_filter_loads_only_the_selected_entry_point(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -450,7 +490,7 @@ def test_direct_conformance_accepts_every_first_party_formal_descriptor() -> Non
     ] == list(descriptors)
 
 
-def test_distributed_algorithm_discovery_rejects_wrong_strategy_base(
+def test_distributed_algorithm_discovery_rejects_wrong_recipe_base(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from tributo.algorithms.api import QualifiedReference
@@ -477,7 +517,7 @@ def test_distributed_algorithm_discovery_rejects_wrong_strategy_base(
     )
     diagnostics = []
 
-    with pytest.raises(TypeError, match="CollectiveAlgorithm"):
+    with pytest.raises(TypeError, match="TorchTrainingRecipe"):
         plugin.validate_distributed_algorithm_descriptor(
             invalid_descriptor,
             entry_point_name="dnn",

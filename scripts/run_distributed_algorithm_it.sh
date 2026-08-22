@@ -31,6 +31,8 @@ RAY_JOB_LOG="${LOG_DIR}/ray-jobs.log"
 PLUGIN_DIST_DIR="${LOG_DIR}/plugin-dist"
 PLUGIN_CONTAINER_DIR="/workspace/tributo-work/distributed-plugin"
 PLUGIN_WHEEL=""
+TORCH_RECIPE_DIST_DIR="${LOG_DIR}/torch-recipe-dist"
+TORCH_RECIPE_WHEEL=""
 OFFLINE_DIST_DIR="${LOG_DIR}/offline-dist"
 OFFLINE_BUNDLE_DIR="${LOG_DIR}/offline-bundle"
 OFFLINE_BUNDLE_ARCHIVE="${LOG_DIR}/offline-bundle.zip"
@@ -52,6 +54,7 @@ if [[ -e "${LOG_DIR}" ]]; then
   exit 2
 fi
 mkdir -p "${PLUGIN_DIST_DIR}"
+mkdir -p "${TORCH_RECIPE_DIST_DIR}"
 mkdir -p "${OFFLINE_DIST_DIR}"
 
 compose() {
@@ -246,6 +249,21 @@ PLUGIN_WHEEL="${plugin_wheels[0]}"
 
 uv build \
   --wheel \
+  --out-dir "${TORCH_RECIPE_DIST_DIR}" \
+  --no-create-gitignore \
+  tests/fixtures/torch_recipe_algorithm_plugin \
+  2>&1 | tee "${LOG_DIR}/torch-recipe-wheel.log"
+shopt -s nullglob
+torch_recipe_wheels=("${TORCH_RECIPE_DIST_DIR}"/*.whl)
+shopt -u nullglob
+if [[ "${#torch_recipe_wheels[@]}" -ne 1 ]]; then
+  echo "Expected exactly one Torch recipe plugin wheel, found ${#torch_recipe_wheels[@]}" >&2
+  exit 1
+fi
+TORCH_RECIPE_WHEEL="${torch_recipe_wheels[0]}"
+
+uv build \
+  --wheel \
   --out-dir "${OFFLINE_DIST_DIR}" \
   --no-create-gitignore \
   tests/fixtures/offline_algorithm_dependency \
@@ -299,13 +317,13 @@ TRIBUTO_IT_RUNTIME_IMAGE="$({
 REQUIRED_RUNTIME_IMAGE="${TRIBUTO_IT_RUNTIME_IMAGE}"
 REQUIRED_RUNTIME_IMAGE_ID="$(docker image inspect \
   --format '{{.Id}}' "${TRIBUTO_IT_RUNTIME_IMAGE}")"
-export TRIBUTO_IT_MINIO_IMAGE="${MINIO_IMAGE}"
 export TRIBUTO_IT_SOURCE_ROOT="${PROJECT_ROOT}"
-export TRIBUTO_IT_TOOL_IMAGE="${TOOL_IMAGE}"
 
 uv run --locked --no-sync python -c \
   'from tools.tributo_it import ensure_digest_image, load_profile; p = load_profile("data-ingestion"); ensure_digest_image(p.tool_image); ensure_digest_image(p.minio_image)' \
   2>&1 | tee "${LOG_DIR}/infrastructure-images.log"
+export TRIBUTO_IT_TOOL_IMAGE="${TOOL_IMAGE%%@*}"
+export TRIBUTO_IT_MINIO_IMAGE="${MINIO_IMAGE%%@*}"
 
 compose config --quiet
 COMPOSE_TOUCHED=1
@@ -321,6 +339,8 @@ wait_for_stable_ray_nodes 3
 compose exec -T ray-head mkdir -p "${PLUGIN_CONTAINER_DIR}"
 compose cp "${PLUGIN_WHEEL}" "ray-head:${PLUGIN_CONTAINER_DIR}/"
 PLUGIN_CONTAINER_WHEEL="${PLUGIN_CONTAINER_DIR}/$(basename "${PLUGIN_WHEEL}")"
+compose cp "${TORCH_RECIPE_WHEEL}" "ray-head:${PLUGIN_CONTAINER_DIR}/"
+TORCH_RECIPE_CONTAINER_WHEEL="${PLUGIN_CONTAINER_DIR}/$(basename "${TORCH_RECIPE_WHEEL}")"
 compose exec -T ray-head mkdir -p \
   "${OFFLINE_BUNDLE_CONTAINER_DIR}/wheelhouse"
 compose cp "${OFFLINE_BUNDLE_DIR}/algorithm.whl" \
@@ -347,9 +367,25 @@ try: client.head_bucket(Bucket=bucket)
 except ClientError: client.create_bucket(Bucket=bucket)
 client.upload_file(archive, bucket, key); print(f"uploaded s3://{bucket}/{key}")'
 
+test_targets=(
+  tests/training/test_dnn_pu_training.py::test_formal_distributed_algorithms_complete_on_ray_cluster
+  tests/training/test_dnn_pu_training.py::test_out_of_tree_torch_recipe_completes_on_ray_cluster
+  tests/training/test_dnn_pu_training.py::test_offline_wheelhouse_installs_unique_dependency_on_driver_and_workers
+  tests/training/test_dnn_pu_training.py::test_remote_offline_wheelhouse_archive_installs_on_driver_and_workers
+)
+if [[ "${TRIBUTO_DISTRIBUTED_ALGORITHM_RERUN_FAILED_ONLY:-0}" == "1" ]]; then
+  test_targets=(
+    tests/training/test_dnn_pu_training.py::test_formal_distributed_algorithms_complete_on_ray_cluster
+  )
+elif [[ "${TRIBUTO_DISTRIBUTED_ALGORITHM_RERUN_FAILED_ONLY:-0}" != "0" ]]; then
+  echo "TRIBUTO_DISTRIBUTED_ALGORITHM_RERUN_FAILED_ONLY must be 0 or 1" >&2
+  exit 2
+fi
+
 compose exec -T \
   --env TRIBUTO_DOCKER_DISTRIBUTED_ALGORITHM_IT=1 \
   --env "TRIBUTO_DISTRIBUTED_PLUGIN_WHEEL=${PLUGIN_CONTAINER_WHEEL}" \
+  --env "TRIBUTO_TORCH_RECIPE_PLUGIN_WHEEL=${TORCH_RECIPE_CONTAINER_WHEEL}" \
   --env TRIBUTO_EXPECTED_ALGORITHM_MODE=image_py_modules \
   --env "TRIBUTO_ALGORITHM_IMAGE_DIGEST=${REQUIRED_RUNTIME_IMAGE_ID}" \
   --env "TRIBUTO_OFFLINE_ALGORITHM_BUNDLE=${OFFLINE_BUNDLE_CONTAINER_DIR}" \
@@ -358,9 +394,7 @@ compose exec -T \
   --env TRIBUTO_DISTRIBUTED_GATE_LOG=/workspace/tributo-work/distributed-algorithm-ray-jobs.log \
   ray-head \
   python -m pytest \
-  tests/training/test_dnn_pu_training.py::test_formal_distributed_algorithms_complete_on_ray_cluster \
-  tests/training/test_dnn_pu_training.py::test_offline_wheelhouse_installs_unique_dependency_on_driver_and_workers \
-  tests/training/test_dnn_pu_training.py::test_remote_offline_wheelhouse_archive_installs_on_driver_and_workers \
+  "${test_targets[@]}" \
   -o addopts= \
   -o cache_dir=/workspace/tributo-work/cache/pytest-distributed-algorithm \
   -m integration -vv -rP --tb=short --timeout=1200 2>&1 | tee "${TEST_LOG}"

@@ -53,12 +53,16 @@ def first_party_source_providers() -> tuple[type[ExportSourceProvider], ...]:
     """Return built-in checkpoint providers without entry-point metadata."""
     from tributo.integrations.sources.ray_dnn import RayDnnSourceProvider
     from tributo.integrations.sources.ray_pu import RayPUSourceProvider
+    from tributo.integrations.sources.ray_torch_recipe import (
+        RayTorchRecipeSourceProvider,
+    )
     from tributo.integrations.sources.ray_xgboost import RayXGBoostSourceProvider
 
     return (
         RayXGBoostSourceProvider,
         RayDnnSourceProvider,
         RayPUSourceProvider,
+        RayTorchRecipeSourceProvider,
     )
 
 

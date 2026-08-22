@@ -80,7 +80,7 @@ class ExecutionRequest:
             profile = ExecutionProfile(self.profile)
         except (TypeError, ValueError) as exc:
             raise AlgorithmConfigurationError(
-                "execution profile must be 'local' or 'kubernetes'"
+                "execution profile must be 'local' or 'cluster'"
             ) from exc
         object.__setattr__(self, "profile", profile)
         if (
@@ -357,6 +357,7 @@ class ExecutionReceipt:
     artifact_ids: tuple[str, ...] = ()
     cluster_resources: Mapping[str, float] = field(default_factory=dict)
     runtime_owned: bool = False
+    resource_preflight: str = "validated"
     api_version: int = 1
 
     def __post_init__(self) -> None:
@@ -490,6 +491,17 @@ class ExecutionReceipt:
         object.__setattr__(self, "cluster_resources", FrozenDict(resources))
         if not isinstance(self.runtime_owned, bool):
             raise AlgorithmConfigurationError("runtime_owned must be a boolean")
+        if self.resource_preflight not in {"validated", "deferred_to_ray"}:
+            raise AlgorithmConfigurationError(
+                "resource_preflight must be 'validated' or 'deferred_to_ray'"
+            )
+        if (
+            self.profile is ExecutionProfile.LOCAL
+            and self.resource_preflight != "validated"
+        ):
+            raise AlgorithmConfigurationError(
+                "local execution requires validated resource preflight"
+            )
 
     @property
     def node_count(self) -> int:
@@ -524,13 +536,25 @@ class ExecutionReceipt:
         return self.node_count >= 2
 
     @property
-    def kubernetes_distributed_supported(self) -> bool:
-        """Return the per-run evidence predicate used by the KubeRay Gate."""
+    def cluster_distributed(self) -> bool:
+        """Return whether an attached-cluster run proves cross-node training."""
         return (
-            self.profile is ExecutionProfile.KUBERNETES
+            self.profile is ExecutionProfile.CLUSTER
             and self.distributed
             and self.cross_node
         )
+
+    @property
+    def kubernetes_distributed_supported(self) -> bool:
+        """Return the deprecated KubeRay-specific evidence predicate."""
+        import warnings
+
+        warnings.warn(
+            "kubernetes_distributed_supported is deprecated; use cluster_distributed",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.cluster_distributed
 
     def to_dict(self) -> dict[str, Any]:
         """Return portable receipt metadata."""
@@ -561,9 +585,10 @@ class ExecutionReceipt:
             "artifact_ids": list(self.artifact_ids),
             "cluster_resources": dict(sorted(self.cluster_resources.items())),
             "runtime_owned": self.runtime_owned,
+            "resource_preflight": self.resource_preflight,
             "distributed": self.distributed,
             "cross_node": self.cross_node,
-            "kubernetes_distributed_supported": (self.kubernetes_distributed_supported),
+            "cluster_distributed": self.cluster_distributed,
         }
 
 

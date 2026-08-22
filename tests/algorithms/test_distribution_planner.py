@@ -66,7 +66,7 @@ def test_formal_registration_requires_explicit_execution_request() -> None:
 def test_legacy_joblib_registration_cannot_claim_formal_distribution() -> None:
     request = ExecutionRequest(
         algorithm_request=request_for("external_sklearn", AlgorithmOperation.FIT),
-        profile=ExecutionProfile.KUBERNETES,
+        profile=ExecutionProfile.CLUSTER,
         worker_count=2,
     )
 

@@ -22,6 +22,8 @@ TEST_LOG="${LOG_DIR}/tests.log"
 IMAGE_LOG="${LOG_DIR}/image-prepare.log"
 PLUGIN_DIST_DIR="${LOG_DIR}/plugin-dist"
 PLUGIN_WHEEL=""
+TORCH_RECIPE_DIST_DIR="${LOG_DIR}/torch-recipe-dist"
+TORCH_RECIPE_WHEEL=""
 BASELINE_CONTAINERS="${LOG_DIR}/existing-containers.tsv"
 BASELINE_IMAGES="${LOG_DIR}/baseline-dangling-images.txt"
 FINAL_IMAGES="${LOG_DIR}/final-dangling-images.txt"
@@ -147,6 +149,21 @@ if [[ "${#plugin_wheels[@]}" -ne 1 ]]; then
 fi
 PLUGIN_WHEEL="${plugin_wheels[0]}"
 
+uv build \
+  --wheel \
+  --out-dir "${TORCH_RECIPE_DIST_DIR}" \
+  --no-create-gitignore \
+  tests/fixtures/torch_recipe_algorithm_plugin \
+  2>&1 | tee "${LOG_DIR}/torch-recipe-wheel.log"
+shopt -s nullglob
+torch_recipe_wheels=("${TORCH_RECIPE_DIST_DIR}"/*.whl)
+shopt -u nullglob
+if [[ "${#torch_recipe_wheels[@]}" -ne 1 ]]; then
+  echo "Expected exactly one Torch recipe plugin wheel, found ${#torch_recipe_wheels[@]}" >&2
+  exit 1
+fi
+TORCH_RECIPE_WHEEL="${torch_recipe_wheels[0]}"
+
 prepare_args=(prepare-runtime --profile data-ingestion)
 if [[ -n "${TRIBUTO_IT_RUNTIME_REGISTRY:-}" ]]; then
   prepare_args+=(--registry "${TRIBUTO_IT_RUNTIME_REGISTRY}")
@@ -197,12 +214,13 @@ docker create \
   --init \
   --shm-size 2gb \
   --env PYTHONDONTWRITEBYTECODE=1 \
-  --env PYTHONPATH=/workspace/tributo-plugin.whl:/workspace/tributo-src/src:/workspace/tributo-src \
+  --env PYTHONPATH=/workspace/tributo-plugin.whl:/workspace/tributo-torch-recipe.whl:/workspace/tributo-src/src:/workspace/tributo-src \
   --env TRIBUTO_DOCKER_ALGORITHM_LOCAL_IT=1 \
   --env TMPDIR=/workspace/tributo-work/tmp \
   --env XDG_CACHE_HOME=/workspace/tributo-work/cache \
   --volume "${SOURCE_VOLUME_NAME}:/workspace/tributo-src:ro" \
   --volume "${PLUGIN_WHEEL}:/workspace/tributo-plugin.whl:ro" \
+  --volume "${TORCH_RECIPE_WHEEL}:/workspace/tributo-torch-recipe.whl:ro" \
   --volume "${WORK_VOLUME_NAME}:/workspace/tributo-work" \
   --workdir /workspace/tributo-src \
   "${RUNTIME_IMAGE}" \

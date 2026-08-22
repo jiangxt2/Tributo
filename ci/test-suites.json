@@ -140,6 +140,7 @@
       "entrypoint": ["python", "-m", "pytest"],
       "args": [
         "tests/integration/test_distributed_algorithm_it_contract.py",
+        "tests/integration/test_kuberay_algorithm_it_contract.py",
         "tests/integration/test_export_helpers.py",
         "tests/integration/test_it_component_versions.py",
         "tests/integrations/conformance/test_model_importer_contract.py",
@@ -151,6 +152,7 @@
       "extras": ["dev"],
       "test_paths": [
         "tests/integration/test_distributed_algorithm_it_contract.py",
+        "tests/integration/test_kuberay_algorithm_it_contract.py",
         "tests/integration/test_export_helpers.py",
         "tests/integration/test_it_component_versions.py",
         "tests/integrations/conformance/test_model_importer_contract.py",
@@ -668,6 +670,38 @@
       "forbid_skips": true,
       "log_contract": "run-scoped local or Compose logs and cleanup evidence",
       "rationale": "Multi-worker scheduling, sharding, and plugin distribution require external cluster evidence."
+    },
+    {
+      "id": "kuberay-provision",
+      "owner": "training",
+      "domain": "algorithms",
+      "tier": "manual_external",
+      "workflow": "external",
+      "owns_tests": true,
+      "entrypoint": ["./scripts/run_kuberay_algorithm_it.sh"],
+      "args": [],
+      "extras": [],
+      "test_paths": [
+        "scripts/run_kuberay_algorithm_it.sh",
+        "tests/integration/kuberay/provision-gate.yaml"
+      ],
+      "trigger_domains": [],
+      "trigger_paths": [
+        "src/tributo/algorithms/**",
+        "src/tributo/integrations/algorithm_runtimes/**",
+        "scripts/run_kuberay_algorithm_it.sh",
+        "tests/integration/kuberay/provision-gate.yaml",
+        "tools/tributo-runtime-full.json",
+        "docker/tributo-runtime/Dockerfile",
+        "pyproject.toml",
+        "uv.lock"
+      ],
+      "requires": ["docker", "kubernetes", "ray_jobs"],
+      "budget_seconds": 3600,
+      "ci_allowed": false,
+      "forbid_skips": true,
+      "log_contract": "run-scoped runtime image, RayJob, resource, and cleanup logs",
+      "rationale": "KubeRay provisioning and native RayCluster cleanup require an isolated external kind cluster."
     },
     {
       "id": "ray-runtime-environment",

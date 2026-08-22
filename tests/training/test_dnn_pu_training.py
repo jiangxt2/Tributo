@@ -74,6 +74,16 @@ def _plugin_wheel() -> Path:
     return wheel
 
 
+def _torch_recipe_plugin_wheel() -> Path:
+    configured = os.environ.get("TRIBUTO_TORCH_RECIPE_PLUGIN_WHEEL")
+    if not configured:
+        pytest.fail("distributed algorithm IT requires a Torch recipe plugin wheel")
+    wheel = Path(configured)
+    if not wheel.is_file() or wheel.suffix != ".whl":
+        pytest.fail(f"Torch recipe plugin wheel is unavailable: {wheel}")
+    return wheel
+
+
 def _algorithm_image_profile() -> ImageProfile:
     digest = os.environ.get("TRIBUTO_ALGORITHM_IMAGE_DIGEST", "a" * 64)
     if digest.startswith("sha256:"):
@@ -144,6 +154,53 @@ def _submit_gate_job(
     return result
 
 
+def _submit_torch_recipe_gate_job(
+    job_client: JobSubmissionClient,
+    *,
+    root: Path,
+    plugin_wheel: Path,
+) -> dict[str, Any]:
+    submission_id = f"torch-recipe-{uuid.uuid4().hex}"
+    artifact = AlgorithmArtifact(
+        source=str(plugin_wheel),
+        package_name="tributo-test-torch-recipe-algorithm",
+        package_version="0.1.0",
+        plugin_names=("third_party_binary_linear",),
+        wheel_tags=("py3-none-any",),
+    )
+    runtime_env = build_runtime_env(
+        env_vars={
+            "RAY_ENABLE_UV_RUN_RUNTIME_ENV": "0",
+            "TRIBUTO_DISTRIBUTED_GATE_PROFILE": "torch-recipe",
+            "TRIBUTO_DISTRIBUTED_GATE_ROOT": str(root),
+            "TRIBUTO_RUN_ID": submission_id,
+            "TRIBUTO_ATTEMPT_ID": "attempt-1",
+        },
+        algorithm_artifact=artifact,
+        image_profile=_algorithm_image_profile(),
+        declared_dependencies=("tributo-test-torch-recipe-algorithm==0.1.0",),
+    )
+    if str(plugin_wheel) not in runtime_env.get("py_modules", []):
+        raise AssertionError("Ray runtime_env did not include the Torch recipe Wheel")
+    job_id = job_client.submit_job(
+        entrypoint="python tests/training/jobs/torch_recipe_gate_job.py",
+        runtime_env=runtime_env,
+        submission_id=submission_id,
+    )
+    result = wait_for_job(job_client, job_id, timeout=900)
+    result["message"] = job_client.get_job_info(job_id).message or ""
+    if log_path := os.environ.get("TRIBUTO_DISTRIBUTED_GATE_LOG"):
+        with Path(log_path).open("a", encoding="utf-8") as stream:
+            stream.write(
+                f"===== torch-recipe status={result['status']} job_id={job_id} =====\n"
+            )
+            if result["message"]:
+                stream.write(f"Ray Job message: {result['message']}\n")
+            stream.write(str(result["logs"]))
+            stream.write("\n")
+    return result
+
+
 def test_formal_distributed_algorithms_complete_on_ray_cluster(
     job_client: JobSubmissionClient,
 ) -> None:
@@ -187,11 +244,11 @@ def test_formal_distributed_algorithms_complete_on_ray_cluster(
         for result in results:
             receipt = result["receipt"]
             assert result["status"] == "succeeded"
-            assert receipt["execution_profile"] == "local"
+            assert receipt["execution_profile"] == "cluster"
             assert receipt["requested_worker_count"] == result["worker_count"]
             assert receipt["distributed"] is (result["worker_count"] >= 2)
             assert receipt["cross_node"] is (result["worker_count"] >= 2)
-            assert receipt["kubernetes_distributed_supported"] is False
+            assert receipt["cluster_distributed"] is (result["worker_count"] >= 2)
             assert receipt["driver_materialized_training_rows"] == 0
             assert len(receipt["workers"]) == result["worker_count"]
             assert (
@@ -217,6 +274,44 @@ def test_formal_distributed_algorithms_complete_on_ray_cluster(
         )
         assert failure_result["status"] == JobStatus.FAILED
         assert not tuple(failure_root.rglob("manifest.json"))
+    finally:
+        shutil.rmtree(gate_root, ignore_errors=True)
+
+
+def test_out_of_tree_torch_recipe_completes_on_ray_cluster(
+    job_client: JobSubmissionClient,
+) -> None:
+    """Prove the low-code recipe Wheel, uneven shards, checkpoint, and Bundle."""
+    if os.environ.get("TRIBUTO_DOCKER_DISTRIBUTED_ALGORITHM_IT") != "1":
+        pytest.fail("distributed algorithm IT must run in its owned Docker cluster")
+    gate_root = Path(f"/workspace/tributo-work/tributo-recipe-{uuid.uuid4().hex}")
+    try:
+        job_result = _submit_torch_recipe_gate_job(
+            job_client,
+            root=gate_root,
+            plugin_wheel=_torch_recipe_plugin_wheel(),
+        )
+        assert job_result["status"] == JobStatus.SUCCEEDED, (
+            f"Torch recipe Gate failed:\n{job_result['message']}\n{job_result['logs']}"
+        )
+        results = _result_from_logs(str(job_result["logs"]))
+        assert len(results) == 1
+        result = results[0]
+        receipt = result["receipt"]
+        assert result["algorithm"] == "third_party_binary_linear"
+        assert result["worker_count"] == 2
+        assert receipt["execution_profile"] == "cluster"
+        assert receipt["runtime_owned"] is False
+        assert receipt["distributed"] is True
+        assert receipt["cross_node"] is True
+        assert receipt["cluster_distributed"] is True
+        assert receipt["result_policy"] == "bundle_required"
+        assert receipt["artifact_ids"]
+        assert sum(worker["input_rows"]["train"] for worker in receipt["workers"]) == 65
+        assert all(
+            worker["batch_count"] <= worker["collective_steps"]
+            for worker in receipt["workers"]
+        )
     finally:
         shutil.rmtree(gate_root, ignore_errors=True)
 

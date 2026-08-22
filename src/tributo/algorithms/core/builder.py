@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Literal
 
 from tributo.algorithms.api import (
@@ -19,6 +20,7 @@ from tributo.algorithms.api import (
     FrameworkNativePolicy,
     ImplementationDescriptor,
     MapReducePolicy,
+    MetricReduction,
     QualifiedReference,
     ResultPolicy,
     RuntimeBinding,
@@ -206,6 +208,106 @@ class AlgorithmBuilder:
             supported=supported,
             validated_execution_profiles=validated_execution_profiles,
             limitations=limitations,
+        )
+
+    @staticmethod
+    def from_torch_recipe(
+        *,
+        spec: AlgorithmSpec,
+        implementation_id: str,
+        implementation_version: str,
+        recipe: str,
+        environment: EnvironmentSpec,
+        metric_reducers: Mapping[str, MetricReduction],
+        supported_worker_range: WorkerRange,
+        supported_execution_profiles: tuple[ExecutionProfile, ...],
+        resources_per_worker: WorkerResources,
+        package_name: str,
+        package_version: str,
+        tributo_version_spec: str,
+        backend: Literal["auto", "gloo", "nccl"] = "auto",
+        distributed_min_workers: int = 2,
+        stability: Literal["alpha", "beta", "stable"] = "alpha",
+        tested: bool = False,
+        supported: bool = False,
+        validated_execution_profiles: tuple[ExecutionProfile, ...] = (),
+        limitations: tuple[str, ...] = (),
+        is_default: bool = False,
+        code_digest: str | None = None,
+    ) -> DistributedAlgorithmDescriptor:
+        """Lower four PyTorch factories to the existing Ray collective runtime.
+
+        The referenced class must subclass ``TorchTrainingRecipe`` and have a
+        no-argument constructor. The ordinary recipe configuration surface is
+        deliberately fixed to model, loss, optimizer, metrics, training, ray,
+        and output namespaces so algorithm code cannot smuggle deployment
+        settings into the worker loop.
+        """
+        try:
+            normalized_reducers = {
+                name: MetricReduction(reduction)
+                for name, reduction in metric_reducers.items()
+            }
+        except (TypeError, ValueError) as exc:
+            raise AlgorithmConfigurationError(
+                "Torch recipe metric reducer is invalid"
+            ) from exc
+        if "train_loss" in normalized_reducers and (
+            normalized_reducers["train_loss"] is not MetricReduction.SUM_COUNT
+        ):
+            raise AlgorithmConfigurationError(
+                "Torch recipe train_loss uses the fixed sum_count reducer"
+            )
+        normalized_reducers["train_loss"] = MetricReduction.SUM_COUNT
+        return AlgorithmBuilder.from_distributed_algorithm(
+            spec=spec,
+            implementation_id=implementation_id,
+            implementation_version=implementation_version,
+            implementation=recipe,
+            executable_factory=(
+                "tributo.integrations.algorithm_runtimes.torch_recipe:"
+                "create_torch_recipe_algorithm"
+            ),
+            distribution=package_name,
+            framework="pytorch",
+            environment=environment,
+            allowed_config_keys=(
+                "loss",
+                "metrics",
+                "model",
+                "optimizer",
+                "output",
+                "ray",
+                "training",
+            ),
+            strategy=DistributionStrategy.RAY_TRAIN_COLLECTIVE,
+            supported_worker_range=supported_worker_range,
+            supported_execution_profiles=supported_execution_profiles,
+            resources_per_worker=resources_per_worker,
+            policy=CollectivePolicy(
+                backend=backend,
+                metric_reducers=normalized_reducers,
+                checkpoint_owner_rank=0,
+                same_world_size_resume=True,
+                rank_seeded=True,
+            ),
+            package_name=package_name,
+            package_version=package_version,
+            tributo_version_spec=tributo_version_spec,
+            result_policy=ResultPolicy.BUNDLE_REQUIRED,
+            exporter=(
+                "tributo.integrations.algorithm_runtimes.torch_recipe:"
+                "export_torch_recipe_result"
+            ),
+            flavor_id="onnx-runtime-v1",
+            distributed_min_workers=distributed_min_workers,
+            stability=stability,
+            tested=tested,
+            supported=supported,
+            validated_execution_profiles=validated_execution_profiles,
+            limitations=limitations,
+            is_default=is_default,
+            code_digest=code_digest,
         )
 
     @staticmethod

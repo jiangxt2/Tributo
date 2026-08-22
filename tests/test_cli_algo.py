@@ -65,10 +65,13 @@ class TestAlgoList:
         ]
         assert by_name["xgboost"]["distribution_strategies"] == ["framework_native"]
         assert by_name["xgboost"]["execution_profiles"] == [
-            "kubernetes",
+            "cluster",
             "local",
         ]
-        assert by_name["xgboost"]["validated_execution_profiles"] == ["local"]
+        assert by_name["xgboost"]["validated_execution_profiles"] == [
+            "cluster",
+            "local",
+        ]
 
         if "dnn" in by_name:
             assert "distributed" in by_name["dnn"]["capabilities"]
@@ -115,8 +118,8 @@ class TestAlgoInfo:
         assert "Stability:      alpha" in result.output
         assert "tributo.xgboost.framework_native" in result.output
         assert "Distribution:   ['framework_native']" in result.output
-        assert "Profiles:       ['kubernetes', 'local']" in result.output
-        assert "Validated:      ['local']" in result.output
+        assert "Profiles:       ['cluster', 'local']" in result.output
+        assert "Validated:      ['cluster', 'local']" in result.output
 
     def test_info_unknown_algorithm(self, runner) -> None:
         result = runner.invoke(main, ["algo", "info", "nonexistent_algo_xyz"])
@@ -348,13 +351,13 @@ class TestAlgoRun:
         manager = build_dispatcher.call_args.kwargs["runtime_manager"]
         assert manager._default_local_options.num_cpus == 1.0
 
-    def test_run_rejects_local_runtime_for_kubernetes(self, runner, tmp_path) -> None:
+    def test_run_rejects_local_runtime_for_cluster(self, runner, tmp_path) -> None:
         config_file = tmp_path / "execution.json"
         config_file.write_text(
             json.dumps(
                 {
                     "algorithm": "multinomial_nb",
-                    "profile": "kubernetes",
+                    "profile": "cluster",
                     "worker_count": 2,
                     "input": {
                         "ingestion": {

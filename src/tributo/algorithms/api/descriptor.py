@@ -88,7 +88,7 @@ class DistributedAlgorithmDescriptor:
             )
         except (TypeError, ValueError) as exc:
             raise AlgorithmConfigurationError(
-                "validated execution profiles must be local or kubernetes"
+                "validated execution profiles must be local or cluster"
             ) from exc
         compatible_profiles = set(
             self.registration.distribution_spec.supported_execution_profiles
