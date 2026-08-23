@@ -14,6 +14,7 @@ import pyarrow as pa
 
 from tributo._common.storage_profiles import StorageProfileResolver
 from tributo.data._s3 import to_lance_storage_options
+from tributo.data.persistence import LanceRayBinding
 from tributo.vector_index.contracts import (
     CoverageStatus,
     FragmentSetEvidence,
@@ -335,6 +336,7 @@ class LanceRayAdapter:
             ) from None
         self._validate_driver_runtime()
         self._validate_public_api()
+        self._lance_binding = LanceRayBinding(self._lance_ray, self._lance)
 
     def _validate_driver_runtime(self) -> None:
         versions = _distribution_versions()
@@ -423,60 +425,27 @@ class LanceRayAdapter:
         storage_options = self._storage_options(ref)
         namespace_properties = _namespace_properties(ref)
         table_id = list(ref.table_id) if ref.table_id is not None else None
-        if ref.uri is not None:
-            dataset = self._lance.LanceDataset(
-                ref.uri,
+        try:
+            access = self._lance_binding.open_dataset(
+                uri=ref.uri,
                 version=version,
                 block_size=ref.block_size,
-                storage_options=storage_options or None,
-            )
-            return ResolvedDatasetAccess(
-                dataset=dataset,
-                uri=ref.uri,
                 storage_options=storage_options,
+                namespace_impl=ref.namespace_impl,
+                namespace_properties=namespace_properties,
+                table_id=table_id,
             )
-
-        if ref.namespace_impl is None or table_id is None:
-            raise VectorIndexConfigurationError(
-                "namespace dataset reference is incomplete"
-            )
-        try:
-            lance_namespace = importlib.import_module("lance_namespace")
-            namespace = lance_namespace.connect(
-                ref.namespace_impl,
-                namespace_properties or {},
-            )
-            describe_request = lance_namespace.DescribeTableRequest(id=table_id)
-            description = namespace.describe_table(describe_request)
         except Exception as exc:
             raise VectorIndexExecutionError(
-                f"Lance namespace resolution failed ({type(exc).__name__})"
+                f"Lance dataset resolution failed ({type(exc).__name__})"
             ) from None
-        location = getattr(description, "location", None)
-        if not isinstance(location, str) or not location:
-            raise VectorIndexExecutionError(
-                "Lance namespace did not return a table location"
-            )
-        namespace_storage = getattr(description, "storage_options", None)
-        if isinstance(namespace_storage, Mapping):
-            storage_options.update(
-                {str(key): str(value) for key, value in namespace_storage.items()}
-            )
-        dataset = self._lance.LanceDataset(
-            location,
-            version=version,
-            block_size=ref.block_size,
-            storage_options=storage_options or None,
-            namespace_client=namespace,
-            table_id=table_id,
-        )
         return ResolvedDatasetAccess(
-            dataset=dataset,
-            uri=location,
-            storage_options=storage_options,
-            namespace_impl=ref.namespace_impl,
-            namespace_properties=namespace_properties,
-            table_id=table_id,
+            dataset=access.dataset,
+            uri=access.uri,
+            storage_options=access.storage_options,
+            namespace_impl=access.namespace_impl,
+            namespace_properties=access.namespace_properties,
+            table_id=access.table_id,
         )
 
     def current_dataset(self, ref: LanceDatasetRef) -> ResolvedDatasetAccess:
@@ -513,7 +482,7 @@ class LanceRayAdapter:
                 table_id=list(ref.table_id or ()),
             )
         try:
-            return self._lance_ray.create_index(**common)
+            return self._lance_binding.create_index(**common)
         except Exception as exc:
             raise VectorIndexExecutionError(
                 f"Lance-Ray create_index failed ({type(exc).__name__})"
@@ -532,7 +501,7 @@ class LanceRayAdapter:
             if value is not None:
                 nearest[name] = value
         try:
-            result = self._lance_ray.vector_search(
+            result = self._lance_binding.vector_search(
                 uri=dataset,
                 nearest=nearest,
                 index_name=request.index_name,
@@ -573,7 +542,7 @@ class LanceRayAdapter:
                 table_id=list(ref.table_id or ()),
             )
         try:
-            return self._lance_ray.optimize_indices(**kwargs)
+            return self._lance_binding.optimize_indices(**kwargs)
         except Exception as exc:
             raise VectorIndexExecutionError(
                 f"Lance-Ray optimize_indices failed ({type(exc).__name__})"
@@ -596,7 +565,7 @@ class LanceRayAdapter:
                 table_id=list(ref.table_id or ()),
             )
         try:
-            return self._lance_ray.compact_files(**kwargs)
+            return self._lance_binding.compact_files(**kwargs)
         except Exception as exc:
             raise VectorIndexExecutionError(
                 f"Lance-Ray compact_files failed ({type(exc).__name__})"

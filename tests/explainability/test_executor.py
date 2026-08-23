@@ -336,7 +336,7 @@ def test_executor_writes_every_attempt_to_its_isolated_result_uri(monkeypatch) -
     monkeypatch.setattr(
         executor_module,
         "_result_stats",
-        lambda _uri: ("b" * 64, 10, 1),
+        lambda _uri, **_kwargs: ("b" * 64, 10, 1),
     )
 
     def fake_sink_write(self, dataset, sink_request, *, run_id, plan_digest):
@@ -353,7 +353,7 @@ def test_executor_writes_every_attempt_to_its_isolated_result_uri(monkeypatch) -
     monkeypatch.setattr(
         executor_module,
         "_write_receipt",
-        lambda uri, receipt: captured.__setitem__("receipt_write_uri", uri),
+        lambda uri, receipt, **_kwargs: captured.__setitem__("receipt_write_uri", uri),
     )
 
     store = InMemoryOperationStore()

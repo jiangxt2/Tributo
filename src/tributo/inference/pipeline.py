@@ -23,20 +23,21 @@ from tributo.data import (
     SelectColumns,
     TransformPipeline,
     apply_source_projection,
+    normalize_legacy_inference_json_source,
+    normalize_legacy_inference_source,
     source_projection,
 )
 from tributo.data.source_config import (
     CanonicalSourceInput,
     CsvSourceConfig,
     IcebergSourceConfig,
-    LegacyConfigNormalizer,
     ParquetSourceConfig,
     ProviderSourceConfig,
-    RawSourceConfig,
 )
 from tributo.exceptions import JobConfigurationError
 from tributo.inference._credential_safety import credential_paths
-from tributo.inference.contracts import LanceResultSinkRequest, LanceVectorColumnSpec
+from tributo.inference.contracts import LanceVectorColumnSpec
+from tributo.integrations.sinks.legacy import build_legacy_result_sink
 from tributo.util.annotations import PublicAPI
 
 logger = logging.getLogger(__name__)
@@ -295,111 +296,30 @@ def _warn_source_s3_domain_migration(
 
 
 def _legacy_source(config: InferenceConfig) -> CanonicalSourceInput:
-    """Normalize the historical flat inference fields into a source config."""
+    """Delegate historical flat source normalization to the data module."""
     if config.source is not None:
         return config.source
     assert config.input_uri is not None
 
-    if config.data_type == "clickhouse":
-        raw: dict[str, Any] = {
-            "type": "clickhouse",
-            "ch_host": config.ch_host or None,
-            "ch_port": config.ch_port,
-            "ch_database": config.ch_database or None,
-            "ch_user": config.ch_user or None,
-            "ch_password": config.ch_password or None,
-            "ch_sql": config.ch_sql,
-        }
-    elif config.data_type == "s3":
-        raw = {
-            "type": "s3",
-            "uri": config.input_uri,
-            "format": "parquet",
-            "s3": config.s3_config or None,
-        }
-    else:
-        # The historical inference path read both local and S3 input_uri
-        # values as Parquet unless the ClickHouse branch was selected.
-        raw = {
-            "type": "parquet",
-            "path": config.input_uri,
-            "s3": config.s3_config or None,
-        }
-    normalized = LegacyConfigNormalizer.normalize(raw)
-    if isinstance(normalized, RawSourceConfig):
-        raise JobConfigurationError(
-            f"Unknown legacy inference source type: {normalized.type!r}"
+    try:
+        return normalize_legacy_inference_source(
+            data_type=config.data_type,
+            input_uri=config.input_uri,
+            s3_config=config.s3_config,
+            ch_host=config.ch_host,
+            ch_port=config.ch_port,
+            ch_database=config.ch_database,
+            ch_user=config.ch_user,
+            ch_password=config.ch_password,
+            ch_sql=config.ch_sql,
         )
-    return normalized
+    except ValueError as exc:
+        raise JobConfigurationError(str(exc)) from None
 
 
 def _legacy_json_source(data_config: dict[str, Any]) -> CanonicalSourceInput:
-    """Convert the historical JSON ``data`` object to a canonical source."""
-    data_type = data_config.get("type")
-    input_uri = data_config.get("uri") or data_config.get("input")
-    s3 = data_config.get("s3") or None
-
-    if data_type is None:
-        raw: dict[str, Any] = {
-            "type": "parquet",
-            "path": input_uri or "",
-            "s3": s3,
-        }
-    elif data_type == "clickhouse":
-        clickhouse = data_config.get("clickhouse") or {}
-        if not isinstance(clickhouse, dict):
-            raise ValueError("data.clickhouse must be a mapping")
-        raw = {
-            "type": "clickhouse",
-            "ch_host": data_config.get("ch_host", clickhouse.get("host")),
-            "ch_port": data_config.get("ch_port", clickhouse.get("port")),
-            "ch_database": data_config.get("ch_database", clickhouse.get("database")),
-            "ch_user": data_config.get("ch_user", clickhouse.get("user")),
-            "ch_password": data_config.get("ch_password", clickhouse.get("password")),
-            "ch_sql": data_config.get("ch_sql", clickhouse.get("sql", "")),
-            "ch_sql_params": data_config.get("ch_sql_params", clickhouse.get("params")),
-        }
-    elif data_type == "s3":
-        raw = {
-            "type": "s3",
-            "uri": input_uri or "",
-            "format": data_config.get("format", "parquet"),
-            "s3": s3,
-        }
-    elif data_type in {
-        "parquet",
-        "csv",
-        "iceberg",
-        "doris",
-        "mysql",
-        "postgresql",
-    }:
-        if data_type != "parquet":
-            logger.warning(
-                "Legacy inference data.type=%r preserves historical Parquet "
-                "semantics; use canonical source for an explicit %s source",
-                data_type,
-                data_type,
-            )
-        raw = {
-            "type": "parquet",
-            "path": input_uri or "",
-            "s3": s3,
-        }
-    else:
-        raw = dict(data_config)
-        raw["path"] = raw.get("path") or input_uri or ""
-        raw.pop("uri", None)
-        raw.pop("input", None)
-        raw.pop("feature_columns", None)
-        raw.pop("clickhouse", None)
-
-    normalized = LegacyConfigNormalizer.normalize(raw)
-    if isinstance(normalized, RawSourceConfig):
-        raise JobConfigurationError(
-            f"Unknown legacy inference source type: {normalized.type!r}"
-        )
-    return normalized
+    """Delegate historical JSON source normalization to the data module."""
+    return normalize_legacy_inference_json_source(data_config)
 
 
 @PublicAPI(stability="beta")
@@ -433,9 +353,7 @@ def run_batch_inference(
     import ray.data
 
     from tributo.inference.batch_predictor import XGBoostONNXPredictor
-    from tributo.inference.contracts import ParquetResultSinkRequest
     from tributo.inference.input_resolver import IngestionGatewayInputResolver
-    from tributo.integrations.sinks import LanceResultSink, ParquetResultSink
 
     if predictor_cls is None:
         predictor_cls = XGBoostONNXPredictor
@@ -552,44 +470,17 @@ def run_batch_inference(
         logger.info(
             "Writing predictions to %s", _credential_free_uri(config.output_uri)
         )
-        sink: ParquetResultSink | LanceResultSink
-        sink_profile = config.output_storage_profile
-        request: LanceResultSinkRequest | ParquetResultSinkRequest
-        if config.output_format == "lance":
-            if sink_profile is None and legacy_s3_config:
-                sink_profile = "legacy-flat-s3-config"
-                sink = LanceResultSink(
-                    storage_resolver=_LegacyStorageProfileResolver(legacy_s3_config)
-                )
-            else:
-                sink = LanceResultSink()
-            request = LanceResultSinkRequest(
-                uri=config.output_uri,
-                mode=config.output_mode,
-                storage_profile=sink_profile,
-                data_storage_version=config.output_data_storage_version,
-                min_rows_per_file=config.min_rows_per_file or 1024 * 1024,
-                vector_columns=tuple(config.output_vector_columns),
-            )
-        elif sink_profile is None and legacy_s3_config:
-            sink_profile = "legacy-flat-s3-config"
-            sink = ParquetResultSink(
-                storage_resolver=_LegacyStorageProfileResolver(legacy_s3_config)
-            )
-            request = ParquetResultSinkRequest(
-                uri=config.output_uri,
-                storage_profile=sink_profile,
-                compression=config.output_compression,
-                min_rows_per_file=config.min_rows_per_file,
-            )
-        else:
-            sink = ParquetResultSink()
-            request = ParquetResultSinkRequest(
-                uri=config.output_uri,
-                storage_profile=sink_profile,
-                compression=config.output_compression,
-                min_rows_per_file=config.min_rows_per_file,
-            )
+        sink, request = build_legacy_result_sink(
+            output_format=config.output_format,
+            output_uri=config.output_uri,
+            output_storage_profile=config.output_storage_profile,
+            legacy_s3_config=legacy_s3_config,
+            output_mode=config.output_mode,
+            output_compression=config.output_compression,
+            min_rows_per_file=config.min_rows_per_file,
+            output_data_storage_version=config.output_data_storage_version,
+            output_vector_columns=config.output_vector_columns,
+        )
         receipt = sink.write(
             ds,
             request,
@@ -619,24 +510,6 @@ def run_batch_inference(
         "status": "completed",
         "rows_written": receipt.rows_written,
     }
-
-
-class _LegacyStorageProfileResolver:
-    """Bind the deprecated flat S3 mapping only inside the legacy adapter."""
-
-    def __init__(self, raw: dict[str, str]) -> None:
-        self._raw = dict(raw)
-
-    def resolve(self, profile: str | None):
-        from tributo._common.storage_profiles import StorageProfile
-
-        del profile
-        return StorageProfile(
-            endpoint=self._raw.get("endpoint"),
-            region=self._raw.get("region"),
-            access_key_id=self._raw.get("access_key_id"),
-            secret_access_key=self._raw.get("secret_access_key"),
-        )
 
 
 @PublicAPI(stability="beta")

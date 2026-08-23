@@ -5,6 +5,7 @@ from tributo.data.writing.bindings import WriteBinding
 from tributo.data.writing.builtins import default_write_gateway
 from tributo.data.writing.capabilities import WriteCapability
 from tributo.data.writing.contracts import (
+    DataWriteTargetRequest,
     WriteBindingError,
     WriteCapabilityError,
     WriteDescriptor,
@@ -26,6 +27,7 @@ from tributo.data.writing.targets import (
 __all__ = [
     "WriteBinding",
     "WriteBindingError",
+    "DataWriteTargetRequest",
     "WriteCapability",
     "WriteBindingRegistry",
     "WriteCapabilityError",

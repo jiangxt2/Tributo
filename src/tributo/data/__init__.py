@@ -47,6 +47,20 @@ from tributo.data.ingestion import (
     open_ingestion,
     ray_worker_distribution_probe,
 )
+from tributo.data.persistence import (
+    CheckpointStore,
+    LanceRayBinding,
+    LocalS3ObjectStore,
+    ObjectFile,
+    ObjectStore,
+    ParquetInspection,
+    RayCheckpointStore,
+    ResolvedLanceDataset,
+    default_checkpoint_store,
+    default_object_store,
+    inspect_parquet_output,
+    write_parquet_table,
+)
 from tributo.data.provider import DatasetHandle, DataSourceProvider, ResolvedSource
 from tributo.data.provider_registry import (
     list_providers,
@@ -74,6 +88,8 @@ from tributo.data.source_config import (
     SqlPartitioning,
     SqlSourceConfig,
     apply_source_projection,
+    normalize_legacy_inference_json_source,
+    normalize_legacy_inference_source,
     source_projection,
 )
 from tributo.data.transform_ir import (
@@ -95,6 +111,7 @@ from tributo.data.transform_ir import (
     transform_ir_digest,
 )
 from tributo.data.writing import (
+    DataWriteTargetRequest,
     GenericWriteTargetProvider,
     LogicalWritePlan,
     WriteBinding,
@@ -169,6 +186,19 @@ __all__ = [
     "resolve_provider",
     "unregister_provider",
     "list_providers",
+    # Checkpoint persistence boundary
+    "CheckpointStore",
+    "LanceRayBinding",
+    "RayCheckpointStore",
+    "ResolvedLanceDataset",
+    "default_checkpoint_store",
+    "LocalS3ObjectStore",
+    "ObjectFile",
+    "ObjectStore",
+    "default_object_store",
+    "ParquetInspection",
+    "inspect_parquet_output",
+    "write_parquet_table",
     # Dataset identity
     "DatasetRef",
     "compute_ref_id",
@@ -189,8 +219,11 @@ __all__ = [
     "SqlPartitioning",
     "source_projection",
     "apply_source_projection",
+    "normalize_legacy_inference_source",
+    "normalize_legacy_inference_json_source",
     # Native-engine writing control plane
     "WriteBinding",
+    "DataWriteTargetRequest",
     "WriteBindingError",
     "WriteCapability",
     "WriteBindingRegistry",

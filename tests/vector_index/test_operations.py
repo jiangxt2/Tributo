@@ -10,6 +10,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+import tributo.data.persistence.object_store as object_store_module
 from tributo.vector_index.contracts import (
     CoverageStatus,
     LanceDatasetRef,
@@ -382,18 +383,17 @@ def test_materialized_delivery_refuses_to_overwrite_local_file(tmp_path) -> None
 
 
 def test_materialized_delivery_writes_s3_object_atomically(monkeypatch) -> None:
-    from tributo.vector_index import result_writer as module
-
     captured: dict[str, Any] = {}
 
     class _Client:
         @staticmethod
         def put_object(**kwargs: Any) -> None:
             captured.update(kwargs)
-            captured["payload"] = kwargs["Body"].read()
+            body = kwargs["Body"]
+            captured["payload"] = body.read() if hasattr(body, "read") else body
 
     monkeypatch.setattr(
-        module.StorageProfileResolver,
+        object_store_module.StorageProfileResolver,
         "resolve",
         lambda self, name: SimpleNamespace(
             endpoint="http://minio:9000",
@@ -405,7 +405,9 @@ def test_materialized_delivery_writes_s3_object_atomically(monkeypatch) -> None:
             profile_name=None,
         ),
     )
-    monkeypatch.setattr(module, "get_boto3_client", lambda **kwargs: _Client())
+    monkeypatch.setattr(
+        object_store_module, "get_boto3_client", lambda **kwargs: _Client()
+    )
     uri = write_parquet_result(
         pa.table({"id": [1]}),
         output=SearchResultOutput(
@@ -425,8 +427,6 @@ def test_materialized_delivery_writes_s3_object_atomically(monkeypatch) -> None:
 
 
 def test_materialized_delivery_refuses_to_overwrite_s3_object(monkeypatch) -> None:
-    from tributo.vector_index import result_writer as module
-
     class _Conflict(Exception):
         response = {"Error": {"Code": "PreconditionFailed"}}
 
@@ -436,7 +436,7 @@ def test_materialized_delivery_refuses_to_overwrite_s3_object(monkeypatch) -> No
             raise _Conflict("secret endpoint details")
 
     monkeypatch.setattr(
-        module.StorageProfileResolver,
+        object_store_module.StorageProfileResolver,
         "resolve",
         lambda self, name: SimpleNamespace(
             endpoint=None,
@@ -448,7 +448,9 @@ def test_materialized_delivery_refuses_to_overwrite_s3_object(monkeypatch) -> No
             profile_name=None,
         ),
     )
-    monkeypatch.setattr(module, "get_boto3_client", lambda **kwargs: _Client())
+    monkeypatch.setattr(
+        object_store_module, "get_boto3_client", lambda **kwargs: _Client()
+    )
     with pytest.raises(VectorResultDeliveryError, match="already exists"):
         write_parquet_result(
             pa.table({"id": [1]}),
@@ -465,8 +467,6 @@ def test_materialized_delivery_reports_unsupported_conditional_put(
 ) -> None:
     from botocore.exceptions import ParamValidationError
 
-    from tributo.vector_index import result_writer as module
-
     class _Client:
         @staticmethod
         def put_object(**kwargs: Any) -> None:
@@ -475,7 +475,7 @@ def test_materialized_delivery_reports_unsupported_conditional_put(
             )
 
     monkeypatch.setattr(
-        module.StorageProfileResolver,
+        object_store_module.StorageProfileResolver,
         "resolve",
         lambda self, name: SimpleNamespace(
             endpoint=None,
@@ -487,7 +487,9 @@ def test_materialized_delivery_reports_unsupported_conditional_put(
             profile_name=None,
         ),
     )
-    monkeypatch.setattr(module, "get_boto3_client", lambda **kwargs: _Client())
+    monkeypatch.setattr(
+        object_store_module, "get_boto3_client", lambda **kwargs: _Client()
+    )
     with pytest.raises(
         VectorResultDeliveryError,
         match="does not support conditional PutObject",
@@ -508,8 +510,6 @@ def test_materialized_delivery_does_not_misclassify_parameter_errors(
 ) -> None:
     from botocore.exceptions import ParamValidationError
 
-    from tributo.vector_index import result_writer as module
-
     class _Client:
         @staticmethod
         def put_object(**kwargs: Any) -> None:
@@ -518,7 +518,7 @@ def test_materialized_delivery_does_not_misclassify_parameter_errors(
             )
 
     monkeypatch.setattr(
-        module.StorageProfileResolver,
+        object_store_module.StorageProfileResolver,
         "resolve",
         lambda self, name: SimpleNamespace(
             endpoint=None,
@@ -530,7 +530,9 @@ def test_materialized_delivery_does_not_misclassify_parameter_errors(
             profile_name=None,
         ),
     )
-    monkeypatch.setattr(module, "get_boto3_client", lambda **kwargs: _Client())
+    monkeypatch.setattr(
+        object_store_module, "get_boto3_client", lambda **kwargs: _Client()
+    )
     with pytest.raises(
         VectorResultDeliveryError,
         match=r"Parquet result delivery failed \(ParamValidationError\)",

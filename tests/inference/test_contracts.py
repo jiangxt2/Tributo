@@ -5,7 +5,12 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from tributo.data import IngestionPlanReceipt, IngestionRequest
+from tributo.data import (
+    DataWriteTargetRequest,
+    IngestionPlanReceipt,
+    IngestionRequest,
+    WriteMode,
+)
 from tributo.data.source_config import ParquetSourceConfig, ProviderSourceConfig
 from tributo.exporting.models import BundleRef
 from tributo.inference.contracts import (
@@ -75,6 +80,35 @@ class TestBundleModelReference:
             "bundle_id",
             "manifest_sha256",
         }
+
+
+def test_generic_data_write_result_sink_is_target_neutral() -> None:
+    request = DataWriteTargetRequest(
+        target_kind="clickhouse",
+        target="analytics.events",
+        options={"operation": "append"},
+    )
+
+    assert request.sink_id == "data-write-v1"
+    assert request.target_kind == "clickhouse"
+    assert request.mode is WriteMode.APPEND
+
+
+def test_generic_data_write_result_sink_rejects_target_credentials() -> None:
+    with pytest.raises(ValidationError, match="credential-free"):
+        DataWriteTargetRequest(
+            target_kind="doris",
+            target="doris://user:secret@host/events",
+        )
+
+
+def test_generic_data_write_result_sink_rejects_inline_runtime_credentials() -> None:
+    with pytest.raises(ValidationError, match="credential"):
+        DataWriteTargetRequest(
+            target_kind="doris",
+            target="analytics.events",
+            runtime_options={"password": "secret"},
+        )
 
 
 class TestArtifactModelReference:

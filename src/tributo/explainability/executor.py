@@ -11,7 +11,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import shutil
 from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -22,6 +21,10 @@ from uuid import uuid4
 
 import numpy as np
 
+from tributo.data.persistence import (
+    default_object_store,
+    inspect_parquet_output,
+)
 from tributo.exceptions import ResultMaterializationError
 from tributo.explainability.contracts import (
     Exactness,
@@ -160,7 +163,8 @@ def run_batch_explainability(
             )
         if existing.status in {"succeeded", "partial"}:
             cached = _read_receipt(
-                existing.receipt_uri or _receipt_uri(existing.result_uri)
+                existing.receipt_uri or _receipt_uri(existing.result_uri),
+                storage_profile=request.result_storage_profile,
             )
             if cached is not None:
                 return cached
@@ -262,7 +266,8 @@ def run_batch_explainability(
             plan_digest=bundle_digest,
         )
         result_digest, result_bytes, explanation_rows = _result_stats(
-            attempt_result_uri
+            attempt_result_uri,
+            storage_profile=request.result_storage_profile,
         )
         if (
             request.limits.max_explanation_rows is not None
@@ -289,7 +294,11 @@ def run_batch_explainability(
             status="succeeded",
             reference_provider=references,
         )
-        _write_receipt(attempt_result_uri, receipt)
+        _write_receipt(
+            attempt_result_uri,
+            receipt,
+            storage_profile=request.result_storage_profile,
+        )
         _record_operation(
             store,
             ExplainabilityOperationRecord(
@@ -318,7 +327,10 @@ def run_batch_explainability(
             explanation_rows > 0 and result_digest is not None and not limit_failure
         )
         if not partial:
-            _cleanup_result_uri(attempt_result_uri)
+            _cleanup_result_uri(
+                attempt_result_uri,
+                storage_profile=request.result_storage_profile,
+            )
         if partial:
             try:
                 selected_backend, exactness = _selected_backend(manifest, request)
@@ -340,6 +352,7 @@ def run_batch_explainability(
                         failure_code=type(exc).__name__,
                         reference_provider=references,
                     ),
+                    storage_profile=request.result_storage_profile,
                 )
             except Exception:
                 logger.warning(
@@ -1079,67 +1092,27 @@ def _dependency_versions(backend: str) -> dict[str, str]:
     return versions
 
 
-def _result_stats(uri: str) -> tuple[str, int, int]:
-    parsed = urlsplit(uri)
-    if parsed.scheme == "s3":
-        import pyarrow.fs as pafs
-
-        filesystem, path = pafs.FileSystem.from_uri(uri)
-        infos = filesystem.get_file_info(pafs.FileSelector(path, recursive=True))
-        files = [(info.path, info.size) for info in infos if info.is_file]
-        digest = hashlib.sha256()
-        total = 0
-        rows = 0
-        import pyarrow as pa
-        import pyarrow.parquet as pq
-
-        for file_path, size in sorted(files):
-            digest.update(file_path.encode())
-            with filesystem.open_input_file(file_path) as stream:
-                payload = stream.read()
-            digest.update(payload)
-            total += size
-            rows += pq.ParquetFile(pa.BufferReader(payload)).metadata.num_rows
-        return digest.hexdigest(), total, rows
-
-    path = Path(unquote(parsed.path if parsed.scheme == "file" else uri))
-    local_files: list[Path] = sorted(path.rglob("*.parquet"))
-    digest = hashlib.sha256()
-    total = 0
-    rows = 0
-    import pyarrow.parquet as pq
-
-    for file_path in local_files:
-        payload = file_path.read_bytes()
-        digest.update(str(file_path.relative_to(path)).encode())
-        digest.update(payload)
-        total += len(payload)
-        rows += pq.ParquetFile(file_path).metadata.num_rows
-    if not local_files:
-        raise ValueError(f"explainability sink produced no Parquet files at {uri!r}")
-    return digest.hexdigest(), total, rows
+def _result_stats(
+    uri: str,
+    *,
+    storage_profile: str | None = None,
+) -> tuple[str, int, int]:
+    inspection = inspect_parquet_output(uri, storage_profile=storage_profile)
+    return inspection.digest, inspection.total_bytes, inspection.rows
 
 
-def _write_receipt(uri: str, receipt: ExplainabilityReceipt) -> None:
-    parsed = urlsplit(uri)
-    if parsed.scheme == "s3":
-        import pyarrow.fs as pafs
-
-        filesystem, path = pafs.FileSystem.from_uri(uri)
-        with filesystem.open_output_stream(
-            f"{path.rstrip('/')}/receipt.json"
-        ) as stream:
-            stream.write(receipt.model_dump_json().encode())
-        return
-    path = Path(unquote(parsed.path if parsed.scheme == "file" else uri))
-    path.mkdir(parents=True, exist_ok=True)
-    (path / "receipt.json").write_text(receipt.model_dump_json(), encoding="utf-8")
-
-
-def _file_digest(path: Path) -> str:
-    digest = hashlib.sha256()
-    digest.update(path.read_bytes())
-    return digest.hexdigest()
+def _write_receipt(
+    uri: str,
+    receipt: ExplainabilityReceipt,
+    *,
+    storage_profile: str | None = None,
+) -> None:
+    default_object_store().write_bytes(
+        _receipt_uri(uri),
+        receipt.model_dump_json().encode(),
+        storage_profile=storage_profile,
+        content_type="application/json",
+    )
 
 
 def _schema_signature() -> str:
@@ -1254,22 +1227,20 @@ def _is_retryable_error(exc: Exception) -> bool:
     return isinstance(exc, retryable_types)
 
 
-def _read_receipt(uri: str) -> ExplainabilityReceipt | None:
-    parsed = urlsplit(uri)
+def _read_receipt(
+    uri: str,
+    *,
+    storage_profile: str | None = None,
+) -> ExplainabilityReceipt | None:
+    receipt_uri = (
+        uri if uri.rstrip("/").endswith("/receipt.json") else _receipt_uri(uri)
+    )
     try:
-        if parsed.scheme == "s3":
-            import pyarrow.fs as pafs
-
-            filesystem, path = pafs.FileSystem.from_uri(uri)
-            with filesystem.open_input_file(
-                f"{path.rstrip('/')}/receipt.json"
-            ) as stream:
-                return ExplainabilityReceipt.model_validate_json(stream.read())
-        path = Path(unquote(parsed.path if parsed.scheme == "file" else uri))
-        receipt_path = path / "receipt.json"
-        if not receipt_path.is_file():
-            return None
-        return ExplainabilityReceipt.model_validate_json(receipt_path.read_bytes())
+        payload = default_object_store().read_bytes(
+            receipt_uri,
+            storage_profile=storage_profile,
+        )
+        return ExplainabilityReceipt.model_validate_json(payload)
     except (FileNotFoundError, OSError, ValueError):
         return None
 
@@ -1284,21 +1255,14 @@ def _reference_rows(
     return int(data.shape[0]) if data is not None else None
 
 
-def _cleanup_result_uri(uri: str) -> None:
-    parsed = urlsplit(uri)
+def _cleanup_result_uri(
+    uri: str,
+    *,
+    storage_profile: str | None = None,
+) -> None:
     try:
-        if parsed.scheme == "s3":
-            import pyarrow.fs as pafs
-
-            filesystem, path = pafs.FileSystem.from_uri(uri)
-            filesystem.delete_dir(path)
-            return
-        path = Path(unquote(parsed.path if parsed.scheme == "file" else uri))
-        if path.is_dir():
-            shutil.rmtree(path)
-        elif path.exists():
-            path.unlink()
-    except (FileNotFoundError, OSError):
+        default_object_store().delete_tree(uri, storage_profile=storage_profile)
+    except (FileNotFoundError, OSError, ValueError):
         logger.warning("Failed to clean explainability result %s", uri, exc_info=True)
 
 

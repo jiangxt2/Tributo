@@ -245,6 +245,10 @@ documentation for every public stability tier.
 :no-members:
 ```
 
+```{autoclass} tributo.inference.contracts.ResultSinkProvider
+:no-members:
+```
+
 ```{autoclass} tributo.inference.contracts.ResultSinkReceipt
 :no-members:
 ```
@@ -402,6 +406,13 @@ documentation for every public stability tier.
 ```
 
 ```{autofunction} tributo.integrations.model_importers.registry.build_default_model_importer_registry
+```
+
+
+## `tributo.integrations.sinks.data_write`
+
+```{autoclass} tributo.integrations.sinks.data_write.DataWriteResultSink
+:no-members:
 ```
 
 
