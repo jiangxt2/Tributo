@@ -6,32 +6,33 @@ import hashlib
 import json
 import os
 from collections.abc import Iterable
+from typing import Any, Protocol, runtime_checkable
 
 from tributo._common.submission_id import generate_submission_id
 from tributo.data import IngestionRequest, SelectColumns, TransformPipeline
 from tributo.exceptions import JobConfigurationError, UnsupportedArtifactFormat
-from tributo.exporting.bundle_reader import BundleReader
-from tributo.exporting.manifest import ExportManifest, SignatureField
-from tributo.exporting.models import BundleRef, LogicalArtifact
-from tributo.exporting.runtime import FLAVOR_SUPPORT_MATRIX
+from tributo.exporting.manifest import ManifestSignature, SignatureField
 from tributo.inference.contracts import (
-    ArtifactModelReference,
-    BundleModelReference,
     InferenceRequest,
-    RegistryModelReference,
+    ModelReference,
     ResolvedInference,
     ResolvedInputSelection,
+    ResolvedModelBinding,
     ResolvedModelSelection,
 )
 from tributo.inference.input_resolver import (
     IngestionGatewayInputResolver,
     InputResolverPort,
 )
-from tributo.integrations.model_importers import (
-    ModelImporterRegistry,
-    build_default_model_importer_registry,
-)
 from tributo.util.annotations import PublicAPI
+
+
+@runtime_checkable
+@PublicAPI(stability="alpha")
+class ModelReferenceResolver(Protocol):
+    """Resolve a logical model reference without exposing artifact formats."""
+
+    def resolve(self, reference: ModelReference) -> ResolvedModelBinding: ...
 
 
 @PublicAPI(stability="alpha")
@@ -41,13 +42,23 @@ class InferenceResolver:
     def __init__(
         self,
         *,
-        bundle_reader: BundleReader | None = None,
+        model_resolver: ModelReferenceResolver | None = None,
+        bundle_reader: Any | None = None,
         input_resolver: InputResolverPort | None = None,
-        importers: ModelImporterRegistry | None = None,
+        importers: Any | None = None,
     ) -> None:
-        self._bundles = bundle_reader or BundleReader()
+        if model_resolver is not None and (
+            bundle_reader is not None or importers is not None
+        ):
+            raise ValueError(
+                "model_resolver cannot be combined with legacy bundle/importer "
+                "constructor arguments"
+            )
+        self._models = model_resolver or _default_model_reference_resolver(
+            bundle_reader=bundle_reader,
+            importers=importers,
+        )
         self._inputs = input_resolver or IngestionGatewayInputResolver()
-        self._importers = importers or build_default_model_importer_registry()
 
     def resolve(self, request: InferenceRequest) -> ResolvedInference:
         """Return a credential-free immutable plan for one request."""
@@ -56,59 +67,19 @@ class InferenceResolver:
         # plain payload before any importer, Bundle reader, or Data Gateway
         # side effect so the aggregate credential and JSON gates run again.
         request = InferenceRequest.model_validate(request.model_dump(mode="python"))
-        model_reference, provenance = self._normalize_model(request)
-        manifest, manifest_bytes = self._bundles.read_manifest_with_bytes(
-            model_reference.uri,
-            storage_profile=model_reference.storage_profile,
+        resolved_model = self._models.resolve(request.model)
+        _validate_bindings(
+            request,
+            input_signature=resolved_model.input_signature,
+            output_signature=resolved_model.output_signature,
+            unsafe=resolved_model.selection.unsafe,
         )
-        manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
-        if (
-            model_reference.expected_manifest_sha256 is not None
-            and manifest_sha256 != model_reference.expected_manifest_sha256
-        ):
-            raise JobConfigurationError(
-                "Bundle manifest digest mismatch: expected "
-                f"{model_reference.expected_manifest_sha256[:16]}..., got "
-                f"{manifest_sha256[:16]}..."
-            )
-
-        artifact = _select_artifact(
-            manifest,
-            role=model_reference.role,
-            unsafe=model_reference.unsafe,
-        )
-        if isinstance(request.model, ArtifactModelReference):
-            if artifact.flavor_id != request.model.flavor_id:
-                raise UnsupportedArtifactFormat(
-                    f"Imported artifact flavor {artifact.flavor_id!r} does not "
-                    f"match requested flavor {request.model.flavor_id!r}"
-                )
-        _validate_bindings(request, manifest)
 
         resolved_input = self._inputs.describe(_bind_input_projection(request))
 
-        bundle_ref = BundleRef(
-            canonical_uri=manifest.canonical_uri,
-            bundle_id=manifest.bundle_id,
-            manifest_sha256=manifest_sha256,
-        )
-        source_provenance = (
-            f"{provenance};source_kind={manifest.source_info.source_kind};"
-            f"source_fingerprint={manifest.source_info.source_fingerprint}"
-        )
-        selection = ResolvedModelSelection(
-            bundle_ref=bundle_ref,
-            role=model_reference.role,
-            flavor_id=artifact.flavor_id,
-            storage_profile=model_reference.storage_profile,
-            source_provenance=source_provenance,
-            unsafe=model_reference.unsafe,
-        )
         plan_digest = _plan_digest(
             request=request,
-            bundle_ref=bundle_ref,
-            role=model_reference.role,
-            flavor_id=artifact.flavor_id,
+            model=resolved_model.selection,
             resolved_input=resolved_input,
         )
         run_id = _resolve_run_id(request, plan_digest)
@@ -121,10 +92,10 @@ class InferenceResolver:
 
         return ResolvedInference(
             plan_digest=plan_digest,
-            model=selection,
+            model=resolved_model.selection,
             input=resolved_input,
-            input_signature=manifest.input_signature,
-            output_signature=manifest.output_signature,
+            input_signature=resolved_model.input_signature,
+            output_signature=resolved_model.output_signature,
             input_binding=request.input_binding,
             output_binding=request.output_binding,
             result_sink=request.result_sink,
@@ -135,99 +106,22 @@ class InferenceResolver:
             parent_run_id=request.parent_run_id,
         )
 
-    def _normalize_model(
-        self, request: InferenceRequest
-    ) -> tuple[BundleModelReference, str]:
-        reference = request.model
-        if isinstance(reference, BundleModelReference):
-            return reference, "tributo-bundle"
 
-        bundle_ref = self._importers.import_model(reference)
-        if isinstance(reference, RegistryModelReference):
-            selector = reference.version or reference.alias
-            provenance = (
-                f"registry:{reference.provider_id}:{reference.model_name}:{selector}"
-            )
-        elif isinstance(reference, ArtifactModelReference):
-            provenance = (
-                f"artifact:{reference.provider_id}:{reference.format_id}:"
-                f"{reference.expected_sha256 or 'imported'}"
-            )
-        else:  # pragma: no cover - discriminated union makes this unreachable.
-            raise AssertionError(type(reference).__name__)
-        return (
-            BundleModelReference.from_bundle_ref(
-                bundle_ref,
-                storage_profile=reference.import_storage_profile,
-            ),
-            provenance,
-        )
-
-
-def _select_artifact(
-    manifest: ExportManifest, *, role: str, unsafe: bool
-) -> LogicalArtifact:
-    artifact_name = manifest.roles.get(role)
-    if artifact_name is None:
-        raise JobConfigurationError(
-            f"Role {role!r} not found in bundle. Available roles: "
-            f"{sorted(manifest.roles)}"
-        )
-    artifact = next(
-        (item for item in manifest.artifacts if item.name == artifact_name), None
-    )
-    if artifact is None:
-        raise JobConfigurationError(
-            f"Role {role!r} references missing artifact {artifact_name!r}"
-        )
-    matrix_entry = next(
-        (
-            entry
-            for entry in FLAVOR_SUPPORT_MATRIX
-            if entry.flavor_id == artifact.flavor_id
-        ),
-        None,
-    )
-    if matrix_entry is None:
-        raise UnsupportedArtifactFormat(
-            f"Flavor {artifact.flavor_id!r} is not in the capability matrix"
-        )
-    if not matrix_entry.batch_inference_capable:
-        raise UnsupportedArtifactFormat(
-            f"Flavor {artifact.flavor_id!r} is readable but does not declare "
-            "batch inference capability"
-        )
-    if artifact.artifact_kind != matrix_entry.artifact_role:
-        raise UnsupportedArtifactFormat(
-            f"Artifact {artifact.name!r} has kind {artifact.artifact_kind!r} but "
-            f"flavor {artifact.flavor_id!r} requires "
-            f"{matrix_entry.artifact_role!r}"
-        )
-    if matrix_entry.signature_required and not unsafe:
-        if not manifest.input_signature.input_fields:
-            raise UnsupportedArtifactFormat(
-                f"Artifact {artifact.name!r} requires a typed input signature"
-            )
-        if not manifest.output_signature.output_fields:
-            raise UnsupportedArtifactFormat(
-                f"Artifact {artifact.name!r} requires a typed output signature"
-            )
-    return artifact
-
-
-def _validate_bindings(request: InferenceRequest, manifest: ExportManifest) -> None:
+def _validate_bindings(
+    request: InferenceRequest,
+    *,
+    input_signature: ManifestSignature,
+    output_signature: ManifestSignature,
+    unsafe: bool,
+) -> None:
     _validate_side(
         side="input",
         bindings=(
             (binding.tensor_name, binding.dtype)
             for binding in request.input_binding.tensors
         ),
-        fields=manifest.input_signature.input_fields,
-        unsafe=(
-            request.model.unsafe
-            if isinstance(request.model, BundleModelReference)
-            else False
-        ),
+        fields=input_signature.input_fields,
+        unsafe=unsafe,
     )
     _validate_side(
         side="output",
@@ -235,12 +129,8 @@ def _validate_bindings(request: InferenceRequest, manifest: ExportManifest) -> N
             (binding.tensor_name, binding.dtype)
             for binding in request.output_binding.tensors
         ),
-        fields=manifest.output_signature.output_fields,
-        unsafe=(
-            request.model.unsafe
-            if isinstance(request.model, BundleModelReference)
-            else False
-        ),
+        fields=output_signature.output_fields,
+        unsafe=unsafe,
     )
 
 
@@ -275,16 +165,14 @@ def _validate_side(
 def _plan_digest(
     *,
     request: InferenceRequest,
-    bundle_ref: BundleRef,
-    role: str,
-    flavor_id: str,
+    model: ResolvedModelSelection,
     resolved_input: ResolvedInputSelection,
 ) -> str:
     payload = {
         "schema_version": request.schema_version,
-        "bundle": bundle_ref.model_dump(mode="json"),
-        "role": role,
-        "flavor_id": flavor_id,
+        "bundle": model.bundle_ref.model_dump(mode="json"),
+        "role": model.role,
+        "flavor_id": model.flavor_id,
         "input_descriptor": resolved_input.descriptor.model_dump(mode="json"),
         "input_binding": request.input_binding.model_dump(mode="json"),
         "output_binding": request.output_binding.model_dump(mode="json"),
@@ -328,4 +216,23 @@ def _resolve_run_id(request: InferenceRequest, plan_digest: str) -> str:
     )
 
 
-__all__ = ["InferenceResolver"]
+def _default_model_reference_resolver(
+    *,
+    bundle_reader: Any | None,
+    importers: Any | None,
+) -> ModelReferenceResolver:
+    """Resolve the compatibility adapter through top-level composition."""
+    if bundle_reader is None and importers is None:
+        from tributo.runtime import default_model_reference_resolver
+
+        return default_model_reference_resolver()
+
+    from tributo.integrations.model_runtimes import BundleModelReferenceResolver
+
+    return BundleModelReferenceResolver(
+        bundle_reader=bundle_reader,
+        importers=importers,
+    )
+
+
+__all__ = ["InferenceResolver", "ModelReferenceResolver"]

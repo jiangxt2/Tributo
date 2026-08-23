@@ -49,6 +49,23 @@ def prepare_bundle_output_config(
             "explainability_model": "explainability-model",
         }
         changed = True
+    if source.source_kind == "xgboost_result" and explainability.backend in {
+        "auto",
+        "tree",
+    }:
+        for target in data["targets"]:
+            if target["format"] not in {"ubj", "xgboost-json"} and target.get(
+                "exporter_id"
+            ) not in {"xgboost-ubj-v1", "xgboost-json-v1"}:
+                continue
+            validation = dict(target.get("validation") or {})
+            validation["xgboost-native-runtime-v1"] = {
+                **validation.get("xgboost-native-runtime-v1", {}),
+                "require_tree_shap": True,
+            }
+            target["validation"] = validation
+            changed = True
+            break
     if source.source_kind in {"dnn_result", "pu_result"}:
         for target in data["targets"]:
             if target["format"] == "onnx":

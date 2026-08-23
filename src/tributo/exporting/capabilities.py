@@ -28,6 +28,12 @@ class ArtifactCapability:
     serveable: bool
     runtime_flavor_id: str | None = None
     format_ids: tuple[str, ...] = ()
+    artifact_kind: str = "model"
+    signature_required: bool = False
+    security_mode: str = "unknown-executable"
+    required_dependencies: tuple[str, ...] = ()
+    operations: tuple[str, ...] = ()
+    conditional_operations: tuple[str, ...] = ()
 
 
 @PublicAPI(stability="beta")
@@ -116,6 +122,27 @@ class CapabilityRegistry:
                     ),
                     runtime_flavor_id=flavor_id if runtime_flavor else None,
                     format_ids=format_ids,
+                    artifact_kind=str(
+                        getattr(runtime_flavor, "artifact_kind", "model")
+                    ),
+                    signature_required=bool(
+                        runtime_flavor
+                        and getattr(runtime_flavor, "signature_required", False)
+                    ),
+                    security_mode=str(
+                        getattr(
+                            runtime_flavor,
+                            "security_mode",
+                            "unknown-executable",
+                        )
+                    ),
+                    required_dependencies=tuple(
+                        getattr(runtime_flavor, "required_dependencies", ())
+                    ),
+                    operations=_runtime_operations(runtime_flavor),
+                    conditional_operations=_runtime_conditional_operations(
+                        runtime_flavor
+                    ),
                 )
             )
 
@@ -135,6 +162,18 @@ class CapabilityRegistry:
                     serveable=bool(getattr(flavor_cls, "serveable", False)),
                     runtime_flavor_id=flavor_id,
                     format_ids=tuple(getattr(flavor_cls, "supported_formats", ())),
+                    artifact_kind=str(getattr(flavor_cls, "artifact_kind", "model")),
+                    signature_required=bool(
+                        getattr(flavor_cls, "signature_required", False)
+                    ),
+                    security_mode=str(
+                        getattr(flavor_cls, "security_mode", "unknown-executable")
+                    ),
+                    required_dependencies=tuple(
+                        getattr(flavor_cls, "required_dependencies", ())
+                    ),
+                    operations=_runtime_operations(flavor_cls),
+                    conditional_operations=_runtime_conditional_operations(flavor_cls),
                 )
             )
         return cls(tuple(entries))
@@ -158,15 +197,58 @@ class CapabilityRegistry:
             raise KeyError(f"Undeclared exporter {exporter_id!r}") from exc
 
 
+def _runtime_operations(runtime_flavor: type[Any] | None) -> tuple[str, ...]:
+    if runtime_flavor is None:
+        return ()
+    declared = tuple(getattr(runtime_flavor, "operations", ()))
+    if declared:
+        return tuple(dict.fromkeys(str(operation) for operation in declared))
+    operations: list[str] = []
+    if getattr(runtime_flavor, "batch_supported", False):
+        operations.append("prediction.batch")
+    if getattr(runtime_flavor, "serveable", False):
+        operations.append("prediction.online")
+    return tuple(operations)
+
+
+def _runtime_conditional_operations(
+    runtime_flavor: type[Any] | None,
+) -> tuple[str, ...]:
+    if runtime_flavor is None:
+        return ()
+    declared = tuple(getattr(runtime_flavor, "conditional_operations", ()))
+    return tuple(dict.fromkeys(str(operation) for operation in declared))
+
+
 def _build_default_capability_registry() -> CapabilityRegistry:
-    """Compose first-party descriptors without duplicating their metadata."""
+    """Compose first-party and discovered descriptors without duplicate ids."""
     from tributo._bootstrap import (
         first_party_export_plugins,
         first_party_model_flavors,
     )
+    from tributo.plugin import discover_exporter_plugins, discover_flavor_plugins
 
-    exporters, _ = first_party_export_plugins()
-    return CapabilityRegistry.from_plugins(exporters, first_party_model_flavors())
+    builtin_exporters, _ = first_party_export_plugins()
+    builtin_flavors = first_party_model_flavors()
+    exporter_ids = {exporter.exporter_id for exporter in builtin_exporters}
+    flavor_ids = {flavor.flavor_id for flavor in builtin_flavors}
+    exporters = (
+        *builtin_exporters,
+        *(
+            exporter
+            for exporter in discover_exporter_plugins()
+            if exporter.exporter_id not in exporter_ids
+        ),
+    )
+    flavors = (
+        *builtin_flavors,
+        *(
+            flavor
+            for flavor in discover_flavor_plugins()
+            if flavor.flavor_id not in flavor_ids
+        ),
+    )
+    return CapabilityRegistry.from_plugins(exporters, flavors)
 
 
 _DEFAULT_CAPABILITY_REGISTRY: CapabilityRegistry | None = None

@@ -28,6 +28,8 @@ def test_default_registry_creates_builtin_and_generic_sinks() -> None:
         ),
         DataWriteResultSink,
     )
+    bound = registry.bind(ParquetResultSinkRequest(uri="/tmp/results"))
+    assert bound.sink_id == "parquet-v1"
 
 
 def test_custom_registry_rejects_factory_id_drift() -> None:

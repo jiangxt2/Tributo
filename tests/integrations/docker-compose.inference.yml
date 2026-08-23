@@ -1,11 +1,5 @@
 x-inference-common: &inference-common
-  image: tributo-inference-it:${TRIBUTO_INFERENCE_IMAGE_TAG:-local}
-  build:
-    context: ../..
-    dockerfile: tests/integrations/Dockerfile.inference
-    args:
-      BASE_IMAGE: ${TRIBUTO_INFERENCE_RAY_IMAGE:?set by inference-it-versions.conf}
-      UV_IMAGE: ${TRIBUTO_INFERENCE_UV_IMAGE:?set by inference-it-versions.conf}
+  image: ${TRIBUTO_INFERENCE_RUNTIME_IMAGE:?prebuild the inference IT image}
   init: true
   shm_size: 2gb
   environment:

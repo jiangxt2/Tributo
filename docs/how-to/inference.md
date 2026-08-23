@@ -9,6 +9,16 @@ production flavor matrix contains `onnx-runtime-v1` and the safe native
 Formal requests use strict named bindings. Table columns and model tensor names
 are separate, and outputs are selected by name rather than by position.
 
+The compatibility facade resolves data, model, and output configuration through
+the top-level composition root. The Ray executor itself receives a format-neutral
+PredictionKernelFactory and BoundResultSink; it does not branch on ONNX, UBJ,
+XGBoost JSON, Parquet, Lance, or database target kinds. Advanced orchestration
+can call `run_prepared_inference()` with an already-opened Ray input and already
+bound runtime/output ports. Its `PreparedInferencePlan` contains only tensor
+bindings, Ray execution policy, output-port identity, and opaque provenance;
+the source request, Bundle selection, and result-target request have already
+been removed.
+
 ```python
 from tributo.data import IngestionRequest, ParquetSourceConfig
 from tributo.inference import (

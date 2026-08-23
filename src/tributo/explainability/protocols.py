@@ -10,11 +10,40 @@ import numpy as np
 
 from tributo.explainability.contracts import (
     Exactness,
+    ExplainabilityDescriptor,
+    ExplainabilityLimits,
+    ExplainabilityReceipt,
     ExplainabilityRequest,
     FeatureAttribution,
+    ReferenceBinding,
 )
-from tributo.explainability.reference import ReferenceProvider
 from tributo.util.annotations import PublicAPI
+
+
+@PublicAPI(stability="alpha")
+@dataclass(frozen=True)
+class ResolvedReference:
+    """Materialized reference data and its immutable provenance."""
+
+    data: np.ndarray
+    digest: str
+    rows: int
+
+
+@runtime_checkable
+@PublicAPI(stability="alpha")
+class ReferenceProvider(Protocol):
+    """Load and identify reference data without exposing storage details."""
+
+    provider_id: ClassVar[str]
+
+    def resolve(
+        self,
+        binding: ReferenceBinding,
+        limits: ExplainabilityLimits,
+    ) -> ResolvedReference: ...
+
+    def digest(self, binding: ReferenceBinding) -> str: ...
 
 
 @PublicAPI(stability="alpha")
@@ -35,7 +64,126 @@ class ExplainableModelContext:
     model_digest: str = ""
     preprocessor_digest: str | None = None
     feature_map_digest: str | None = None
+    native_attribution_id: str | None = None
     metadata: dict[str, Any] | None = None
+
+
+@PublicAPI(stability="alpha")
+class ExplainabilityModelSession(Protocol):
+    """Opened model context with deterministic resource cleanup."""
+
+    @property
+    def context(self) -> ExplainableModelContext: ...
+
+    @property
+    def output_count_upper_bound(self) -> int: ...
+
+    def close(self) -> None: ...
+
+
+@runtime_checkable
+@PublicAPI(stability="alpha")
+class ExplainabilityModelSessionFactory(Protocol):
+    """Serializable factory that opens one model session inside a Ray worker."""
+
+    factory_id: ClassVar[str]
+
+    def create(
+        self, reference_provider: ReferenceProvider
+    ) -> ExplainabilityModelSession: ...
+
+
+@PublicAPI(stability="alpha")
+@dataclass(frozen=True)
+class ExplainabilityModelBinding:
+    """Verified model metadata plus an opaque worker-local session factory."""
+
+    bundle_id: str
+    bundle_digest: str
+    manifest_sha256: str
+    model_role: str
+    model_digest: str
+    preprocessor_digest: str | None
+    feature_map_digest: str | None
+    descriptor: ExplainabilityDescriptor
+    backend: str
+    exactness: Exactness
+    output_count_upper_bound: int
+    session_factory: ExplainabilityModelSessionFactory
+    dependency_versions: tuple[tuple[str, str], ...] = ()
+
+
+@PublicAPI(stability="alpha")
+class ExplainabilityModelProvider(Protocol):
+    """Build one verified explainability model context outside the core worker."""
+
+    provider_id: ClassVar[str]
+
+    def resolve(self, request: ExplainabilityRequest) -> ExplainabilityModelBinding: ...
+
+
+@PublicAPI(stability="alpha")
+@dataclass(frozen=True)
+class ExplainabilityMaterialization:
+    """Credential-free facts returned by an explainability result adapter."""
+
+    digest: str
+    total_bytes: int
+    rows: int
+
+
+@runtime_checkable
+@PublicAPI(stability="alpha")
+class ExplainabilityResultStore(Protocol):
+    """Persist and inspect explainability results outside the domain executor."""
+
+    provider_id: ClassVar[str]
+
+    def materialize(
+        self,
+        dataset: object,
+        *,
+        uri: str,
+        storage_profile: str | None,
+        max_bytes: int | None,
+        run_id: str,
+        plan_digest: str,
+    ) -> ExplainabilityMaterialization: ...
+
+    def write_receipt(
+        self,
+        uri: str,
+        receipt: ExplainabilityReceipt,
+        *,
+        storage_profile: str | None,
+    ) -> None: ...
+
+    def read_receipt(
+        self,
+        uri: str,
+        *,
+        storage_profile: str | None,
+    ) -> ExplainabilityReceipt | None: ...
+
+    def cleanup(self, uri: str, *, storage_profile: str | None) -> None: ...
+
+
+@runtime_checkable
+@PublicAPI(stability="alpha")
+class NativeAttributionModel(Protocol):
+    """Loaded runtime capability for model-native feature attribution."""
+
+    @property
+    def native_attribution_id(self) -> str | None: ...
+
+    @property
+    def native_model_object(self) -> Any: ...
+
+    @property
+    def native_feature_names(self) -> tuple[str, ...]: ...
+
+    @property
+    def native_objective(self) -> str | None: ...
 
 
 @PublicAPI(stability="alpha")
@@ -110,8 +258,16 @@ class ExplainerAdapter(Protocol):
 
 __all__ = [
     "ExplainableModelContext",
+    "ExplainabilityModelProvider",
+    "ExplainabilityModelSession",
+    "ExplainabilityModelSessionFactory",
+    "ExplainabilityMaterialization",
+    "ExplainabilityModelBinding",
+    "ExplainabilityResultStore",
+    "NativeAttributionModel",
     "ExplainerAdapter",
     "PreparedExplainer",
     "ReferenceProvider",
+    "ResolvedReference",
     "SupportDecision",
 ]

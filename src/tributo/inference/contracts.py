@@ -431,6 +431,15 @@ class ResolvedModelSelection(_FrozenContract):
 
 
 @PublicAPI(stability="alpha")
+class ResolvedModelBinding(_FrozenContract):
+    """Opaque model selection plus its verified tensor signatures."""
+
+    selection: ResolvedModelSelection
+    input_signature: ManifestSignature
+    output_signature: ManifestSignature
+
+
+@PublicAPI(stability="alpha")
 class ResolvedInputSelection(_FrozenContract):
     """Pinned ingestion request plus its credential-free planning descriptor."""
 
@@ -478,6 +487,44 @@ class ResolvedInference(_FrozenContract):
             raise ValueError(
                 "ResolvedInference transport must not contain plaintext "
                 f"credentials (fields: {sorted(paths)})"
+            )
+        return self
+
+
+@PublicAPI(stability="alpha")
+class PreparedModelProvenance(_FrozenContract):
+    """Opaque model identity retained only for execution provenance."""
+
+    model_id: str = Field(min_length=1)
+    version_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    role: str = Field(min_length=1)
+    runtime_id: str = Field(min_length=1)
+
+
+@PublicAPI(stability="alpha")
+class PreparedInferencePlan(_FrozenContract):
+    """Core execution plan with data, artifact, and output requests removed."""
+
+    schema_version: Literal[1] = 1
+    plan_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    model_provenance: PreparedModelProvenance
+    source_ref_id: str = Field(min_length=1)
+    output_port_id: str = Field(min_length=1)
+    input_binding: InputBindingSpec
+    output_binding: OutputBindingSpec
+    execution: RayExecutionPolicy
+    run_id: str
+    attempt_id: str
+    submission_id: str
+    parent_run_id: str | None = None
+
+    @model_validator(mode="after")
+    def _preserve_credential_free_transport(self) -> "PreparedInferencePlan":
+        paths = credential_paths(self.model_dump(mode="python"), "prepared_plan")
+        if paths:
+            raise ValueError(
+                "PreparedInferencePlan must not contain plaintext credentials "
+                f"(fields: {sorted(paths)})"
             )
         return self
 
@@ -606,10 +653,31 @@ class ResultSink(Protocol):
 
 @runtime_checkable
 @PublicAPI(stability="alpha")
+class BoundResultSink(Protocol):
+    """Output port with target configuration already bound outside core."""
+
+    api_version: ClassVar[int]
+
+    @property
+    def sink_id(self) -> str: ...
+
+    def write(
+        self,
+        dataset: Any,
+        *,
+        run_id: str,
+        plan_digest: str,
+    ) -> ResultSinkReceipt: ...
+
+
+@runtime_checkable
+@PublicAPI(stability="alpha")
 class ResultSinkProvider(Protocol):
     """Composition boundary for resolving one inference result sink."""
 
     def create(self, request: ResultSinkRequest) -> ResultSink: ...
+
+    def bind(self, request: ResultSinkRequest) -> BoundResultSink: ...
 
 
 _SUPPORTED_BINDING_DTYPES = frozenset(
@@ -637,6 +705,7 @@ def _validate_binding_dtype(value: str | None) -> str | None:
 
 __all__ = [
     "ArtifactModelReference",
+    "BoundResultSink",
     "BundleModelReference",
     "FailureDiagnostic",
     "InferenceExecutor",
@@ -647,10 +716,13 @@ __all__ = [
     "LanceVectorColumnSpec",
     "OutputBindingSpec",
     "ParquetResultSinkRequest",
+    "PreparedInferencePlan",
+    "PreparedModelProvenance",
     "RayExecutionPolicy",
     "RegistryModelReference",
     "ResolvedInference",
     "ResolvedInputSelection",
+    "ResolvedModelBinding",
     "ResolvedModelSelection",
     "ResultSink",
     "ResultSinkProvider",

@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from tests.inference.test_executor import _plan
-from tributo.inference.api import run_inference, run_resolved_inference
+from tributo.inference.api import (
+    prepared_inference_plan,
+    run_inference,
+    run_prepared_inference,
+    run_resolved_inference,
+)
 from tributo.inference.contracts import (
     BundleModelReference,
     FailureDiagnostic,
@@ -94,6 +99,85 @@ def test_run_resolved_inference_does_not_resolve_again() -> None:
     assert executed_plan == plan
     assert executed_plan is not plan
     assert executor.execute.call_args.args[1] is sink
+
+
+def test_run_prepared_inference_uses_only_injected_ports() -> None:
+    plan = prepared_inference_plan(_plan())
+    result = _failed_result()
+    executor = MagicMock()
+    executor.execute_prepared.return_value = result
+    opened_input = object()
+    kernel_factory = object()
+    sink = object()
+
+    actual = run_prepared_inference(
+        plan,
+        opened_input=opened_input,
+        kernel_factory=kernel_factory,
+        sink=sink,
+        executor=executor,
+    )
+
+    assert actual == result
+    args = executor.execute_prepared.call_args.args
+    assert args[0] == plan
+    assert args[0] is not plan
+    assert args[1] is sink
+    assert args[2] is opened_input
+    assert (
+        executor.execute_prepared.call_args.kwargs["kernel_factory"] is kernel_factory
+    )
+
+
+def test_default_executor_receives_injected_model_kernel_factory() -> None:
+    plan = _plan()
+    result = _failed_result()
+    provider = MagicMock()
+    factory = object()
+    provider.prediction_factory.return_value = factory
+    runtime = MagicMock()
+    runtime.execute.return_value = result
+
+    with patch(
+        "tributo.inference.api.RayMapBatchesExecutor",
+        return_value=runtime,
+    ) as executor_type:
+        actual = run_resolved_inference(
+            plan,
+            sink=object(),
+            kernel_provider=provider,
+        )
+
+    assert actual == result
+    provider.prediction_factory.assert_called_once_with(plan.model)
+    executor_type.assert_called_once_with(kernel_factory=factory)
+
+
+def test_default_execution_binds_output_before_entering_core() -> None:
+    plan = _plan()
+    result = _failed_result()
+    sink_provider = MagicMock()
+    bound_sink = object()
+    sink_provider.bind.return_value = bound_sink
+    kernel_provider = MagicMock()
+    kernel_provider.prediction_factory.return_value = object()
+    runtime = MagicMock()
+    runtime.execute_bound.return_value = result
+
+    with patch(
+        "tributo.inference.api.RayMapBatchesExecutor",
+        return_value=runtime,
+    ):
+        actual = run_resolved_inference(
+            plan,
+            sink_provider=sink_provider,
+            kernel_provider=kernel_provider,
+        )
+
+    assert actual == result
+    sink_provider.bind.assert_called_once_with(plan.result_sink)
+    runtime.execute_bound.assert_called_once()
+    assert runtime.execute_bound.call_args.args[1] is bound_sink
 
 
 def test_inference_api_does_not_import_concrete_sink_integrations() -> None:

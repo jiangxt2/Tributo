@@ -25,7 +25,7 @@ from tributo.inference.contracts import (
     TensorInputBinding,
     TensorOutputBinding,
 )
-from tributo.inference.executor import RayMapBatchesExecutor
+from tributo.inference.executor import RayMapBatchesExecutor, prepared_inference_plan
 
 
 def _descriptor() -> IngestionDescriptor:
@@ -182,6 +182,34 @@ class _Sink:
         )
 
 
+class _BoundSink:
+    api_version = 1
+    sink_id = "parquet-v1"
+
+    def __init__(self, sink: _Sink, request: ParquetResultSinkRequest) -> None:
+        self._sink = sink
+        self._request = request
+
+    def write(self, dataset, *, run_id, plan_digest):
+        return self._sink.write(
+            dataset,
+            self._request,
+            run_id=run_id,
+            plan_digest=plan_digest,
+        )
+
+
+class _Factory:
+    factory_id = "test.prediction-v1"
+
+    def create(self):
+        raise AssertionError("kernel factories must load only inside Ray actors")
+
+
+def _executor(inputs: _Inputs) -> RayMapBatchesExecutor:
+    return RayMapBatchesExecutor(inputs, kernel_factory=_Factory())
+
+
 class TestRayMapBatchesExecutor:
     def test_success_builds_one_lazy_graph_and_writes_through_sink(self) -> None:
         plan = _plan()
@@ -191,7 +219,7 @@ class TestRayMapBatchesExecutor:
         strategy = object()
 
         with patch("ray.data.ActorPoolStrategy", return_value=strategy) as actor_pool:
-            result = RayMapBatchesExecutor(inputs).execute(plan, sink)
+            result = _executor(inputs).execute(plan, sink)
 
         assert result.status == "succeeded"
         assert result.input_rows is None
@@ -202,16 +230,46 @@ class TestRayMapBatchesExecutor:
         assert inputs.opened.close_calls == 1
         assert inputs.opened.cancel_calls == 0
         args, kwargs = dataset.map_kwargs
-        assert args[0].__name__ == "BundleBatchPredictor"
+        assert args[0].__name__ == "KernelBatchPredictor"
+        assert kwargs["fn_constructor_args"][0].factory_id == "test.prediction-v1"
         assert kwargs["batch_format"] == "numpy"
         assert kwargs["compute"] is strategy
         assert sink.calls[0][0] is dataset.predicted
         actor_pool.assert_called_once_with(size=plan.execution.concurrency)
 
+    def test_prepared_execution_does_not_open_input(self) -> None:
+        resolved = _plan()
+        plan = prepared_inference_plan(resolved)
+        dataset = _Dataset()
+        inputs = _Inputs(dataset)
+        sink = _Sink()
+        bound_sink = _BoundSink(sink, resolved.result_sink)
+
+        with patch("ray.data.ActorPoolStrategy", return_value=object()):
+            result = RayMapBatchesExecutor(inputs).execute_prepared(
+                plan,
+                bound_sink,
+                inputs.opened,
+                kernel_factory=_Factory(),
+            )
+
+        assert result.status == "succeeded"
+        assert inputs.calls == []
+        assert inputs.opened.close_calls == 1
+
+    def test_prepared_plan_excludes_data_model_and_output_requests(self) -> None:
+        plan = prepared_inference_plan(_plan())
+
+        assert not hasattr(plan, "input")
+        assert not hasattr(plan, "model")
+        assert not hasattr(plan, "result_sink")
+        assert plan.output_port_id == "parquet-v1"
+        assert plan.model_provenance.runtime_id == "onnx-runtime-v1"
+
     def test_acquisition_failure_is_structured(self) -> None:
-        result = RayMapBatchesExecutor(
-            _Inputs(error=RuntimeError("credential detail"))
-        ).execute(_plan(), _Sink())
+        result = _executor(_Inputs(error=RuntimeError("credential detail"))).execute(
+            _plan(), _Sink()
+        )
 
         assert result.status == "failed"
         assert result.failure is not None
@@ -237,7 +295,7 @@ class TestRayMapBatchesExecutor:
     ) -> None:
         inputs = _Inputs(_Dataset())
 
-        result = RayMapBatchesExecutor(inputs).execute(_plan(), _Sink(error))
+        result = _executor(inputs).execute(_plan(), _Sink(error))
 
         assert result.failure is not None
         assert result.failure.phase == phase
@@ -254,7 +312,7 @@ class TestRayMapBatchesExecutor:
                 raise ValueError("bad execution")
 
         inputs = _Inputs(BrokenDataset())
-        result = RayMapBatchesExecutor(inputs).execute(_plan(), _Sink())
+        result = _executor(inputs).execute(_plan(), _Sink())
 
         assert result.failure is not None
         assert result.failure.phase == "execution"
@@ -266,7 +324,7 @@ class TestRayMapBatchesExecutor:
         inputs = _Inputs(_Dataset(), close_error=RuntimeError("cleanup detail"))
 
         with caplog.at_level(logging.WARNING, logger="tributo.inference.executor"):
-            result = RayMapBatchesExecutor(inputs).execute(_plan(), _Sink())
+            result = _executor(inputs).execute(_plan(), _Sink())
 
         assert result.status == "succeeded"
         assert result.failure is None
@@ -283,7 +341,7 @@ class TestRayMapBatchesExecutor:
         inputs = _Inputs(_Dataset())
 
         with pytest.raises(ValueError, match="cannot write"):
-            RayMapBatchesExecutor(inputs).execute(_plan(), sink)
+            _executor(inputs).execute(_plan(), sink)
 
     def test_post_resolution_credential_mutation_fails_before_data_access(
         self,
@@ -293,7 +351,7 @@ class TestRayMapBatchesExecutor:
         inputs = _Inputs(_Dataset())
 
         with pytest.raises(ValidationError, match="plaintext credentials") as error:
-            RayMapBatchesExecutor(inputs).execute(plan, _Sink())
+            _executor(inputs).execute(plan, _Sink())
 
         assert inputs.calls == []
         assert "must-not-leak" not in str(error.value)

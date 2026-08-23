@@ -39,6 +39,11 @@ class ONNXRuntimeFlavor:
     security_mode: ClassVar[str] = SECURITY_MODE_SAFE
     signature_required: ClassVar[bool] = True
     required_dependencies: ClassVar[tuple[str, ...]] = ("onnxruntime",)
+    operations: ClassVar[tuple[str, ...]] = (
+        "prediction.batch",
+        "prediction.online",
+    )
+    conditional_operations: ClassVar[tuple[str, ...]] = ()
 
     def load(
         self,

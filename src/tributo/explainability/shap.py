@@ -135,20 +135,12 @@ class ShapAdapter:
     ) -> SupportDecision:
         if (
             request.backend in ("auto", "tree")
-            and context.flavor_id == "xgboost-native-v1"
+            and context.native_attribution_id == "xgboost-tree-shap-v1"
         ):
             native_strategy = _uses_native_tree_strategy(context, request)
             missing = _missing("xgboost")
             if not native_strategy:
                 missing += _missing("shap")
-            if context.artifact_format not in {"ubj", "xgboost-json"}:
-                return SupportDecision(
-                    supported=False,
-                    reason="Tree SHAP requires an XGBoost UBJ or JSON artifact",
-                    required_dependencies=missing,
-                    backend="tree",
-                    exactness="exact",
-                )
             if context.objective and not _supported_objective(context.objective):
                 return SupportDecision(
                     supported=False,
@@ -258,13 +250,10 @@ class ShapAdapter:
                     backend="model_agnostic",
                     exactness="approximate",
                 )
-            if context.flavor_id != "onnx-runtime-v1" or context.predict is None:
+            if context.predict is None:
                 return SupportDecision(
                     supported=False,
-                    reason=(
-                        "model_agnostic SHAP requires an onnx-runtime-v1 "
-                        "prediction function"
-                    ),
+                    reason=("model_agnostic SHAP requires a prediction kernel"),
                     required_dependencies=missing,
                     backend="model_agnostic",
                     exactness="approximate",
@@ -310,12 +299,9 @@ class ShapAdapter:
         if decision.backend == "tree":
             booster = context.model_object
             if booster is None:
-                if context.artifact_path is None:
-                    raise ValueError("Tree SHAP requires a verified artifact path")
-                import xgboost
-
-                booster = xgboost.Booster()
-                booster.load_model(str(context.artifact_path))
+                raise ValueError(
+                    "Native Tree SHAP provider did not supply a loaded tree model"
+                )
             if not feature_names:
                 feature_names = tuple(booster.feature_names or ())
             if _uses_native_tree_strategy(context, request):
@@ -581,7 +567,7 @@ def _uses_native_tree_strategy(
     request: ExplainabilityRequest,
 ) -> bool:
     return (
-        context.flavor_id == "xgboost-native-v1"
+        context.native_attribution_id == "xgboost-tree-shap-v1"
         and request.output_target in _NATIVE_OUTPUT_TARGETS
         and request.reference is None
     )

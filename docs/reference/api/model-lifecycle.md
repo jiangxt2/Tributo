@@ -542,6 +542,13 @@ documentation for every public stability tier.
 ```
 
 
+## `tributo.integrations.validators.xgboost_native`
+
+```{autoclass} tributo.integrations.validators.xgboost_native.XGBoostNativeRuntimeValidator
+:no-members:
+```
+
+
 ## `tributo.registry.callback`
 
 ```{autoclass} tributo.registry.callback.MLflowTrackingCallback

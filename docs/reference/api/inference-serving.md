@@ -93,6 +93,30 @@ documentation for every public stability tier.
 
 ## `tributo.explainability.protocols`
 
+```{autoclass} tributo.explainability.protocols.ExplainabilityMaterialization
+:no-members:
+```
+
+```{autoclass} tributo.explainability.protocols.ExplainabilityModelBinding
+:no-members:
+```
+
+```{autoclass} tributo.explainability.protocols.ExplainabilityModelProvider
+:no-members:
+```
+
+```{autoclass} tributo.explainability.protocols.ExplainabilityModelSession
+:no-members:
+```
+
+```{autoclass} tributo.explainability.protocols.ExplainabilityModelSessionFactory
+:no-members:
+```
+
+```{autoclass} tributo.explainability.protocols.ExplainabilityResultStore
+:no-members:
+```
+
 ```{autoclass} tributo.explainability.protocols.ExplainableModelContext
 :no-members:
 ```
@@ -101,7 +125,19 @@ documentation for every public stability tier.
 :no-members:
 ```
 
+```{autoclass} tributo.explainability.protocols.NativeAttributionModel
+:no-members:
+```
+
 ```{autoclass} tributo.explainability.protocols.PreparedExplainer
+:no-members:
+```
+
+```{autoclass} tributo.explainability.protocols.ReferenceProvider
+:no-members:
+```
+
+```{autoclass} tributo.explainability.protocols.ResolvedReference
 :no-members:
 ```
 
@@ -113,14 +149,6 @@ documentation for every public stability tier.
 ## `tributo.explainability.reference`
 
 ```{autoclass} tributo.explainability.reference.FileReferenceProvider
-:no-members:
-```
-
-```{autoclass} tributo.explainability.reference.ReferenceProvider
-:no-members:
-```
-
-```{autoclass} tributo.explainability.reference.ResolvedReference
 :no-members:
 ```
 
@@ -148,6 +176,9 @@ documentation for every public stability tier.
 ```
 
 ```{autofunction} tributo.inference.api.run_inference
+```
+
+```{autofunction} tributo.inference.api.run_prepared_inference
 ```
 
 ```{autofunction} tributo.inference.api.run_resolved_inference
@@ -178,6 +209,10 @@ documentation for every public stability tier.
 ## `tributo.inference.contracts`
 
 ```{autoclass} tributo.inference.contracts.ArtifactModelReference
+:no-members:
+```
+
+```{autoclass} tributo.inference.contracts.BoundResultSink
 :no-members:
 ```
 
@@ -221,6 +256,14 @@ documentation for every public stability tier.
 :no-members:
 ```
 
+```{autoclass} tributo.inference.contracts.PreparedInferencePlan
+:no-members:
+```
+
+```{autoclass} tributo.inference.contracts.PreparedModelProvenance
+:no-members:
+```
+
 ```{autoclass} tributo.inference.contracts.RayExecutionPolicy
 :no-members:
 ```
@@ -234,6 +277,10 @@ documentation for every public stability tier.
 ```
 
 ```{autoclass} tributo.inference.contracts.ResolvedInputSelection
+:no-members:
+```
+
+```{autoclass} tributo.inference.contracts.ResolvedModelBinding
 :no-members:
 ```
 
@@ -266,6 +313,9 @@ documentation for every public stability tier.
 
 ```{autoclass} tributo.inference.executor.RayMapBatchesExecutor
 :no-members:
+```
+
+```{autofunction} tributo.inference.executor.prepared_inference_plan
 ```
 
 
@@ -319,6 +369,25 @@ documentation for every public stability tier.
 ```
 
 
+## `tributo.inference.kernel`
+
+```{autoclass} tributo.inference.kernel.KernelBatchPredictor
+:no-members:
+```
+
+```{autoclass} tributo.inference.kernel.ModelKernelProvider
+:no-members:
+```
+
+```{autoclass} tributo.inference.kernel.PredictionKernel
+:no-members:
+```
+
+```{autoclass} tributo.inference.kernel.PredictionKernelFactory
+:no-members:
+```
+
+
 ## `tributo.inference.pipeline`
 
 ```{autoclass} tributo.inference.pipeline.InferenceConfig
@@ -348,6 +417,10 @@ documentation for every public stability tier.
 ## `tributo.inference.resolver`
 
 ```{autoclass} tributo.inference.resolver.InferenceResolver
+:no-members:
+```
+
+```{autoclass} tributo.inference.resolver.ModelReferenceResolver
 :no-members:
 ```
 
@@ -412,6 +485,13 @@ documentation for every public stability tier.
 ## `tributo.integrations.sinks.data_write`
 
 ```{autoclass} tributo.integrations.sinks.data_write.DataWriteResultSink
+:no-members:
+```
+
+
+## `tributo.integrations.sinks.explainability`
+
+```{autoclass} tributo.integrations.sinks.explainability.ParquetExplainabilityResultStore
 :no-members:
 ```
 

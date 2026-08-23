@@ -140,7 +140,7 @@ InferenceRequest(model, input, named bindings, result sink, execution policy)
   ↓
 InferenceResolver.resolve()
   ↓
-BundleReader.read_manifest_with_bytes() → pinned BundleRef
+BundleModelReferenceResolver → pinned BundleRef + verified signatures
   ↓
 IngestionGatewayInputResolver.describe()
   → IngestionGateway.describe(engine="ray")
@@ -148,19 +148,34 @@ IngestionGatewayInputResolver.describe()
   ↓
 ResolvedInference (credential-free, immutable)
   ↓
-RayMapBatchesExecutor
+Top-level runtime composition
+  ├── BundleModelKernelProvider → serializable PredictionKernelFactory
+  └── ResultSinkProvider.bind() → BoundResultSink
+  ↓
+Compatibility facade
   ├── IngestionGatewayInputResolver.open()
-  │     → worker-local describe() + open()
   │     → RayDataHandle.dataset + IngestionPlanReceipt
-  ├── BundleBatchPredictor → BundleModelLoader → named tensor predict
-  └── ParquetResultSink → WriteGateway → RayWriteBinding → Dataset.write_parquet()
+  └── ResolvedInference → PreparedInferencePlan
+        (no input request, Bundle selection, or result-target request)
+  ↓
+RayMapBatchesExecutor.execute_prepared() / run_prepared_inference()
+  ├── KernelBatchPredictor → injected PredictionKernelFactory
+  │     → worker-local Runtime Flavor load → named tensor predict
+  └── BoundResultSink → WriteGateway → WriteBinding
 ```
 
-The Executor never imports `training.data_loader`, Provider, LogicalScanPlan,
-or EngineBinding. Feature plus passthrough projection is appended to the
+The core Executor never imports `training.data_loader`, Provider,
+LogicalScanPlan, EngineBinding, BundleReader, FlavorRegistry, or a concrete
+model runtime. Feature plus passthrough projection is appended to the
 bounded-ingestion Transform IR before the Gateway opens the source. Source,
 model, and sink storage profiles are resolved independently. Row counts remain
 optional and no extra `Dataset.count()` job is launched for metrics.
+
+`run_prepared_inference()` is the fully injected core entry: callers provide an
+already-opened Ray input, stripped `PreparedInferencePlan`,
+PredictionKernelFactory, and BoundResultSink. Existing `run_inference()` and
+`run_resolved_inference()` remain compatibility facades that resolve those
+ports through the top-level composition root.
 
 External model references are normalized before this chain executes:
 
@@ -199,20 +214,26 @@ tributo explain / submit_explainability_job()
   → Ray Job driver
   → ExplainabilityRequest
   → run_batch_explainability()
-       ├─ BundleReader → pinned manifest bytes and model role
+       ├─ BundleExplainabilityModelProvider
+       │    → verified ExplainabilityModelBinding
+       │    → serializable ExplainabilityModelSessionFactory
        ├─ OperationStore → idempotency key, lease, and attempt state
        ├─ IngestionGatewayInputResolver → bounded Ray Data input
        └─ Ray Data map_batches(ExplainabilityBatchWorker)
             → ExplainabilityPlanner → ExplainerAdapter
-            → ParquetResultSink
+            → injected ExplainabilityResultStore → ResultSink/data persistence
             → ExplainabilityReceipt + terminal operation record
 ```
 
-The executor validates the request against the Bundle descriptor, pins the
-exact manifest bytes passed to workers, and writes each attempt under a unique
-lease-token path. Output size and row limits are checked before a successful
-receipt is recorded. Tree SHAP and explicitly enabled model-agnostic SHAP are
-batch operations; they do not change the inference or serving request path.
+The model-runtime adapter validates the request against the Bundle descriptor
+and encapsulates exact manifest bytes inside its serializable worker factory;
+the executor receives neither Bundle internals nor a concrete model provider.
+Each attempt writes below a unique lease-token path. Output size and row limits
+are checked before a successful receipt is recorded. Tree SHAP and explicitly
+enabled model-agnostic SHAP are batch operations; model loading and dynamic
+instance-capability checks remain inside the model-runtime adapter. Result
+materialization, inspection, receipt bytes, and attempt cleanup are owned by
+the injected data-persistence adapter rather than the Explainability executor.
 
 ### Vector-index operations
 

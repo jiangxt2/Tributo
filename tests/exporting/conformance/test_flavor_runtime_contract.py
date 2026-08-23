@@ -102,3 +102,20 @@ def test_first_party_flavor_metadata_reuses_capability_matrix() -> None:
         assert set(flavor.required_dependencies).issubset(entry.dependencies)
         assert entry.batch_inference_capable is True
         assert entry.online_serveable is True
+
+
+def test_plugin_capabilities_are_the_execution_source_of_truth() -> None:
+    from tributo.exporting.capabilities import get_default_capability_registry
+
+    capabilities = get_default_capability_registry()
+    onnx = capabilities.for_flavor("onnx-runtime-v1")
+    native = capabilities.for_flavor("xgboost-native-v1")
+
+    assert onnx.operations == ("prediction.batch", "prediction.online")
+    assert onnx.conditional_operations == ()
+    assert "attribution.tree-shap" not in onnx.operations
+    assert native.operations == (
+        "prediction.batch",
+        "prediction.online",
+    )
+    assert native.conditional_operations == ("attribution.tree-shap",)

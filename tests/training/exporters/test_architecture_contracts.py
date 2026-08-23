@@ -188,6 +188,23 @@ def test_first_party_exporters_do_not_require_entry_point_metadata(
     assert "onnx-runtime-v1" in validators.list_all()
 
 
+def test_artifact_protocol_import_does_not_eagerly_load_torch_exporters() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; import tributo.training.exporters.artifact_protocol; "
+            "assert 'torch' not in sys.modules",
+        ],
+        cwd=Path(__file__).parents[3],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_first_party_source_providers_have_stable_unique_ids() -> None:
     providers = first_party_source_providers()
 
@@ -398,6 +415,14 @@ def test_capability_matrix_matches_runtime_support_matrix() -> None:
     assert native.exporter_ids == ("xgboost-json-v1", "xgboost-ubj-v1")
     assert native.format_ids == ("ubj", "xgboost-json")
     assert native.batch and native.serveable
+    assert native.signature_required is True
+    assert native.security_mode == "safe"
+    assert native.required_dependencies == ("xgboost",)
+    assert native.operations == (
+        "prediction.batch",
+        "prediction.online",
+    )
+    assert native.conditional_operations == ("attribution.tree-shap",)
 
 
 def test_operation_event_is_deterministic_committed_manifest_view() -> None:

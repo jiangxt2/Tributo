@@ -4,48 +4,23 @@ from __future__ import annotations
 
 import hashlib
 import io
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import ClassVar
 from urllib.parse import urlsplit
 
 import numpy as np
 
 from tributo.data.persistence import ObjectStore, default_object_store
 from tributo.explainability.contracts import ExplainabilityLimits, ReferenceBinding
+from tributo.explainability.protocols import ReferenceProvider, ResolvedReference
 from tributo.util.annotations import PublicAPI
-
-
-@PublicAPI(stability="alpha")
-@dataclass(frozen=True)
-class ResolvedReference:
-    """Materialized reference data and its immutable provenance."""
-
-    data: np.ndarray
-    digest: str
-    rows: int
-
-
-@PublicAPI(stability="alpha")
-class ReferenceProvider(Protocol):
-    """Load and identify reference data without exposing storage details."""
-
-    provider_id: str
-
-    def resolve(
-        self,
-        binding: ReferenceBinding,
-        limits: ExplainabilityLimits,
-    ) -> ResolvedReference: ...
-
-    def digest(self, binding: ReferenceBinding) -> str: ...
 
 
 @PublicAPI(stability="alpha")
 class FileReferenceProvider:
     """Built-in local/file:// and S3 NPY/Parquet reference provider."""
 
-    provider_id = "file-reference-v1"
+    provider_id: ClassVar[str] = "file-reference-v1"
 
     def __init__(self, object_store: ObjectStore | None = None) -> None:
         self._object_store = object_store or default_object_store()

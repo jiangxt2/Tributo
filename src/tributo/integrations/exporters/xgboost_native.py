@@ -48,6 +48,7 @@ class _XGBoostNativeExporterBase:
     source_kinds: ClassVar[tuple[str, ...]] = ("xgboost_result",)
     validator_bindings: ClassVar[tuple[ValidatorBinding, ...]] = (
         ValidatorBinding(validator_id="structure-v1", required=True),
+        ValidatorBinding(validator_id="xgboost-native-runtime-v1", required=True),
     )
     mutates_source: ClassVar[bool] = False
     upstream_requirements: ClassVar[tuple[Any, ...]] = ()

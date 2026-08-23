@@ -21,7 +21,56 @@ from tributo.exceptions import JobConfigurationError
 from tributo.util.annotations import DeveloperAPI, PublicAPI
 
 if TYPE_CHECKING:
+    from tributo.explainability.protocols import (
+        ExplainabilityModelProvider,
+        ExplainabilityResultStore,
+        ReferenceProvider,
+    )
     from tributo.inference.contracts import ResultSinkProvider
+    from tributo.inference.kernel import ModelKernelProvider
+    from tributo.inference.resolver import ModelReferenceResolver
+
+
+@DeveloperAPI
+def default_explainability_model_provider() -> ExplainabilityModelProvider:
+    """Build the default Bundle-backed explainability model provider."""
+    from tributo.integrations.model_runtimes import BundleExplainabilityModelProvider
+
+    return BundleExplainabilityModelProvider()
+
+
+@DeveloperAPI
+def default_explainability_result_store() -> ExplainabilityResultStore:
+    """Build the default data-backed explainability result adapter."""
+    from tributo.integrations.sinks.explainability import (
+        ParquetExplainabilityResultStore,
+    )
+
+    return ParquetExplainabilityResultStore()
+
+
+@DeveloperAPI
+def default_explainability_reference_provider() -> ReferenceProvider:
+    """Build the default data-backed explainability reference adapter."""
+    from tributo.explainability.reference import FileReferenceProvider
+
+    return FileReferenceProvider()
+
+
+@DeveloperAPI
+def default_model_kernel_provider() -> ModelKernelProvider:
+    """Build the default Bundle-backed model-kernel provider."""
+    from tributo.integrations.model_runtimes import BundleModelKernelProvider
+
+    return BundleModelKernelProvider()
+
+
+@DeveloperAPI
+def default_model_reference_resolver() -> ModelReferenceResolver:
+    """Build the default Bundle-backed logical model resolver."""
+    from tributo.integrations.model_runtimes import BundleModelReferenceResolver
+
+    return BundleModelReferenceResolver()
 
 
 @DeveloperAPI
@@ -231,6 +280,11 @@ class RuntimeTarget(StrictConfigModel):
 
 
 __all__ = [
+    "default_explainability_model_provider",
+    "default_explainability_reference_provider",
+    "default_explainability_result_store",
+    "default_model_kernel_provider",
+    "default_model_reference_resolver",
     "default_result_sink_provider",
     "RuntimeExecutionMode",
     "RuntimeLifecycle",

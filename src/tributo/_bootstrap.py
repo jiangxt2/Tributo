@@ -38,6 +38,9 @@ def first_party_export_plugins() -> tuple[
     )
     from tributo.integrations.exporters.xgboost_onnx import XGBoostONNXExporter
     from tributo.integrations.validators.onnx_runtime import ONNXRuntimeValidator
+    from tributo.integrations.validators.xgboost_native import (
+        XGBoostNativeRuntimeValidator,
+    )
 
     exporters: tuple[type[ModelExporter], ...] = (
         XGBoostONNXExporter,
@@ -51,7 +54,10 @@ def first_party_export_plugins() -> tuple[
         XLearnerExporter,
         XLearnerCausalReportExporter,
     )
-    validators: tuple[type[ExportValidator], ...] = (ONNXRuntimeValidator,)
+    validators: tuple[type[ExportValidator], ...] = (
+        ONNXRuntimeValidator,
+        XGBoostNativeRuntimeValidator,
+    )
     return exporters, validators
 
 
