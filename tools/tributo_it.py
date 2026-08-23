@@ -27,6 +27,7 @@ import tomllib
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Iterator, Sequence
 
@@ -86,6 +87,13 @@ DOCKER_PROXY_VARIABLES = (
 
 class TributoITError(RuntimeError):
     """Raised when an integration-test lifecycle contract is violated."""
+
+
+class RuntimeBuildInputMode(StrEnum):
+    """Select how a runtime build resolves its base image inputs."""
+
+    LOCAL_MIRROR = "local-mirror"
+    CANONICAL = "canonical"
 
 
 @dataclass(frozen=True)
@@ -743,9 +751,17 @@ def _prepare_mirrored_image(
 
 def _prepare_runtime_build_inputs(
     identity: RuntimeIdentity,
+    *,
+    build_input_mode: RuntimeBuildInputMode,
 ) -> tuple[str, str]:
-    """Prepare domestic mirror inputs when a runtime profile declares them."""
+    """Resolve builder-visible inputs under the selected image source policy."""
     profile = identity.profile
+    if build_input_mode == RuntimeBuildInputMode.CANONICAL:
+        return profile.base_image, profile.uv_image
+    if build_input_mode != RuntimeBuildInputMode.LOCAL_MIRROR:
+        raise TributoITError(
+            f"unsupported runtime build input mode: {build_input_mode!r}"
+        )
     if profile.base_image_mirror is None and profile.uv_image_mirror is None:
         return profile.base_image, profile.uv_image
     if profile.base_image_mirror is None or profile.uv_image_mirror is None:
@@ -767,9 +783,16 @@ def _prepare_runtime_build_inputs(
     return LOCAL_RUNTIME_BASE_IMAGE, LOCAL_RUNTIME_UV_IMAGE
 
 
-def _build_runtime(identity: RuntimeIdentity) -> str:
+def _build_runtime(
+    identity: RuntimeIdentity,
+    *,
+    build_input_mode: RuntimeBuildInputMode,
+) -> str:
     labels = _expected_labels(identity)
-    base_image, uv_image = _prepare_runtime_build_inputs(identity)
+    base_image, uv_image = _prepare_runtime_build_inputs(
+        identity,
+        build_input_mode=build_input_mode,
+    )
     descriptor, metadata_name = tempfile.mkstemp(
         prefix="tributo-buildx-", suffix=".json"
     )
@@ -852,6 +875,7 @@ def prepare_runtime(
     platform: str,
     registry: str | None = None,
     allow_build: bool = True,
+    build_input_mode: RuntimeBuildInputMode = RuntimeBuildInputMode.LOCAL_MIRROR,
 ) -> PreparedRuntime:
     """Reuse, pull, or build one immutable runtime under its file lock."""
     identity = runtime_identity(profile, platform)
@@ -900,7 +924,10 @@ def prepare_runtime(
             )
         return PreparedRuntime(
             identity=identity,
-            image_id=_build_runtime(identity),
+            image_id=_build_runtime(
+                identity,
+                build_input_mode=build_input_mode,
+            ),
             source="build",
         )
 
@@ -1882,6 +1909,7 @@ def publish_runtime(
     *,
     platform: str,
     registry: str,
+    build_input_mode: RuntimeBuildInputMode = RuntimeBuildInputMode.LOCAL_MIRROR,
 ) -> None:
     """Publish a missing immutable runtime after local validation."""
     identity = runtime_identity(profile, platform)
@@ -1904,6 +1932,7 @@ def publish_runtime(
         profile,
         platform=platform,
         allow_build=True,
+        build_input_mode=build_input_mode,
     )
     _run(["docker", "tag", prepared.identity.local_tag, remote])
     _run(["docker", "push", remote], capture_output=False)
@@ -2014,11 +2043,23 @@ def _parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument("--platform")
     prepare_parser.add_argument("--registry")
     prepare_parser.add_argument("--no-local-build", action="store_true")
+    prepare_parser.add_argument(
+        "--build-input-mode",
+        type=RuntimeBuildInputMode,
+        choices=tuple(RuntimeBuildInputMode),
+        default=RuntimeBuildInputMode.LOCAL_MIRROR,
+    )
 
     publish_parser = subparsers.add_parser("publish-runtime")
     publish_parser.add_argument("--profile", default="data-ingestion")
     publish_parser.add_argument("--platform", required=True)
     publish_parser.add_argument("--registry", required=True)
+    publish_parser.add_argument(
+        "--build-input-mode",
+        type=RuntimeBuildInputMode,
+        choices=tuple(RuntimeBuildInputMode),
+        default=RuntimeBuildInputMode.LOCAL_MIRROR,
+    )
 
     snapshot_parser = subparsers.add_parser("create-source-snapshot")
     snapshot_parser.add_argument("--source", type=Path, required=True)
@@ -2087,6 +2128,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 platform=platform,
                 registry=args.registry,
                 allow_build=not args.no_local_build,
+                build_input_mode=args.build_input_mode,
             )
             print(
                 json.dumps(
@@ -2100,7 +2142,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 0
         if args.command == "publish-runtime":
-            publish_runtime(profile, platform=platform, registry=args.registry)
+            publish_runtime(
+                profile,
+                platform=platform,
+                registry=args.registry,
+                build_input_mode=args.build_input_mode,
+            )
             return 0
         raise TributoITError(f"unsupported command: {args.command}")
     except TributoITError as exc:

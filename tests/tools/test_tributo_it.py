@@ -137,6 +137,80 @@ def test_domestic_mirror_reference_maps_supported_registries() -> None:
     assert tributo_it._domestic_mirror_reference(custom) == custom
 
 
+def test_runtime_build_inputs_default_to_verified_local_mirror_tags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile = _write_profile(tmp_path)
+    base_digest = profile.base_image.rsplit("@", 1)[1]
+    uv_digest = profile.uv_image.rsplit("@", 1)[1]
+    profile.definition["base_image_mirror"] = (
+        f"docker.m.daocloud.io/example:1@{base_digest}"
+    )
+    profile.definition["uv_image_mirror"] = (
+        f"ghcr.m.daocloud.io/example/uv:1@{uv_digest}"
+    )
+    identity = tributo_it.runtime_identity(profile, "linux/amd64")
+    prepared: list[dict[str, str]] = []
+    monkeypatch.setattr(
+        tributo_it,
+        "_prepare_mirrored_image",
+        lambda **kwargs: prepared.append(kwargs),
+    )
+
+    inputs = tributo_it._prepare_runtime_build_inputs(
+        identity,
+        build_input_mode=tributo_it.RuntimeBuildInputMode.LOCAL_MIRROR,
+    )
+
+    assert inputs == (
+        tributo_it.LOCAL_RUNTIME_BASE_IMAGE,
+        tributo_it.LOCAL_RUNTIME_UV_IMAGE,
+    )
+    assert prepared == [
+        {
+            "mirror": profile.base_image_mirror,
+            "canonical": profile.base_image,
+            "local": tributo_it.LOCAL_RUNTIME_BASE_IMAGE,
+            "platform": "linux/amd64",
+        },
+        {
+            "mirror": profile.uv_image_mirror,
+            "canonical": profile.uv_image,
+            "local": tributo_it.LOCAL_RUNTIME_UV_IMAGE,
+            "platform": "linux/amd64",
+        },
+    ]
+
+
+def test_canonical_runtime_build_inputs_bypass_daemon_local_tags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile = _write_profile(tmp_path)
+    profile.definition["base_image_mirror"] = (
+        "docker.m.daocloud.io/example:1@sha256:" + "a" * 64
+    )
+    profile.definition["uv_image_mirror"] = (
+        "ghcr.m.daocloud.io/example/uv:1@sha256:" + "d" * 64
+    )
+    identity = tributo_it.runtime_identity(profile, "linux/amd64")
+
+    def fail_mirror_prepare(**_kwargs: str) -> None:
+        pytest.fail(
+            "canonical build inputs must remain visible to containerized Buildx"
+        )
+
+    monkeypatch.setattr(
+        tributo_it,
+        "_prepare_mirrored_image",
+        fail_mirror_prepare,
+    )
+
+    assert tributo_it._prepare_runtime_build_inputs(
+        identity,
+        build_input_mode=tributo_it.RuntimeBuildInputMode.CANONICAL,
+    ) == (profile.base_image, profile.uv_image)
+
+
 def test_docker_command_environment_removes_pandafan_proxy_variables(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -326,7 +400,12 @@ def test_concurrent_prepare_has_exactly_one_builder(
     def fake_inspect(_reference: str) -> dict[str, str] | None:
         return {"Id": image_id} if built.value else None
 
-    def fake_build(_identity: tributo_it.RuntimeIdentity) -> str:
+    def fake_build(
+        _identity: tributo_it.RuntimeIdentity,
+        *,
+        build_input_mode: tributo_it.RuntimeBuildInputMode,
+    ) -> str:
+        assert build_input_mode == tributo_it.RuntimeBuildInputMode.LOCAL_MIRROR
         with build_count.get_lock():
             build_count.value += 1
         time.sleep(0.2)
@@ -359,6 +438,38 @@ def test_concurrent_prepare_has_exactly_one_builder(
         "build",
         "concurrent-local",
     }
+
+
+def test_prepare_runtime_propagates_canonical_build_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile = _write_profile(tmp_path / "repository")
+    lock_dir = tmp_path / "locks"
+    lock_dir.mkdir(mode=0o700)
+    build_modes: list[tributo_it.RuntimeBuildInputMode] = []
+
+    def fake_build(
+        _identity: tributo_it.RuntimeIdentity,
+        *,
+        build_input_mode: tributo_it.RuntimeBuildInputMode,
+    ) -> str:
+        build_modes.append(build_input_mode)
+        return "sha256:image"
+
+    monkeypatch.setattr(tributo_it, "_lock_directory", lambda: lock_dir)
+    monkeypatch.setattr(tributo_it, "_docker_daemon_identity", lambda: "daemon")
+    monkeypatch.setattr(tributo_it, "_image_inspect", lambda _reference: None)
+    monkeypatch.setattr(tributo_it, "_build_runtime", fake_build)
+
+    prepared = tributo_it.prepare_runtime(
+        profile,
+        platform="linux/amd64",
+        build_input_mode=tributo_it.RuntimeBuildInputMode.CANONICAL,
+    )
+
+    assert prepared.source == "build"
+    assert prepared.image_id == "sha256:image"
+    assert build_modes == [tributo_it.RuntimeBuildInputMode.CANONICAL]
 
 
 def test_compose_contract_rejects_service_level_build(tmp_path: Path) -> None:
@@ -468,13 +579,20 @@ def test_publish_runtime_builds_and_pushes_exact_missing_tag(
         )
     )
     commands: list[list[str]] = []
+    prepare_kwargs: dict[str, object] = {}
+
+    def fake_prepare_runtime(
+        *_args: object, **kwargs: object
+    ) -> tributo_it.PreparedRuntime:
+        prepare_kwargs.update(kwargs)
+        return prepared
 
     monkeypatch.setattr(
         tributo_it,
         "_pull_registry_runtime",
         lambda _reference, *, wait_seconds: next(pulls),
     )
-    monkeypatch.setattr(tributo_it, "prepare_runtime", lambda *args, **kwargs: prepared)
+    monkeypatch.setattr(tributo_it, "prepare_runtime", fake_prepare_runtime)
     monkeypatch.setattr(
         tributo_it,
         "validate_runtime_image",
@@ -492,8 +610,14 @@ def test_publish_runtime_builds_and_pushes_exact_missing_tag(
         profile,
         platform="linux/amd64",
         registry=registry,
+        build_input_mode=tributo_it.RuntimeBuildInputMode.CANONICAL,
     )
 
+    assert prepare_kwargs == {
+        "platform": "linux/amd64",
+        "allow_build": True,
+        "build_input_mode": tributo_it.RuntimeBuildInputMode.CANONICAL,
+    }
     assert commands == [
         ["docker", "tag", identity.local_tag, remote],
         ["docker", "push", remote],
@@ -563,6 +687,56 @@ def test_run_data_ingestion_cli_dispatches_without_platform_argument(
 
     assert tributo_it.main(["run-data-ingestion"]) == 0
     assert called == [profile]
+
+
+def test_publish_runtime_cli_propagates_canonical_build_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile = _write_profile(tmp_path)
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(tributo_it, "load_profile", lambda _name: profile)
+    monkeypatch.setattr(
+        tributo_it,
+        "publish_runtime",
+        lambda _profile, **kwargs: calls.append(kwargs),
+    )
+
+    assert (
+        tributo_it.main(
+            [
+                "publish-runtime",
+                "--profile",
+                profile.name,
+                "--platform",
+                "linux/amd64",
+                "--build-input-mode",
+                "canonical",
+                "--registry",
+                "ghcr.io/example/runtime",
+            ]
+        )
+        == 0
+    )
+    assert calls == [
+        {
+            "platform": "linux/amd64",
+            "registry": "ghcr.io/example/runtime",
+            "build_input_mode": tributo_it.RuntimeBuildInputMode.CANONICAL,
+        }
+    ]
+
+
+def test_runtime_image_workflow_selects_canonical_build_inputs() -> None:
+    workflow = (
+        Path(__file__).resolve().parents[2]
+        / ".github"
+        / "workflows"
+        / "it-runtime-image.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "docker/setup-buildx-action" in workflow
+    assert "driver: docker-container" in workflow
+    assert "--build-input-mode canonical" in workflow
 
 
 def test_container_states_capture_ownership_diagnostics(
