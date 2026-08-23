@@ -6,6 +6,7 @@ dispatch in ``training/data_loader.py`` and ``inference/pipeline.py``.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Annotated, Any, Literal, Union
 
@@ -13,7 +14,9 @@ from pydantic import BaseModel, Field, model_validator
 
 from tributo._common.config import StrictConfigModel
 from tributo.data.base import S3Config
-from tributo.util.annotations import PublicAPI
+from tributo.util.annotations import DeveloperAPI, PublicAPI
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Individual source configs
@@ -562,3 +565,136 @@ class LegacyConfigNormalizer:
                 "database": database,
             }
         )
+
+
+@DeveloperAPI
+def normalize_legacy_inference_source(
+    *,
+    data_type: str,
+    input_uri: str,
+    s3_config: dict[str, str],
+    ch_host: str,
+    ch_port: int,
+    ch_database: str,
+    ch_user: str,
+    ch_password: str,
+    ch_sql: str,
+) -> CanonicalSourceInput:
+    """Normalize historical flat inference source fields.
+
+    The compatibility shape is intentionally owned by the data module.  The
+    inference pipeline supplies legacy values, but it must not contain source
+    or dialect dispatch.  New data sources must use the canonical
+    ``ProviderSourceConfig`` path and add a Provider/Binding here instead of
+    adding another inference branch.
+
+    Historical behavior is preserved: ClickHouse and S3 receive dedicated
+    legacy mappings, while every other flat type is treated as the historical
+    Parquet input unless the canonical source shape is used.
+    """
+    if data_type == "clickhouse":
+        raw: dict[str, Any] = {
+            "type": "clickhouse",
+            "ch_host": ch_host or None,
+            "ch_port": ch_port,
+            "ch_database": ch_database or None,
+            "ch_user": ch_user or None,
+            "ch_password": ch_password or None,
+            "ch_sql": ch_sql,
+        }
+    elif data_type == "s3":
+        raw = {
+            "type": "s3",
+            "uri": input_uri,
+            "format": "parquet",
+            "s3": s3_config or None,
+        }
+    else:
+        raw = {
+            "type": "parquet",
+            "path": input_uri,
+            "s3": s3_config or None,
+        }
+    return _require_legacy_inference_source(raw)
+
+
+@DeveloperAPI
+def normalize_legacy_inference_json_source(
+    data_config: dict[str, Any],
+) -> CanonicalSourceInput:
+    """Normalize the historical JSON ``data`` object for inference.
+
+    This keeps compatibility parsing alongside the other legacy source
+    normalizers.  The inference module only invokes this adapter; it does not
+    dispatch on ClickHouse, S3, or individual source names.
+    """
+    data_type = data_config.get("type")
+    input_uri = data_config.get("uri") or data_config.get("input")
+    s3 = data_config.get("s3") or None
+
+    if data_type is None:
+        raw: dict[str, Any] = {
+            "type": "parquet",
+            "path": input_uri or "",
+            "s3": s3,
+        }
+    elif data_type == "clickhouse":
+        clickhouse = data_config.get("clickhouse") or {}
+        if not isinstance(clickhouse, dict):
+            raise ValueError("data.clickhouse must be a mapping")
+        raw = {
+            "type": "clickhouse",
+            "ch_host": data_config.get("ch_host", clickhouse.get("host")),
+            "ch_port": data_config.get("ch_port", clickhouse.get("port")),
+            "ch_database": data_config.get("ch_database", clickhouse.get("database")),
+            "ch_user": data_config.get("ch_user", clickhouse.get("user")),
+            "ch_password": data_config.get("ch_password", clickhouse.get("password")),
+            "ch_sql": data_config.get("ch_sql", clickhouse.get("sql", "")),
+            "ch_sql_params": data_config.get("ch_sql_params", clickhouse.get("params")),
+        }
+    elif data_type == "s3":
+        raw = {
+            "type": "s3",
+            "uri": input_uri or "",
+            "format": data_config.get("format", "parquet"),
+            "s3": s3,
+        }
+    elif data_type in {
+        "parquet",
+        "csv",
+        "iceberg",
+        "doris",
+        "mysql",
+        "postgresql",
+    }:
+        if data_type != "parquet":
+            logger.warning(
+                "Legacy inference data.type=%r preserves historical Parquet "
+                "semantics; use canonical source for an explicit %s source",
+                data_type,
+                data_type,
+            )
+        raw = {
+            "type": "parquet",
+            "path": input_uri or "",
+            "s3": s3,
+        }
+    else:
+        raw = dict(data_config)
+        raw["path"] = raw.get("path") or input_uri or ""
+        raw.pop("uri", None)
+        raw.pop("input", None)
+        raw.pop("feature_columns", None)
+        raw.pop("clickhouse", None)
+
+    return _require_legacy_inference_source(raw)
+
+
+def _require_legacy_inference_source(
+    raw: dict[str, Any],
+) -> CanonicalSourceInput:
+    """Return a canonical source or fail closed for unknown legacy types."""
+    normalized = LegacyConfigNormalizer.normalize(raw)
+    if isinstance(normalized, RawSourceConfig):
+        raise ValueError(f"Unknown legacy inference source type: {normalized.type!r}")
+    return normalized

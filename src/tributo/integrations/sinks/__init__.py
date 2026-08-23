@@ -3,6 +3,7 @@
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from tributo.integrations.sinks.data_write import DataWriteResultSink
     from tributo.integrations.sinks.lance import LanceResultSink
     from tributo.integrations.sinks.parquet import ParquetResultSink
 
@@ -13,6 +14,10 @@ def __getattr__(name: str) -> Any:
         from tributo.integrations.sinks.lance import LanceResultSink
 
         return LanceResultSink
+    if name == "DataWriteResultSink":
+        from tributo.integrations.sinks.data_write import DataWriteResultSink
+
+        return DataWriteResultSink
     if name == "ParquetResultSink":
         from tributo.integrations.sinks.parquet import ParquetResultSink
 
@@ -20,4 +25,4 @@ def __getattr__(name: str) -> Any:
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-__all__ = ["LanceResultSink", "ParquetResultSink"]
+__all__ = ["DataWriteResultSink", "LanceResultSink", "ParquetResultSink"]

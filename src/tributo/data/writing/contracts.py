@@ -164,6 +164,68 @@ class WriteRequest(BaseModel):
 
 
 @PublicAPI(stability="alpha")
+class DataWriteTargetRequest(BaseModel):
+    """Credential-safe target request reusable by result and data writers.
+
+    This contract belongs to the data-writing domain.  Inference may embed it
+    in its output-port union, but data target semantics do not belong to the
+    inference package.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    sink_id: Literal["data-write-v1"] = "data-write-v1"
+    target_kind: str = Field(pattern=r"^[a-z][a-z0-9_.-]*$")
+    target: str = Field(min_length=1, repr=False)
+    binding_id: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_.-]+$")
+    mode: WriteMode = WriteMode.APPEND
+    options: Mapping[str, Any] = Field(default_factory=dict, repr=False)
+    runtime_options: Mapping[str, Any] = Field(default_factory=dict, repr=False)
+
+    @field_validator("target")
+    @classmethod
+    def _credential_free_target(cls, value: str) -> str:
+        if _credential_paths(value):
+            raise ValueError("DataWriteTargetRequest.target must be credential-free")
+        return value
+
+    @field_validator("options")
+    @classmethod
+    def _copy_and_validate_options(cls, value: Mapping[str, Any]) -> Mapping[str, Any]:
+        if not isinstance(value, Mapping):
+            raise TypeError("data write options must be mappings")
+        if _credential_paths(value):
+            raise ValueError("DataWriteTargetRequest.options must be credential-free")
+        return MappingProxyType(dict(value))
+
+    @field_validator("runtime_options")
+    @classmethod
+    def _copy_and_validate_runtime_options(
+        cls, value: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
+        if not isinstance(value, Mapping):
+            raise TypeError("data write runtime options must be mappings")
+        _validate_runtime_options(value)
+        return MappingProxyType(dict(value))
+
+    @field_serializer("options", "runtime_options")
+    def _serialize_options(self, value: Mapping[str, Any]) -> dict[str, Any]:
+        return cast(dict[str, Any], credential_free_runtime_value(value))
+
+    def as_write_request(self) -> WriteRequest:
+        """Lower this target contract into the native data WriteRequest."""
+        return WriteRequest(
+            engine="ray",
+            target_kind=self.target_kind,
+            target=self.target,
+            binding_id=self.binding_id,
+            mode=self.mode,
+            options=self.options,
+            runtime_options=self.runtime_options,
+        )
+
+
+@PublicAPI(stability="alpha")
 class WriteDescriptor(BaseModel):
     """Credential-free capability description for one write binding."""
 

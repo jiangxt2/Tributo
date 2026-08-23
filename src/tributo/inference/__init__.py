@@ -34,6 +34,7 @@ from tributo.inference.contracts import (
     ParquetResultSinkRequest,
     RayExecutionPolicy,
     RegistryModelReference,
+    ResultSinkProvider,
     TensorInputBinding,
     TensorOutputBinding,
 )
@@ -64,6 +65,7 @@ __all__ = [
     "ParquetResultSinkRequest",
     "RayExecutionPolicy",
     "RegistryModelReference",
+    "ResultSinkProvider",
     "TensorInputBinding",
     "TensorOutputBinding",
     "resolve_inference",

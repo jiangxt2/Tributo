@@ -23,6 +23,7 @@ from typing import Any, Generator, Literal, cast
 from pydantic import ConfigDict, Field, field_validator
 
 from tributo._common.config import StrictConfigModel
+from tributo.data.persistence import CheckpointStore, default_checkpoint_store
 from tributo.util.annotations import PublicAPI
 
 RESUME_MANIFEST_FILENAME = "resume.json"
@@ -203,34 +204,24 @@ def read_resume_manifest(
 
 @contextmanager
 @PublicAPI(stability="beta")
-def checkpoint_directory(checkpoint: Any) -> Generator[Path, None, None]:
-    """Yield a local directory for a Ray ``Checkpoint`` or local path."""
-    if isinstance(checkpoint, (str, Path)):
-        path = Path(checkpoint)
-        if not path.is_dir():
-            raise NotADirectoryError(f"Checkpoint path is not a directory: {path}")
+def checkpoint_directory(
+    checkpoint: Any,
+    *,
+    store: CheckpointStore | None = None,
+) -> Generator[Path, None, None]:
+    """Yield a local directory through the selected CheckpointStore."""
+    with (store or default_checkpoint_store()).open_directory(checkpoint) as path:
         yield path
-        return
-
-    if not hasattr(checkpoint, "as_directory"):
-        raise TypeError(f"Expected a Ray Checkpoint or path, got {type(checkpoint)!r}")
-    with checkpoint.as_directory() as raw_path:
-        yield Path(raw_path)
 
 
 @PublicAPI(stability="beta")
-def load_initial_checkpoint(path: str | None) -> Any | None:
-    """Create a Ray checkpoint for an explicit local resume directory."""
-    if path is None:
-        return None
-    checkpoint_path = Path(path)
-    if not checkpoint_path.is_dir():
-        raise NotADirectoryError(
-            f"Checkpoint path is not a directory: {checkpoint_path}"
-        )
-    from ray.train import Checkpoint
-
-    return Checkpoint.from_directory(str(checkpoint_path))
+def load_initial_checkpoint(
+    path: str | None,
+    *,
+    store: CheckpointStore | None = None,
+) -> Any | None:
+    """Create an initial runtime checkpoint through the selected store."""
+    return (store or default_checkpoint_store()).load_initial(path)
 
 
 @PublicAPI(stability="beta")

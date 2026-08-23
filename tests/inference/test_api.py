@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ast
+from pathlib import Path
 from unittest.mock import MagicMock
 
 from tests.inference.test_executor import _plan
@@ -92,3 +94,15 @@ def test_run_resolved_inference_does_not_resolve_again() -> None:
     assert executed_plan == plan
     assert executed_plan is not plan
     assert executor.execute.call_args.args[1] is sink
+
+
+def test_inference_api_does_not_import_concrete_sink_integrations() -> None:
+    path = Path(__file__).parents[2] / "src/tributo/inference/api.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    imports = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+
+    assert not any(module.startswith("tributo.integrations") for module in imports)

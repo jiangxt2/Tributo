@@ -7,10 +7,11 @@ import io
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
-from urllib.parse import unquote, urlsplit
+from urllib.parse import urlsplit
 
 import numpy as np
 
+from tributo.data.persistence import ObjectStore, default_object_store
 from tributo.explainability.contracts import ExplainabilityLimits, ReferenceBinding
 from tributo.util.annotations import PublicAPI
 
@@ -46,6 +47,9 @@ class FileReferenceProvider:
 
     provider_id = "file-reference-v1"
 
+    def __init__(self, object_store: ObjectStore | None = None) -> None:
+        self._object_store = object_store or default_object_store()
+
     def resolve(
         self,
         binding: ReferenceBinding,
@@ -78,22 +82,10 @@ class FileReferenceProvider:
     def digest(self, binding: ReferenceBinding) -> str:
         return self._read(binding)[2]
 
-    @staticmethod
-    def _read(binding: ReferenceBinding) -> tuple[bytes, str, str]:
+    def _read(self, binding: ReferenceBinding) -> tuple[bytes, str, str]:
         parsed = urlsplit(binding.uri)
-        if parsed.scheme == "s3":
-            import pyarrow.fs as pafs
-
-            filesystem, path = pafs.FileSystem.from_uri(binding.uri)
-            with filesystem.open_input_file(path) as stream:
-                payload = stream.read()
-            suffix = Path(path).suffix
-        else:
-            path = Path(
-                unquote(parsed.path if parsed.scheme == "file" else binding.uri)
-            )
-            payload = path.read_bytes()
-            suffix = path.suffix
+        payload = self._object_store.read_bytes(binding.uri)
+        suffix = Path(parsed.path).suffix
         return payload, suffix, hashlib.sha256(payload).hexdigest()
 
 

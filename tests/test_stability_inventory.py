@@ -163,6 +163,7 @@ STABILITY_MAP: dict[str, str] = {
     "tributo.integrations.hooks": "beta",
     "tributo.integrations.sinks.parquet": "alpha",
     "tributo.integrations.sinks.lance": "alpha",
+    "tributo.integrations.sinks.data_write": "alpha",
     "tributo.integrations.broker": "alpha",
     "tributo.integrations.broker_registry": "alpha",
     # Inference — beta

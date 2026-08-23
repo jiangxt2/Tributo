@@ -22,6 +22,8 @@ from tributo.data.source_config import (
     SqlPartitioning,
     SqlSourceConfig,
     apply_source_projection,
+    normalize_legacy_inference_json_source,
+    normalize_legacy_inference_source,
     source_projection,
 )
 
@@ -261,6 +263,41 @@ class TestResolveEnv:
         assert resolved.host == "env-host"
         assert resolved.port == 9999
         assert resolved.user == "env-user"
+
+
+def test_legacy_inference_flat_source_is_normalized_by_data_module() -> None:
+    source = normalize_legacy_inference_source(
+        data_type="clickhouse",
+        input_uri="legacy-input",
+        s3_config={},
+        ch_host="clickhouse.example",
+        ch_port=8123,
+        ch_database="analytics",
+        ch_user="reader",
+        ch_password="secret",
+        ch_sql="SELECT * FROM events",
+    )
+
+    assert isinstance(source, SqlSourceConfig)
+    assert source.dialect == "clickhouse"
+    assert source.host == "clickhouse.example"
+    assert source.database == "analytics"
+    assert source.sql == "SELECT * FROM events"
+
+
+def test_legacy_inference_json_source_preserves_parquet_compatibility(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    source = normalize_legacy_inference_json_source(
+        {
+            "type": "doris",
+            "uri": "/legacy/input",
+        }
+    )
+
+    assert isinstance(source, ParquetSourceConfig)
+    assert source.path == "/legacy/input"
+    assert "preserves historical Parquet semantics" in caplog.text
 
 
 class TestSqlPartitioning:

@@ -211,6 +211,7 @@ from the legacy setup-only propagation rule.
 | `tributo.integrations.model_importers.*` | `alpha` | Canonical ModelImporter protocol/registry plus explicit MLflow and typed artifact-to-Bundle implementations |
 | `tributo.integrations.sinks.parquet` | `alpha` | Parquet inference ResultSink adapter |
 | `tributo.integrations.sinks.lance` | `alpha` | Generic Lance inference ResultSink adapter |
+| `tributo.integrations.sinks.data_write` | `alpha` | Generic data-module-backed inference ResultSink adapter |
 | `tributo.integrations.broker` | `alpha` | Minimal transport-neutral Broker API v1; transport implementations and consume loops are external |
 | `tributo.integrations.broker_registry` | `alpha` | Lazy broker discovery and explicit provider resolution |
 

@@ -14,7 +14,12 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from tributo.data import IngestionDescriptor, IngestionPlanReceipt, IngestionRequest
+from tributo.data import (
+    DataWriteTargetRequest,
+    IngestionDescriptor,
+    IngestionPlanReceipt,
+    IngestionRequest,
+)
 from tributo.exporting.manifest import ManifestSignature
 from tributo.exporting.models import BundleRef
 from tributo.inference._credential_safety import credential_paths
@@ -345,7 +350,11 @@ class LanceResultSinkRequest(_FrozenContract):
 
 
 ResultSinkRequest = Annotated[
-    Union[ParquetResultSinkRequest, LanceResultSinkRequest],
+    Union[
+        ParquetResultSinkRequest,
+        LanceResultSinkRequest,
+        DataWriteTargetRequest,
+    ],
     Field(discriminator="sink_id"),
 ]
 
@@ -595,6 +604,14 @@ class ResultSink(Protocol):
     ) -> ResultSinkReceipt: ...
 
 
+@runtime_checkable
+@PublicAPI(stability="alpha")
+class ResultSinkProvider(Protocol):
+    """Composition boundary for resolving one inference result sink."""
+
+    def create(self, request: ResultSinkRequest) -> ResultSink: ...
+
+
 _SUPPORTED_BINDING_DTYPES = frozenset(
     {
         "bool",
@@ -636,6 +653,7 @@ __all__ = [
     "ResolvedInputSelection",
     "ResolvedModelSelection",
     "ResultSink",
+    "ResultSinkProvider",
     "ResultSinkRequest",
     "ResultSinkReceipt",
     "TensorInputBinding",

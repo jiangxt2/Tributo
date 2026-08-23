@@ -306,6 +306,10 @@ documentation for every public stability tier.
 
 ## `tributo.data.writing.contracts`
 
+```{autoclass} tributo.data.writing.contracts.DataWriteTargetRequest
+:no-members:
+```
+
 ```{autoexception} tributo.data.writing.contracts.WriteBindingError
 ```
 
