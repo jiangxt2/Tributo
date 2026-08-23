@@ -241,11 +241,11 @@ dataset after mutation and derive coverage evidence from Lance metadata.
 **Primary entry**: `cli.py`
 
 ```
-tributo submit --config <json>
+tributo submit --master <local|ray-jobs-endpoint> --config <json>
   ↓
 CLI parses JSON → builds JobConfig / TrainingConfig
   ↓
-submits to Ray Job API or calls local runner
+RuntimeTarget selects Ray local runtime, Ray Jobs API, or an explicit managed provider
 ```
 
 ### Plugin and optional data providers

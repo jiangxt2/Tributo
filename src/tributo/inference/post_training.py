@@ -12,6 +12,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from tributo._common import DEFAULT_DASHBOARD_URL
 from tributo.data import IngestionRequest
 from tributo.exporting.models import BundleRef
 from tributo.inference._credential_safety import credential_paths
@@ -25,6 +26,7 @@ from tributo.inference.contracts import (
     RayExecutionPolicy,
     ResultSinkRequest,
 )
+from tributo.runtime import RuntimeTarget
 from tributo.util.annotations import PublicAPI
 
 
@@ -98,7 +100,8 @@ def submit_post_training_inference(
     bundle_ref: BundleRef,
     *,
     parent_run_id: str,
-    dashboard_url: str,
+    dashboard_url: str = DEFAULT_DASHBOARD_URL,
+    runtime_target: RuntimeTarget | None = None,
     env_vars: dict[str, str] | None = None,
     project_root: Path | None = None,
 ) -> str:
@@ -110,9 +113,18 @@ def submit_post_training_inference(
         )
     from tributo.inference.job_runner import submit_inference_request
 
+    request = action.bind(bundle_ref, parent_run_id=parent_run_id)
+    if runtime_target is None:
+        return submit_inference_request(
+            request,
+            dashboard_url=dashboard_url,
+            env_vars=env_vars,
+            project_root=project_root,
+        )
     return submit_inference_request(
-        action.bind(bundle_ref, parent_run_id=parent_run_id),
+        request,
         dashboard_url=dashboard_url,
+        runtime_target=runtime_target,
         env_vars=env_vars,
         project_root=project_root,
     )

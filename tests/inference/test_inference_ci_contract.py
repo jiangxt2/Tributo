@@ -26,7 +26,7 @@ def test_inference_it_versions_are_explicit_and_immutable() -> None:
 
     assert "rayproject/ray:2.55.1-py312@sha256:" in versions
     assert "ghcr.io/astral-sh/uv:0.11.23@sha256:" in versions
-    assert "minio/minio@sha256:" in versions
+    assert "minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:" in versions
     for expected in (
         "TRIBUTO_EXPECTED_RAY_VERSION=2.55.1",
         "TRIBUTO_EXPECTED_MLFLOW_VERSION=2.22.5",

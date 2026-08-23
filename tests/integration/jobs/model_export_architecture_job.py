@@ -24,6 +24,11 @@ def _delete_bucket(client: Any, bucket: str) -> None:
 
 def main() -> int:
     """Run the complete model-export architecture on Docker-owned services."""
+    # Ray Train may remove its temporary storage directory before deferred
+    # framework imports finish. Keep Python reflection independent of that
+    # lifecycle-owned directory.
+    os.chdir("/tmp")
+
     import importlib.metadata
 
     import httpx

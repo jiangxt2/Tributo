@@ -26,8 +26,10 @@ uv run tributo submit --help
 uv run tributo serve grpc start --help
 ```
 
-Commands that contact Ray require a reachable dashboard or serving endpoint.
-Generating `--help` and this reference does not contact those services.
+Commands that submit to an attached Ray cluster require a reachable dashboard
+or Jobs endpoint. `submit --master local --wait` owns a local Ray runtime;
+managed targets require an explicit provider and wait for completion. Generating
+`--help` and this reference does not contact those services.
 
 ## Component guides
 

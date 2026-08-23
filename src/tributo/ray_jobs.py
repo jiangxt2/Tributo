@@ -12,6 +12,8 @@ from ray.job_submission import JobSubmissionClient
 from tributo._common import DEFAULT_DASHBOARD_URL, build_runtime_env
 from tributo._common.retry import retry_with_exponential_backoff
 from tributo._common.submission_id import generate_submission_id
+from tributo.exceptions import JobConfigurationError
+from tributo.runtime import RuntimeExecutionMode, RuntimeTarget
 from tributo.util.annotations import PublicAPI
 
 logger = logging.getLogger(__name__)
@@ -154,6 +156,7 @@ def submit_ray_job(
     run_id: str,
     attempt_id: str = "attempt-1",
     dashboard_url: str = DEFAULT_DASHBOARD_URL,
+    runtime_target: RuntimeTarget | None = None,
     env_vars: dict[str, str] | None = None,
     project_root: Path | None = None,
     extra_excludes: list[str] | None = None,
@@ -172,6 +175,17 @@ def submit_ray_job(
     without discovering providers or resolving dependencies. Runtime pip
     packages cannot be combined with algorithm artifact pip distribution.
     """
+
+    if runtime_target is not None:
+        if runtime_target.execution_mode is RuntimeExecutionMode.LOCAL:
+            raise JobConfigurationError(
+                "local runtime targets require a lifecycle-aware Ray Job runner"
+            )
+        if runtime_target.is_managed:
+            raise JobConfigurationError(
+                "managed runtime targets require a lifecycle-aware Ray Job runner"
+            )
+        dashboard_url = runtime_target.require_jobs_address()
 
     if not entrypoint.strip():
         raise ValueError("entrypoint must not be empty")

@@ -31,15 +31,12 @@ environment Gate. The project-wide distributed algorithm Gate uses Ray Jobs on
 an isolated Docker cluster with two worker nodes to verify sharding, state
 coordination, cross-node receipts, and Bundle atomicity. This verifies the
 deployment-neutral `cluster` execution profile on an existing Ray cluster.
-Kubernetes remains a substrate managed by KubeRay, not a Tributo profile or
-control plane. KubeRay 1.6.0 RayJob has passed one real provision-substrate
-Gate on an isolated kind cluster, including RayCluster creation, the same
-Tributo `cluster` workload, status/log retrieval, successful Bundle
-publication, and native RayCluster cleanup. This verifies the common KubeRay
-substrate only; individual algorithm validation remains represented by the
-algorithm-level `cluster` profile. The reproducible evidence entrypoint is
-`scripts/run_kuberay_algorithm_it.sh`; it is test infrastructure, not a
-Tributo cluster-management implementation.
+Kubernetes remains an external substrate managed by KubeRay or another Ray
+platform, not a Tributo profile or control plane. Tributo's distributed
+evidence is the deployment-neutral `cluster` profile on an isolated Docker Ray
+cluster. KubeRay deployment and lifecycle validation are outside the Tributo IT
+scope; users may attach the same workload to an externally provided Ray Jobs
+endpoint.
 
 ## Data
 

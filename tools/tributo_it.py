@@ -50,9 +50,11 @@ SOURCE_ENTRIES = (
     ".python-version",
     "README.md",
     "ci",
+    "docker",
     "scripts",
     "src",
     "tests",
+    "tools",
 )
 EXCLUDED_DIRECTORY_NAMES = {
     ".git",

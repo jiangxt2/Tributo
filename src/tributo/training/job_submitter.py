@@ -19,7 +19,10 @@ from tributo._common.retry import retry_with_exponential_backoff
 from tributo._common.submission_id import generate_submission_id
 from tributo.algorithms.api import EnvironmentSpec
 from tributo.algorithms.api.artifacts import AlgorithmArtifact, ImageProfile
+from tributo.exceptions import JobConfigurationError
 from tributo.ray_jobs import RayJobSubmission, _submit_ray_job_with_client
+from tributo.runtime import RuntimeExecutionMode, RuntimeTarget
+from tributo.runtime_providers import open_job_submission_client
 from tributo.util.annotations import PublicAPI
 
 DEFAULT_TIMEOUT = 180
@@ -134,6 +137,7 @@ def submit_training_job(
     entrypoint: str,
     *,
     dashboard_url: str = DEFAULT_DASHBOARD_URL,
+    runtime_target: RuntimeTarget | None = None,
     env_vars: dict[str, str] | None = None,
     project_root: Path | None = None,
     extra_excludes: list[str] | None = None,
@@ -180,9 +184,20 @@ def submit_training_job(
     Raises:
         RuntimeError: Submission failed.
     """
+    if runtime_target is not None:
+        if runtime_target.execution_mode is RuntimeExecutionMode.LOCAL:
+            raise JobConfigurationError(
+                "local runtime targets require submit_training_job_with_retry"
+            )
+        if runtime_target.is_managed:
+            raise JobConfigurationError(
+                "managed runtime targets require submit_training_job_with_retry"
+            )
+        dashboard_url = runtime_target.require_jobs_address()
     return submit_training_job_with_identity(
         entrypoint,
         dashboard_url=dashboard_url,
+        runtime_target=None,
         env_vars=env_vars,
         project_root=project_root,
         extra_excludes=extra_excludes,
@@ -202,6 +217,7 @@ def submit_training_job_with_identity(
     entrypoint: str,
     *,
     dashboard_url: str = DEFAULT_DASHBOARD_URL,
+    runtime_target: RuntimeTarget | None = None,
     env_vars: dict[str, str] | None = None,
     project_root: Path | None = None,
     extra_excludes: list[str] | None = None,
@@ -215,6 +231,16 @@ def submit_training_job_with_identity(
     request_digest: str | None = None,
 ) -> RayJobSubmission:
     """Submit one attempt and return workload-neutral Ray Jobs identity."""
+    if runtime_target is not None:
+        if runtime_target.execution_mode is RuntimeExecutionMode.LOCAL:
+            raise JobConfigurationError(
+                "local runtime targets require submit_training_job_with_retry"
+            )
+        if runtime_target.is_managed:
+            raise JobConfigurationError(
+                "managed runtime targets require submit_training_job_with_retry"
+            )
+        dashboard_url = runtime_target.require_jobs_address()
     resolved_run_id = _resolve_run_id(entrypoint, env_vars, run_id)
     resolved_attempt_id = attempt_id or "attempt-1"
     submission_id = generate_submission_id(
@@ -259,6 +285,7 @@ def submit_training_job_with_retry(
     entrypoint: str,
     *,
     dashboard_url: str = DEFAULT_DASHBOARD_URL,
+    runtime_target: RuntimeTarget | None = None,
     env_vars: dict[str, str] | None = None,
     project_root: Path | None = None,
     extra_excludes: list[str] | None = None,
@@ -293,6 +320,33 @@ def submit_training_job_with_retry(
     """
     if max_attempts < 1:
         raise ValueError("max_attempts must be at least 1")
+
+    if runtime_target is not None:
+        if (
+            runtime_target.execution_mode is RuntimeExecutionMode.LOCAL
+            or runtime_target.is_managed
+        ):
+            with open_job_submission_client(runtime_target) as client:
+                return submit_training_job_with_retry(
+                    entrypoint,
+                    dashboard_url=client.get_address(),
+                    runtime_target=None,
+                    env_vars=env_vars,
+                    project_root=project_root,
+                    extra_excludes=extra_excludes,
+                    run_id=run_id,
+                    metadata=metadata,
+                    max_attempts=max_attempts,
+                    timeout=timeout,
+                    poll_interval=poll_interval,
+                    retry_classifier=retry_classifier,
+                    algorithm_artifact=algorithm_artifact,
+                    image_profile=image_profile,
+                    declared_dependencies=declared_dependencies,
+                    environment=environment,
+                    request_digest=request_digest,
+                )
+        dashboard_url = runtime_target.require_jobs_address()
 
     resolved_run_id = _resolve_run_id(entrypoint, env_vars, run_id)
     _validate_metadata(metadata)
