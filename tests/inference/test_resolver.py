@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 from pathlib import Path
@@ -27,6 +28,20 @@ from tributo.inference.contracts import (
 )
 from tributo.inference.importers import ModelImporterRegistry
 from tributo.inference.resolver import InferenceResolver
+
+
+def test_inference_resolver_does_not_import_bundle_runtime_implementations() -> None:
+    path = Path(__file__).parents[2] / "src/tributo/inference/resolver.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    imports = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+
+    assert "tributo.exporting.bundle_reader" not in imports
+    assert "tributo.exporting.runtime" not in imports
+    assert "tributo.integrations.model_importers" not in imports
 
 
 def _manifest_digest(bundle: Path) -> str:

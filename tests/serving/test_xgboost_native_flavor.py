@@ -21,6 +21,7 @@ from tributo.integrations.flavors.xgboost_native import XGBoostNativeFlavor
 
 class _Booster:
     objective = "binary:logistic"
+    booster_kind = "gbtree"
     predictions = np.array([0.2, 0.8], dtype=np.float32)
     feature_names = ["a", "b"]
 
@@ -34,6 +35,7 @@ class _Booster:
         return json.dumps(
             {
                 "learner": {
+                    "gradient_booster": {"name": self.booster_kind},
                     "objective": {"name": self.objective},
                     "learner_model_param": {"num_class": "0"},
                 }
@@ -93,6 +95,7 @@ def test_binary_native_formats_expose_named_label_and_probability_outputs(
 
     assert model.input_names == ("float_input",)
     assert model.output_names == ("label", "probabilities")
+    assert model.native_attribution_id == "xgboost-tree-shap-v1"
     np.testing.assert_array_equal(outputs["label"], [0, 1])
     np.testing.assert_allclose(outputs["probabilities"], [[0.8, 0.2], [0.2, 0.8]])
 
@@ -114,3 +117,16 @@ def test_regression_native_model_has_two_dimensional_prediction(
     finally:
         _Booster.objective = "binary:logistic"
         _Booster.predictions = np.array([0.2, 0.8], dtype=np.float32)
+
+
+def test_non_tree_booster_does_not_advertise_native_tree_shap(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _Booster.booster_kind = "gblinear"
+    try:
+        _fake_xgboost(monkeypatch)
+        model = XGBoostNativeFlavor().load(_artifact(tmp_path), role="inference")
+
+        assert model.native_attribution_id is None
+    finally:
+        _Booster.booster_kind = "gbtree"

@@ -194,6 +194,26 @@ def test_xgboost_auto_bundle_config_adds_ubj_companion_at_service_boundary() -> 
     )
     assert [target.format for target in prepared.targets or []] == ["onnx", "ubj"]
     assert prepared.roles["explainability_model"] == "explainability-model"
+    native = next(target for target in prepared.targets or [] if target.format == "ubj")
+    assert native.validation["xgboost-native-runtime-v1"] == {"require_tree_shap": True}
+
+
+def test_xgboost_tree_bundle_requires_native_treeshap_validation() -> None:
+    config = BundleOutputConfig(
+        bundle_uri="/models/bundle",
+        targets=[ExportTarget(name="native", format="ubj")],
+        roles={"inference": "native"},
+        explainability=ExplainabilityConfig(enabled=True, backend="tree"),
+    )
+
+    prepared = BundleExportService._prepare_explainability_config(
+        config, ExportSource(source_kind="xgboost_result")
+    )
+
+    assert prepared.targets is not None
+    assert prepared.targets[0].validation["xgboost-native-runtime-v1"] == {
+        "require_tree_shap": True
+    }
 
 
 def test_descriptor_can_bind_the_actual_companion_model_role() -> None:

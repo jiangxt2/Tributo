@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,27 +20,66 @@ from tributo.explainability.contracts import (
 )
 from tributo.explainability.executor import (
     _attempt_result_uri,
-    _build_onnx_inputs,
-    _explanation_output_count_upper_bound,
     _LeaseHeartbeat,
     _load_reference,
     _make_receipt,
-    _manifest_role_digest,
     _operation_idempotency_key,
     _operation_store_for_request,
-    _resolve_xgboost_feature_names,
     _schema_signature,
-    _select_onnx_output,
-    _selected_model_role,
-    _validate_request_against_descriptor,
     run_batch_explainability,
 )
-from tributo.exporting.bundle_reader import BundleReader
+from tributo.explainability.protocols import ExplainabilityModelBinding
 from tributo.exporting.models import ArtifactFile, LogicalArtifact, ProducerInfo
 from tributo.exporting.records import InMemoryOperationStore
+from tributo.integrations.model_runtimes.explainability import (
+    _output_count_upper_bound as _explanation_output_count_upper_bound,
+)
+from tributo.integrations.model_runtimes.explainability import (
+    build_onnx_inputs as _build_onnx_inputs,
+)
+from tributo.integrations.model_runtimes.explainability import (
+    manifest_role_digest as _manifest_role_digest,
+)
+from tributo.integrations.model_runtimes.explainability import (
+    resolve_xgboost_feature_names as _resolve_xgboost_feature_names,
+)
+from tributo.integrations.model_runtimes.explainability import (
+    select_onnx_output as _select_onnx_output,
+)
+from tributo.integrations.model_runtimes.explainability import (
+    selected_model_role as _selected_model_role,
+)
+from tributo.integrations.model_runtimes.explainability import (
+    validate_explainability_request as _validate_request_against_descriptor,
+)
 from tributo.integrations.storage.json_operation_store import JsonFileOperationStore
 from tributo.training.features.column_types import DenseFeat, NormMethod
 from tributo.training.features.transformer import FeatureTransformer
+
+
+class _UnusedSessionFactory:
+    factory_id = "test.explainability-session-v1"
+
+    def create(self, reference_provider):
+        raise AssertionError(reference_provider)
+
+
+def test_explainability_worker_does_not_import_concrete_model_loaders() -> None:
+    path = Path(__file__).parents[2] / "src/tributo/explainability/executor.py"
+    source = path.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    imports = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+
+    assert "tributo.exporting.runtime" not in imports
+    assert "tributo.data.persistence" not in imports
+    assert "tributo.integrations.sinks.parquet" not in imports
+    assert "manifest_bytes" not in source
+    assert "xgboost.Booster" not in source
+    assert ".load_model(" not in source
 
 
 def test_build_onnx_inputs_applies_dnn_preprocessor_and_named_inputs() -> None:
@@ -194,7 +234,10 @@ def test_xgboost_output_bound_comes_from_typed_manifest_signature(
         ),
     )
 
-    assert _explanation_output_count_upper_bound(manifest, request) == expected
+    assert (
+        _explanation_output_count_upper_bound(manifest, request, native=True)
+        == expected
+    )
 
 
 def test_xgboost_output_bound_requires_a_fixed_typed_signature() -> None:
@@ -215,7 +258,7 @@ def test_xgboost_output_bound_requires_a_fixed_typed_signature() -> None:
     )
 
     with pytest.raises(ValueError, match="typed probability or prediction"):
-        _explanation_output_count_upper_bound(manifest, request)
+        _explanation_output_count_upper_bound(manifest, request, native=True)
 
 
 def test_descriptorless_bundle_is_rejected_before_worker_loading() -> None:
@@ -290,7 +333,29 @@ def test_executor_writes_every_attempt_to_its_isolated_result_uri(monkeypatch) -
         operation_id="operation-attempt-isolation",
         request_id="request-attempt-isolation",
     )
-    manifest = SimpleNamespace(bundle_id="bundle-attempt-isolation")
+    descriptor = ExplainabilityDescriptor(
+        adapter_id="shap-v1",
+        backend="tree",
+        exactness="exact",
+        model_roles=("explainability_model",),
+        feature_view="raw",
+        output_target="model_output",
+        reference_policy="optional",
+    )
+    model_binding = ExplainabilityModelBinding(
+        bundle_id="bundle-attempt-isolation",
+        bundle_digest="a" * 64,
+        manifest_sha256="c" * 64,
+        model_role="explainability_model",
+        model_digest="d" * 64,
+        preprocessor_digest=None,
+        feature_map_digest=None,
+        descriptor=descriptor,
+        backend="tree",
+        exactness="exact",
+        output_count_upper_bound=1,
+        session_factory=_UnusedSessionFactory(),
+    )
     opened = SimpleNamespace(
         dataset=SimpleNamespace(
             count=lambda: 1,
@@ -308,59 +373,57 @@ def test_executor_writes_every_attempt_to_its_isolated_result_uri(monkeypatch) -
             return opened
 
     monkeypatch.setattr(
-        BundleReader,
-        "read_manifest_with_bytes",
-        lambda self, *args, **kwargs: (manifest, b"manifest"),
-    )
-    monkeypatch.setattr(executor_module, "_bundle_digest", lambda _manifest: "a" * 64)
-    monkeypatch.setattr(
-        executor_module,
-        "_validate_request_against_descriptor",
-        lambda _manifest, _request: None,
-    )
-    monkeypatch.setattr(
-        executor_module,
-        "_explanation_output_count_upper_bound",
-        lambda _manifest, _request: 1,
-    )
-    monkeypatch.setattr(
-        executor_module,
-        "_selected_backend",
-        lambda _manifest, _request: ("tree", "exact"),
-    )
-    monkeypatch.setattr(
         executor_module,
         "_safe_reference_digest",
         lambda _request, _provider: None,
     )
-    monkeypatch.setattr(
-        executor_module,
-        "_result_stats",
-        lambda _uri, **_kwargs: ("b" * 64, 10, 1),
-    )
 
-    def fake_sink_write(self, dataset, sink_request, *, run_id, plan_digest):
-        del self, dataset, run_id, plan_digest
-        captured["sink_uri"] = sink_request.uri
+    class ResultStore:
+        provider_id = "test-results-v1"
 
-    monkeypatch.setattr(executor_module.ParquetResultSink, "write", fake_sink_write)
+        def materialize(
+            self,
+            dataset,
+            *,
+            uri,
+            storage_profile,
+            max_bytes,
+            run_id,
+            plan_digest,
+        ):
+            del dataset, storage_profile, max_bytes, run_id, plan_digest
+            captured["sink_uri"] = uri
+            return SimpleNamespace(digest="b" * 64, total_bytes=10, rows=1)
+
+        def write_receipt(self, uri, receipt, *, storage_profile):
+            del receipt, storage_profile
+            captured["receipt_write_uri"] = uri
+
+        def read_receipt(self, uri, *, storage_profile):
+            del uri, storage_profile
+            return None
+
+        def cleanup(self, uri, *, storage_profile):
+            del uri, storage_profile
+
+    class Models:
+        provider_id = "test-models-v1"
+
+        def resolve(self, _request):
+            return model_binding
 
     def fake_make_receipt(**kwargs):
         captured["receipt_payload_result_uri"] = kwargs["result_uri"]
         return SimpleNamespace(input_rows=1, explanation_rows=1)
 
     monkeypatch.setattr(executor_module, "_make_receipt", fake_make_receipt)
-    monkeypatch.setattr(
-        executor_module,
-        "_write_receipt",
-        lambda uri, receipt, **_kwargs: captured.__setitem__("receipt_write_uri", uri),
-    )
-
     store = InMemoryOperationStore()
     run_batch_explainability(
         request,
         input_resolver=Resolver(),
         operation_store=store,
+        model_provider=Models(),
+        result_store=ResultStore(),
     )
 
     record = store.get_explainability(request.operation_id)
@@ -384,20 +447,30 @@ def test_receipt_and_idempotency_record_output_selection() -> None:
         result_uri="/data/explanations",
         request_id="request-output-selection",
     )
-    artifact = SimpleNamespace(
-        name="native",
-        flavor_id="xgboost-native-v1",
-        tree_digest="b" * 64,
-        files=(),
-    )
-    manifest = SimpleNamespace(
+    model_binding = ExplainabilityModelBinding(
         bundle_id="bundle-output-selection",
-        roles={"explainability_model": "native"},
-        artifacts=(artifact,),
-        explainability=None,
+        bundle_digest="a" * 64,
+        manifest_sha256="d" * 64,
+        model_role="explainability_model",
+        model_digest="b" * 64,
+        preprocessor_digest=None,
+        feature_map_digest=None,
+        descriptor=ExplainabilityDescriptor(
+            adapter_id="shap-v1",
+            backend="tree",
+            exactness="exact",
+            model_roles=("explainability_model",),
+            feature_view="raw",
+            output_target="model_output",
+            reference_policy="optional",
+        ),
+        backend="tree",
+        exactness="exact",
+        output_count_upper_bound=1,
+        session_factory=_UnusedSessionFactory(),
     )
     receipt = _make_receipt(
-        manifest=manifest,
+        model_binding=model_binding,
         request=request,
         operation_id="operation-output-selection",
         bundle_digest="a" * 64,
@@ -414,13 +487,11 @@ def test_receipt_and_idempotency_record_output_selection() -> None:
     assert receipt.output_selection == "predicted"
 
     all_key = _operation_idempotency_key(
-        manifest,
         request.model_copy(update={"output_selection": "all"}),
         bundle_digest="a" * 64,
         reference_provider=SimpleNamespace(),
     )
     predicted_key = _operation_idempotency_key(
-        manifest,
         request,
         bundle_digest="a" * 64,
         reference_provider=SimpleNamespace(),

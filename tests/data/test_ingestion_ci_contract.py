@@ -223,5 +223,18 @@ def test_model_export_runner_is_isolated_and_cleans_its_own_project() -> None:
     assert "trap cleanup EXIT" in runner
     assert "down --volumes --remove-orphans" in runner
     assert "label=com.docker.compose.project=${PROJECT_NAME}" in runner
+    assert 'TRIBUTO_IT_TOOL_IMAGE="${TOOL_IMAGE%%@*}"' in runner
+    assert 'TRIBUTO_IT_MINIO_IMAGE="${MINIO_IMAGE%%@*}"' in runner
+    assert "create-source-snapshot" in runner
+    assert "test_it_component_versions.py" in runner
+    assert "--collect-only" in runner
+    assert "--preflight-only" in runner
+    assert "walking-skeleton" in runner
+    assert 'TRIBUTO_IT_SOURCE_ROOT="${PREFLIGHT_SOURCE}"' in runner
+    assert runner.index("create-source-snapshot") < runner.index("command -v docker")
+    assert "-u HTTP_PROXY" in runner
+    assert "-u http_proxy" in runner
+    assert "test_e2e_mlflow.py::" in runner
+    assert "tests/fixtures/preflight_stubs" in runner
     assert "docker system prune" not in runner
     assert "docker container prune" not in runner

@@ -6,9 +6,10 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 COMPOSE_FILE="${PROJECT_ROOT}/tests/integrations/docker-compose.data-ingestion.yml"
 VERSIONS_FILE="${PROJECT_ROOT}/tests/integrations/component-versions.env"
 SUITE="full"
+PREFLIGHT_ONLY=0
 
 usage() {
-  echo "Usage: $0 [--suite ci|full]" >&2
+  echo "Usage: $0 [--suite ci|full|walking-skeleton] [--preflight-only]" >&2
 }
 
 while [[ $# -gt 0 ]]; do
@@ -21,6 +22,10 @@ while [[ $# -gt 0 ]]; do
       SUITE="$2"
       shift 2
       ;;
+    --preflight-only)
+      PREFLIGHT_ONLY=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -31,7 +36,7 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
-if [[ "${SUITE}" != "ci" && "${SUITE}" != "full" ]]; then
+if [[ "${SUITE}" != "ci" && "${SUITE}" != "full" && "${SUITE}" != "walking-skeleton" ]]; then
   usage
   exit 2
 fi
@@ -48,14 +53,24 @@ LOG_DIR="/tmp/${PROJECT_NAME}"
 BASELINE_FILE="${LOG_DIR}/existing-containers.tsv"
 TEST_LOG="${LOG_DIR}/tests.log"
 SERVICE_LOG="${LOG_DIR}/services.log"
+PREFLIGHT_SOURCE="${LOG_DIR}/preflight-source"
+PREFLIGHT_TEST_LOG="${LOG_DIR}/preflight-tests.log"
+PREFLIGHT_COLLECTION_LOG="${LOG_DIR}/preflight-collection.log"
+PREFLIGHT_UV_CACHE="${LOG_DIR}/uv-cache"
 BASELINE_CAPTURED=0
 COMPOSE_TOUCHED=0
+docker_clean=(
+  env
+  -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY
+  -u http_proxy -u https_proxy -u all_proxy
+  docker
+)
 
 cd "${PROJECT_ROOT}"
 mkdir -p "${LOG_DIR}"
 
 compose() {
-  docker compose \
+  "${docker_clean[@]}" compose \
     --env-file "${VERSIONS_FILE}" \
     --project-name "${PROJECT_NAME}" \
     --file "${COMPOSE_FILE}" \
@@ -64,13 +79,13 @@ compose() {
 
 project_resource_ids() {
   local label="com.docker.compose.project=${PROJECT_NAME}"
-  docker ps --all --quiet --filter "label=${label}"
-  docker network ls --quiet --filter "label=${label}"
-  docker volume ls --quiet --filter "label=${label}"
+  "${docker_clean[@]}" ps --all --quiet --filter "label=${label}"
+  "${docker_clean[@]}" network ls --quiet --filter "label=${label}"
+  "${docker_clean[@]}" volume ls --quiet --filter "label=${label}"
 }
 
 snapshot_existing_containers() {
-  docker ps --all \
+  "${docker_clean[@]}" ps --all \
     --format '{{.ID}}\t{{.State}}\t{{.Names}}\t{{.Label "com.docker.compose.project"}}' \
     >"${BASELINE_FILE}"
   BASELINE_CAPTURED=1
@@ -82,7 +97,7 @@ verify_existing_containers_unchanged() {
   while IFS=$'\t' read -r \
     container_id expected_state container_name compose_project; do
     [[ -n "${container_id}" ]] || continue
-    actual_state="$(docker inspect --format '{{.State.Status}}' "${container_id}" 2>/dev/null || true)"
+    actual_state="$("${docker_clean[@]}" inspect --format '{{.State.Status}}' "${container_id}" 2>/dev/null || true)"
     if [[ "${actual_state}" != "${expected_state}" ]]; then
       echo "Concurrent container change: ${container_name} (${container_id}, project=${compose_project:-none}) ${expected_state} -> ${actual_state:-missing}" >&2
       changed=1
@@ -100,17 +115,17 @@ cleanup() {
     compose --profile model-export logs --no-color >"${SERVICE_LOG}" 2>&1 || cleanup_status=1
     compose --profile model-export down --volumes --remove-orphans || cleanup_status=1
 
-    if docker ps --all --quiet \
+    if "${docker_clean[@]}" ps --all --quiet \
       --filter "label=com.docker.compose.project=${PROJECT_NAME}" | grep -q .; then
       echo "Owned Compose containers remain after cleanup" >&2
       cleanup_status=1
     fi
-    if docker network ls --quiet \
+    if "${docker_clean[@]}" network ls --quiet \
       --filter "label=com.docker.compose.project=${PROJECT_NAME}" | grep -q .; then
       echo "Owned Compose networks remain after cleanup" >&2
       cleanup_status=1
     fi
-    if docker volume ls --quiet \
+    if "${docker_clean[@]}" volume ls --quiet \
       --filter "label=com.docker.compose.project=${PROJECT_NAME}" | grep -q .; then
       echo "Owned Compose volumes remain after cleanup" >&2
       cleanup_status=1
@@ -139,11 +154,51 @@ cleanup() {
 
 trap cleanup EXIT
 
-command -v docker >/dev/null
-docker info >/dev/null
-docker compose version >/dev/null
+command -v uv >/dev/null
 test -r "${VERSIONS_FILE}"
 test -r "${COMPOSE_FILE}"
+
+python3 "${PROJECT_ROOT}/tools/tributo_it.py" create-source-snapshot \
+  --source "${PROJECT_ROOT}" \
+  --destination "${PREFLIGHT_SOURCE}" \
+  --owner-uid "$(id -u)" \
+  --owner-gid "$(id -g)" \
+  >"${LOG_DIR}/preflight-snapshot.sha256"
+
+env UV_CACHE_DIR="${PREFLIGHT_UV_CACHE}" uv run --locked --no-sync python -m pytest \
+  -p no:cacheprovider \
+  "${PREFLIGHT_SOURCE}/tests/integration/test_it_component_versions.py" \
+  -o addopts= -q 2>&1 | tee "${PREFLIGHT_TEST_LOG}"
+
+env \
+  UV_CACHE_DIR="${PREFLIGHT_UV_CACHE}" \
+  PYTHONPATH="${PREFLIGHT_SOURCE}/tests/fixtures/preflight_stubs${PYTHONPATH:+:${PYTHONPATH}}" \
+  uv run --locked --no-sync python -m pytest \
+  -p no:cacheprovider \
+  "${PREFLIGHT_SOURCE}/tests/training/exporters/test_first_party_conformance.py" \
+  "${PREFLIGHT_SOURCE}/tests/integrations/test_e2e_mlflow.py" \
+  "${PREFLIGHT_SOURCE}/tests/integration/test_walking_skeleton.py" \
+  -o addopts= -m integration --collect-only -q \
+  2>&1 | tee "${PREFLIGHT_COLLECTION_LOG}"
+
+for required_module in \
+  "tests/training/exporters/test_first_party_conformance.py::" \
+  "tests/integrations/test_e2e_mlflow.py::" \
+  "tests/integration/test_walking_skeleton.py::"; do
+  if ! grep -Fq "${required_module}" "${PREFLIGHT_COLLECTION_LOG}"; then
+    echo "Model-export preflight did not collect ${required_module%::}" >&2
+    exit 1
+  fi
+done
+
+if [[ "${PREFLIGHT_ONLY}" -eq 1 ]]; then
+  echo "Model-export preflight passed before Docker access"
+  exit 0
+fi
+
+command -v docker >/dev/null
+"${docker_clean[@]}" info >/dev/null
+"${docker_clean[@]}" compose version >/dev/null
 snapshot_existing_containers
 
 if project_resource_ids | grep -q .; then
@@ -171,7 +226,7 @@ TRIBUTO_IT_RUNTIME_IMAGE="$(
     python3 -c 'import json, sys; print(json.loads(sys.stdin.read().splitlines()[-1])["local_tag"])'
 )"
 export TRIBUTO_IT_MINIO_IMAGE="${MINIO_IMAGE%%@*}"
-export TRIBUTO_IT_SOURCE_ROOT="${PROJECT_ROOT}"
+export TRIBUTO_IT_SOURCE_ROOT="${PREFLIGHT_SOURCE}"
 export TRIBUTO_IT_TOOL_IMAGE="${TOOL_IMAGE%%@*}"
 
 python3 -c \
@@ -192,16 +247,27 @@ compose --profile model-export exec -T \
   -o cache_dir=/workspace/tributo-work/cache/pytest-model-export \
   -vv --tb=short 2>&1 | tee "${TEST_LOG}"
 
-compose --profile model-export exec -T \
-  --env TRIBUTO_DOCKER_MODEL_EXPORT_IT=1 \
-  ray-head \
-  python -m pytest \
-  tests/training/exporters/test_first_party_conformance.py \
-  tests/integrations/test_e2e_mlflow.py \
-  tests/integration/test_walking_skeleton.py \
-  -o addopts= \
-  -o cache_dir=/workspace/tributo-work/cache/pytest-model-export \
-  -m integration -vv --tb=short --timeout=900 2>&1 | tee -a "${TEST_LOG}"
+if [[ "${SUITE}" == "walking-skeleton" ]]; then
+  compose --profile model-export exec -T \
+    --env TRIBUTO_DOCKER_MODEL_EXPORT_IT=1 \
+    ray-head \
+    python -m pytest \
+    tests/integration/test_walking_skeleton.py \
+    -o addopts= \
+    -o cache_dir=/workspace/tributo-work/cache/pytest-model-export \
+    -m integration -vv --tb=short --timeout=900 2>&1 | tee -a "${TEST_LOG}"
+else
+  compose --profile model-export exec -T \
+    --env TRIBUTO_DOCKER_MODEL_EXPORT_IT=1 \
+    ray-head \
+    python -m pytest \
+    tests/training/exporters/test_first_party_conformance.py \
+    tests/integrations/test_e2e_mlflow.py \
+    tests/integration/test_walking_skeleton.py \
+    -o addopts= \
+    -o cache_dir=/workspace/tributo-work/cache/pytest-model-export \
+    -m integration -vv --tb=short --timeout=900 2>&1 | tee -a "${TEST_LOG}"
+fi
 
 if [[ "${SUITE}" == "full" ]]; then
   compose --profile model-export exec -T \

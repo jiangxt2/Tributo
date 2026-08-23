@@ -51,6 +51,39 @@ documentation for every public stability tier.
 ```
 
 
+## `tributo.integrations.model_runtimes.bundle`
+
+```{autoclass} tributo.integrations.model_runtimes.bundle.BundleModelKernelProvider
+:no-members:
+```
+
+```{autoclass} tributo.integrations.model_runtimes.bundle.BundlePredictionKernelFactory
+:no-members:
+```
+
+
+## `tributo.integrations.model_runtimes.explainability`
+
+```{autoclass} tributo.integrations.model_runtimes.explainability.BundleExplainabilityModelProvider
+:no-members:
+```
+
+```{autoclass} tributo.integrations.model_runtimes.explainability.BundleExplainabilityModelSession
+:no-members:
+```
+
+```{autoclass} tributo.integrations.model_runtimes.explainability.BundleExplainabilityModelSessionFactory
+:no-members:
+```
+
+
+## `tributo.integrations.model_runtimes.resolver`
+
+```{autoclass} tributo.integrations.model_runtimes.resolver.BundleModelReferenceResolver
+:no-members:
+```
+
+
 ## `tributo.pipeline.core`
 
 ```{autoclass} tributo.pipeline.core.ArtifactRef

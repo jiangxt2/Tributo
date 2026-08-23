@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
-
 import numpy as np
 import pytest
 
@@ -35,6 +33,28 @@ class _Runtime:
 
     def close(self) -> None:
         self.close_calls += 1
+
+
+class _Factory:
+    factory_id = "test.prediction-v1"
+
+    def __init__(self, runtime: _Runtime) -> None:
+        self.runtime = runtime
+
+    def create(self) -> _Runtime:
+        return self.runtime
+
+
+class _Provider:
+    provider_id = "test.model-runtime-v1"
+
+    def __init__(self, runtime: _Runtime) -> None:
+        self.runtime = runtime
+        self.models: list[object] = []
+
+    def prediction_factory(self, model: object) -> _Factory:
+        self.models.append(model)
+        return _Factory(self.runtime)
 
 
 def _selection() -> ResolvedModelSelection:
@@ -95,19 +115,14 @@ class TestBundleBatchPredictor:
         inputs, outputs = _bindings(
             preserve_features=preserve_features, nan_policy=nan_policy
         )
-        with patch(
-            "tributo.inference.bundle_predictor.BundleModelLoader.open",
-            return_value=runtime,
-        ) as open_runtime:
-            predictor = BundleBatchPredictor(_selection(), inputs, outputs)
-        open_runtime.assert_called_once_with(
-            "/models/bundle",
-            role="inference",
-            storage_profile="model-domain",
-            unsafe=False,
-            expected_manifest_sha256="a" * 64,
-            use_case="batch",
+        provider = _Provider(runtime)
+        predictor = BundleBatchPredictor(
+            _selection(),
+            inputs,
+            outputs,
+            kernel_provider=provider,
         )
+        assert provider.models == [_selection()]
         return predictor
 
     def test_named_input_order_and_named_output_selection(self) -> None:
@@ -237,11 +252,9 @@ class TestBundleBatchPredictor:
                 ),
             )
         )
-        with patch(
-            "tributo.inference.bundle_predictor.BundleModelLoader.open",
-            return_value=runtime,
-        ):
-            predictor = BundleBatchPredictor(_selection(), inputs, outputs)
+        predictor = BundleBatchPredictor(
+            _selection(), inputs, outputs, kernel_provider=_Provider(runtime)
+        )
 
         with pytest.raises(ValueError, match="cannot be safely converted"):
             predictor({"feature": np.array([value])})
@@ -282,11 +295,9 @@ class TestBundleBatchPredictor:
                 ),
             )
         )
-        with patch(
-            "tributo.inference.bundle_predictor.BundleModelLoader.open",
-            return_value=runtime,
-        ):
-            predictor = BundleBatchPredictor(_selection(), inputs, outputs)
+        predictor = BundleBatchPredictor(
+            _selection(), inputs, outputs, kernel_provider=_Provider(runtime)
+        )
 
         with pytest.raises(ValueError, match="collides"):
             predictor(
@@ -321,12 +332,70 @@ def test_single_vector_column_is_not_restacked() -> None:
             TensorOutputBinding(tensor_name="label", column="label", semantic="label"),
         )
     )
-    with patch(
-        "tributo.inference.bundle_predictor.BundleModelLoader.open",
-        return_value=runtime,
-    ):
-        predictor = BundleBatchPredictor(_selection(), inputs, outputs)
+    predictor = BundleBatchPredictor(
+        _selection(), inputs, outputs, kernel_provider=_Provider(runtime)
+    )
 
     predictor({"embedding": np.array([[1.0, 2.0], [3.0, 4.0]])})
 
     assert runtime.inputs[0]["float_input"].shape == (2, 2)
+
+
+def test_plugin_kernel_cannot_change_batch_row_count_without_passthrough() -> None:
+    class WrongRowRuntime(_Runtime):
+        def predict(self, inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+            self.inputs.append(inputs)
+            return {"label": np.array([1], dtype=np.int64)}
+
+    runtime = WrongRowRuntime()
+    inputs = InputBindingSpec(
+        tensors=(
+            TensorInputBinding(
+                tensor_name="float_input",
+                columns=("feature",),
+                dtype="float32",
+            ),
+        )
+    )
+    outputs = OutputBindingSpec(
+        tensors=(
+            TensorOutputBinding(
+                tensor_name="label",
+                column="prediction",
+                semantic="label",
+            ),
+        )
+    )
+    predictor = BundleBatchPredictor(
+        _selection(), inputs, outputs, kernel_provider=_Provider(runtime)
+    )
+
+    with pytest.raises(ValueError, match="changed batch row count from 2 to 1"):
+        predictor({"feature": np.array([1.0, 2.0])})
+
+
+def test_plugin_kernel_cannot_return_scalar_output() -> None:
+    class ScalarRuntime(_Runtime):
+        def predict(self, inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+            self.inputs.append(inputs)
+            return {"label": np.asarray(1, dtype=np.int64)}
+
+    runtime = ScalarRuntime()
+    inputs = InputBindingSpec(
+        tensors=(TensorInputBinding(tensor_name="float_input", columns=("feature",)),)
+    )
+    outputs = OutputBindingSpec(
+        tensors=(
+            TensorOutputBinding(
+                tensor_name="label",
+                column="prediction",
+                semantic="label",
+            ),
+        )
+    )
+    predictor = BundleBatchPredictor(
+        _selection(), inputs, outputs, kernel_provider=_Provider(runtime)
+    )
+
+    with pytest.raises(ValueError, match="must preserve the batch dimension"):
+        predictor({"feature": np.array([1.0])})

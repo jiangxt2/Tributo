@@ -176,7 +176,7 @@ from the legacy setup-only propagation rule.
 | `tributo.explainability.export` | `alpha` | Bundle export companion-artifact preparation |
 | `tributo.explainability.job_runner` | `alpha` | Ray Jobs submission entry point for batch explanations |
 | `tributo.explainability.planner` | `alpha` | Adapter selection and resource preflight planning |
-| `tributo.explainability.protocols` | `alpha` | Adapter SPI, model context and support decision protocols |
+| `tributo.explainability.protocols` | `alpha` | Adapter SPI, resolved model binding, serializable model-session factory, result-store port, model context and support decision protocols |
 | `tributo.explainability.reference` | `alpha` | Reference/background data provider protocol and file provider |
 | `tributo.explainability.registry` | `alpha` | Adapter registry and entry-point discovery |
 | `tributo.explainability.shap` | `alpha` | First-party SHAP adapter (tree and model-agnostic backends) |
@@ -209,9 +209,11 @@ from the legacy setup-only propagation rule.
 | `tributo.integrations.flavors.x_learner` | `alpha` | Safe batch-only fixed-composition X-Learner runtime flavor |
 | `tributo.integrations.sources.ray_x_learner` | `alpha` | Five-checkpoint X-Learner ExportSource provider |
 | `tributo.integrations.model_importers.*` | `alpha` | Canonical ModelImporter protocol/registry plus explicit MLflow and typed artifact-to-Bundle implementations |
+| `tributo.integrations.model_runtimes.*` | `alpha` | Bundle-backed model reference, prediction-kernel, and explainability capability adapters |
 | `tributo.integrations.sinks.parquet` | `alpha` | Parquet inference ResultSink adapter |
 | `tributo.integrations.sinks.lance` | `alpha` | Generic Lance inference ResultSink adapter |
 | `tributo.integrations.sinks.data_write` | `alpha` | Generic data-module-backed inference ResultSink adapter |
+| `tributo.integrations.sinks.explainability` | `alpha` | Explainability ResultSink, inspection, receipt and cleanup adapter |
 | `tributo.integrations.broker` | `alpha` | Minimal transport-neutral Broker API v1; transport implementations and consume loops are external |
 | `tributo.integrations.broker_registry` | `alpha` | Lazy broker discovery and explicit provider resolution |
 
@@ -223,14 +225,16 @@ from the legacy setup-only propagation rule.
 | `tributo.inference.batch_predictor` | `beta` | Batch predictor implementation |
 | `tributo.inference.pipeline` | `beta` | Inference pipeline; data loading delegates the Ray Gateway adapter |
 | `tributo.inference.job_runner` | `beta` | Inference job runner |
-| `tributo.inference.contracts` | `alpha` | Candidate request, result, binding, executor, and sink contracts |
+| `tributo.inference.contracts` | `alpha` | Compatibility request/result contracts plus stripped prepared execution and sink ports |
 | `tributo.inference.api` | `alpha` | Bundle-aware resolve and execute entry points |
 | `tributo.inference.importers` | `alpha` | Compatibility re-export; new code uses `tributo.integrations.model_importers` |
 | `tributo.inference.input_resolver` | `alpha` | Public IngestionGateway to RayDataHandle adapter |
 | `tributo.inference.resolver` | `alpha` | Fail-closed immutable inference-plan resolver |
 | `tributo.inference.bundle_predictor` | `alpha` | Named tensor binding Ray actor |
 | `tributo.inference.executor` | `alpha` | RayMapBatchesExecutor |
+| `tributo.inference.kernel` | `alpha` | Format-neutral prediction Kernel, Kernel Factory, provider, and Ray batch binding contracts |
 | `tributo.inference.post_training` | `alpha` | Training-result entry adapter; no Training implementation dependency |
+| `tributo.runtime` | `beta` | Deployment-neutral RuntimeTarget contracts plus DeveloperAPI lazy composition factories |
 
 ### Serving (tributo.serving.*)
 

@@ -62,6 +62,8 @@ def test_inference_compose_is_project_scoped_without_host_ports() -> None:
     assert "inference-workspace:/workspace" in compose
     assert "container_name:" not in compose
     assert "ports:" not in compose
+    assert "build:" not in compose
+    assert "TRIBUTO_INFERENCE_RUNTIME_IMAGE" in compose
 
 
 def test_inference_runner_always_performs_exact_scoped_cleanup() -> None:
@@ -74,6 +76,8 @@ def test_inference_runner_always_performs_exact_scoped_cleanup() -> None:
     assert "Compose project already owns Docker resources" in runner
     assert "ray.cluster_resources().get('CPU', 0) >= 4" in runner
     assert "verify_existing_containers" in runner
+    assert '"${docker_clean[@]}" buildx build' in runner
+    assert "up --detach --no-build --pull never" in runner
     assert "docker prune" not in runner
     assert "docker system prune" not in runner
     assert "docker rm" not in runner

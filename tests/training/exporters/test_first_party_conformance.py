@@ -38,6 +38,9 @@ from tributo.integrations.exporters.xgboost_native import (
 )
 from tributo.integrations.exporters.xgboost_onnx import XGBoostONNXExporter
 from tributo.integrations.validators.onnx_runtime import ONNXRuntimeValidator
+from tributo.integrations.validators.xgboost_native import (
+    XGBoostNativeRuntimeValidator,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -486,6 +489,46 @@ def _resolved_multi_input_onnx(root: Path) -> ResolvedArtifact:
     return ResolvedArtifact(descriptor=descriptor, root_dir=root)
 
 
+def _resolved_xgboost_native(
+    root: Path,
+    *,
+    valid: bool = True,
+) -> ResolvedArtifact:
+    root.mkdir(parents=True, exist_ok=True)
+    model_path = root / "model.ubj"
+    if valid:
+        _xgboost_booster().save_model(model_path)
+    else:
+        model_path.write_bytes(b"not-an-xgboost-model")
+    feature_names = b'["f0", "f1", "f2", "f3"]'
+    (root / "feature_names.json").write_bytes(feature_names)
+    model_payload = model_path.read_bytes()
+    files = (
+        ArtifactFile(
+            relative_path="model.ubj",
+            sha256=hashlib.sha256(model_payload).hexdigest(),
+            size_bytes=len(model_payload),
+            role="model",
+        ),
+        ArtifactFile(
+            relative_path="feature_names.json",
+            sha256=hashlib.sha256(feature_names).hexdigest(),
+            size_bytes=len(feature_names),
+            role="config",
+        ),
+    )
+    descriptor = LogicalArtifact(
+        name="native",
+        format="ubj",
+        flavor_id="xgboost-native-v1",
+        files=files,
+        entrypoint="model.ubj",
+        tree_digest=LogicalArtifact.compute_tree_digest(files),
+        producer=ProducerInfo(exporter_id="xgboost-ubj-v1"),
+    )
+    return ResolvedArtifact(descriptor=descriptor, root_dir=root)
+
+
 class TestONNXQuantizerConformance(_ExporterFixture, ExporterConformanceTest):
     exporter_cls = ONNXQuantizer
 
@@ -532,6 +575,34 @@ class TestONNXRuntimeValidatorConformance(ValidatorConformanceTest):
         assert result.metrics["input_count"] == 2
 
 
+class TestXGBoostNativeRuntimeValidatorConformance(ValidatorConformanceTest):
+    validator_cls = XGBoostNativeRuntimeValidator
+
+    def make_source(self) -> ExportSource:
+        return ExportSource(
+            source_kind="xgboost_result",
+            model_object=_xgboost_booster(),
+        )
+
+    def make_artifact(self, tmp_path: Path) -> ResolvedArtifact:
+        return _resolved_xgboost_native(tmp_path)
+
+    def make_invalid_artifact(self, tmp_path: Path) -> ResolvedArtifact:
+        return _resolved_xgboost_native(tmp_path, valid=False)
+
+    def test_required_treeshap_capability_is_validated(self, tmp_path: Path) -> None:
+        validator = XGBoostNativeRuntimeValidator()
+        result = validator.validate(
+            self.make_source(),
+            self.make_artifact(tmp_path),
+            {},
+            validator.options_model(require_tree_shap=True),
+        )
+
+        assert result.status == "passed"
+        assert result.metrics["tree_shap_candidate"] == 1.0
+
+
 class TestStructureValidatorConformance(ValidatorConformanceTest):
     validator_cls = StructureValidator
 
@@ -558,5 +629,15 @@ def test_serveable_first_party_onnx_validation_is_required() -> None:
             binding
             for binding in exporter_cls.validator_bindings
             if binding.validator_id == "onnx-runtime-v1"
+        )
+        assert runtime_binding.required is True
+
+
+def test_executable_xgboost_native_validation_is_required() -> None:
+    for exporter_cls in (XGBoostUBJExporter, XGBoostJSONExporter):
+        runtime_binding = next(
+            binding
+            for binding in exporter_cls.validator_bindings
+            if binding.validator_id == "xgboost-native-runtime-v1"
         )
         assert runtime_binding.required is True

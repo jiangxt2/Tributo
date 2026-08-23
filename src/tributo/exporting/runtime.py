@@ -46,6 +46,10 @@ from tributo.exceptions import (
     UnsupportedArtifactFormat,
 )
 from tributo.exporting.bundle_reader import BundleReader
+from tributo.exporting.capabilities import (
+    CapabilityRegistry,
+    get_default_capability_registry,
+)
 from tributo.exporting.formats import validate_format_id
 from tributo.exporting.manifest import ExportManifest, SignatureField
 from tributo.exporting.models import LogicalArtifact, ResolvedArtifact
@@ -379,9 +383,11 @@ class BundleModelLoader:
         *,
         bundle_reader: BundleReaderLike | None = None,
         flavor_registry: FlavorRegistry | None = None,
+        capability_registry: CapabilityRegistry | None = None,
     ) -> None:
         self._reader = bundle_reader or BundleReader()
         self._flavors = flavor_registry or _build_flavor_registry()
+        self._capabilities = capability_registry or get_default_capability_registry()
 
     def open(
         self,
@@ -441,11 +447,18 @@ class BundleModelLoader:
             )
         artifact = _find_artifact(manifest, target_name)
 
-        entry = _matrix_entry(artifact.flavor_id)
+        try:
+            capability_entry = self._capabilities.for_flavor(artifact.flavor_id)
+        except KeyError:
+            known = [entry.flavor_id for entry in self._capabilities.entries()]
+            raise UnsupportedArtifactFormat(
+                f"Flavor {artifact.flavor_id!r} is not in the flavor capability "
+                f"registry. Supported flavors: {known}"
+            ) from None
         supported = (
-            entry.batch_inference_capable
+            capability_entry.batch
             if use_case == "batch"
-            else entry.online_serveable
+            else capability_entry.serveable
         )
         if not supported:
             capability = "batch inference" if use_case == "batch" else "online serving"
@@ -466,10 +479,11 @@ class BundleModelLoader:
 
         # The matrix row also declares which artifact kind it executes. A
         # report or auxiliary artifact must never reach a model loader.
-        if artifact.artifact_kind != entry.artifact_role:
+        if artifact.artifact_kind != capability_entry.artifact_kind:
             raise UnsupportedArtifactFormat(
                 f"Artifact {artifact.name!r} has kind {artifact.artifact_kind!r} "
-                f"but flavor {entry.flavor_id!r} serves role {entry.artifact_role!r}"
+                f"but flavor {capability_entry.flavor_id!r} serves kind "
+                f"{capability_entry.artifact_kind!r}"
             )
 
         # Security gate: the loader's declared mode is what actually
@@ -482,12 +496,15 @@ class BundleModelLoader:
 
         # Dependency pre-check with an install hint.
         dependencies = tuple(
-            dict.fromkeys(entry.dependencies + flavor_cls.required_dependencies)
+            dict.fromkeys(
+                capability_entry.required_dependencies
+                + flavor_cls.required_dependencies
+            )
         )
         _check_dependencies(artifact.flavor_id, dependencies)
 
         # Signature gate: serveable roles need non-empty typed signatures.
-        if entry.signature_required:
+        if capability_entry.signature_required:
             _require_typed_signature(manifest, artifact, unsafe)
 
         if artifact.format not in flavor_cls.supported_formats:

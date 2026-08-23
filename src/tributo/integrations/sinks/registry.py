@@ -3,12 +3,51 @@
 from __future__ import annotations
 
 import threading
-from typing import Callable, cast
+from typing import Callable, ClassVar, cast
 
-from tributo.inference.contracts import ResultSink, ResultSinkRequest
+from tributo.inference.contracts import (
+    BoundResultSink,
+    ResultSink,
+    ResultSinkReceipt,
+    ResultSinkRequest,
+)
 from tributo.util.annotations import DeveloperAPI
 
 ResultSinkFactory = Callable[[], ResultSink]
+
+
+@DeveloperAPI
+class BoundResultSinkAdapter:
+    """Bind one validated output request before inference core execution."""
+
+    api_version: ClassVar[int] = 1
+
+    def __init__(self, sink: ResultSink, request: ResultSinkRequest) -> None:
+        if sink.sink_id != request.sink_id:
+            raise ValueError(
+                f"ResultSink {sink.sink_id!r} cannot bind {request.sink_id!r}"
+            )
+        self._sink = sink
+        self._request = request
+        self._sink_id = str(sink.sink_id)
+
+    @property
+    def sink_id(self) -> str:
+        return self._sink_id
+
+    def write(
+        self,
+        dataset: object,
+        *,
+        run_id: str,
+        plan_digest: str,
+    ) -> ResultSinkReceipt:
+        return self._sink.write(
+            dataset,
+            self._request,
+            run_id=run_id,
+            plan_digest=plan_digest,
+        )
 
 
 @DeveloperAPI
@@ -41,6 +80,10 @@ class ResultSinkRegistry:
                 f"expected {request.sink_id!r}"
             )
         return sink
+
+    def bind(self, request: ResultSinkRequest) -> BoundResultSink:
+        """Resolve and bind target configuration outside inference core."""
+        return BoundResultSinkAdapter(self.create(request), request)
 
 
 _REGISTRY_LOCK = threading.RLock()
@@ -87,6 +130,7 @@ def _load_sink(module_name: str, class_name: str) -> ResultSink:
 
 
 __all__ = [
+    "BoundResultSinkAdapter",
     "ResultSinkRegistry",
     "default_result_sink_registry",
 ]

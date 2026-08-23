@@ -111,16 +111,20 @@ matrix are generated from the same Registry projection.
 Artifact capabilities are independent. "Readable" means `BundleReader` can
 verify and expose the artifact; it does not imply that Tributo can execute it.
 
-| Flavor | Exportable | Bundle readable | Batch inference | Online serving | Boundary |
-| --- | --- | --- | --- | --- | --- |
-| `onnx-runtime-v1` | Yes | Yes | Yes | Yes | Typed signature and safe ONNX Runtime loader |
-| `xgboost-native-v1` | Yes | Yes | Yes | Yes | Canonical `ubj` and `xgboost-json` formats share this safe Booster runtime; canonical `float_input` binding |
-| `x-learner-v1` | Yes | Yes | Yes | No | Fixed five-Booster X-Learner composition with named CATE/component outputs and integer quadrant codes |
-| `report` | Yes | Yes | No | No | JSON causal report role; readable but non-executable |
-| `safetensors-v1` | Yes | Yes | No | No | Weights-only; no trusted architecture loader |
-| `torch-export-v1` | Yes | Yes | No | No | PT2 loader and version/device contract are pending |
-| `hf-onnx-v1` | Yes | Yes | No | No | Dedicated runtime compatibility gate is pending |
-| `onnx-int8-v1` | Yes | Yes | No | No | Quantized numerical compatibility gate is pending |
+| Flavor | Exportable | Bundle readable | Batch inference | Online serving | Native attribution | Boundary |
+| --- | --- | --- | --- | --- | --- | --- |
+| `onnx-runtime-v1` | Yes | Yes | Yes | Yes | No | Typed signature and safe ONNX Runtime loader; model-agnostic attribution requires an explicit reference |
+| `xgboost-native-v1` | Yes | Yes | Yes | Yes | Conditional TreeSHAP | Canonical `ubj` and `xgboost-json` formats share this safe Booster runtime; runtime validation proves prediction parity and eligible tree models prove exact margin reconstruction |
+| `x-learner-v1` | Yes | Yes | Yes | No | No | Fixed five-Booster X-Learner composition with named CATE/component outputs and integer quadrant codes |
+| `report` | Yes | Yes | No | No | No | JSON causal report role; readable but non-executable |
+| `safetensors-v1` | Yes | Yes | No | No | No | Weights-only; no trusted architecture loader |
+| `torch-export-v1` | Yes | Yes | No | No | No | PT2 loader and version/device contract are pending |
+| `hf-onnx-v1` | Yes | Yes | No | No | No | Dedicated runtime compatibility gate is pending |
+| `onnx-int8-v1` | Yes | Yes | No | No | No | Quantized numerical compatibility gate is pending |
+
+Executable decisions come from the plugin-derived capability registry. The
+frozen support matrix remains a compatibility/documentation view and is not
+used by inference core to branch on model formats.
 
 The ONNX entries describe execution of validated tensors. DNN/PU Bundle
 publication includes digest-protected preprocessing state, and

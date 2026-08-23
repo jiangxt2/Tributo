@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import importlib
 import warnings
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from tributo.training.exporters.artifact_protocol import (
     ARTIFACT_KIND_DIAGNOSTICS,
@@ -22,10 +22,31 @@ from tributo.training.exporters.artifact_protocol import (
     ArtifactExporter,
     is_known_artifact_kind,
 )
-from tributo.training.exporters.causal_report import CausalReportExporter
-from tributo.training.exporters.safetensors import SafetensorsExporter
-from tributo.training.exporters.torch_onnx_exporter import export_pytorch_to_onnx
-from tributo.training.exporters.torchscript import TorchScriptExporter
+
+if TYPE_CHECKING:
+    from tributo.training.exporters.causal_report import CausalReportExporter
+    from tributo.training.exporters.safetensors import SafetensorsExporter
+    from tributo.training.exporters.torch_onnx_exporter import export_pytorch_to_onnx
+    from tributo.training.exporters.torchscript import TorchScriptExporter
+
+_LAZY_EXPORTS = {
+    "CausalReportExporter": (
+        "tributo.training.exporters.causal_report",
+        "CausalReportExporter",
+    ),
+    "SafetensorsExporter": (
+        "tributo.training.exporters.safetensors",
+        "SafetensorsExporter",
+    ),
+    "TorchScriptExporter": (
+        "tributo.training.exporters.torchscript",
+        "TorchScriptExporter",
+    ),
+    "export_pytorch_to_onnx": (
+        "tributo.training.exporters.torch_onnx_exporter",
+        "export_pytorch_to_onnx",
+    ),
+}
 
 __all__ = [
     "ArtifactExporter",
@@ -42,7 +63,13 @@ __all__ = [
 
 
 def __getattr__(name: str) -> Any:
-    if name in __all__:
+    lazy = _LAZY_EXPORTS.get(name)
+    if lazy is not None:
+        module_name, attribute_name = lazy
+        value = getattr(importlib.import_module(module_name), attribute_name)
+        globals()[name] = value
+        return value
+    if name in globals():
         return globals()[name]
     warnings.warn(
         f"tributo.training.exporters.{name} is deprecated; "

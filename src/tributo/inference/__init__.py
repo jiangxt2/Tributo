@@ -16,14 +16,17 @@ Extend ``BasePredictor`` for a compatibility workflow::
 from __future__ import annotations
 
 from tributo.inference.api import (
+    prepared_inference_plan,
     resolve_inference,
     run_inference,
+    run_prepared_inference,
     run_resolved_inference,
 )
 from tributo.inference.base import BasePredictor
 from tributo.inference.batch_predictor import XGBoostONNXPredictor
 from tributo.inference.contracts import (
     ArtifactModelReference,
+    BoundResultSink,
     BundleModelReference,
     InferenceRequest,
     InferenceResult,
@@ -32,6 +35,8 @@ from tributo.inference.contracts import (
     LanceVectorColumnSpec,
     OutputBindingSpec,
     ParquetResultSinkRequest,
+    PreparedInferencePlan,
+    PreparedModelProvenance,
     RayExecutionPolicy,
     RegistryModelReference,
     ResultSinkProvider,
@@ -45,33 +50,50 @@ from tributo.inference.job_runner import (
     submit_resolved_inference,
     submit_resolved_inference_with_identity,
 )
+from tributo.inference.kernel import (
+    KernelBatchPredictor,
+    ModelKernelProvider,
+    PredictionKernel,
+    PredictionKernelFactory,
+)
 from tributo.inference.pipeline import (
     InferenceConfig,
     run_batch_inference,
     run_inference_from_json,
 )
+from tributo.inference.resolver import ModelReferenceResolver
 
 __all__ = [
     "BasePredictor",
     "ArtifactModelReference",
+    "BoundResultSink",
     "BundleModelReference",
     "InferenceConfig",
     "InferenceRequest",
     "InferenceResult",
     "InputBindingSpec",
+    "KernelBatchPredictor",
     "LanceResultSinkRequest",
     "LanceVectorColumnSpec",
     "OutputBindingSpec",
     "ParquetResultSinkRequest",
+    "PreparedInferencePlan",
+    "PreparedModelProvenance",
     "RayExecutionPolicy",
     "RegistryModelReference",
+    "ModelKernelProvider",
+    "ModelReferenceResolver",
+    "PredictionKernel",
+    "PredictionKernelFactory",
     "ResultSinkProvider",
     "TensorInputBinding",
     "TensorOutputBinding",
     "resolve_inference",
+    "prepared_inference_plan",
     "run_batch_inference",
     "run_inference",
     "run_inference_from_json",
+    "run_prepared_inference",
     "run_resolved_inference",
     "XGBoostONNXPredictor",
     "submit_inference_job",

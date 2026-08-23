@@ -198,6 +198,7 @@ hf-v1 = "tributo.integrations.sources.huggingface:HuggingFaceSourceProvider"
 
 [project.entry-points."tributo.validators"]
 onnx-runtime-v1 = "tributo.integrations.validators.onnx_runtime:ONNXRuntimeValidator"
+xgboost-native-runtime-v1 = "tributo.integrations.validators.xgboost_native:XGBoostNativeRuntimeValidator"
 
 [project.entry-points."tributo.model_flavors"]
 onnx-runtime-v1 = "tributo.integrations.flavors.onnx_runtime:ONNXRuntimeFlavor"

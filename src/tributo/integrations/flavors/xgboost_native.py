@@ -10,6 +10,7 @@ import numpy as np
 from tributo.exceptions import ModelLoadError, UnsupportedArtifactFormat
 from tributo.exporting.models import ResolvedArtifact
 from tributo.exporting.runtime import SECURITY_MODE_SAFE, BundleModel
+from tributo.integrations.xgboost_capabilities import supports_native_tree_shap
 from tributo.util.annotations import PublicAPI
 
 
@@ -25,6 +26,11 @@ class XGBoostNativeFlavor:
     security_mode: ClassVar[str] = SECURITY_MODE_SAFE
     signature_required: ClassVar[bool] = True
     required_dependencies: ClassVar[tuple[str, ...]] = ("xgboost",)
+    operations: ClassVar[tuple[str, ...]] = (
+        "prediction.batch",
+        "prediction.online",
+    )
+    conditional_operations: ClassVar[tuple[str, ...]] = ("attribution.tree-shap",)
 
     def load(
         self,
@@ -60,7 +66,9 @@ class _XGBoostNativeModel:
     def __init__(self, booster: Any, xgboost: Any) -> None:
         self._booster = booster
         self._xgboost = xgboost
-        self._objective, self._num_classes = _model_metadata(booster)
+        self._objective, self._num_classes, self._booster_kind = _model_metadata(
+            booster
+        )
         self._num_features = int(booster.num_features())
         self._classification = self._objective.startswith(("binary:", "multi:"))
         if self._objective == "binary:hinge":
@@ -95,6 +103,27 @@ class _XGBoostNativeModel:
             return ((None,), (None, self._num_classes))
         return ((None, 1),)
 
+    @property
+    def native_attribution_id(self) -> str | None:
+        if supports_native_tree_shap(
+            booster_kind=self._booster_kind,
+            objective=self._objective,
+        ):
+            return "xgboost-tree-shap-v1"
+        return None
+
+    @property
+    def native_model_object(self) -> Any:
+        return self._booster
+
+    @property
+    def native_feature_names(self) -> tuple[str, ...]:
+        return tuple(self._booster.feature_names or ())
+
+    @property
+    def native_objective(self) -> str | None:
+        return self._objective
+
     def predict(self, inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         tensor = np.asarray(inputs["float_input"], dtype=np.float32)
         matrix = self._xgboost.DMatrix(
@@ -126,13 +155,14 @@ class _XGBoostNativeModel:
         return {"label": labels, "probabilities": probabilities}
 
 
-def _model_metadata(booster: Any) -> tuple[str, int]:
+def _model_metadata(booster: Any) -> tuple[str, int, str]:
     try:
         config = json.loads(booster.save_config())
         learner = config["learner"]
         objective = str(learner["objective"]["name"])
         num_classes = max(2, int(learner["learner_model_param"]["num_class"]))
-        return objective, num_classes
+        booster_kind = str(learner["gradient_booster"]["name"])
+        return objective, num_classes, booster_kind
     except Exception as exc:
         raise ModelLoadError(
             f"Native XGBoost metadata is invalid ({type(exc).__name__})"
