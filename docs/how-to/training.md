@@ -186,13 +186,8 @@ mount them), and use `examples/kuberay/distributed-algorithm-rayjob.yaml` as
 the deployment skeleton. The RayJob manifest is Kubernetes YAML; Tributo's
 persisted algorithm configuration remains JSON. KubeRay owns deployment and
 cluster lifecycle; Tributo owns the algorithm contract already exercised by
-the Docker multi-node Ray Jobs Gate. KubeRay 1.6.0 RayJob has also passed the
-common provision-substrate Gate on an isolated kind cluster; this verifies
-cluster creation, submission, status/logs, and native cleanup rather than
-validating every algorithm again on Kubernetes.
-Maintainers can reproduce that substrate evidence with
-`scripts/run_kuberay_algorithm_it.sh`; application users continue to invoke
-KubeRay directly.
+the Docker multi-node Ray Jobs Gate. Application users invoke KubeRay directly
+or provide the resulting Ray Jobs endpoint to the deployment-neutral submitter.
 
 ## Bundle Checkpoint Compatibility
 

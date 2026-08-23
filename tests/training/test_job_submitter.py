@@ -7,7 +7,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 from ray.job_submission import JobStatus
 
+from tributo import RuntimeTarget
 from tributo.algorithms import AlgorithmArtifact, EnvironmentSpec, ImageProfile
+from tributo.exceptions import JobConfigurationError
 from tributo.training.job_submitter import (
     submit_training_job,
     submit_training_job_with_identity,
@@ -20,6 +22,13 @@ def _runtime_env(*args, **kwargs):
 
 
 class TestStableSubmission:
+    def test_local_target_requires_lifecycle_aware_retry_api(self) -> None:
+        with pytest.raises(JobConfigurationError, match="with_retry"):
+            submit_training_job(
+                "python train.py",
+                runtime_target=RuntimeTarget.from_master("local"),
+            )
+
     @pytest.mark.parametrize("status", [JobStatus.PENDING, JobStatus.RUNNING])
     def test_existing_active_attempt_is_reused(self, status: JobStatus) -> None:
         client = MagicMock()
@@ -112,6 +121,41 @@ class TestStableSubmission:
 
 
 class TestRetryClassification:
+    def test_local_target_is_released_after_retry_result(self) -> None:
+        provider_client = MagicMock()
+        provider_client.get_address.return_value = "http://local-ray:8265"
+        provider_context = MagicMock()
+        provider_context.__enter__.return_value = provider_client
+        client = MagicMock()
+        client.submit_job.return_value = "job-local"
+        client.get_job_status.return_value = JobStatus.SUCCEEDED
+        client.get_job_logs.return_value = "ok"
+
+        with (
+            patch(
+                "tributo.training.job_submitter.open_job_submission_client",
+                return_value=provider_context,
+            ),
+            patch(
+                "tributo.training.job_submitter._get_submission_client",
+                return_value=client,
+            ),
+            patch(
+                "tributo.training.job_submitter.build_runtime_env",
+                side_effect=_runtime_env,
+            ),
+        ):
+            result = submit_training_job_with_retry(
+                "python train.py",
+                runtime_target=RuntimeTarget.from_master("local"),
+                timeout=1,
+                poll_interval=0,
+            )
+
+        assert result.status == "SUCCEEDED"
+        provider_context.__enter__.assert_called_once_with()
+        provider_context.__exit__.assert_called_once()
+
     def test_failed_job_uses_next_attempt_and_succeeded_stops(self) -> None:
         client = MagicMock()
         client.submit_job.side_effect = ["job-1", "job-2"]

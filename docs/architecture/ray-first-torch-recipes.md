@@ -25,7 +25,7 @@ implementation and its public annotations, not unversioned latest docs.
 | Run identity | V2 `RunConfig.name` and storage context | Derive a unique Ray run name from the existing Tributo `run_id` so independent runs cannot inherit each other's checkpoints |
 | Export and serving | Existing Torch ONNX exporter, ONNX Runtime validator, Bundle publisher, reader, batch inference, and Serve flavor | Reconstruct the trusted recipe model and create one `ExportSource` |
 | Local execution | `ray.init(address="local")` | Own and close only the runtime created by Tributo |
-| Existing or provisioned cluster | `ray.init(address="auto")`, Ray Jobs, KubeRay RayJob, or Cluster Launcher | Attach or expose the same entrypoint; never provision or delete the cluster |
+| Existing or provisioned cluster | `ray.init(address="auto")`, Ray Jobs, KubeRay RayJob, or Cluster Launcher | Attach or expose the same entrypoint; workload code never provisions or deletes the cluster |
 
 Ray's public API has no `DataConfig(equal=False)` option in 2.55.1. The custom
 `configure()` override is therefore isolated under
@@ -93,12 +93,7 @@ contents, trusted model reconstruction, ONNX Bundle publication, execution
 profile compatibility, and isolated wheel construction. The isolated Recipe
 wheel has also passed owned-local single/two-worker and existing Docker Ray
 cluster multi-node Ray Jobs gates, including 65-row uneven input and Bundle
-publication. KubeRay 1.6.0 has also passed the public provision-substrate gate
-on an isolated kind cluster: RayJob created the RayCluster, submitted the same
-Tributo `cluster` workload, exposed status and logs, completed Bundle
-publication, and removed the RayCluster through
-`shutdownAfterJobFinishes`. This is substrate evidence and does not imply that
-every algorithm was rerun on Kubernetes.
-The reproducible test-only entrypoint is
-`scripts/run_kuberay_algorithm_it.sh`; it owns one uniquely named kind cluster
-and delegates RayCluster creation and cleanup to KubeRay.
+publication. Kubernetes and KubeRay remain external deployment substrates; the
+deployment-neutral Docker Ray multi-node gate is the Tributo evidence for the
+common `cluster` workload. This does not claim that Tributo owns or validates
+Kubernetes control-plane lifecycle.

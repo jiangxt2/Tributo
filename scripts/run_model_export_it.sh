@@ -170,9 +170,9 @@ TRIBUTO_IT_RUNTIME_IMAGE="$(
   python3 "${PROJECT_ROOT}/tools/tributo_it.py" runtime-key --profile data-ingestion |
     python3 -c 'import json, sys; print(json.loads(sys.stdin.read().splitlines()[-1])["local_tag"])'
 )"
-export TRIBUTO_IT_MINIO_IMAGE="${MINIO_IMAGE}"
+export TRIBUTO_IT_MINIO_IMAGE="${MINIO_IMAGE%%@*}"
 export TRIBUTO_IT_SOURCE_ROOT="${PROJECT_ROOT}"
-export TRIBUTO_IT_TOOL_IMAGE="${TOOL_IMAGE}"
+export TRIBUTO_IT_TOOL_IMAGE="${TOOL_IMAGE%%@*}"
 
 python3 -c \
   'from tools.tributo_it import ensure_digest_image, load_profile; p = load_profile("data-ingestion"); ensure_digest_image(p.tool_image); ensure_digest_image(p.minio_image)' \

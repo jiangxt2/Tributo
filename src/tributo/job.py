@@ -44,6 +44,23 @@ class TributoClient:
         self.address = address
         self._client: JobSubmissionClient | None = None
 
+    @classmethod
+    def _from_submission_client(
+        cls,
+        client: JobSubmissionClient,
+        *,
+        address: str,
+    ) -> TributoClient:
+        """Bind an already-open provider-managed Jobs client.
+
+        Runtime providers own the client lifecycle. This internal constructor
+        lets the stable job API reuse that client without creating a second
+        connection or taking ownership of provider cleanup.
+        """
+        instance = cls(address)
+        instance._client = client
+        return instance
+
     def _get_client(self) -> JobSubmissionClient:
         """Get or create the underlying Ray ``JobSubmissionClient``."""
         if self._client is None:

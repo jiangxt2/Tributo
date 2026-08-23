@@ -8,6 +8,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from ray.job_submission import JobStatus
 
+from tributo import RuntimeTarget
+from tributo.exceptions import JobConfigurationError
 from tributo.ray_jobs import (
     RayJobSubmission,
     get_ray_job_logs,
@@ -45,6 +47,52 @@ def test_submission_identity_is_workload_neutral_and_ray_job_id_is_real() -> Non
     assert result.submission_id.startswith("tributo-broker-")
     assert result.ray_job_id == "ray-core-job-1"
     assert client.submit_job.call_args.kwargs["submission_id"] == result.submission_id
+
+
+def test_submit_ray_job_uses_an_attached_runtime_target() -> None:
+    client = MagicMock()
+    client.get_job_info.return_value = type(
+        "JobInfo", (), {"job_id": "ray-core-job-target"}
+    )()
+    target = RuntimeTarget.from_master("http://ray-head:8265")
+
+    with (
+        patch("tributo.ray_jobs._get_submission_client", return_value=client) as get,
+        patch(
+            "tributo.ray_jobs.build_runtime_env",
+            autospec=True,
+            return_value={"env_vars": {}},
+        ),
+    ):
+        result = submit_ray_job(
+            "python -m provider.driver",
+            operation_namespace="broker",
+            run_id="run-target",
+            runtime_target=target,
+        )
+
+    get.assert_called_once_with("http://ray-head:8265")
+    assert result.ray_job_id == "ray-core-job-target"
+
+
+def test_submit_ray_job_rejects_owned_or_local_targets() -> None:
+    with pytest.raises(JobConfigurationError, match="lifecycle-aware"):
+        submit_ray_job(
+            "python -m provider.driver",
+            operation_namespace="broker",
+            run_id="run-local",
+            runtime_target=RuntimeTarget.from_master("local"),
+        )
+
+    with pytest.raises(JobConfigurationError, match="lifecycle-aware"):
+        submit_ray_job(
+            "python -m provider.driver",
+            operation_namespace="broker",
+            run_id="run-managed",
+            runtime_target=RuntimeTarget.from_master(
+                "managed://ray_cluster_launcher/provider.json"
+            ),
+        )
 
 
 def test_submit_ray_job_forwards_trusted_runtime_env_extensions(

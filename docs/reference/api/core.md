@@ -188,3 +188,29 @@ documentation for every public stability tier.
 
 ```{autofunction} tributo.ray_jobs.submit_ray_job
 ```
+
+
+## `tributo.runtime`
+
+```{autoclass} tributo.RuntimeExecutionMode
+:no-members:
+```
+
+```{autoclass} tributo.RuntimeLifecycle
+:no-members:
+```
+
+```{autoclass} tributo.RuntimeSubmissionMode
+:no-members:
+```
+
+```{autoclass} tributo.RuntimeTarget
+:no-members:
+```
+
+
+## `tributo.runtime_providers`
+
+```{autoclass} tributo.RuntimeLease
+:no-members:
+```

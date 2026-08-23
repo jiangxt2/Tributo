@@ -30,12 +30,40 @@ from tributo.exceptions import (  # noqa: E402
     TributoError,
 )
 from tributo.job import RayJob, TributoClient  # noqa: E402
+from tributo.runtime import (
+    RuntimeExecutionMode,
+    RuntimeLifecycle,
+    RuntimeSubmissionMode,
+    RuntimeTarget,
+)
+from tributo.runtime_providers import (
+    LocalRayJobsProvider,
+    RuntimeLease,
+    RuntimeProvider,
+    open_job_submission_client,
+    open_ray_client,
+    register_runtime_provider,
+    resolve_runtime_provider,
+    run_local_entrypoint,
+)
 
 __all__: list[str] = [
     # Core
     "TributoClient",
     "RayJob",
     "JobConfig",
+    "RuntimeTarget",
+    "RuntimeExecutionMode",
+    "RuntimeSubmissionMode",
+    "RuntimeLifecycle",
+    "RuntimeLease",
+    "LocalRayJobsProvider",
+    "RuntimeProvider",
+    "open_job_submission_client",
+    "open_ray_client",
+    "register_runtime_provider",
+    "resolve_runtime_provider",
+    "run_local_entrypoint",
     # Exceptions
     "TributoError",
     "JobSubmissionError",

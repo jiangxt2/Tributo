@@ -265,6 +265,74 @@ class TestAlgoValidate:
 
 
 class TestAlgoRun:
+    def test_run_master_submits_the_same_cluster_workload_through_ray_jobs(
+        self, runner, tmp_path
+    ) -> None:
+        config_file = tmp_path / "execution.json"
+        config_file.write_text(
+            json.dumps(
+                {
+                    "algorithm": "multinomial_nb",
+                    "profile": "cluster",
+                    "worker_count": 2,
+                    "input": {
+                        "ingestion": {
+                            "source": {
+                                "type": "parquet",
+                                "path": "/tmp/data.parquet",
+                            },
+                            "engine": "ray",
+                        },
+                        "features": ["f1"],
+                        "label": "label",
+                    },
+                    "algorithm_config": {},
+                }
+            )
+        )
+
+        with (
+            patch("tributo.cli.TributoClient") as client_cls,
+            patch("tributo.cli._wait_for_job") as wait_for_job,
+        ):
+            client = client_cls.return_value
+            client.submit.return_value = "job-1"
+            client.get_logs.return_value = "job logs"
+            result = runner.invoke(
+                main,
+                [
+                    "algo",
+                    "run",
+                    "--config",
+                    str(config_file),
+                    "--master",
+                    "http://ray-head:8265",
+                ],
+            )
+
+        assert result.exit_code == 0, result.output
+        client_cls.assert_called_once_with("http://ray-head:8265")
+        submit_kwargs = client.submit.call_args.kwargs
+        assert submit_kwargs["entrypoint"] == (
+            "python -m tributo.cli algo run --config execution.json"
+        )
+        assert submit_kwargs["runtime_env"] == {"working_dir": str(tmp_path)}
+        wait_for_job.assert_called_once()
+        assert "Algorithm Job submitted: job-1" in result.output
+        assert "job logs" in result.output
+
+    def test_run_rejects_non_object_execution_json(self, runner, tmp_path) -> None:
+        config_file = tmp_path / "execution.json"
+        config_file.write_text("[]")
+
+        result = runner.invoke(
+            main,
+            ["algo", "run", "--config", str(config_file), "--master", "local"],
+        )
+
+        assert result.exit_code == 1
+        assert "JSON must be an object" in result.output
+
     def test_run_builds_one_formal_request_from_json(self, runner, tmp_path) -> None:
         from tributo.algorithms.api import (
             AlgorithmExecutionResult,

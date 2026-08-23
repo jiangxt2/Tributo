@@ -10,6 +10,8 @@ import pytest
 from ray.job_submission import JobStatus
 
 from tests.inference.test_executor import _plan
+from tributo import RuntimeTarget
+from tributo.exceptions import JobConfigurationError
 from tributo.inference.contracts import ResolvedInference
 from tributo.inference.job_runner import (
     map_ray_job_status,
@@ -79,6 +81,13 @@ class TestSubmitInferenceJob:
 
         assert job_id.startswith("tributo-infer-")
         assert mock_constructor.call_count == 2
+
+    def test_local_target_requires_lifecycle_aware_retry_api(self) -> None:
+        with pytest.raises(JobConfigurationError, match="with_retry"):
+            submit_inference_job(
+                config_path="jobs/inference.json",
+                runtime_target=RuntimeTarget.from_master("local"),
+            )
 
 
 if __name__ == "__main__":
@@ -196,6 +205,47 @@ class TestResolvedRequestSubmission:
 
 
 class TestJobStatusAndRetry:
+    def test_local_target_is_released_after_retry_result(self) -> None:
+        plan = _plan()
+        resolver = MagicMock()
+        resolver.resolve.return_value = plan
+        provider_client = MagicMock()
+        provider_client.get_address.return_value = "http://local-ray:8265"
+        provider_context = MagicMock()
+        provider_context.__enter__.return_value = provider_client
+        client = MagicMock()
+        client.submit_job.return_value = "job-local"
+        client.get_job_status.return_value = JobStatus.SUCCEEDED
+        client.get_job_logs.return_value = "ok"
+
+        with (
+            patch(
+                "tributo.inference.job_runner.open_job_submission_client",
+                return_value=provider_context,
+            ),
+            patch(
+                "tributo.inference.job_runner._get_submission_client",
+                return_value=client,
+            ),
+            patch(
+                "tributo.inference.job_runner.build_runtime_env",
+                side_effect=lambda *args, **kwargs: {
+                    "env_vars": kwargs.get("env_vars", {})
+                },
+            ),
+        ):
+            result = submit_inference_request_with_retry(
+                object(),
+                runtime_target=RuntimeTarget.from_master("local"),
+                resolver=resolver,
+                timeout=1,
+                poll_interval=0,
+            )
+
+        assert result.status == "succeeded"
+        provider_context.__enter__.assert_called_once_with()
+        provider_context.__exit__.assert_called_once()
+
     def test_timeout_boundary_rechecks_terminal_status(self) -> None:
         client = MagicMock()
         client.get_job_status.return_value = JobStatus.SUCCEEDED

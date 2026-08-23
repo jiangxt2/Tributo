@@ -16,9 +16,12 @@ from ray.job_submission import JobStatus, JobSubmissionClient
 from tributo._common import DEFAULT_DASHBOARD_URL, build_runtime_env
 from tributo._common.retry import retry_with_exponential_backoff
 from tributo._common.submission_id import generate_submission_id
+from tributo.exceptions import JobConfigurationError
 from tributo.inference.contracts import InferenceRequest, ResolvedInference
 from tributo.inference.resolver import InferenceResolver
 from tributo.ray_jobs import RayJobSubmission, _submit_ray_job_with_client
+from tributo.runtime import RuntimeExecutionMode, RuntimeTarget
+from tributo.runtime_providers import open_job_submission_client
 from tributo.util.annotations import PublicAPI
 
 logger = logging.getLogger(__name__)
@@ -97,12 +100,23 @@ def submit_inference_job(
     config_path: str,
     *,
     dashboard_url: str = DEFAULT_DASHBOARD_URL,
+    runtime_target: RuntimeTarget | None = None,
     env_vars: dict[str, str] | None = None,
     project_root: Path | None = None,
     run_id: str | None = None,
     attempt_id: str = "attempt-1",
 ) -> str:
     """Submit the legacy strict-JSON entry point with stable job identity."""
+    if runtime_target is not None:
+        if runtime_target.execution_mode is RuntimeExecutionMode.LOCAL:
+            raise JobConfigurationError(
+                "local runtime targets require submit_inference_request_with_retry"
+            )
+        if runtime_target.is_managed:
+            raise JobConfigurationError(
+                "managed runtime targets require submit_inference_request_with_retry"
+            )
+        dashboard_url = runtime_target.require_jobs_address()
     _validate_env_vars(env_vars)
     resolved_run_id = run_id or generate_submission_id(
         "infer-run", config_path, str(sorted((env_vars or {}).items()))
@@ -146,6 +160,7 @@ def submit_inference_request(
     request: InferenceRequest,
     *,
     dashboard_url: str = DEFAULT_DASHBOARD_URL,
+    runtime_target: RuntimeTarget | None = None,
     env_vars: dict[str, str] | None = None,
     project_root: Path | None = None,
     resolver: InferenceResolver | None = None,
@@ -154,6 +169,7 @@ def submit_inference_request(
     return submit_inference_request_with_identity(
         request,
         dashboard_url=dashboard_url,
+        runtime_target=runtime_target,
         env_vars=env_vars,
         project_root=project_root,
         resolver=resolver,
@@ -165,11 +181,22 @@ def submit_inference_request_with_identity(
     request: InferenceRequest,
     *,
     dashboard_url: str = DEFAULT_DASHBOARD_URL,
+    runtime_target: RuntimeTarget | None = None,
     env_vars: dict[str, str] | None = None,
     project_root: Path | None = None,
     resolver: InferenceResolver | None = None,
 ) -> RayJobSubmission:
     """Resolve once, freeze the plan, and return complete submission identity."""
+    if runtime_target is not None:
+        if runtime_target.execution_mode is RuntimeExecutionMode.LOCAL:
+            raise JobConfigurationError(
+                "local runtime targets require submit_inference_request_with_retry"
+            )
+        if runtime_target.is_managed:
+            raise JobConfigurationError(
+                "managed runtime targets require submit_inference_request_with_retry"
+            )
+        dashboard_url = runtime_target.require_jobs_address()
     _validate_env_vars(env_vars)
     plan = (resolver or InferenceResolver()).resolve(request)
     client = _get_submission_client(dashboard_url)
@@ -186,6 +213,7 @@ def submit_resolved_inference(
     plan: ResolvedInference,
     *,
     dashboard_url: str = DEFAULT_DASHBOARD_URL,
+    runtime_target: RuntimeTarget | None = None,
     env_vars: dict[str, str] | None = None,
     project_root: Path | None = None,
 ) -> str:
@@ -193,6 +221,7 @@ def submit_resolved_inference(
     return submit_resolved_inference_with_identity(
         plan,
         dashboard_url=dashboard_url,
+        runtime_target=runtime_target,
         env_vars=env_vars,
         project_root=project_root,
     ).submission_id
@@ -203,10 +232,21 @@ def submit_resolved_inference_with_identity(
     plan: ResolvedInference,
     *,
     dashboard_url: str = DEFAULT_DASHBOARD_URL,
+    runtime_target: RuntimeTarget | None = None,
     env_vars: dict[str, str] | None = None,
     project_root: Path | None = None,
 ) -> RayJobSubmission:
     """Submit a frozen plan and return workload-neutral Ray Jobs identity."""
+    if runtime_target is not None:
+        if runtime_target.execution_mode is RuntimeExecutionMode.LOCAL:
+            raise JobConfigurationError(
+                "local runtime targets require submit_inference_request_with_retry"
+            )
+        if runtime_target.is_managed:
+            raise JobConfigurationError(
+                "managed runtime targets require submit_inference_request_with_retry"
+            )
+        dashboard_url = runtime_target.require_jobs_address()
     _validate_env_vars(env_vars)
     client = _get_submission_client(dashboard_url)
     return _submit_resolved_plan(
@@ -222,6 +262,7 @@ def submit_inference_request_with_retry(
     request: InferenceRequest,
     *,
     dashboard_url: str = DEFAULT_DASHBOARD_URL,
+    runtime_target: RuntimeTarget | None = None,
     env_vars: dict[str, str] | None = None,
     project_root: Path | None = None,
     resolver: InferenceResolver | None = None,
@@ -233,6 +274,25 @@ def submit_inference_request_with_retry(
     """Submit stable attempts; STOPPED maps to cancelled and is never retried."""
     if max_attempts < 1:
         raise ValueError("max_attempts must be at least 1")
+    if runtime_target is not None:
+        if (
+            runtime_target.execution_mode is RuntimeExecutionMode.LOCAL
+            or runtime_target.is_managed
+        ):
+            with open_job_submission_client(runtime_target) as client:
+                return submit_inference_request_with_retry(
+                    request,
+                    dashboard_url=client.get_address(),
+                    runtime_target=None,
+                    env_vars=env_vars,
+                    project_root=project_root,
+                    resolver=resolver,
+                    max_attempts=max_attempts,
+                    timeout=timeout,
+                    poll_interval=poll_interval,
+                    retry_classifier=retry_classifier,
+                )
+        dashboard_url = runtime_target.require_jobs_address()
     _validate_env_vars(env_vars)
     first_plan = (resolver or InferenceResolver()).resolve(request)
     client = _get_submission_client(dashboard_url)

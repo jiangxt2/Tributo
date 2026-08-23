@@ -7,7 +7,10 @@ from __future__ import annotations
 
 import json
 import logging
+import shlex
 import sys
+import tempfile
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -17,10 +20,17 @@ from tributo import JobConfig
 from tributo._common import DEFAULT_DASHBOARD_URL, configure_logging
 from tributo.exceptions import (
     JobConfigurationError,
+    JobExecutionError,
     PostPublishCallbackError,
     TributoError,
 )
 from tributo.job import TributoClient
+from tributo.runtime import (
+    RuntimeExecutionMode,
+    RuntimeSubmissionMode,
+    RuntimeTarget,
+)
+from tributo.runtime_providers import open_job_submission_client, open_ray_client
 from tributo.vector_index.cli import vector as vector_group
 
 logger = logging.getLogger(__name__)
@@ -78,24 +88,68 @@ def main():
 @main.command()
 @click.option(
     "--address",
-    required=True,
-    help="Ray cluster address (e.g., http://127.0.0.1:8265)",
+    default=None,
+    help="Deprecated alias for --master with a Ray Jobs endpoint",
+)
+@click.option(
+    "--master",
+    default=None,
+    help="Runtime target: local, Ray Jobs URL, or a managed provider target",
 )
 @click.option("--entrypoint", required=True, help="Command to run for the job")
 @click.option("--config", type=click.Path(exists=True), help="Path to config JSON file")
 @click.option("--num-cpus", type=float, help="Number of CPUs to allocate")
 @click.option("--num-gpus", type=float, help="Number of GPUs to allocate")
 @click.option("--memory", type=int, help="Memory to allocate for entrypoint (in bytes)")
+@click.option(
+    "--wait/--no-wait",
+    default=False,
+    help="Wait for completion; required for provider-owned managed targets",
+)
+@click.option(
+    "--timeout",
+    type=float,
+    default=3600.0,
+    show_default=True,
+    help="Maximum wait time in seconds when --wait is enabled",
+)
 def submit(
-    address: str,
+    address: str | None,
+    master: str | None,
     entrypoint: str,
     config: Optional[str],
     num_cpus: Optional[float],
     num_gpus: Optional[float],
     memory: Optional[int],
+    wait: bool,
+    timeout: float,
 ):
-    """Submit a job to the Ray cluster."""
+    """Submit a job through the selected deployment-neutral Ray target."""
     try:
+        if address is not None and master is not None:
+            raise JobConfigurationError("use only one of --master and --address")
+        target = RuntimeTarget.from_master(master or address or DEFAULT_DASHBOARD_URL)
+        if target.execution_mode.value == "local" and not wait:
+            raise JobConfigurationError(
+                "local targets require --wait so the local runtime remains alive "
+                "until the entrypoint exits"
+            )
+        if (
+            target.submission_mode is not RuntimeSubmissionMode.JOBS
+            and target.execution_mode.value != "local"
+        ):
+            raise JobConfigurationError(
+                "submit uses the Ray Jobs API; local and ray:// targets require "
+                "their dedicated execution or interactive entrypoint"
+            )
+        if timeout <= 0:
+            raise JobConfigurationError("timeout must be positive")
+        if target.is_managed and not wait:
+            raise JobConfigurationError(
+                "managed targets require --wait so the provider-owned cluster "
+                "remains alive until the job reaches a terminal state"
+            )
+
         # Load config from file if provided
         config_dict: dict[str, Any] = {}
         if config:
@@ -116,24 +170,61 @@ def submit(
             config_dict["memory"] = memory
 
         job_config = JobConfig(**config_dict)
-        client = TributoClient(address)
-        job_id = client.submit(
-            entrypoint=job_config.entrypoint,
-            runtime_env=job_config.runtime_env,
-            metadata=job_config.metadata,
-            submission_id=job_config.submission_id,
-            entrypoint_num_cpus=job_config.num_cpus,
-            entrypoint_num_gpus=job_config.num_gpus,
-            entrypoint_memory=job_config.memory,
-        )
 
-        click.echo(f"Job submitted successfully: {job_id}")
+        def submit_with_client(client: TributoClient) -> None:
+            job_id = client.submit(
+                entrypoint=job_config.entrypoint,
+                runtime_env=job_config.runtime_env,
+                metadata=job_config.metadata,
+                submission_id=job_config.submission_id,
+                entrypoint_num_cpus=job_config.num_cpus,
+                entrypoint_num_gpus=job_config.num_gpus,
+                entrypoint_memory=job_config.memory,
+            )
+            click.echo(f"Job submitted successfully: {job_id}")
+            if (
+                wait
+                or target.is_managed
+                or target.execution_mode is RuntimeExecutionMode.LOCAL
+            ):
+                _wait_for_job(client, job_id, timeout=timeout)
+
+        if target.execution_mode is RuntimeExecutionMode.LOCAL or target.is_managed:
+            with open_job_submission_client(target) as submission_client:
+                submit_with_client(
+                    TributoClient._from_submission_client(
+                        submission_client,
+                        address=submission_client.get_address(),
+                    )
+                )
+        else:
+            submit_with_client(TributoClient(target.require_jobs_address()))
     except TributoError as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
     except Exception as e:
         click.echo(f"Unexpected error: {e}", err=True)
         sys.exit(1)
+
+
+def _wait_for_job(client: TributoClient, job_id: str, *, timeout: float) -> None:
+    """Wait for a submitted Ray Job and fail on non-success terminal states."""
+    deadline = time.monotonic() + timeout
+    terminal = {"SUCCEEDED", "FAILED", "STOPPED"}
+    while time.monotonic() < deadline:
+        status = client.get_status(job_id)
+        if status in terminal:
+            if status != "SUCCEEDED":
+                raise JobExecutionError(
+                    f"Ray Job {job_id} ended with status {status}; "
+                    "retrieve logs with the logs command"
+                )
+            click.echo(f"Job {job_id} completed successfully")
+            return
+        time.sleep(1.0)
+    raise JobExecutionError(
+        f"Ray Job {job_id} did not reach a terminal state within {timeout:g}s"
+    )
 
 
 @main.command()
@@ -1200,8 +1291,18 @@ def algo_validate(algo_name: str, config_path: str):
     required=True,
     help="Path to the distributed algorithm execution JSON file",
 )
-def algo_run(config_path: str) -> None:
-    """Run one formal algorithm through local[*] or an attached KubeRay job."""
+@click.option(
+    "--master",
+    default=None,
+    help="Override the workload runtime: local, Ray Jobs URL, ray://, or managed target",
+)
+@click.option(
+    "--wait/--no-wait",
+    default=True,
+    help="Wait for a remote Ray Job to finish before returning",
+)
+def algo_run(config_path: str, master: str | None, wait: bool) -> None:
+    """Run one formal algorithm through a local or attached Ray runtime."""
     from pydantic import ValidationError
 
     from tributo._common.immutable import deep_thaw
@@ -1227,6 +1328,29 @@ def algo_run(config_path: str) -> None:
         )
     try:
         raw_config = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(raw_config, dict):
+            raise click.ClickException(
+                "Distributed algorithm execution JSON must be an object"
+            )
+        original_profile = raw_config.get("profile")
+        target = RuntimeTarget.from_master(master) if master else None
+        if target is not None:
+            expected_profile = (
+                "local"
+                if target.execution_mode is RuntimeExecutionMode.LOCAL
+                else "cluster"
+            )
+            configured_profile = raw_config.get("profile")
+            allowed_profiles = {None, expected_profile}
+            if expected_profile == "cluster":
+                allowed_profiles.add("kubernetes")
+            if configured_profile not in allowed_profiles:
+                raise click.ClickException(
+                    "--master conflicts with the JSON execution profile; "
+                    "choose one deployment target"
+                )
+            raw_config = dict(raw_config)
+            raw_config["profile"] = expected_profile
         execution_config = AlgorithmExecutionConfig.model_validate(raw_config)
     except ValidationError as exc:
         diagnostics = "; ".join(
@@ -1241,80 +1365,139 @@ def algo_run(config_path: str) -> None:
             f"Unable to read distributed algorithm JSON: {type(exc).__name__}"
         ) from exc
 
-    request_key = "tributo.cli-input"
-    invocation = IngestionInputInvocation(request=execution_config.input.ingestion)
-    values = {request_key: invocation}
-    binding = InputBinding(
-        name="train",
-        resolver_id=INGESTION_RESOLVER_ID,
-        reference=request_key,
-        feature_names=tuple(execution_config.input.features),
-        label_name=execution_config.input.label,
-        sample_weight_name=execution_config.input.sample_weight,
-    )
-    resources = execution_config.resources_per_worker
-    local_runtime = execution_config.local_runtime
-    manager = RayRuntimeManager(
-        default_local_options=(
-            LocalRuntimeOptions(
-                num_cpus=local_runtime.num_cpus,
-                num_gpus=local_runtime.num_gpus,
-            )
-            if local_runtime is not None
-            else None
+    def execute_workload() -> None:
+        """Execute the shared workload through the selected Ray context."""
+        request_key = "tributo.cli-input"
+        invocation = IngestionInputInvocation(request=execution_config.input.ingestion)
+        values = {request_key: invocation}
+        binding = InputBinding(
+            name="train",
+            resolver_id=INGESTION_RESOLVER_ID,
+            reference=request_key,
+            feature_names=tuple(execution_config.input.features),
+            label_name=execution_config.input.label,
+            sample_weight_name=execution_config.input.sample_weight,
         )
-    )
-    request = ExecutionRequest(
-        algorithm_request=AlgorithmRequest(
-            algorithm=execution_config.algorithm,
-            operation=execution_config.operation,
-            input_binding=binding,
-            algorithm_config=execution_config.algorithm_config,
-            implementation_id=execution_config.implementation_id,
-        ),
-        profile=execution_config.profile,
-        worker_count=execution_config.worker_count,
-        resources_per_worker=(
-            WorkerResources(
-                num_cpus=resources.num_cpus,
-                num_gpus=resources.num_gpus,
-                custom=resources.custom,
+        resources = execution_config.resources_per_worker
+        local_runtime = execution_config.local_runtime
+        manager = RayRuntimeManager(
+            default_local_options=(
+                LocalRuntimeOptions(
+                    num_cpus=local_runtime.num_cpus,
+                    num_gpus=local_runtime.num_gpus,
+                )
+                if local_runtime is not None
+                else None
             )
-            if resources is not None
-            else None
-        ),
-        resume_from=execution_config.resume_from,
-    )
-    dispatcher = build_algorithm_dispatcher(runtime_manager=manager)
+        )
+        request = ExecutionRequest(
+            algorithm_request=AlgorithmRequest(
+                algorithm=execution_config.algorithm,
+                operation=execution_config.operation,
+                input_binding=binding,
+                algorithm_config=execution_config.algorithm_config,
+                implementation_id=execution_config.implementation_id,
+            ),
+            profile=execution_config.profile,
+            worker_count=execution_config.worker_count,
+            resources_per_worker=(
+                WorkerResources(
+                    num_cpus=resources.num_cpus,
+                    num_gpus=resources.num_gpus,
+                    custom=resources.custom,
+                )
+                if resources is not None
+                else None
+            ),
+            resume_from=execution_config.resume_from,
+        )
+        dispatcher = build_algorithm_dispatcher(runtime_manager=manager)
+        try:
+            result = dispatcher.execute(
+                request,
+                InputExecutionContext(values=values),
+                resolution_context=InputResolutionContext(values=values),
+            )
+        except TributoError as exc:
+            raise click.ClickException(
+                f"Distributed algorithm execution failed: {type(exc).__name__}: {exc}"
+            ) from exc
+        receipt = result.execution_receipt
+        if receipt is None:
+            raise click.ClickException(
+                "Formal distributed execution completed without an ExecutionReceipt"
+            )
+        click.echo(
+            json.dumps(
+                {
+                    "run_id": result.run_id,
+                    "plan_id": result.plan_id,
+                    "status": result.execution.status,
+                    "metrics": deep_thaw(result.execution.metrics),
+                    "outputs": deep_thaw(result.execution.outputs),
+                    "execution_receipt": receipt.to_dict(),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+
+    if target is None or target.execution_mode is RuntimeExecutionMode.LOCAL:
+        execute_workload()
+        return
+    if target.submission_mode is RuntimeSubmissionMode.CLIENT:
+        with open_ray_client(target):
+            execute_workload()
+        return
+
+    if target.is_managed and not wait:
+        raise click.ClickException(
+            "managed algorithm targets require --wait so the provider-owned "
+            "cluster remains alive until the workload exits"
+        )
+    config_directory: tempfile.TemporaryDirectory[str] | None = None
+    if raw_config.get("profile") == "cluster" and original_profile == "cluster":
+        working_directory = path.parent
+        remote_config_name = path.name
+    else:
+        config_directory = tempfile.TemporaryDirectory(prefix="tributo-algo-")
+        working_directory = Path(config_directory.name)
+        remote_config_name = "execution.json"
+        (working_directory / remote_config_name).write_text(
+            json.dumps(raw_config, sort_keys=True),
+            encoding="utf-8",
+        )
     try:
-        result = dispatcher.execute(
-            request,
-            InputExecutionContext(values=values),
-            resolution_context=InputResolutionContext(values=values),
+        entrypoint = (
+            f"python -m tributo.cli algo run --config {shlex.quote(remote_config_name)}"
         )
-    except TributoError as exc:
-        raise click.ClickException(
-            f"Distributed algorithm execution failed: {type(exc).__name__}: {exc}"
-        ) from exc
-    receipt = result.execution_receipt
-    if receipt is None:
-        raise click.ClickException(
-            "Formal distributed execution completed without an ExecutionReceipt"
-        )
-    click.echo(
-        json.dumps(
-            {
-                "run_id": result.run_id,
-                "plan_id": result.plan_id,
-                "status": result.execution.status,
-                "metrics": deep_thaw(result.execution.metrics),
-                "outputs": deep_thaw(result.execution.outputs),
-                "execution_receipt": receipt.to_dict(),
-            },
-            indent=2,
-            sort_keys=True,
-        )
-    )
+        if target.is_managed:
+            with open_job_submission_client(target) as submission_client:
+                client = TributoClient._from_submission_client(
+                    submission_client,
+                    address=submission_client.get_address(),
+                )
+                job_id = client.submit(
+                    entrypoint=entrypoint,
+                    runtime_env={"working_dir": str(working_directory)},
+                )
+                click.echo(f"Algorithm Job submitted: {job_id}")
+                if wait:
+                    _wait_for_job(client, job_id, timeout=3600.0)
+                    click.echo(client.get_logs(job_id))
+        else:
+            client = TributoClient(target.require_jobs_address())
+            job_id = client.submit(
+                entrypoint=entrypoint,
+                runtime_env={"working_dir": str(working_directory)},
+            )
+            click.echo(f"Algorithm Job submitted: {job_id}")
+            if wait:
+                _wait_for_job(client, job_id, timeout=3600.0)
+                click.echo(client.get_logs(job_id))
+    finally:
+        if config_directory is not None:
+            config_directory.cleanup()
 
 
 # ── Tune ────────────────────────────────────────────────────────────────────────

@@ -64,6 +64,11 @@ _ROOT_ALIASES: Final[dict[str, str]] = {
     "tributo.exceptions.TributoError": "tributo.TributoError",
     "tributo.job.RayJob": "tributo.RayJob",
     "tributo.job.TributoClient": "tributo.TributoClient",
+    "tributo.runtime.RuntimeExecutionMode": "tributo.RuntimeExecutionMode",
+    "tributo.runtime.RuntimeLifecycle": "tributo.RuntimeLifecycle",
+    "tributo.runtime.RuntimeSubmissionMode": "tributo.RuntimeSubmissionMode",
+    "tributo.runtime.RuntimeTarget": "tributo.RuntimeTarget",
+    "tributo.runtime_providers.RuntimeLease": "tributo.RuntimeLease",
 }
 
 
@@ -173,7 +178,15 @@ def component_for(symbol: PublicSymbol) -> str:
     """Route a public symbol to one user-facing component page."""
     parts = symbol.module.split(".")
     package = parts[1] if len(parts) > 1 else "core"
-    if package in {"config", "exceptions", "job", "ray_jobs", "_common"}:
+    if package in {
+        "config",
+        "exceptions",
+        "job",
+        "ray_jobs",
+        "runtime",
+        "runtime_providers",
+        "_common",
+    }:
         return "core"
     if package in {"data", "streaming"}:
         return "data"

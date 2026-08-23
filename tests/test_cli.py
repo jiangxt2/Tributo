@@ -42,6 +42,99 @@ class TestSubmitCommand:
             assert result.exit_code == 0
             assert "job-abc123" in result.output
 
+    def test_submit_accepts_master_as_deployment_neutral_alias(self, runner):
+        """submit should accept a Ray Jobs endpoint through --master."""
+        with patch("tributo.cli.TributoClient") as mock_cls:
+            mock_client = MagicMock()
+            mock_client.submit.return_value = "job-master"
+            mock_cls.return_value = mock_client
+            result = runner.invoke(
+                main,
+                [
+                    "submit",
+                    "--master",
+                    "http://127.0.0.1:8265",
+                    "--entrypoint",
+                    "python script.py",
+                ],
+            )
+            assert result.exit_code == 0
+            assert "job-master" in result.output
+
+    def test_submit_rejects_conflicting_master_and_address(self, runner):
+        """submit should fail closed when target selectors conflict."""
+        result = runner.invoke(
+            main,
+            [
+                "submit",
+                "--master",
+                "http://ray-head:8265",
+                "--address",
+                "http://other-ray-head:8265",
+                "--entrypoint",
+                "python script.py",
+            ],
+        )
+        assert result.exit_code == 1
+        assert "only one of --master and --address" in result.output
+
+    def test_submit_rejects_local_master(self, runner):
+        """local submit requires synchronous ownership of the local runtime."""
+        result = runner.invoke(
+            main,
+            [
+                "submit",
+                "--master",
+                "local",
+                "--entrypoint",
+                "python script.py",
+            ],
+        )
+        assert result.exit_code == 1
+        assert "require --wait" in result.output
+
+    def test_submit_runs_local_entrypoint_with_wait(self, runner):
+        """local submit should delegate to the owned local Ray provider."""
+        submission_client = MagicMock()
+        submission_client.get_address.return_value = "http://127.0.0.1:8265"
+        submission_client.submit_job.return_value = "local-job"
+        open_client = MagicMock()
+        open_client.__enter__.return_value = submission_client
+        with (
+            patch("tributo.cli.open_job_submission_client", return_value=open_client),
+            patch("tributo.cli._wait_for_job") as wait_for_job,
+        ):
+            result = runner.invoke(
+                main,
+                [
+                    "submit",
+                    "--master",
+                    "local",
+                    "--wait",
+                    "--entrypoint",
+                    "python script.py",
+                ],
+            )
+        assert result.exit_code == 0
+        open_client.__enter__.assert_called_once_with()
+        wait_for_job.assert_called_once()
+        assert "Job submitted successfully: local-job" in result.output
+
+    def test_submit_rejects_managed_master_without_wait(self, runner):
+        """Owned runtimes must not be torn down immediately after submit."""
+        result = runner.invoke(
+            main,
+            [
+                "submit",
+                "--master",
+                "managed://ray_cluster_launcher/cluster.json",
+                "--entrypoint",
+                "python script.py",
+            ],
+        )
+        assert result.exit_code == 1
+        assert "require --wait" in result.output
+
     def test_submit_with_config_file(self, runner, tmp_path):
         """submit should load config from JSON file."""
         config_file = tmp_path / "config.json"

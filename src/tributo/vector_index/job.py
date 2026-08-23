@@ -15,6 +15,7 @@ from tributo._common.logging import configure_logging
 from tributo._common.runtime_env import build_runtime_env
 from tributo._common.submission_id import generate_submission_id
 from tributo.job import TributoClient
+from tributo.runtime import RuntimeExecutionMode, RuntimeTarget
 from tributo.vector_index.contracts import (
     VectorCompactRequest,
     VectorIndexBuildReceipt,
@@ -151,11 +152,22 @@ def decode_job_request(value: str) -> VectorJobRequest:
 def submit_vector_job(
     *,
     address: str,
+    runtime_target: RuntimeTarget | None = None,
     job_request: VectorJobRequest,
     project_root: Path | None = None,
     client: TributoClient | None = None,
 ) -> str:
     """Submit through TributoClient using the trusted Ray control-plane boundary."""
+    if runtime_target is not None:
+        if runtime_target.execution_mode is RuntimeExecutionMode.LOCAL:
+            raise VectorIndexConfigurationError(
+                "vector index Jobs require an attached or managed Ray Jobs runtime"
+            )
+        if runtime_target.is_managed:
+            raise VectorIndexConfigurationError(
+                "managed runtime targets require a lifecycle-aware vector runner"
+            )
+        address = runtime_target.require_jobs_address()
     encoded = encode_job_request(job_request)
     request_digest = _request_digest(job_request)
     submission_id = generate_submission_id(

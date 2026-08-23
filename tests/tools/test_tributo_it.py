@@ -189,6 +189,10 @@ tributo = "tributo.cli:main"
     )
     (source / "uv.lock").write_text("version = 1\n")
     (source / "ci" / "test-suites.json").write_text("{}\n")
+    (source / "docker" / "tributo-runtime").mkdir(parents=True)
+    (source / "docker" / "tributo-runtime" / "Dockerfile").write_text(
+        "FROM example:1\n"
+    )
     module = source / "src" / "tributo" / "module.py"
     module.write_text("uncommitted = True\n")
     (source / "src" / "tributo" / "__pycache__" / "module.pyc").write_bytes(b"x")
@@ -196,6 +200,8 @@ tributo = "tributo.cli:main"
     (source / "tests" / ".env.local").write_text("TOKEN=secret\n")
     (source / "tests" / "test_example.py").write_text("def test_example(): pass\n")
     (source / "scripts" / "ci_test_plan.py").write_text("MARKER = True\n")
+    (source / "tools").mkdir()
+    (source / "tools" / "tributo-runtime-full.json").write_text("{}\n")
     (source / ".git" / "config").write_text("secret\n")
 
     digest = tributo_it.create_source_snapshot(
@@ -210,6 +216,8 @@ tributo = "tributo.cli:main"
     assert (
         destination / "scripts" / "ci_test_plan.py"
     ).read_text() == "MARKER = True\n"
+    assert (destination / "docker" / "tributo-runtime" / "Dockerfile").is_file()
+    assert (destination / "tools" / "tributo-runtime-full.json").is_file()
     assert (destination / "src" / "tributo" / "module-link.py").is_symlink()
     assert not (destination / "src" / "tributo" / "__pycache__").exists()
     assert not (destination / "tests" / ".env.local").exists()
@@ -246,8 +254,10 @@ def test_source_snapshot_rejects_symlink_that_escapes_checkout(tmp_path: Path) -
     source = tmp_path / "checkout"
     destination = tmp_path / "snapshot"
     (source / "ci").mkdir(parents=True)
+    (source / "docker").mkdir()
     (source / "src").mkdir(parents=True)
     (source / "scripts").mkdir()
+    (source / "tools").mkdir()
     (source / "tests").mkdir()
     (source / "pyproject.toml").write_text("[project]\n")
     (source / "uv.lock").write_text("version = 1\n")
