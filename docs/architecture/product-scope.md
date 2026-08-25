@@ -70,12 +70,14 @@ connectors: Tributo describes *what* to read; an installed engine or Binding
 owns file discovery, decoding, SQL, split planning, transport, and batch loops.
 
 The current alpha implementation has real dual-engine Conformance evidence for
-Local/S3 Parquet and CSV, Local/S3 Iceberg and Lance, plus PostgreSQL. HDFS has
-a Ray Data adapter but still requires its cluster gate. ClickHouse and Doris
-have optional thin adapters for independent engine packages but remain
-unsupported until those packages are installable and pass real-infrastructure
-tests. ORC and Hive external tables remain unsupported in the locked engine
-versions. A configuration enum or adapter alone is never a support claim.
+Local/S3 Parquet and CSV, Local/S3 Iceberg and Lance, PostgreSQL, and structured
+Ray HiveServer2 table reads. The Hive vertical slice delegates all SQL,
+transport, ORC-backed fixture decoding, and worker execution to locked
+`ray-hive==1.0`; it does not provide native ORC/HDFS access or a Daft route.
+HDFS has a Ray Data adapter but still requires its cluster gate. ClickHouse and
+Doris have optional thin adapters for independent engine packages but remain
+unsupported until those packages pass real-infrastructure tests. A
+configuration enum or adapter alone is never a support claim.
 
 The narrow `tributo.ingestion_bindings` entry-point group discovers versioned
 descriptors only. It has no plugin lifecycle, dependency installation, third

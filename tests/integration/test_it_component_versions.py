@@ -40,13 +40,13 @@ def test_component_versions_match_lock_and_are_digest_pinned() -> None:
     assert re.fullmatch(r"3\.(12|13)", versions["PYTHON_VERSION"])
     python_tag = versions["PYTHON_VERSION"].replace(".", "")
     assert f":{versions['RAY_VERSION']}-py{python_tag}@sha256:" in versions["RAY_IMAGE"]
-    assert f":{versions['UV_VERSION']}@sha256:" in versions["UV_IMAGE"]
+    assert re.fullmatch(r"\d+\.\d+\.\d+", versions["UV_VERSION"])
+    assert f":{versions['HIVE_VERSION']}@sha256:" in versions["HIVE_IMAGE"]
     assert f":{versions['MINIO_RELEASE']}@sha256:" in versions["MINIO_IMAGE"]
     assert f":{versions['POSTGRES_VERSION']}@sha256:" in versions["POSTGRES_IMAGE"]
     for key in (
         "RAY_IMAGE",
-        "UV_IMAGE",
-        "TOOL_IMAGE",
+        "HIVE_IMAGE",
         "MINIO_IMAGE",
         "POSTGRES_IMAGE",
     ):
@@ -64,16 +64,29 @@ def test_dockerfiles_and_compose_consume_the_version_contract() -> None:
     versions = load_it_component_versions()
 
     assert profile["base_image"] == versions["RAY_IMAGE"]
-    assert profile["uv_image"] == versions["UV_IMAGE"]
-    assert profile["tool_image"] == versions["TOOL_IMAGE"]
+    assert profile["dependency_mode"] == "host-uv-export"
+    assert profile["uv_version"] == versions["UV_VERSION"]
+    assert profile["hive_image"] == versions["HIVE_IMAGE"]
     assert profile["minio_image"] == versions["MINIO_IMAGE"]
+    assert "uv_image" not in profile
+    assert "tool_image" not in profile
     assert "ARG BASE_IMAGE" in dockerfile
     assert "FROM ${BASE_IMAGE}" in dockerfile
-    assert "ARG UV_IMAGE" in dockerfile
-    assert "FROM ${UV_IMAGE} AS uv" in dockerfile
-    assert "COPY --from=uv" in dockerfile
+    assert "ARG UV_IMAGE" not in dockerfile
+    assert "FROM ${UV_IMAGE}" not in dockerfile
+    assert "COPY --from=uv" not in dockerfile
+    assert "COPY --from=locked-requirements" in dockerfile
+    assert "python -m pip install --require-hashes" in dockerfile
     assert "image: ${TRIBUTO_IT_RUNTIME_IMAGE:" in compose
     assert "image: ${TRIBUTO_IT_MINIO_IMAGE:" in compose
+    assert compose.count("image: ${TRIBUTO_IT_RUNTIME_IMAGE:") >= 3
+    assert "TRIBUTO_IT_TOOL_IMAGE" not in compose
+    assert "python:3.12.13-alpine3.22" not in compose
+    assert "hiveserver2:" in compose
+    assert "hive-init:" in compose
+    assert "setup_hive_fixture.py" in compose
+    assert "/opt/hive/bin/beeline" not in compose
+    assert "JAVA_TOOL_OPTIONS" not in compose
     assert "build:" not in compose
     assert "MLFLOW_VERSION" in compose
     assert "mlflow-init:" in compose

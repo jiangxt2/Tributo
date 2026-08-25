@@ -84,8 +84,9 @@ The equivalent uv commands are `uv sync --extra clickhouse`,
 `uv sync --extra hive-ray`. A Doris test that selects
 `engine="tributo.daft"` needs `daft-doris`; a Ray Doris or generic training
 path that selects `engine="tributo.ray_data"` needs `ray-doris`.
-`ray-hive` is packaged for the Ray-native runtime, but Tributo does not yet
-register a Hive Provider or Binding and does not silently add a Hive route.
+`ray-hive` backs the built-in `tributo.hive` to `tributo.ray.hive` route. The
+request must still select Ray explicitly; no Daft, native ORC/HDFS, or automatic
+fallback route is added.
 
 ## Run the image gate
 
@@ -112,10 +113,10 @@ directory, then removes only that Compose project and its volumes.
 
 The full image includes the first-party data, model export, training,
 Tune, serving, streaming, registry, vector-index, explainability, graph, and
-causal dependency closure, plus the external `ray-hive==1.0` HiveServer2
-connector package. It does not include development/test dependencies, GPU
-compatibility or a GPU execution gate, a Tributo-native Hive Provider/Binding,
-HDFS/ORC file readers, or a KubeRay control plane. Linux PyTorch dependencies may still contain
+causal dependency closure, plus `ray-hive==1.0` for the built-in Ray
+HiveServer2 Binding. It does not include development/test dependencies, GPU
+compatibility or a GPU execution gate, HDFS/ORC file readers, a Daft Hive
+Binding, or a KubeRay control plane. Linux PyTorch dependencies may still contain
 CUDA/NVIDIA distributions; GPU drivers, GPU scheduling, and NCCL validation
 are outside this image contract.
 Kubernetes deployment remains the responsibility of the Ray/KubeRay

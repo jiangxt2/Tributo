@@ -21,6 +21,8 @@ x-ray-common: &ray-common
     XDG_CACHE_HOME: /workspace/tributo-work/cache
     TRIBUTO_RAY_DASHBOARD_URL: http://127.0.0.1:8265
     TRIBUTO_RAY_MINIO_ENDPOINT: http://minio:9000
+    TRIBUTO_HIVE_HOST: hiveserver2
+    TRIBUTO_HIVE_PORT: "10000"
     TRIBUTO_STORAGE_PROFILE_VECTOR_IT: '{"endpoint":"http://minio:9000","region":"us-east-1","access_key_id":"minioadmin","secret_access_key":"minioadmin123","use_ssl":false,"path_style":true}'
     MLFLOW_TRACKING_URI: http://mlflow:5000
     PYTHON_VERSION: ${PYTHON_VERSION}
@@ -42,7 +44,7 @@ x-ray-common: &ray-common
 
 services:
   source-init:
-    image: ${TRIBUTO_IT_TOOL_IMAGE:?TRIBUTO_IT_TOOL_IMAGE is required}
+    image: ${TRIBUTO_IT_RUNTIME_IMAGE:?TRIBUTO_IT_RUNTIME_IMAGE is required}
     pull_policy: never
     user: "0:0"
     entrypoint:
@@ -64,7 +66,7 @@ services:
     restart: "no"
 
   workspace-init:
-    image: ${TRIBUTO_IT_TOOL_IMAGE:?TRIBUTO_IT_TOOL_IMAGE is required}
+    image: ${TRIBUTO_IT_RUNTIME_IMAGE:?TRIBUTO_IT_RUNTIME_IMAGE is required}
     pull_policy: never
     user: "0:0"
     entrypoint:
@@ -88,7 +90,7 @@ services:
       - --head
       - --port=6379
       - --dashboard-host=0.0.0.0
-      - --num-cpus=1
+      - --num-cpus=${TRIBUTO_IT_RAY_HEAD_CPUS:-1}
       - --block
     healthcheck:
       test:
@@ -138,6 +140,47 @@ services:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin123
 
+  hiveserver2:
+    image: ${TRIBUTO_IT_HIVE_IMAGE:-tributo-hive-disabled:local}
+    pull_policy: never
+    profiles: ["hive-ingestion"]
+    environment:
+      SERVICE_NAME: hiveserver2
+      SERVICE_OPTS: >-
+        -Dhive.server2.authentication=NOSASL
+        -Dhive.server2.thrift.resultset.serialize.in.tasks=false
+        -Dhive.exec.mode.local.auto=true
+        -Dhive.execution.engine=mr
+    volumes:
+      - hive-warehouse:/opt/hive/data/warehouse
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - bash -c '</dev/tcp/127.0.0.1/10000'
+      interval: 5s
+      timeout: 3s
+      retries: 60
+      start_period: 30s
+
+  hive-init:
+    <<: *ray-common
+    profiles: ["hive-ingestion"]
+    entrypoint:
+      - python
+    command:
+      - /workspace/tributo-src/tests/integrations/setup_hive_fixture.py
+      - /workspace/tributo-src/tests/integrations/hive-setup.sql
+      - --host
+      - hiveserver2
+      - --port
+      - "10000"
+    depends_on:
+      hiveserver2:
+        condition: service_healthy
+      source-init:
+        condition: service_completed_successfully
+    restart: "no"
+
   mlflow:
     <<: *ray-common
     profiles: ["model-export"]
@@ -181,6 +224,7 @@ services:
       - mlflow-data:/mlflow
 
 volumes:
+  hive-warehouse:
   ingestion-source:
   ingestion-workspace:
   mlflow-data:

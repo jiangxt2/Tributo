@@ -34,6 +34,9 @@ def test_distributed_ingestion_is_external_and_absent_from_ci() -> None:
     assert (
         "tests/integrations/test_data_ingestion_dual_engine.py" in suite["test_paths"]
     )
+    assert "tests/integrations/setup_hive_fixture.py" in suite["trigger_paths"]
+    assert "tests/integrations/hive-setup.sql" in suite["trigger_paths"]
+    assert "hive" in suite["requires"]
     assert "data-ingestion-distributed:" not in workflow
     assert "run_data_ingestion_it.sh" not in workflow
     assert "docker compose" not in workflow
@@ -81,26 +84,21 @@ def test_distributed_ingestion_image_uses_locked_project_dependencies() -> None:
     assert versions["RAY_IMAGE"].startswith(
         f"rayproject/ray:{versions['RAY_VERSION']}-py312@sha256:"
     )
-    assert versions["UV_IMAGE"].startswith(
-        f"ghcr.io/astral-sh/uv:{versions['UV_VERSION']}@sha256:"
-    )
     assert profile["base_image"] == versions["RAY_IMAGE"]
-    assert profile["uv_image"] == versions["UV_IMAGE"]
+    assert profile["dependency_mode"] == "host-uv-export"
+    assert profile["uv_version"] == versions["UV_VERSION"]
     assert profile["minio_image"] == versions["MINIO_IMAGE"]
-    assert profile["tool_image"] == versions["TOOL_IMAGE"]
+    assert profile["hive_image"] == versions["HIVE_IMAGE"]
+    assert "uv_image" not in profile
+    assert "tool_image" not in profile
     assert "ARG BASE_IMAGE" in dockerfile
     assert "FROM ${BASE_IMAGE}" in dockerfile
-    assert "ARG UV_IMAGE" in dockerfile
-    assert "FROM ${UV_IMAGE} AS uv" in dockerfile
-    assert "COPY --from=uv" in dockerfile
-    assert "uv sync" in dockerfile
-    assert "--extra model-export-hf" in dockerfile
-    assert "--extra data-daft" in dockerfile
-    assert "--no-default-groups" in dockerfile
-    assert "--no-install-project" in dockerfile
-    assert "--locked" in dockerfile
-    assert "python -m ensurepip --upgrade" in dockerfile
-    assert "COPY --chown=1000:100 pyproject.toml uv.lock" in dockerfile
+    assert "ARG UV_IMAGE" not in dockerfile
+    assert "FROM ${UV_IMAGE}" not in dockerfile
+    assert "COPY --from=uv" not in dockerfile
+    assert "uv sync" not in dockerfile
+    assert "COPY --from=locked-requirements" in dockerfile
+    assert "python -m pip install --require-hashes" in dockerfile
     assert "COPY --chown=ray:users ." not in dockerfile
     assert "src/" not in dockerfile
     assert "tests/" not in dockerfile
@@ -152,6 +150,8 @@ def test_runtime_publish_workflow_is_trusted_and_immutable() -> None:
         "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c"
         in workflow
     )
+    assert "astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5" in workflow
+    assert 'version: "0.11.23"' in workflow
     assert "publish-runtime" in workflow
     assert "linux/amd64" in workflow
     assert ":latest" not in workflow
@@ -223,8 +223,9 @@ def test_model_export_runner_is_isolated_and_cleans_its_own_project() -> None:
     assert "trap cleanup EXIT" in runner
     assert "down --volumes --remove-orphans" in runner
     assert "label=com.docker.compose.project=${PROJECT_NAME}" in runner
-    assert 'TRIBUTO_IT_TOOL_IMAGE="${TOOL_IMAGE%%@*}"' in runner
+    assert "TRIBUTO_IT_TOOL_IMAGE" not in runner
     assert 'TRIBUTO_IT_MINIO_IMAGE="${MINIO_IMAGE%%@*}"' in runner
+    assert "prepare-infrastructure --profile data-ingestion" in runner
     assert "create-source-snapshot" in runner
     assert "test_it_component_versions.py" in runner
     assert "--collect-only" in runner

@@ -76,14 +76,20 @@ def test_vector_runtime_is_exactly_versioned_in_the_shared_profile() -> None:
         "pylance": "9.0.0",
         "ray": "2.55.1",
         "ray_doris": "1.0",
+        "ray_hive": "1.0",
+        "thrift": "0.16.0",
     }
-    assert "--extra vector-index" in dockerfile
+    assert profile["dependency_mode"] == "host-uv-export"
+    assert "COPY --from=locked-requirements" in dockerfile
+    assert "python -m pip install --require-hashes" in dockerfile
     assert "m.version('pylance') == '9.0.0'" in dockerfile
     assert "m.version('lance-ray') == '0.5.0'" in dockerfile
     assert "m.version('pyarrow') == '19.0.1'" in dockerfile
     assert "m.version('daft-clickhouse') == '1.0'" in dockerfile
     assert "m.version('daft-doris') == '1.0'" in dockerfile
     assert "m.version('ray-doris') == '1.0'" in dockerfile
+    assert "m.version('ray-hive') == '1.0'" in dockerfile
+    assert "m.version('thrift') == '0.16.0'" in dockerfile
 
 
 def test_vector_project_names_are_scoped_and_cli_dispatches(monkeypatch) -> None:
