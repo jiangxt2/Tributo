@@ -25,7 +25,7 @@ def test_inference_it_versions_are_explicit_and_immutable() -> None:
     versions = _VERSIONS.read_text(encoding="utf-8")
 
     assert "rayproject/ray:2.55.1-py312@sha256:" in versions
-    assert "ghcr.io/astral-sh/uv:0.11.23@sha256:" in versions
+    assert "TRIBUTO_INFERENCE_UV_IMAGE" not in versions
     assert "minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:" in versions
     for expected in (
         "TRIBUTO_EXPECTED_RAY_VERSION=2.55.1",
@@ -40,14 +40,21 @@ def test_inference_it_versions_are_explicit_and_immutable() -> None:
 
 def test_inference_image_uses_one_locked_project_environment() -> None:
     dockerfile = _DOCKERFILE.read_text(encoding="utf-8")
+    runner = _RUNNER.read_text(encoding="utf-8")
 
     assert "ARG BASE_IMAGE" in dockerfile
-    assert "ARG UV_IMAGE" in dockerfile
-    assert "uv sync" in dockerfile
-    assert "--extra dev" in dockerfile
-    assert "--extra test-integration" in dockerfile
-    assert "--no-default-groups" in dockerfile
-    assert "--locked" in dockerfile
+    assert "ARG UV_IMAGE" not in dockerfile
+    assert "uv sync" not in dockerfile
+    assert "COPY --from=locked-requirements" in dockerfile
+    assert "COPY --from=project-wheelhouse" in dockerfile
+    assert "python -m pip install --require-hashes" in dockerfile
+    assert "python -m pip install --no-index --no-deps" in dockerfile
+    assert "TRIBUTO_INFERENCE_UV_IMAGE" not in runner
+    assert "export-requirements" in runner
+    assert "project-wheelhouse" in runner
+    assert "cleanup_transient_path" in runner
+    assert "requirements_dir" in runner
+    assert "project_wheel_dir" in runner
 
 
 def test_inference_compose_is_project_scoped_without_host_ports() -> None:

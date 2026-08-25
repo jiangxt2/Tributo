@@ -1,9 +1,7 @@
 ARG BASE_IMAGE=tributo-ray-base:2.55.1-py312
-ARG UV_IMAGE=tributo-uv:0.11.23
 ARG TRIBUTO_BASE_IMAGE=rayproject/ray:2.55.1-py312@sha256:911245f2478ad2e9f67ac13978dc2a75bcae0498b9f188b10bba703324b78379
 ARG TRIBUTO_PLATFORM
 
-FROM ${UV_IMAGE} AS uv
 FROM ${BASE_IMAGE}
 
 ARG BASE_IMAGE
@@ -22,10 +20,9 @@ LABEL org.opencontainers.image.title="tributo-runtime-full" \
       org.tributo.runtime-extras="${TRIBUTO_RUNTIME_EXTRAS}" \
       org.tributo.manifest-sha256="${TRIBUTO_MANIFEST_SHA256}"
 
-COPY --from=uv /uv /uvx /usr/local/bin/
-
 USER root
 RUN mkdir -p /opt/tributo /opt/tributo-image /workspace && \
+    python -m venv /opt/tributo/.venv && \
     chown -R ray:users /opt/tributo /opt/tributo-image /workspace
 
 # Some locked Alpha dependencies, notably econml on linux/arm64, do not ship
@@ -39,47 +36,19 @@ USER ray
 
 ENV PATH="/opt/tributo/.venv/bin:${PATH}" \
     PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    UV_HTTP_RETRIES=10 \
-    UV_HTTP_TIMEOUT=600 \
-    UV_LINK_MODE=copy \
-    UV_PROJECT_ENVIRONMENT=/opt/tributo/.venv
+    PYTHONDONTWRITEBYTECODE=1
 
 COPY --chown=ray:users pyproject.toml uv.lock README.md /opt/tributo/
 COPY --chown=ray:users src /opt/tributo/src
+COPY --from=locked-requirements /requirements.txt /opt/tributo/requirements.txt
+COPY --from=project-wheelhouse / /opt/tributo-image/project-wheelhouse/
 
 WORKDIR /opt/tributo
 
-RUN --mount=type=cache,target=/home/ray/.cache/uv,uid=1000,gid=100 \
-    env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
-        -u http_proxy -u https_proxy -u all_proxy \
-    uv sync \
-        --extra data \
-        --extra data-daft \
-        --extra hive-ray \
-        --extra vector-index \
-        --extra postgresql \
-        --extra clickhouse \
-        --extra mysql \
-        --extra doris-flight \
-        --extra s3 \
-        --extra model-export \
-        --extra model-export-torch \
-        --extra hf \
-        --extra model-export-hf \
-        --extra training \
-        --extra tune \
-        --extra explainability \
-        --extra identity \
-        --extra streaming \
-        --extra grpc \
-        --extra registry \
-        --extra graph \
-        --extra causal \
-        --extra streaming-inference \
-        --no-default-groups \
-        --no-dev \
-        --locked
+RUN --mount=type=cache,target=/home/ray/.cache/pip,uid=1000,gid=100 \
+    python -m pip install --require-hashes -r /opt/tributo/requirements.txt && \
+    python -m pip install --no-index --no-deps \
+        /opt/tributo-image/project-wheelhouse/*.whl
 
 # Ray runtime_env may need pip when an algorithm uses the offline wheelhouse
 # distribution mode. Bootstrap it in the image without contacting an index.

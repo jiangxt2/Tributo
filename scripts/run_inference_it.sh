@@ -112,6 +112,8 @@ baseline_images="/tmp/${COMPOSE_PROJECT_NAME}-baseline-dangling-images.txt"
 final_images="/tmp/${COMPOSE_PROJECT_NAME}-final-dangling-images.txt"
 baseline_df="/tmp/${COMPOSE_PROJECT_NAME}-baseline-docker-df.txt"
 final_df="/tmp/${COMPOSE_PROJECT_NAME}-final-docker-df.txt"
+requirements_dir="/tmp/${COMPOSE_PROJECT_NAME}-requirements"
+project_wheel_dir="/tmp/${COMPOSE_PROJECT_NAME}-project-wheel"
 image_created=0
 
 docker ps -a --format '{{.ID}}' | while IFS= read -r container_id; do
@@ -139,6 +141,16 @@ project_resources() {
   docker ps -aq --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}"
   docker network ls -q --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}"
   docker volume ls -q --filter "label=com.docker.compose.project=${COMPOSE_PROJECT_NAME}"
+}
+
+cleanup_transient_path() {
+  local path="$1"
+  [ -e "$path" ] || return 0
+  if command -v trash >/dev/null 2>&1; then
+    trash "$path"
+  else
+    python3 -c 'import shutil, sys; shutil.rmtree(sys.argv[1])' "$path"
+  fi
 }
 
 if [ -n "$(project_resources)" ]; then
@@ -179,6 +191,11 @@ cleanup() {
   "${docker_clean[@]}" image ls \
     --all --no-trunc --filter dangling=true > "$final_images"
   "${docker_clean[@]}" system df > "$final_df"
+  if ! cleanup_transient_path "$requirements_dir" ||
+    ! cleanup_transient_path "$project_wheel_dir"; then
+    echo "Failed to clean inference IT transient build contexts" >&2
+    status=1
+  fi
   echo "Inference IT image log: ${image_log}"
   echo "Docker image snapshots: ${baseline_images}, ${final_images}"
   echo "Docker disk summaries: ${baseline_df}, ${final_df}"
@@ -202,10 +219,25 @@ if "${docker_clean[@]}" image inspect \
 fi
 
 ray_image_ref="$TRIBUTO_INFERENCE_RAY_IMAGE"
-uv_image_ref="$TRIBUTO_INFERENCE_UV_IMAGE"
 minio_image_ref="$TRIBUTO_INFERENCE_MINIO_IMAGE"
-python3 -c \
-  'from tools.tributo_it import ensure_digest_image; import os; [ensure_digest_image(os.environ[name]) for name in ("TRIBUTO_INFERENCE_RAY_IMAGE", "TRIBUTO_INFERENCE_UV_IMAGE", "TRIBUTO_INFERENCE_MINIO_IMAGE")]'
+command -v uv >/dev/null
+mkdir -p "$requirements_dir" "$project_wheel_dir"
+uv run --no-project --python 3.12 python tools/tributo_it.py \
+  export-requirements \
+  --output-file "$requirements_dir/requirements.txt" \
+  --uv-version "$TRIBUTO_EXPECTED_UV_VERSION" \
+  --extra dev \
+  --extra test-integration \
+  --extra explainability \
+  --extra model-export-torch
+uv build --wheel --out-dir "$project_wheel_dir" --no-create-gitignore
+project_wheel_count="$(find "$project_wheel_dir" -maxdepth 1 -type f -name 'tributo-*.whl' | wc -l | tr -d ' ')"
+if [ "$project_wheel_count" -ne 1 ]; then
+  echo "Expected exactly one Tributo project wheel, found ${project_wheel_count}" >&2
+  exit 1
+fi
+uv run --no-project --python 3.12 python -c \
+  'from tools.tributo_it import ensure_digest_image; import os; [ensure_digest_image(os.environ[name]) for name in ("TRIBUTO_INFERENCE_RAY_IMAGE", "TRIBUTO_INFERENCE_MINIO_IMAGE")]'
 export TRIBUTO_INFERENCE_MINIO_IMAGE="${minio_image_ref%@*}"
 
 image_created=1
@@ -215,7 +247,8 @@ image_created=1
   --tag "$TRIBUTO_INFERENCE_RUNTIME_IMAGE" \
   --label "io.tributo.it.compose-project=${COMPOSE_PROJECT_NAME}" \
   --build-arg "BASE_IMAGE=${ray_image_ref%@*}" \
-  --build-arg "UV_IMAGE=${uv_image_ref%@*}" \
+  --build-context "locked-requirements=${requirements_dir}" \
+  --build-context "project-wheelhouse=${project_wheel_dir}" \
   . 2>&1 | tee "$image_log"
 
 "${compose[@]}" config --quiet

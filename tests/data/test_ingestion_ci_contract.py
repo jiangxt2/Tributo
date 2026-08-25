@@ -48,11 +48,19 @@ def test_distributed_ingestion_uses_isolated_ray_and_minio_services() -> None:
     assert "ray-head:" in compose
     assert "ray-worker:" in compose
     assert "minio:" in compose
+    assert "postgres:" in compose
+    assert "postgres-test:" in compose
+    assert "tests/integration/test_postgresql_ingestion.py" in compose
+    assert "postgres-ingestion" in compose
     assert "source-init:" in compose
     assert "workspace-init:" in compose
     assert "ingestion-source:/workspace/tributo-src:ro" in compose
     assert "ingestion-workspace:/workspace/tributo-work" in compose
     assert "TRIBUTO_MINIO_ENDPOINT: http://minio:9000" in compose
+    assert "TRIBUTO_POSTGRESQL_HOST: postgres" in compose
+    assert 'TRIBUTO_POSTGRESQL_PORT: "5432"' in compose
+    runner = _RUNNER.read_text(encoding="utf-8")
+    assert "enable_postgresql=True" in runner
     assert "condition: service_healthy" in compose
     assert "condition: service_completed_successfully" in compose
     assert 'user: "0:0"' in compose
@@ -199,7 +207,7 @@ def test_postgresql_external_contract_keeps_an_immutable_component_pin() -> None
     workflow = _WORKFLOW.read_text(encoding="utf-8")
     versions = load_it_component_versions()
 
-    assert versions["POSTGRES_IMAGE"].startswith("postgres:17.6@sha256:")
+    assert versions["POSTGRES_IMAGE"].startswith("postgres:16.14@sha256:")
     assert versions["POSTGRES_IMAGE"] not in workflow
     assert (
         "tests/integration/test_postgresql_ingestion.py"

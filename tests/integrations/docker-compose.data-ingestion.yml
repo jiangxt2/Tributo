@@ -23,6 +23,11 @@ x-ray-common: &ray-common
     TRIBUTO_RAY_MINIO_ENDPOINT: http://minio:9000
     TRIBUTO_HIVE_HOST: hiveserver2
     TRIBUTO_HIVE_PORT: "10000"
+    TRIBUTO_POSTGRESQL_HOST: postgres
+    TRIBUTO_POSTGRESQL_PORT: "5432"
+    TRIBUTO_POSTGRESQL_DB: tributo
+    TRIBUTO_POSTGRESQL_USER: tributo
+    TRIBUTO_POSTGRESQL_PASSWORD: tributo-test
     TRIBUTO_STORAGE_PROFILE_VECTOR_IT: '{"endpoint":"http://minio:9000","region":"us-east-1","access_key_id":"minioadmin","secret_access_key":"minioadmin123","use_ssl":false,"path_style":true}'
     MLFLOW_TRACKING_URI: http://mlflow:5000
     PYTHON_VERSION: ${PYTHON_VERSION}
@@ -140,6 +145,50 @@ services:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin123
 
+  postgres:
+    image: ${TRIBUTO_IT_POSTGRES_IMAGE:-postgres:16.14}
+    pull_policy: never
+    profiles: ["postgres-ingestion"]
+    environment:
+      POSTGRES_DB: tributo
+      POSTGRES_USER: tributo
+      POSTGRES_PASSWORD: tributo-test
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U tributo -d tributo
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 5s
+
+  postgres-test:
+    <<: *ray-common
+    profiles: ["postgres-ingestion"]
+    command:
+      - python
+      - -m
+      - pytest
+      - tests/integration/test_postgresql_ingestion.py
+      - -o
+      - addopts=
+      - -m
+      - integration
+      - -vv
+      - -rP
+      - --tb=short
+      - --timeout=1200
+    depends_on:
+      postgres:
+        condition: service_healthy
+      source-init:
+        condition: service_completed_successfully
+      workspace-init:
+        condition: service_completed_successfully
+    restart: "no"
+
   hiveserver2:
     image: ${TRIBUTO_IT_HIVE_IMAGE:-tributo-hive-disabled:local}
     pull_policy: never
@@ -228,3 +277,4 @@ volumes:
   ingestion-source:
   ingestion-workspace:
   mlflow-data:
+  postgres-data:

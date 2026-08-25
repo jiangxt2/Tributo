@@ -5,7 +5,6 @@ from __future__ import annotations
 import importlib.metadata
 import json
 import os
-import subprocess
 import sys
 import urllib.request
 
@@ -45,20 +44,6 @@ def main() -> None:
     if mismatches:
         raise RuntimeError(f"locked package version mismatch: {mismatches}")
 
-    uv_output = subprocess.run(
-        ["uv", "--version"],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=10,
-    ).stdout.strip()
-    expected_uv_version = _expected("TRIBUTO_EXPECTED_UV_VERSION")
-    uv_version_fields = uv_output.split()
-    if uv_version_fields[:2] != ["uv", expected_uv_version]:
-        raise RuntimeError(
-            f"uv version mismatch: expected {expected_uv_version!r}, got {uv_output!r}"
-        )
-
     for url in (
         "http://mlflow:5000/health",
         "http://minio:9000/minio/health/live",
@@ -71,7 +56,7 @@ def main() -> None:
 
     print(
         json.dumps(
-            {"python": actual_python, "uv": uv_output, **actual},
+            {"python": actual_python, **actual},
             sort_keys=True,
         )
     )
