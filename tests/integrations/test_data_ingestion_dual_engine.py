@@ -40,10 +40,12 @@ from tributo.data import (
     FilterNotNull,
     FilterNull,
     FilterRange,
+    IcebergSourceConfig,
     IngestionRequest,
     IngestionRuntimeContext,
     Limit,
     ParquetSourceConfig,
+    ProviderSourceConfig,
     RayDataHandle,
     RenameColumns,
     S3Config,
@@ -501,8 +503,56 @@ def _assert_native_s3_write_conformance(s3: S3Config) -> None:
             )
             assert receipt.committed is True
             assert catalog.load_table(table_identifier).scan().to_arrow().num_rows == 2
+            _assert_iceberg_s3_read_conformance(
+                source=IcebergSourceConfig(
+                    catalog=catalog_name,
+                    table=table_identifier,
+                    catalog_properties=catalog_properties,
+                    s3={
+                        "endpoint": s3.endpoint,
+                        "access_key_id": s3.access_key_id,
+                        "secret_access_key": s3.secret_access_key,
+                        "region": s3.region,
+                    },
+                    selected_fields=["id", "category"],
+                ),
+                expected_rows=rows,
+            )
     finally:
         filesystem.delete_dir(bucket)
+
+
+def _assert_iceberg_s3_read_conformance(
+    *,
+    source: IcebergSourceConfig,
+    expected_rows: list[dict[str, object]],
+) -> None:
+    context = IngestionRuntimeContext(
+        distribution_probe=ray_worker_distribution_probe,
+        require_worker_validation=True,
+    )
+    with ExitStack() as stack:
+        ray_result = stack.enter_context(
+            open_ingestion(
+                IngestionRequest(source=source, engine="tributo.ray_data"),
+                context,
+            )
+        )
+        daft_result = stack.enter_context(
+            open_ingestion(
+                IngestionRequest(source=source, engine="tributo.daft"),
+                context,
+            )
+        )
+        assert isinstance(ray_result.handle, RayDataHandle)
+        assert isinstance(daft_result.handle, DaftDataFrameHandle)
+        assert_dual_engine_conformance(
+            ray_result,
+            ray_result.handle.dataset.take_all(),
+            daft_result,
+            daft_result.handle.dataframe.to_pylist(),
+            expected_rows=expected_rows,
+        )
 
 
 def test_local_parquet_conformance_on_ray_cluster() -> None:
@@ -569,7 +619,63 @@ def test_s3_parquet_conformance_on_ray_cluster_and_minio() -> None:
         filesystem.delete_dir(bucket)
 
 
+def test_hive_server2_projection_on_worker() -> None:
+    _configure_cluster()
+    current_node_id = ray.get_runtime_context().get_node_id()
+    current_node = next(
+        node for node in ray.nodes() if str(node.get("NodeID")) == current_node_id
+    )
+    assert float((current_node.get("Resources") or {}).get("CPU", 0)) == 0
+
+    source = ProviderSourceConfig(
+        provider="tributo.hive",
+        uri=(
+            f"hive://{os.environ['TRIBUTO_HIVE_HOST']}:"
+            f"{os.environ['TRIBUTO_HIVE_PORT']}/tributo_it/events"
+        ),
+        options={
+            "columns": ["id", "category"],
+            "auth": "NOSASL",
+            "transport": "binary",
+            "fetch_rows": 1,
+            "session_options": {
+                "hive.local.time.zone": "UTC",
+                "hive.resultset.use.unique.column.names": "false",
+            },
+        },
+    )
+    context = IngestionRuntimeContext(
+        distribution_probe=ray_worker_distribution_probe,
+        require_worker_validation=True,
+    )
+    with open_ingestion(
+        IngestionRequest(source=source, engine="tributo.ray_data"),
+        context,
+    ) as result:
+        assert isinstance(result.handle, RayDataHandle)
+        schema = result.handle.dataset.schema()
+        assert schema is not None
+        assert schema.names == ["id", "category"]
+        assert schema.types == [pa.int32(), pa.string()]
+        rows = sorted(result.handle.dataset.take_all(), key=lambda row: row["id"])
+        assert rows == [
+            {"id": 1, "category": "drop"},
+            {"id": 2, "category": "keep"},
+            {"id": 3, "category": "keep"},
+        ]
+        assert result.receipt.binding_id == "tributo.ray.hive"
+        assert result.receipt.reader_api == "ray_hive.read_hive"
+        assert result.receipt.transport_id == "hiveserver2.binary"
+        evidence = {
+            item.distribution_name: item for item in result.receipt.component_versions
+        }
+        assert evidence["ray-hive"].driver_version == "1.0"
+        assert evidence["ray-hive"].worker_validation_complete is True
+        assert set(evidence["ray-hive"].worker_versions) == {"1.0"}
+
+
 if __name__ == "__main__":
     test_local_parquet_conformance_on_ray_cluster()
     test_s3_parquet_conformance_on_ray_cluster_and_minio()
+    test_hive_server2_projection_on_worker()
     print("dual-engine ingestion conformance passed")

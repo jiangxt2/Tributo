@@ -1,44 +1,25 @@
 ARG BASE_IMAGE=rayproject/ray:2.55.1-py312@sha256:911245f2478ad2e9f67ac13978dc2a75bcae0498b9f188b10bba703324b78379
-ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.23@sha256:d0a0a753ab981624b49c97abc98821c1c09f4ca69d1ef5cee69c501be3d88479
 
-FROM ${UV_IMAGE} AS uv
 FROM ${BASE_IMAGE}
-COPY --from=uv /uv /uvx /bin/
 
 USER root
-RUN mkdir -p /opt/tributo && chown 1000:100 /opt/tributo
+RUN python -m venv /opt/tributo/.venv && chown -R 1000:100 /opt/tributo
 
 USER 1000:100
 
 ENV PATH="/opt/tributo/.venv/bin:${PATH}" \
+    PIP_DEFAULT_TIMEOUT=600 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONUNBUFFERED=1 \
-    UV_HTTP_RETRIES=10 \
-    UV_HTTP_TIMEOUT=600 \
-    UV_LINK_MODE=copy \
-    UV_PROJECT_ENVIRONMENT=/opt/tributo/.venv
+    PYTHONDONTWRITEBYTECODE=1
 
-COPY --chown=1000:100 pyproject.toml uv.lock /opt/tributo/
+COPY --from=locked-requirements --chown=1000:100 /requirements.txt /opt/tributo/requirements.txt
 
 WORKDIR /opt/tributo
 
-RUN --mount=type=cache,target=/home/ray/.cache/uv,uid=1000,gid=100 \
-    uv sync \
-        --extra dev \
-        --extra test-integration \
-        --extra training \
-        --extra registry \
-        --extra model-export-torch \
-        --extra model-export-hf \
-        --extra data-daft \
-        --extra vector-index \
-        --no-default-groups \
-        --no-install-project \
-        --locked
+RUN --mount=type=cache,target=/home/ray/.cache/pip,uid=1000,gid=100 \
+    python -m pip install --require-hashes -r /opt/tributo/requirements.txt
 
-# Ray 2.55.1 clones the active venv for runtime_env.pip. Bootstrap pip from
-# Python's bundled ensurepip so offline Wheelhouse jobs never need an index.
-RUN python -m ensurepip --upgrade
-
-RUN python -c "import importlib.metadata as m, sys; assert sys.version_info[:2] == (3, 12); assert m.version('pip'); assert m.version('ray') == '2.55.1'; assert m.version('daft').startswith('0.7.'); assert m.version('pylance') == '9.0.0'; assert m.version('lance-ray') == '0.5.0'; assert m.version('pyarrow') == '19.0.1'; assert m.version('daft-clickhouse') == '1.0'; assert m.version('daft-doris') == '1.0'; assert m.version('ray-doris') == '1.0'"
+RUN python -c "import importlib.metadata as m, sys; assert sys.version_info[:2] == (3, 12); assert m.version('pip'); assert m.version('ray') == '2.55.1'; assert m.version('daft').startswith('0.7.'); assert m.version('pylance') == '9.0.0'; assert m.version('lance-ray') == '0.5.0'; assert m.version('pyarrow') == '19.0.1'; assert m.version('daft-clickhouse') == '1.0'; assert m.version('daft-doris') == '1.0'; assert m.version('ray-doris') == '1.0'; assert m.version('ray-hive') == '1.0'; assert m.version('thrift') == '0.16.0'"
 
 WORKDIR /workspace/tributo-src

@@ -457,6 +457,6 @@ Plugin groups also discovered:
 | ONNX Runtime and native XGBoost have first-party runtime flavors | `exporting/runtime.py` | Safetensors and PT2 are readable Bundle artifacts without executable loaders; raw UBJ/JSON load only through the explicit `xgboost-native-v1` flavor |
 | Hook delivery is in-process | `exporting/dispatch.py` | A committed Bundle survives Hook failure, but cross-process retry/recovery needs the separately scoped Outbox design |
 | Transform pushdown optimization has no benchmark evidence; alpha Bindings classify current ETL as residual | `data/transform_compiler.py` | D4 remains NO-GO for pushdown claims |
-| HDFS, Hive, ClickHouse, and Doris have incomplete delivery evidence | Bindings and external packages | Keep them at adapted/unsupported status until their real-infrastructure gates pass |
+| HDFS, ClickHouse, and Doris have incomplete delivery evidence | Bindings and external packages | Keep them at adapted/unsupported status until their real-infrastructure gates pass; Hive is limited to the separately verified Ray HiveServer2 table route |
 
 <!-- END -->

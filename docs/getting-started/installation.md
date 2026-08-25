@@ -40,9 +40,10 @@ itself is included by the core Ray dependency; the `tune` extra adds the
 optional BayesOpt search implementation. The `clickhouse` extra installs
 `daft-clickhouse==1.0`; `mysql` installs `daft-doris==1.0` and
 `ray-doris==1.0` for their explicit engine routes, while `doris-flight` adds
-their Flight dependencies. The `hive-ray` extra installs the external
-`ray-hive==1.0` HiveServer2 connector package; it does not register a Tributo
-Hive Provider or Binding. The equivalent uv commands are
+their Flight dependencies. The `hive-ray` extra installs `ray-hive==1.0` for
+the built-in Ray-only HiveServer2 Provider/Binding route. This does not add
+Daft Hive, native ORC/HDFS access, raw SQL, or Hive writes. The equivalent uv
+commands are
 `uv sync --extra clickhouse`, `uv sync --extra mysql`,
 `uv sync --extra doris-flight`, and `uv sync --extra hive-ray`.
 

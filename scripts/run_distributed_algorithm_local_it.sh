@@ -4,6 +4,11 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
+tributo_it() {
+  uv run --no-project --python 3.12 python \
+    "${PROJECT_ROOT}/tools/tributo_it.py" "$@"
+}
+
 if [[ $# -ne 0 ]]; then
   echo "Usage: $0" >&2
   exit 2
@@ -171,9 +176,9 @@ fi
 if [[ "${TRIBUTO_IT_ALLOW_LOCAL_BUILD:-1}" != "1" ]]; then
   prepare_args+=(--no-local-build)
 fi
-python3 tools/tributo_it.py "${prepare_args[@]}" 2>&1 | tee "${IMAGE_LOG}"
+tributo_it "${prepare_args[@]}" 2>&1 | tee "${IMAGE_LOG}"
 RUNTIME_IMAGE="$({
-  python3 tools/tributo_it.py runtime-key --profile data-ingestion
+  tributo_it runtime-key --profile data-ingestion
 } | python3 -c 'import json, sys; print(json.loads(sys.stdin.read().splitlines()[-1])["local_tag"])')"
 REQUIRED_RUNTIME_IMAGE="${RUNTIME_IMAGE}"
 REQUIRED_RUNTIME_IMAGE_ID="$(docker image inspect --format '{{.Id}}' "${RUNTIME_IMAGE}")"

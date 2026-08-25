@@ -39,6 +39,10 @@ _RAY_DORIS_INSTALL_HINT = (
     "Install ray-doris==1.0 with Tributo: pip install 'tributo[mysql]' "
     "(or uv sync --extra mysql); use 'tributo[doris-flight]' for Flight"
 )
+_RAY_HIVE_INSTALL_HINT = (
+    "Install ray-hive==1.0 with Tributo: pip install 'tributo[hive-ray]' "
+    "(or uv sync --extra hive-ray)"
+)
 _POSTGRESQL_INSTALL_HINT = "pip install 'tributo[postgresql]'"
 
 
@@ -346,6 +350,26 @@ def _ray_doris_descriptor() -> BindingDescriptor:
     )
 
 
+def _ray_hive_descriptor() -> BindingDescriptor:
+    from tributo.data.bindings.ray_hive import RayHiveBinding
+
+    return BindingDescriptor(
+        key=BindingKey(
+            "tributo.ray_data",
+            ScanKind.SQL,
+            "hive",
+            "tributo.ray.hive",
+        ),
+        factory=RayHiveBinding,
+        capabilities=frozenset({SourceCapability.PROJECTION}),
+        distribution_name="ray-hive",
+        distribution_version=_distribution_version("ray-hive") or "1.0",
+        engine_version_spec=_RAY_VERSION_SPEC,
+        dependency_distributions=("thrift",),
+        install_hint=_RAY_HIVE_INSTALL_HINT,
+    )
+
+
 def _ray_postgresql_descriptor() -> BindingDescriptor:
     from tributo.data.bindings.ray_postgresql import RayPostgreSqlBinding
 
@@ -411,16 +435,31 @@ def _register_optional(
     engine_version_spec: str,
     install_hint: str,
     constraints: BindingPlanConstraints | None = None,
-    dependencies: tuple[str, ...] = (),
+    dependencies: tuple[str | tuple[str, str], ...] = (),
 ) -> None:
     installed_engine = _distribution_version(engine_distribution)
     engine_compatible = _is_compatible_distribution(
         engine_distribution, engine_version_spec
     )
-    missing_dependencies = tuple(
-        name for name in dependencies if _distribution_version(name) is None
+    normalized_dependencies = tuple(
+        (dependency, None) if isinstance(dependency, str) else dependency
+        for dependency in dependencies
     )
-    available = engine_compatible and not missing_dependencies
+    missing_dependencies = tuple(
+        name
+        for name, _version_spec in normalized_dependencies
+        if _distribution_version(name) is None
+    )
+    incompatible_dependencies = tuple(
+        (name, str(installed), version_spec)
+        for name, version_spec in normalized_dependencies
+        if version_spec is not None
+        and (installed := _distribution_version(name)) is not None
+        and not _is_compatible_distribution(name, version_spec)
+    )
+    available = (
+        engine_compatible and not missing_dependencies and not incompatible_dependencies
+    )
     if available:
         bindings.register(descriptor_factory())
     else:
@@ -432,6 +471,10 @@ def _register_optional(
             )
         if missing_dependencies:
             details.append("missing " + ", ".join(sorted(missing_dependencies)))
+        details.extend(
+            f"installed {name} {installed}; required {version_spec}"
+            for name, installed, version_spec in incompatible_dependencies
+        )
         diagnostic_hint = (
             f"{install_hint} ({'; '.join(details)})" if details else install_hint
         )
@@ -463,7 +506,7 @@ def default_engine_bindings() -> EngineBindings:
                 str,
                 str,
                 BindingPlanConstraints | None,
-                tuple[str, ...],
+                tuple[str | tuple[str, str], ...],
             ],
             ...,
         ] = (
@@ -639,6 +682,20 @@ def default_engine_bindings() -> EngineBindings:
                 _RAY_DORIS_INSTALL_HINT,
                 None,
                 ("ray-doris", "PyMySQL"),
+            ),
+            (
+                _ray_hive_descriptor,
+                BindingKey(
+                    "tributo.ray_data",
+                    ScanKind.SQL,
+                    "hive",
+                    "tributo.ray.hive",
+                ),
+                "ray",
+                _RAY_VERSION_SPEC,
+                _RAY_HIVE_INSTALL_HINT,
+                None,
+                (("ray-hive", "==1.0"), "thrift"),
             ),
             (
                 _ray_postgresql_descriptor,

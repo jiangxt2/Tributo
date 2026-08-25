@@ -50,6 +50,82 @@ def _write_profile(root: Path) -> tributo_it.RuntimeProfile:
     return tributo_it.load_profile("data-ingestion", root=root)
 
 
+def _write_host_uv_profile(root: Path) -> tributo_it.RuntimeProfile:
+    integration_dir = root / "tests" / "integrations"
+    integration_dir.mkdir(parents=True)
+    (root / "src").mkdir()
+    (root / "pyproject.toml").write_text(
+        "[project]\nname='example'\n"
+        "[project.optional-dependencies]\ndata-daft=['daft==0.7.23']\n"
+    )
+    (root / "uv.lock").write_text("version = 1\n")
+    dockerfile = integration_dir / "Dockerfile.data-ingestion"
+    digest_a = "a" * 64
+    digest_b = "b" * 64
+    dockerfile.write_text(
+        f"ARG BASE_IMAGE=example:1@sha256:{digest_a}\n"
+        "FROM ${BASE_IMAGE}\n"
+        "COPY --from=locked-requirements /requirements.txt /requirements.txt\n"
+        "RUN python -m pip install --require-hashes -r /requirements.txt\n"
+    )
+    definition = {
+        "base_image": f"example:1@sha256:{digest_a}",
+        "base_image_mirror": f"mirror/example:1@sha256:{digest_a}",
+        "dependency_mode": "host-uv-export",
+        "dockerfile": "tests/integrations/Dockerfile.data-ingestion",
+        "extras": ["data-daft"],
+        "minio_image": f"example:2@sha256:{digest_b}",
+        "python_version": "3.12",
+        "runtime_repository": "tributo-it-runtime",
+        "uv_version": "0.11.23",
+        "version_contract": {"daft_prefix": "0.7.", "ray": "2.55.1"},
+    }
+    (integration_dir / "runtime-profiles.json").write_text(
+        json.dumps({"schema_version": 1, "profiles": {"data-ingestion": definition}})
+    )
+    return tributo_it.load_profile("data-ingestion", root=root)
+
+
+def _fake_host_uv(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    version: str = "0.12.5",
+    mutate_lock: bool = False,
+    export_error: bool = False,
+    lock_error: bool = False,
+    exported_content: str | None = None,
+) -> None:
+    monkeypatch.setattr(tributo_it.shutil, "which", lambda name: f"/bin/{name}")
+
+    def fake_run(
+        args: list[str],
+        *,
+        cwd: Path = tributo_it.ROOT,
+        **_kwargs: object,
+    ) -> subprocess.CompletedProcess[str]:
+        if args == ["uv", "--version"]:
+            return subprocess.CompletedProcess(args, 0, f"uv {version}\n", "")
+        if args == ["uv", "lock", "--check"]:
+            if lock_error:
+                raise tributo_it.TributoITError("simulated uv lock failure")
+            return subprocess.CompletedProcess(args, 0, "", "")
+        if args[:2] == ["uv", "export"]:
+            output = Path(args[args.index("--output-file") + 1])
+            output.write_text(
+                exported_content
+                if exported_content is not None
+                else "daft==0.7.23 --hash=sha256:" + "c" * 64 + "\n"
+            )
+            if mutate_lock:
+                (cwd / "uv.lock").write_text("version = 2\n")
+            if export_error:
+                raise tributo_it.TributoITError("simulated uv export failure")
+            return subprocess.CompletedProcess(args, 0, "", "")
+        raise AssertionError(args)
+
+    monkeypatch.setattr(tributo_it, "_run", fake_run)
+
+
 def _hold_runtime_lock(
     identity: tributo_it.RuntimeIdentity,
     ready: multiprocessing.synchronize.Event,
@@ -67,6 +143,49 @@ def _prepare_runtime_worker(
     ready.wait(timeout=2)
     prepared = tributo_it.prepare_runtime(profile, platform="linux/amd64")
     results.put(prepared.source)
+
+
+def _compose_contract_config(
+    runtime_image: str,
+    minio_image: str,
+    *,
+    hive_image: str | None = None,
+) -> dict[str, object]:
+    ray_service = {
+        "image": runtime_image,
+        "pull_policy": "never",
+        "volumes": [
+            {"target": "/workspace/tributo-src", "read_only": True},
+            {"target": "/workspace/tributo-work", "read_only": False},
+        ],
+        "depends_on": {"source-init": {"condition": "service_completed_successfully"}},
+    }
+    services: dict[str, object] = {
+        "ray-head": dict(ray_service),
+        "ray-worker": dict(ray_service),
+        "source-init": {
+            "image": runtime_image,
+            "pull_policy": "never",
+            "user": "0:0",
+            "restart": "no",
+            "volumes": [{"target": "/host-source", "read_only": True}],
+        },
+        "workspace-init": {
+            "image": runtime_image,
+            "pull_policy": "never",
+            "user": "0:0",
+            "restart": "no",
+        },
+        "minio": {"image": minio_image, "pull_policy": "never"},
+    }
+    if hive_image is not None:
+        services.update(
+            {
+                "hiveserver2": {"image": hive_image, "pull_policy": "never"},
+                "hive-init": {"image": runtime_image, "pull_policy": "never"},
+            }
+        )
+    return {"services": services}
 
 
 def test_runtime_key_ignores_source_but_tracks_dependency_inputs(
@@ -120,6 +239,193 @@ def test_profile_rejects_mutable_minio_image(tmp_path: Path) -> None:
     profile_file.write_text(json.dumps(payload))
 
     with pytest.raises(tributo_it.TributoITError, match="readable tag@sha256"):
+        tributo_it.load_profile(profile.name, root=tmp_path)
+
+
+def test_host_uv_profile_warns_on_version_difference_and_hashes_export(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    profile = _write_host_uv_profile(tmp_path)
+    _fake_host_uv(monkeypatch)
+
+    identity = tributo_it.runtime_identity(profile, "linux/amd64")
+
+    assert identity.uv_version == "0.12.5"
+    assert identity.requirements_content is not None
+    assert (
+        identity.requirements_sha256
+        == hashlib.sha256(identity.requirements_content).hexdigest()
+    )
+    assert "validated with uv 0.11.23; detected uv 0.12.5" in capsys.readouterr().err
+    labels = tributo_it._expected_labels(identity)
+    assert labels[tributo_it.UV_VERSION_LABEL] == "0.12.5"
+    assert labels[tributo_it.REQUIREMENTS_SHA_LABEL] == identity.requirements_sha256
+
+
+def test_host_uv_profile_accepts_baseline_without_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    profile = _write_host_uv_profile(tmp_path)
+    _fake_host_uv(monkeypatch, version="0.11.23")
+
+    identity = tributo_it.runtime_identity(profile, "linux/amd64")
+
+    assert identity.uv_version == "0.11.23"
+    assert capsys.readouterr().err == ""
+
+
+def test_host_uv_profile_rejects_missing_uv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile = _write_host_uv_profile(tmp_path)
+    monkeypatch.setattr(tributo_it.shutil, "which", lambda _name: None)
+
+    with pytest.raises(tributo_it.TributoITError, match="uv is required"):
+        tributo_it.runtime_identity(profile, "linux/amd64")
+
+
+def test_host_uv_profile_propagates_lock_check_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile = _write_host_uv_profile(tmp_path)
+    _fake_host_uv(monkeypatch, lock_error=True)
+
+    with pytest.raises(tributo_it.TributoITError, match="uv lock failure"):
+        tributo_it.runtime_identity(profile, "linux/amd64")
+
+
+def test_host_uv_profile_propagates_export_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile = _write_host_uv_profile(tmp_path)
+    _fake_host_uv(monkeypatch, export_error=True)
+
+    with pytest.raises(tributo_it.TributoITError, match="uv export failure"):
+        tributo_it.runtime_identity(profile, "linux/amd64")
+
+
+def test_host_uv_profile_rejects_unhashed_or_local_requirements(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile = _write_host_uv_profile(tmp_path)
+    _fake_host_uv(monkeypatch, exported_content="daft==0.7.23\n")
+    with pytest.raises(tributo_it.TributoITError, match="hashed requirements"):
+        tributo_it.runtime_identity(profile, "linux/amd64")
+
+    local_reference = (
+        "local-package @ file:///Users/collaborator/local-package\n"
+        "daft==0.7.23 --hash=sha256:" + "c" * 64 + "\n"
+    )
+    _fake_host_uv(monkeypatch, exported_content=local_reference)
+    with pytest.raises(tributo_it.TributoITError, match="host paths"):
+        tributo_it.runtime_identity(profile, "linux/amd64")
+
+
+def test_host_uv_profile_fails_if_locked_export_changes_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile = _write_host_uv_profile(tmp_path)
+    _fake_host_uv(monkeypatch, mutate_lock=True)
+
+    with pytest.raises(tributo_it.TributoITError, match="changed uv.lock"):
+        tributo_it.runtime_identity(profile, "linux/amd64")
+
+
+def test_host_uv_profile_checks_lock_even_when_export_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile = _write_host_uv_profile(tmp_path)
+    _fake_host_uv(monkeypatch, mutate_lock=True, export_error=True)
+
+    with pytest.raises(tributo_it.TributoITError, match="changed uv.lock"):
+        tributo_it.runtime_identity(profile, "linux/amd64")
+
+
+def test_host_uv_build_inputs_prepare_only_the_ray_base(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile = _write_host_uv_profile(tmp_path)
+    _fake_host_uv(monkeypatch, version="0.11.23")
+    identity = tributo_it.runtime_identity(profile, "linux/arm64")
+    prepared: list[dict[str, str]] = []
+    monkeypatch.setattr(
+        tributo_it,
+        "_prepare_mirrored_image",
+        lambda **kwargs: prepared.append(kwargs),
+    )
+
+    assert tributo_it._prepare_runtime_build_inputs(
+        identity,
+        build_input_mode=tributo_it.RuntimeBuildInputMode.LOCAL_MIRROR,
+    ) == (tributo_it.LOCAL_RUNTIME_BASE_IMAGE, None)
+    assert prepared == [
+        {
+            "mirror": profile.base_image_mirror,
+            "canonical": profile.base_image,
+            "local": tributo_it.LOCAL_RUNTIME_BASE_IMAGE,
+            "platform": "linux/arm64",
+        }
+    ]
+
+
+def test_host_uv_runtime_build_uses_requirements_context_without_uv_image(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile = _write_host_uv_profile(tmp_path)
+    _fake_host_uv(monkeypatch, version="0.11.23")
+    identity = tributo_it.runtime_identity(profile, "linux/amd64")
+    commands: list[list[str]] = []
+    observed_requirements: list[bytes] = []
+
+    monkeypatch.setattr(
+        tributo_it,
+        "_prepare_runtime_build_inputs",
+        lambda *_args, **_kwargs: ("local-ray:base", None),
+    )
+    monkeypatch.setattr(
+        tributo_it, "validate_runtime_image", lambda _identity: "sha256:image"
+    )
+
+    def fake_build_run(
+        args: list[str], **_kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        commands.append(args)
+        metadata = Path(args[args.index("--metadata-file") + 1])
+        metadata.write_text('{"containerimage.digest":"sha256:image"}')
+        context_arg = next(
+            value for value in args if value.startswith("locked-requirements=")
+        )
+        context = Path(context_arg.split("=", 1)[1])
+        observed_requirements.append((context / "requirements.txt").read_bytes())
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(tributo_it, "_run", fake_build_run)
+
+    assert (
+        tributo_it._build_runtime(
+            identity,
+            build_input_mode=tributo_it.RuntimeBuildInputMode.LOCAL_MIRROR,
+        )
+        == "sha256:image"
+    )
+    command = commands[0]
+    assert not any("UV_IMAGE=" in value for value in command)
+    assert any(value.startswith("locked-requirements=") for value in command)
+    assert observed_requirements == [identity.requirements_content]
+
+
+def test_host_uv_profile_rejects_uv_or_python_tool_images(tmp_path: Path) -> None:
+    profile = _write_host_uv_profile(tmp_path)
+    profile_file = tmp_path / "tests" / "integrations" / "runtime-profiles.json"
+    payload = json.loads(profile_file.read_text())
+    payload["profiles"][profile.name]["tool_image"] = "python:3@sha256:" + "d" * 64
+    profile_file.write_text(json.dumps(payload))
+
+    with pytest.raises(tributo_it.TributoITError, match="forbids fields"):
         tributo_it.load_profile(profile.name, root=tmp_path)
 
 
@@ -482,6 +788,53 @@ def test_compose_contract_rejects_service_level_build(tmp_path: Path) -> None:
         }
     }
     with pytest.raises(tributo_it.TributoITError, match="must not define build"):
+        tributo_it.validate_compose_contract(config, runtime, profile)
+
+
+def test_compose_contract_accepts_runtime_with_or_without_hive_profile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile = _write_host_uv_profile(tmp_path)
+    _fake_host_uv(monkeypatch, version="0.11.23")
+    identity = tributo_it.runtime_identity(profile, "linux/amd64")
+    runtime = tributo_it.PreparedRuntime(identity, "sha256:image", "local")
+
+    tributo_it.validate_compose_contract(
+        _compose_contract_config(identity.local_tag, profile.minio_image),
+        runtime,
+        profile,
+    )
+
+    hive_image = "apache/hive:4.2.0@sha256:" + "e" * 64
+    tributo_it.validate_compose_contract(
+        _compose_contract_config(
+            identity.local_tag,
+            profile.minio_image,
+            hive_image=hive_image,
+        ),
+        runtime,
+        profile,
+        hive_image=hive_image,
+    )
+
+
+def test_compose_contract_rejects_root_runtime_service_override(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile = _write_host_uv_profile(tmp_path)
+    _fake_host_uv(monkeypatch, version="0.11.23")
+    identity = tributo_it.runtime_identity(profile, "linux/amd64")
+    runtime = tributo_it.PreparedRuntime(identity, "sha256:image", "local")
+    config = _compose_contract_config(identity.local_tag, profile.minio_image)
+    services = config["services"]
+    assert isinstance(services, dict)
+    ray_head = services["ray-head"]
+    assert isinstance(ray_head, dict)
+    ray_head["user"] = "0:100"
+
+    with pytest.raises(tributo_it.TributoITError, match="must not.*root"):
         tributo_it.validate_compose_contract(config, runtime, profile)
 
 

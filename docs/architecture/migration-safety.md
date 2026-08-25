@@ -24,7 +24,7 @@ New: DataSourceProvider / IngestionGateway (one execution path)
 
 Current exit-gate status:
 - [x] All built-in logical sources (Parquet, CSV, Iceberg, Lance, ClickHouse,
-  Doris, and PostgreSQL) have Provider implementations with contract tests.
+  Doris, PostgreSQL, and Hive) have Provider implementations with contract tests.
   Adapter presence is not a runtime-support claim; each physical combination
   still needs its own infrastructure gate.
 - [x] Representative compatibility comparisons show that canonical and legacy

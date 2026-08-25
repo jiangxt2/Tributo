@@ -88,8 +88,8 @@ def test_distributed_gate_uses_cached_images_and_scoped_compose_cleanup() -> Non
         in runner
     )
     assert "docker compose" in runner
-    assert "ensure_digest_image(p.tool_image)" in runner
-    assert 'TRIBUTO_IT_TOOL_IMAGE="${TOOL_IMAGE%%@*}"' in runner
+    assert "prepare-infrastructure" in runner
+    assert "TRIBUTO_IT_TOOL_IMAGE" not in runner
     assert 'TRIBUTO_IT_MINIO_IMAGE="${MINIO_IMAGE%%@*}"' in runner
     assert "down --volumes --remove-orphans" in runner
     assert "com.docker.compose.project=${PROJECT_NAME}" in runner

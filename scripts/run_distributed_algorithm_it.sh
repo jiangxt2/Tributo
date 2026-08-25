@@ -307,22 +307,24 @@ fi
 if [[ "${TRIBUTO_IT_ALLOW_LOCAL_BUILD:-1}" != "1" ]]; then
   prepare_args+=(--no-local-build)
 fi
-uv run --locked --no-sync python "${PROJECT_ROOT}/tools/tributo_it.py" "${prepare_args[@]}" \
+uv run --no-project --python 3.12 python \
+  "${PROJECT_ROOT}/tools/tributo_it.py" "${prepare_args[@]}" \
   2>&1 | tee "${LOG_DIR}/runtime-prepare.log"
 
 export TRIBUTO_IT_RUNTIME_IMAGE
 TRIBUTO_IT_RUNTIME_IMAGE="$({
-  uv run --locked --no-sync python "${PROJECT_ROOT}/tools/tributo_it.py" runtime-key --profile data-ingestion
+  uv run --no-project --python 3.12 python \
+    "${PROJECT_ROOT}/tools/tributo_it.py" runtime-key --profile data-ingestion
 } | python3 -c 'import json, sys; print(json.loads(sys.stdin.read().splitlines()[-1])["local_tag"])')"
 REQUIRED_RUNTIME_IMAGE="${TRIBUTO_IT_RUNTIME_IMAGE}"
 REQUIRED_RUNTIME_IMAGE_ID="$(docker image inspect \
   --format '{{.Id}}' "${TRIBUTO_IT_RUNTIME_IMAGE}")"
 export TRIBUTO_IT_SOURCE_ROOT="${PROJECT_ROOT}"
 
-uv run --locked --no-sync python -c \
-  'from tools.tributo_it import ensure_digest_image, load_profile; p = load_profile("data-ingestion"); ensure_digest_image(p.tool_image); ensure_digest_image(p.minio_image)' \
+uv run --no-project --python 3.12 python \
+  "${PROJECT_ROOT}/tools/tributo_it.py" prepare-infrastructure \
+  --profile data-ingestion \
   2>&1 | tee "${LOG_DIR}/infrastructure-images.log"
-export TRIBUTO_IT_TOOL_IMAGE="${TOOL_IMAGE%%@*}"
 export TRIBUTO_IT_MINIO_IMAGE="${MINIO_IMAGE%%@*}"
 
 compose config --quiet
