@@ -14,8 +14,8 @@ from tools.build_tributo_image import (
     DOCKERFILE,
     PLATFORM_AUTO,
     RUNTIME_EXTRAS,
-    UV_IMAGE,
-    UV_IMAGE_MIRROR,
+    UV_VERSION,
+    HostDependencyExport,
     ImageBuildError,
     _manifest_core,
     _prepare_pinned_image,
@@ -25,7 +25,6 @@ from tools.build_tributo_image import (
     detect_host_platform,
     load_config,
     local_base_image,
-    local_uv_image,
     pip_check_baseline,
     prepared_wheelhouse,
     sha256_bytes,
@@ -45,9 +44,8 @@ def test_full_runtime_config_is_pinned_and_complete() -> None:
     config = load_config(CONFIG, root=ROOT)
 
     assert config.base_image == BASE_IMAGE
-    assert config.uv_image == UV_IMAGE
     assert config.base_image_mirror == BASE_IMAGE_MIRROR
-    assert config.uv_image_mirror == UV_IMAGE_MIRROR
+    assert config.uv_version == UV_VERSION
     assert config.platform == detect_host_platform()
     assert config.runtime_extras == RUNTIME_EXTRAS
     assert config.external_wheelhouse is None
@@ -57,7 +55,7 @@ def test_full_runtime_config_is_pinned_and_complete() -> None:
     ("field", "value"),
     [
         ("base_image", "rayproject/ray:2.55.1-py312"),
-        ("uv_image", "ghcr.io/astral-sh/uv:0.11.23"),
+        ("uv_version", "0.11.22"),
         ("platform", "linux/ppc64le"),
     ],
 )
@@ -151,6 +149,8 @@ def test_build_command_is_shell_free_and_uses_named_context() -> None:
         config,
         root=ROOT,
         wheelhouse_context=Path("/tmp/empty-wheelhouse"),
+        requirements_context=Path("/tmp/requirements"),
+        project_wheelhouse_context=Path("/tmp/project-wheelhouse"),
         manifest_sha256="unsealed",
     )
 
@@ -160,8 +160,10 @@ def test_build_command_is_shell_free_and_uses_named_context() -> None:
     assert str(DOCKERFILE) in command
     assert "--push" not in command
     assert "external-wheelhouse=/tmp/empty-wheelhouse" in command
+    assert "locked-requirements=/tmp/requirements" in command
+    assert "project-wheelhouse=/tmp/project-wheelhouse" in command
     assert f"BASE_IMAGE={local_base_image(config.platform)}" in command
-    assert f"UV_IMAGE={local_uv_image(config.platform)}" in command
+    assert not any("UV_IMAGE=" in value for value in command)
     assert f"TRIBUTO_BASE_IMAGE={BASE_IMAGE}" in command
     assert f"TRIBUTO_PLATFORM={config.platform}" in command
     assert f"TRIBUTO_RUNTIME_EXTRAS={','.join(RUNTIME_EXTRAS)}" in command
@@ -294,6 +296,15 @@ def test_build_image_seals_dependency_closure_without_docker(
         "tributo": "1.0.0",
     }
     monkeypatch.setattr("tools.build_tributo_image._build_once", fake_build_once)
+    dependency_export = HostDependencyExport(
+        uv_version="0.12.5",
+        content=b"ray==2.55.1 --hash=sha256:" + b"a" * 64 + b"\n",
+        sha256="a" * 64,
+    )
+    monkeypatch.setattr(
+        "tools.build_tributo_image._host_dependency_export",
+        lambda *args, **kwargs: dependency_export,
+    )
     monkeypatch.setattr(
         "tools.build_tributo_image._prepare_pinned_images", lambda *args, **kwargs: None
     )
@@ -317,6 +328,11 @@ def test_manifest_core_contains_alpha_and_runtime_closure() -> None:
     core = _manifest_core(
         config,
         root=ROOT,
+        dependency_export=HostDependencyExport(
+            uv_version="0.12.5",
+            content=b"requirements",
+            sha256="a" * 64,
+        ),
         distributions={"ray": "2.55.1"},
         external_wheels=[],
     )
@@ -338,4 +354,6 @@ def test_manifest_core_contains_alpha_and_runtime_closure() -> None:
     assert core["required_distribution_versions"]["thrift"] == "0.16.0"
     assert core["pip_check_baseline"] == list(pip_check_baseline(config.platform))
     assert core["image_sources"]["base_image"]["mirror"] == BASE_IMAGE_MIRROR
-    assert core["image_sources"]["uv_image"]["mirror"] == UV_IMAGE_MIRROR
+    assert core["dependency_mode"] == "host-uv-export"
+    assert core["host_uv_version"] == "0.12.5"
+    assert core["requirements_sha256"] == "a" * 64

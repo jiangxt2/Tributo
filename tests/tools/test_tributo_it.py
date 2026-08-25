@@ -103,13 +103,17 @@ def _fake_host_uv(
         cwd: Path = tributo_it.ROOT,
         **_kwargs: object,
     ) -> subprocess.CompletedProcess[str]:
-        if args == ["uv", "--version"]:
+        if len(args) >= 2 and Path(args[0]).name == "uv" and args[1:] == ["--version"]:
             return subprocess.CompletedProcess(args, 0, f"uv {version}\n", "")
-        if args == ["uv", "lock", "--check"]:
+        if (
+            len(args) >= 3
+            and Path(args[0]).name == "uv"
+            and args[1:3] == ["lock", "--check"]
+        ):
             if lock_error:
                 raise tributo_it.TributoITError("simulated uv lock failure")
             return subprocess.CompletedProcess(args, 0, "", "")
-        if args[:2] == ["uv", "export"]:
+        if len(args) >= 2 and Path(args[0]).name == "uv" and args[1] == "export":
             output = Path(args[args.index("--output-file") + 1])
             output.write_text(
                 exported_content

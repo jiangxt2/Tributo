@@ -425,7 +425,7 @@
         "pyproject.toml",
         "uv.lock"
       ],
-      "requires": ["docker", "multi_node_ray", "minio", "hive"],
+      "requires": ["docker", "multi_node_ray", "minio", "hive", "postgres"],
       "budget_seconds": 4800,
       "ci_allowed": false,
       "forbid_skips": true,

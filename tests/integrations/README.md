@@ -30,7 +30,7 @@ set.
 | Lance vector index | `test_lance_vector_index.py` | `manual_external` | Distributed IVF_FLAT/IVF_PQ build, append coverage, global Top-K, fallback, optimization, compaction, Ray Jobs, and S3 result delivery | Docker Ray cluster + Lance-Ray + MinIO |
 | File conformance | `../integration/test_data_ingestion_conformance.py` | `manual_external` | Local/MinIO Parquet and CSV through Ray Data and Daft | Local Ray runtime + MinIO |
 | Table conformance | `../integration/test_table_format_ingestion.py` | `manual_external` | Local/MinIO Iceberg and Lance through Ray Data and Daft | Local Ray runtime + MinIO |
-| PostgreSQL conformance | `../integration/test_postgresql_ingestion.py` | `manual_external` | Structured table read through Ray Data and Daft | Local Ray runtime + PostgreSQL |
+| PostgreSQL conformance | `../integration/test_postgresql_ingestion.py` | `manual_external` | Structured table read through Ray Data and Daft | Data Ingestion Docker gate + PostgreSQL 16.14 |
 | Inference Ray Jobs | `../integration/test_inference_ray_jobs.py`, `../integration/test_lance_result_sink_ray.py` | `manual_external` | Bundle, real post-training inline/detached inference, MLflow import, external artifacts, retry identity, credential domains, empty/NaN behavior, Lance-Ray local/S3 create/append/overwrite, and vector schemas | Isolated version-locked Docker Ray + Lance-Ray + MLflow + MinIO |
 | Streaming | `test_e2e_streaming.py` | `quarantine` | Streaming inference service | Model and service lifecycle pending |
 | Tune trial correctness | `../integration/test_tune_ray_cluster.py` | `manual_external` | Ray Jobs → two concurrent XGBoost Tune trials, strict target metric, isolated checkpoints, ResultGrid, and zero Bundle publication | Isolated version-locked Docker Ray cluster via `run_tune_it.sh` |
@@ -159,7 +159,7 @@ components used by the model-export and ingestion external validations:
 | Ray | 2.55.1 |
 | uv | 0.11.23 |
 | MinIO | RELEASE.2025-09-07T16-13-09Z |
-| PostgreSQL | 17.6 |
+| PostgreSQL | 16.14 |
 | MLflow | 2.22.5 |
 | boto3 / botocore | 1.43.56 / 1.43.56 |
 | XGBoost | 3.3.0 |
@@ -169,10 +169,11 @@ components used by the model-export and ingestion external validations:
 | PyArrow / pandas | 19.0.1 / 2.3.3 |
 
 Ray, Hive, MinIO, and PostgreSQL image references include immutable SHA-256
-digests. The shared Data Ingestion Runtime uses host uv with `0.11.23` as the
-CI baseline; a different local uv version warns and proceeds only when locked
-validation and export succeed. It does not pull uv or standalone Python tool
-images.
+digests. All Docker IT runtime profiles use host uv with `0.11.23` as the CI
+baseline to validate the lock and export hashed requirements. A different
+local uv version warns and proceeds only when locked validation and export
+succeed. The inference and full-runtime images install the host-built Tributo
+wheel and do not pull uv or standalone Python tool images.
 `test_it_component_versions.py` ties all Python versions to `uv.lock` and
 fails if the Dockerfile or Compose file bypasses the version contract.
 
@@ -237,9 +238,10 @@ repository to prefer a published runtime before the local Buildx fallback.
 The CI impact planner reports the ingestion suite when its source, contracts,
 runtime definition, or runner changes. The external runner obtains one
 content-addressed runtime, starts one zero-CPU Ray head, one Ray worker, MinIO,
-and HiveServer2 4.2.0 with `docker-compose.data-ingestion.yml`, freezes the
-checkout in a run-scoped read-only volume, and requires Driver/Worker version,
-snapshot, Hive projection, and Iceberg-on-MinIO evidence.
+PostgreSQL 16.14, and HiveServer2 4.2.0 with
+`docker-compose.data-ingestion.yml`, freezes the checkout in a run-scoped
+read-only volume, and requires Driver/Worker version, snapshot, Hive
+projection, PostgreSQL dual-engine conformance, and Iceberg-on-MinIO evidence.
 Infrastructure absence cannot be represented as passing evidence.
 
 ## Lance Vector Index External Validation Gate
