@@ -215,7 +215,7 @@ def test_scheduled_plan_contains_only_budgeted_scheduled_shards(
     ("path", "expected"),
     [
         (
-            "tests/integration/test_walking_skeleton.py",
+            "tests/training/jobs/official_algorithm_gate_job.py",
             ("manual_it",),
         ),
         (

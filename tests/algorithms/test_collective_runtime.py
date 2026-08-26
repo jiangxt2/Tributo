@@ -137,6 +137,34 @@ def test_collective_evidence_rejects_incomplete_global_row_coverage() -> None:
         )
 
 
+def test_collective_evidence_preserves_orthogonal_coverage_dimensions() -> None:
+    workers = [_worker(0), _worker(1)]
+    workers[0]["input_rows"] = {
+        "train": 4,
+        "coverage.positive": 3,
+        "coverage.unlabeled": 1,
+    }
+    workers[1]["input_rows"] = {
+        "train": 4,
+        "coverage.positive": 1,
+        "coverage.unlabeled": 3,
+    }
+
+    validated, _ = _worker_evidence(
+        {
+            "execution_workers": workers,
+            "model_state_digest": "a" * 64,
+        },
+        worker_count=2,
+        num_cpus=1,
+        num_gpus=0,
+        custom_resources={},
+        expected_input_rows={"train": 8},
+    )
+
+    assert validated[0]["input_rows"] == workers[0]["input_rows"]
+
+
 def test_collective_fit_only_skips_exporter_and_keeps_portable_metrics() -> None:
     plan = cast(
         ResolvedAlgorithmPlan,

@@ -714,13 +714,7 @@ class TestBundleMode:
 
         lifecycle_module._load_provider_plugins(registry)
 
-        assert registry.list_all() == [
-            "ray-dnn-v1",
-            "ray-pu-v1",
-            "ray-torch-recipe-v1",
-            "ray-x-learner-v1",
-            "ray-xgboost-v1",
-        ]
+        assert registry.list_all() == ["ray-torch-recipe-v1"]
 
     def test_bundle_real_routing_contract(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1009,32 +1003,3 @@ class TestTrainingResultContract:
                 bundle_status=BundleStatus.FAILED,
                 hook_status=TrainingHookStatus.FAILED,
             )
-
-
-class TestTrainerConstructorContract:
-    """PU/DNN must accept callbacks like XGBoost (unified contract, §6.5)."""
-
-    def test_pu_trainer_accepts_callbacks(self) -> None:
-        from tributo.training.pu_trainer import PUTrainerImpl
-
-        cb = _RecordingCallback()
-        trainer = PUTrainerImpl(
-            datasets={},
-            config={"features": [], "pu": {"class_prior": 0.2}},
-            callbacks=[cb],
-        )
-        assert trainer._callbacks == [cb]
-
-    def test_dnn_trainer_accepts_callbacks(self) -> None:
-        from tributo.training.dnn_trainer import DNNTrainerImpl
-
-        cb = _RecordingCallback()
-        trainer = DNNTrainerImpl(datasets={}, config={"features": []}, callbacks=[cb])
-        assert trainer._callbacks == [cb]
-
-    def test_xgboost_trainer_accepts_callbacks(self) -> None:
-        from tributo.training.xgboost_trainer import XGBoostTrainerImpl
-
-        cb = _RecordingCallback()
-        trainer = XGBoostTrainerImpl(datasets={}, config={}, callbacks=[cb])
-        assert trainer._callbacks == [cb]

@@ -157,6 +157,7 @@ def test_default_recipe_streams_torch_batches_and_reports_resumable_checkpoint(
         "optimizer.pt",
         "resume.json",
         "rng_state.json",
+        "scaler.pt",
         "training_state.json",
     }
     assert validation.calls == [

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
-
 import pytest
 
 from tributo.algorithms.api import (
@@ -115,86 +113,3 @@ def test_planner_carries_requested_custom_resources_into_runtime_binding() -> No
 
     assert plan.runtime.custom_resources == {"accelerator_type_a": 0.25}
     assert plan.to_dict()["runtime"]["custom_resources"] == {"accelerator_type_a": 0.25}
-
-
-def test_dnn_nnpu_alias_resolves_only_to_canonical_pu_registration() -> None:
-    base = map_reduce_registration()
-    dnn = replace(
-        base,
-        spec=replace(base.spec, name="dnn"),
-        implementation=replace(
-            base.implementation,
-            implementation_id="tests.dnn_alias",
-            allowed_config_keys=("loss", "pu_learning"),
-        ),
-    )
-    pu = replace(
-        base,
-        spec=replace(base.spec, name="pu"),
-        implementation=replace(
-            base.implementation,
-            implementation_id="tests.pu_canonical",
-            allowed_config_keys=("pu",),
-        ),
-    )
-    registry = AlgorithmRegistrationRegistry()
-    registry.register_many((dnn, pu))
-    resolver = FakeInputResolver()
-    planner = AlgorithmPlanner(registry, {resolver.resolver_id: resolver})
-    request = ExecutionRequest(
-        algorithm_request=request_for(
-            "dnn",
-            AlgorithmOperation.FIT,
-            config={
-                "loss": {"type": "nnpu"},
-                "pu_learning": {
-                    "enabled": True,
-                    "class_prior": 0.25,
-                    "beta": 0.1,
-                },
-            },
-        ),
-        profile=ExecutionProfile.LOCAL,
-        worker_count=2,
-    )
-
-    plan = planner.plan(request, available_resources={"CPU": 2.0})
-
-    assert plan.resolution.requested_algorithm == "dnn"
-    assert plan.resolution.algorithm == "pu"
-    assert plan.resolution.implementation_id == "tests.pu_canonical"
-    assert plan.algorithm_config == {
-        "pu": {
-            "loss_type": "nnpu",
-            "class_prior": 0.25,
-            "class_prior_method": "simple",
-            "beta": 0.1,
-            "gamma": 1.0,
-        }
-    }
-    assert plan.to_dict()["resolution"] == {
-        "requested_algorithm": "dnn",
-        "canonical_algorithm": "pu",
-        "algorithm": "pu",
-        "algorithm_version": plan.resolution.algorithm_version,
-        "implementation_id": "tests.pu_canonical",
-        "implementation_version": plan.resolution.implementation_version,
-        "execution_mode": "map_reduce",
-        "environment_id": plan.resolution.environment_id,
-        "runtime_id": plan.resolution.runtime_id,
-    }
-
-
-def test_dnn_nnpu_alias_rejects_pinned_dnn_implementation() -> None:
-    request = request_for(
-        "dnn",
-        AlgorithmOperation.FIT,
-        config={
-            "loss": {"type": "nnpu"},
-            "pu_learning": {"enabled": True, "class_prior": 0.25},
-        },
-    )
-    request = replace(request, implementation_id="tests.dnn_alias")
-
-    with pytest.raises(AlgorithmConfigurationError, match="cannot pin"):
-        AlgorithmPlanner._canonicalize_compatibility_alias(request)

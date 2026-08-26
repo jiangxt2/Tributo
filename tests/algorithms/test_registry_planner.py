@@ -14,6 +14,7 @@ from tributo.algorithms.api import (
     AlgorithmResolutionError,
     BackendInputCompatibility,
     InputBinding,
+    InputBindingSet,
     QualifiedReference,
     ResolvedInputDescriptor,
     RuntimeTopology,
@@ -238,6 +239,46 @@ def test_new_input_engine_and_view_require_only_declared_contract_facts() -> Non
 
     assert plan.input_descriptor.engine_id == "vendor.engine"
     assert plan.input_descriptor.view_kind == "vendor_columnar"
+
+
+def test_planner_resolves_multiple_named_input_roles_without_domain_branches() -> None:
+    registry = AlgorithmRegistrationRegistry()
+    registry.register(function_registration())
+    resolver = FakeInputResolver()
+    train = request_for("external_function", AlgorithmOperation.FIT).input_binding
+    assert isinstance(train, InputBinding)
+    validation = replace(
+        train,
+        name="validation",
+        reference="validation-fixture",
+    )
+    request = request_for("external_function", AlgorithmOperation.FIT)
+    request = replace(
+        request,
+        input_binding=InputBindingSet(
+            bindings=(train, validation),
+            primary_role="train",
+        ),
+    )
+
+    plan = AlgorithmPlanner(registry, {resolver.resolver_id: resolver}).plan(request)
+
+    assert plan.format_version == 3
+    assert tuple(item.name for item in plan.input_bindings.bindings) == (
+        "train",
+        "validation",
+    )
+    assert plan.input_descriptors.roles == ("train", "validation")
+    assert plan.to_dict()["input_bindings"]["primary_role"] == "train"
+    plan.validate_integrity()
+
+
+def test_input_binding_set_rejects_duplicate_roles() -> None:
+    binding = request_for("external_function", AlgorithmOperation.FIT).input_binding
+    assert isinstance(binding, InputBinding)
+
+    with pytest.raises(AlgorithmConfigurationError, match="roles must be unique"):
+        InputBindingSet(bindings=(binding, binding), primary_role="train")
 
 
 @pytest.mark.parametrize(

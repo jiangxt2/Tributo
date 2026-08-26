@@ -60,9 +60,9 @@ from the legacy setup-only propagation rule.
 | `tributo.training.base` — `BaseTrainer`, `TrainerSpec` | `beta` | First-party trainers default to an explicit-destination Bundle; raw artifacts require `legacy_export=True` |
 | `tributo.training.results` — `TrainingResult` and status enums | `beta` | Closed training, Bundle, Hook, URI, and execution identity result contract |
 | `tributo.training.checkpoint` | `beta` | Resume checkpoint contract |
-| `tributo.training.xgboost_trainer` | `beta` | Most mature Trainer |
-| `tributo.training.dnn_trainer` | `beta` | DNN Trainer |
-| `tributo.training.pu_trainer` | `beta` | PU Learning Trainer |
+| `tributo.training.xgboost_trainer` | `deprecated` | Production implementations moved to the official `tributo-algorithms` Wheels |
+| `tributo.training.dnn_trainer` | `deprecated` | Production implementations moved to the official `tributo-algorithms` Wheels |
+| `tributo.training.pu_trainer` | `deprecated` | Production implementations moved to the official `tributo-algorithms` Wheels |
 | `tributo.training.graph_trainer` | `alpha` | Early-stage graph training |
 | `tributo.training.causal_estimator` | `beta` | Causal effect estimation (docstring was alpha; aligned to @PublicAPI) |
 | `tributo.training.algorithm_spec` | `beta` | Algorithm capability declarations |
@@ -70,6 +70,7 @@ from the legacy setup-only propagation rule.
 | `tributo.training.data_loader` | `beta` | Ray compatibility adapter over IngestionGateway |
 | `tributo.training.tune_config` | `beta` | Hyperparameter tuning config |
 | `tributo.training.tune_runner` | `beta` | Tune execution |
+| `tributo.training.portable_tune` | `alpha` | Portable distributed fit-only Tune execution |
 | `tributo.training.tune_space` | `beta` | Search space definitions |
 | `tributo.training.priors` | `beta` | Class prior estimation |
 | `tributo.training.flavor` | `beta` | Model flavor adapter |
@@ -94,14 +95,14 @@ from the legacy setup-only propagation rule.
 | `tributo.algorithms.api.descriptor` | `alpha` | Trusted installed-package distributed algorithm descriptor API v1 |
 | `tributo.algorithms.api.context` — `UserExecutionContext` | `alpha` | Restricted context for trusted module-qualified Worker functions |
 | `tributo.algorithms.api.errors` | `alpha` | Portable execution error taxonomy |
-| `tributo.algorithms.builtin.multinomial_nb` | `alpha` | Exact sufficient-statistics tree-MapReduce implementation of sklearn MultinomialNB |
-| `tributo.algorithms.builtin.torch_collective` | `alpha` | First-party DNN and PU Ray Train collective implementations |
-| `tributo.algorithms.builtin.xgboost_native` | `alpha` | First-party framework-native distributed XGBoost implementation |
-| `tributo.algorithms.builtin.x_learner` | `alpha` | First-party five-stage Ray Train XGBoost X-Learner implementation |
+| `tributo.algorithms.api.support` | `alpha` | Trusted Wheel support evidence, execution semantics, expiry, and revocation |
+| `tributo.algorithms.conformance` | `alpha` | Descriptor-only and installed algorithm Wheel Conformance Testkit |
+| `tributo.algorithms.builtin.*` | `deprecated` | Production algorithms moved to the official `tributo-algorithms` Wheels; Core retains only public SPI and Ray runtimes |
 | `tributo.algorithms.core.builder` — `AlgorithmBuilder` | `alpha` | Provisional sklearn and Custom Ray Function registration builders |
 | `tributo.algorithms.core.runtime` | `alpha` | Owned local Ray lifecycle and deployment-neutral attached-cluster connection |
 | `tributo.algorithms.composition` | `alpha` | Default formal Dispatcher composition root |
 | `tributo.algorithms.spi.execution` | `alpha` | Provisional operation and Runtime execution protocols |
+| `tributo.algorithms.spi.contracts` | `alpha` | Executable algorithm contract validator protocol |
 | `tributo.algorithms.spi.input` | `alpha` | Two-stage input resolution and Driver/Worker ownership contracts |
 | `tributo.algorithms.spi.torch` | `alpha` | Narrow model/loss/optimizer/metric recipe contract lowered to Ray Train |
 

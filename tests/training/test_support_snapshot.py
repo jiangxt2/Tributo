@@ -96,25 +96,18 @@ def test_snapshot_json_projection_contains_every_cli_support_field() -> None:
     ]
 
 
-def test_unified_snapshot_exposes_native_first_party_support() -> None:
-    from tributo.training.catalog import get_algorithm_catalog
-
-    snapshot = build_algorithm_support_snapshot(get_algorithm_catalog().list_records())
-    by_name = {record.name: record for record in snapshot}
-
-    first_party = ("dnn", "pu", "xgboost", "x_learner")
-    assert set(by_name) >= set(first_party)
-    assert all(by_name[name].available for name in first_party)
-    assert all(not by_name[name].compatibility_only for name in first_party)
-    assert all(by_name[name].tested for name in first_party)
-    assert all(by_name[name].supported for name in first_party)
-    assert all(
-        by_name[name].validated_execution_profiles == ("cluster", "local")
-        for name in first_party
+def test_compatibility_spec_does_not_claim_portable_support() -> None:
+    catalog = _catalog(
+        AlgorithmSpec(
+            name="community_fixture",
+            trainer_cls=FakeTrainer,
+            capabilities=(Capability.DISTRIBUTED,),
+        )
     )
-    assert all(by_name[name].stability == "alpha" for name in first_party)
-    assert all(by_name[name].native_migration_complete for name in first_party)
-    assert by_name["dnn"].distribution_strategies == ("ray_train_collective",)
-    assert by_name["pu"].distribution_strategies == ("ray_train_collective",)
-    assert by_name["xgboost"].distribution_strategies == ("framework_native",)
-    assert by_name["x_learner"].distribution_strategies == ("framework_native",)
+
+    record = build_algorithm_support_snapshot(catalog.list_specs())[0]
+
+    assert record.name == "community_fixture"
+    assert record.tested is False
+    assert record.supported is False
+    assert record.validated_execution_profiles == ()

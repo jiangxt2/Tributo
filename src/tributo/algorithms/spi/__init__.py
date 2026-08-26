@@ -1,13 +1,18 @@
 """Provisional extension protocols for portable algorithms."""
 
+from tributo.algorithms.spi.contracts import AlgorithmContractValidator
 from tributo.algorithms.spi.execution import (
     AlgorithmExecutionContext,
     CollectiveAlgorithm,
+    EnsembleUnitSpec,
     Evaluable,
     ExecutionEnvelope,
     Fittable,
     FrameworkNativeAlgorithm,
+    IterativeOptimizationAlgorithm,
+    JoblibEstimatorRecipe,
     MapReduceAlgorithm,
+    ParallelEnsembleAlgorithm,
     PortableRuntimeAdapter,
     Predictable,
     RuntimeExecutionEnvelope,
@@ -25,22 +30,36 @@ from tributo.algorithms.spi.input import (
     TabularBatchInputView,
     WorkerInputAdapter,
     WorkerInputPayload,
+    WorkerInputPayloadSet,
 )
-from tributo.algorithms.spi.torch import TorchTrainingRecipe
+from tributo.algorithms.spi.torch import (
+    MetricPlan,
+    OptimizationPlan,
+    TorchTrainingRecipe,
+    TrainingRecipeV2,
+    TrainingStepResult,
+)
 
 __all__ = [
+    "AlgorithmContractValidator",
     "AlgorithmExecutionContext",
     "CollectiveAlgorithm",
+    "EnsembleUnitSpec",
     "Evaluable",
     "ExecutionEnvelope",
     "Fittable",
     "FrameworkNativeAlgorithm",
+    "IterativeOptimizationAlgorithm",
+    "JoblibEstimatorRecipe",
     "InputExecutionContext",
     "InputResolutionContext",
     "InputResolverPort",
     "InputRuntimeAdapter",
     "MaterializedTabularInputView",
     "MapReduceAlgorithm",
+    "MetricPlan",
+    "OptimizationPlan",
+    "ParallelEnsembleAlgorithm",
     "PortableRuntimeAdapter",
     "Predictable",
     "RuntimeExecutionEnvelope",
@@ -50,6 +69,9 @@ __all__ = [
     "TabularBatchInputView",
     "Transformable",
     "TorchTrainingRecipe",
+    "TrainingRecipeV2",
+    "TrainingStepResult",
     "WorkerInputAdapter",
     "WorkerInputPayload",
+    "WorkerInputPayloadSet",
 ]

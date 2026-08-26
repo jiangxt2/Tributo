@@ -328,7 +328,15 @@ def stop(address: str, job_id: str):
 @click.option(
     "--source",
     required=True,
-    help="Model source: ray://<checkpoint-path>, hf://<model-id>, or local path",
+    help="Model source understood by the selected source-provider plugin",
+)
+@click.option(
+    "--source-provider",
+    default=None,
+    help=(
+        "Explicit tributo.source_providers provider_id; hf:// defaults to hf-v1, "
+        "all other sources require this option"
+    ),
 )
 @click.option(
     "--targets",
@@ -379,6 +387,7 @@ def stop(address: str, job_id: str):
 )
 def export(
     source: str,
+    source_provider: str | None,
     targets: str,
     output: str,
     alias: str | None,
@@ -437,31 +446,33 @@ def export(
             alias=AliasConfig(name=alias) if alias else None,
         )
 
-        # Resolve source provider by scheme.
+        # Resolve the source provider by explicit plugin identity. Core must
+        # not infer an algorithm implementation from a checkpoint URI.
         source_uri = source
         if source.startswith("ray://"):
             source_uri = source[6:]  # strip ray:// prefix
         elif source.startswith("hf://"):
             source_uri = source[5:]  # strip hf:// prefix
 
-        from tributo.exporting.protocols import ExportSourceProvider
+        from tributo._bootstrap import first_party_source_providers
+        from tributo.exporting.registries import SourceProviderRegistry
+        from tributo.plugin import discover_source_provider_plugins
 
-        provider: ExportSourceProvider
-        if source.startswith("hf://"):
-            from tributo.integrations.sources.huggingface import (
-                HuggingFaceSourceProvider,
+        provider_id = source_provider or (
+            "hf-v1" if source.startswith("hf://") else None
+        )
+        if provider_id is None:
+            raise click.BadParameter(
+                "--source-provider is required for non-hf sources",
+                param_hint="--source-provider",
             )
-
-            provider = HuggingFaceSourceProvider()
-        else:
-            # Ray checkpoints and local checkpoint paths use the
-            # RayXGBoostSourceProvider (DNN/PU providers are selected by
-            # the trainer-type registry in the training path).
-            from tributo.integrations.sources.ray_xgboost import (
-                RayXGBoostSourceProvider,
-            )
-
-            provider = RayXGBoostSourceProvider()
+        provider_registry = SourceProviderRegistry()
+        for provider_cls in (
+            *first_party_source_providers(),
+            *discover_source_provider_plugins(),
+        ):
+            provider_registry.register(provider_cls)
+        provider = provider_registry.get(provider_id)()
         service = BundleExportService()
 
         with provider.open_source(source_uri) as export_source:

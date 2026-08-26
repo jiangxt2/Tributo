@@ -358,43 +358,6 @@ class TestTuneRunner:
         with pytest.raises(JobConfigurationError, match="portable execution path"):
             runner._build_trainable({}, "/tmp/test")
 
-    def test_pu_trial_revalidates_explicit_class_prior(
-        self,
-        tune_config: TuneSearchConfig,
-        search_space: Any,
-    ) -> None:
-        """A sampled PU config cannot reach trainer construction without a prior."""
-        from tributo.training.algorithm_spec import DataLoadingMode
-        from tributo.training.pu_trainer import PUTrainingConfig
-
-        pu_spec = AlgorithmSpec(
-            name="pu-test",
-            trainer_cls=MockTrainer,
-            config_model=PUTrainingConfig,
-            data_loading=DataLoadingMode.CANONICAL_TRAINER,
-        )
-        runner = TuneRunner(
-            pu_spec,
-            tune_config,
-            search_space,
-            {
-                "data": {
-                    "source": {
-                        "type": "parquet",
-                        "path": "/tmp/pu-train.parquet",
-                    }
-                },
-                "pu": {
-                    "class_prior": 0.2,
-                    "class_prior_method": "explicit",
-                },
-            },
-        )
-        trainable = runner._build_trainable({}, "/tmp/test")
-
-        with pytest.raises(JobConfigurationError, match="class_prior"):
-            trainable({"pu.class_prior": None})
-
     def test_init_invalid_search_alg(
         self, trainer_spec, search_space, effective_config
     ):

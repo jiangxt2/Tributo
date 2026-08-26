@@ -16,14 +16,22 @@ from __future__ import annotations
 import hashlib
 import json
 import random
+import shutil
+import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Generator, Literal, cast
+from urllib.parse import urlsplit
 
 from pydantic import ConfigDict, Field, field_validator
 
 from tributo._common.config import StrictConfigModel
-from tributo.data.persistence import CheckpointStore, default_checkpoint_store
+from tributo.data.persistence import (
+    CheckpointStore,
+    ObjectStore,
+    default_checkpoint_store,
+    default_object_store,
+)
 from tributo.util.annotations import PublicAPI
 
 RESUME_MANIFEST_FILENAME = "resume.json"
@@ -214,6 +222,103 @@ def checkpoint_directory(
         yield path
 
 
+def _is_s3_uri(value: str | Path) -> bool:
+    return urlsplit(str(value)).scheme.lower() == "s3"
+
+
+@contextmanager
+@PublicAPI(stability="beta")
+def materialize_checkpoint_directory(
+    checkpoint: Any,
+    *,
+    object_store: ObjectStore | None = None,
+    checkpoint_store: CheckpointStore | None = None,
+) -> Generator[Path, None, None]:
+    """Expose a local or S3 checkpoint directory with bounded cleanup.
+
+    Distributed runtimes use this helper at every restore boundary. S3
+    checkpoints are materialized into a private temporary directory, so a
+    Worker never assumes that another Worker-local path is shared.
+    """
+    if not isinstance(checkpoint, (str, Path)) or not _is_s3_uri(checkpoint):
+        with checkpoint_directory(checkpoint, store=checkpoint_store) as path:
+            yield path
+        return
+
+    store = object_store or default_object_store()
+    temporary = Path(tempfile.mkdtemp(prefix="tributo-checkpoint-"))
+    try:
+        for item in store.list_files(str(checkpoint)):
+            relative = Path(item.relative_path)
+            if relative.is_absolute() or ".." in relative.parts:
+                raise ValueError(
+                    f"checkpoint object path escapes its prefix: {item.relative_path!r}"
+                )
+            target = temporary / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(store.read_bytes(item.uri))
+        yield temporary
+    finally:
+        shutil.rmtree(temporary, ignore_errors=True)
+
+
+@PublicAPI(stability="beta")
+def publish_checkpoint_directory(
+    checkpoint_dir: str | Path,
+    target: str | Path,
+    *,
+    object_store: ObjectStore | None = None,
+) -> str:
+    """Publish a complete checkpoint directory through the Core transport.
+
+    Payload files are uploaded before the manifest. Readers therefore never
+    observe a checkpoint as complete until its manifest is present. Local
+    paths are copied into the requested directory; S3 paths use the shared
+    object-store binding and return the original URI.
+    """
+    source = Path(checkpoint_dir).resolve()
+    if not source.is_dir():
+        raise NotADirectoryError(f"checkpoint source is not a directory: {source}")
+    files = tuple(
+        sorted(
+            path
+            for path in source.rglob("*")
+            if path.is_file() and not path.is_symlink()
+        )
+    )
+    if not files:
+        raise ValueError("checkpoint directory must contain at least one file")
+    target_value = str(target)
+    if not _is_s3_uri(target_value):
+        destination = Path(target_value)
+        destination.mkdir(parents=True, exist_ok=True)
+        for path in files:
+            relative = path.relative_to(source)
+            destination_path = destination / relative
+            destination_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, destination_path)
+        return target_value
+
+    store = object_store or default_object_store()
+    parsed = urlsplit(target_value)
+    suffix = parsed.path.lstrip("/").rstrip("/")
+    prefix = f"s3://{parsed.netloc}/{suffix + '/' if suffix else ''}"
+    manifest_files = [
+        path
+        for path in files
+        if path.name in {RESUME_MANIFEST_FILENAME, "manifest.json"}
+    ]
+    payload_files = [path for path in files if path not in manifest_files]
+    for path in (*payload_files, *manifest_files):
+        relative = path.relative_to(source).as_posix()
+        store.write_bytes(
+            prefix + relative,
+            path.read_bytes(),
+            content_type="application/json" if path.suffix == ".json" else None,
+        )
+    return target_value.rstrip("/")
+
+
 @PublicAPI(stability="beta")
 def load_initial_checkpoint(
     path: str | None,
@@ -320,6 +425,8 @@ __all__ = [
     "checkpoint_directory",
     "compute_payload_digest",
     "load_initial_checkpoint",
+    "materialize_checkpoint_directory",
+    "publish_checkpoint_directory",
     "read_resume_manifest",
     "restore_rng_state",
     "write_resume_manifest",

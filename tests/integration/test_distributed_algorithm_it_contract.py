@@ -99,7 +99,8 @@ def test_distributed_gate_uses_cached_images_and_scoped_compose_cleanup() -> Non
     assert "Global Docker image changes are diagnostic only" in runner
     assert "report_global_image_changes || cleanup_status=1" not in runner
     assert "report_existing_container_changes || cleanup_status=1" not in runner
-    assert "test_formal_distributed_algorithms_complete_on_ray_cluster" in runner
+    assert "test_formal_distributed_algorithms_complete_on_ray_cluster" not in runner
+    assert "test_official_algorithm_wheels_complete_on_ray_cluster" in runner
     assert "test_out_of_tree_torch_recipe_completes_on_ray_cluster" in runner
     assert "TRIBUTO_DISTRIBUTED_ALGORITHM_RERUN_FAILED_ONLY" in runner
     assert (

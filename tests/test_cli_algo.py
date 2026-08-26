@@ -3,13 +3,56 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
+from pydantic import BaseModel, ConfigDict, Field
 
 from tributo.cli import main
+from tributo.training.algorithm_spec import (
+    AlgorithmSpec,
+    Capability,
+    DataLoadingMode,
+    ProblemType,
+)
+from tributo.training.registry import _registry
+
+_CLI_ALGORITHM = "_test_cli_algorithm"
+
+
+class _CliDataConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source: dict[str, object] | None = None
+
+
+class _CliAlgorithmConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    data: _CliDataConfig = Field(default_factory=_CliDataConfig)
+    training: dict[str, object] = Field(default_factory=dict)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _register_cli_algorithm() -> Iterator[None]:
+    _registry.register(
+        _CLI_ALGORITHM,
+        AlgorithmSpec(
+            name=_CLI_ALGORITHM,
+            trainer_cls=type("CliFixtureTrainer", (), {}),
+            supported_tasks=("fit",),
+            problem_types=(ProblemType.BINARY_CLASSIFICATION,),
+            data_modality=("tabular",),
+            capabilities=(Capability.TUNABLE, Capability.DISTRIBUTED),
+            data_loading=DataLoadingMode.CANONICAL_DRIVER,
+            config_model=_CliAlgorithmConfig,
+        ),
+    )
+    yield
+    _registry.unregister(_CLI_ALGORITHM)
 
 
 @pytest.fixture
@@ -26,9 +69,7 @@ class TestAlgoList:
     def test_list_default(self, runner) -> None:
         result = runner.invoke(main, ["algo", "list"])
         assert result.exit_code == 0
-        # Should list at least the bootstrapped first-party XGBoost descriptor.
-        assert "xgboost" in result.output
-        assert "dnn" in result.output
+        assert _CLI_ALGORITHM in result.output
         assert "MODALITY" in result.output
         assert "GPU REQ" in result.output
         assert "STATUS" in result.output
@@ -43,51 +84,36 @@ class TestAlgoList:
         parsed = json.loads(result.stdout)
         assert isinstance(parsed, list)
         names = [item["name"] for item in parsed]
-        assert "xgboost" in names
+        assert _CLI_ALGORITHM in names
         by_name = {item["name"]: item for item in parsed}
-        assert by_name["xgboost"]["execution_kind"] == "train"
-        assert by_name["xgboost"]["supported_tasks"] == ["fit"]
-        assert by_name["xgboost"]["capabilities"] == [
+        record = by_name[_CLI_ALGORITHM]
+        assert record["execution_kind"] == "train"
+        assert record["supported_tasks"] == ["fit"]
+        assert record["capabilities"] == [
             "tunable",
-            "exportable",
             "distributed",
         ]
-        assert by_name["xgboost"]["data_loading"] == "canonical_driver"
-        assert by_name["xgboost"]["stability"] == "alpha"
-        assert by_name["xgboost"]["available"] is True
-        assert by_name["xgboost"]["compatibility_only"] is False
-        assert by_name["xgboost"]["tested"] is True
-        assert by_name["xgboost"]["supported"] is True
-        assert by_name["xgboost"]["native_migration_complete"] is True
-        assert by_name["xgboost"]["implementation_ids"] == [
-            "tributo.xgboost.framework_native",
-            "tributo.xgboost.legacy_trainer",
-        ]
-        assert by_name["xgboost"]["distribution_strategies"] == ["framework_native"]
-        assert by_name["xgboost"]["execution_profiles"] == [
-            "cluster",
-            "local",
-        ]
-        assert by_name["xgboost"]["validated_execution_profiles"] == [
-            "cluster",
-            "local",
-        ]
-
-        if "dnn" in by_name:
-            assert "distributed" in by_name["dnn"]["capabilities"]
-        if "pu" in by_name:
-            assert "distributed" in by_name["pu"]["capabilities"]
+        assert record["data_loading"] == "canonical_driver"
+        assert record["stability"] == "beta"
+        assert record["available"] is False
+        assert record["compatibility_only"] is True
+        assert record["tested"] is False
+        assert record["supported"] is False
+        assert record["native_migration_complete"] is False
+        assert record["implementation_ids"] == []
+        assert record["distribution_strategies"] == []
+        assert record["execution_profiles"] == []
+        assert record["validated_execution_profiles"] == []
 
     def test_list_filter_family(self, runner) -> None:
         result = runner.invoke(main, ["algo", "list", "--family", "classification"])
         assert result.exit_code == 0
-        # xgboost supports classification
-        assert "xgboost" in result.output
+        assert _CLI_ALGORITHM in result.output
 
     def test_list_filter_modality(self, runner) -> None:
         result = runner.invoke(main, ["algo", "list", "--modality", "tabular"])
         assert result.exit_code == 0
-        assert "xgboost" in result.output
+        assert _CLI_ALGORITHM in result.output
 
     def test_list_no_results(self, runner) -> None:
         """Filter combination that nothing matches."""
@@ -107,19 +133,19 @@ class TestAlgoList:
 
 class TestAlgoInfo:
     def test_info_known_algorithm(self, runner) -> None:
-        result = runner.invoke(main, ["algo", "info", "xgboost"])
+        result = runner.invoke(main, ["algo", "info", _CLI_ALGORITHM])
         assert result.exit_code == 0
-        assert "xgboost" in result.output
+        assert _CLI_ALGORITHM in result.output
         assert "Problem Types" in result.output
         assert "Data Modality" in result.output
         assert "Execution Kind" in result.output
         assert "Capabilities" in result.output
         assert "distributed" in result.output
-        assert "Stability:      alpha" in result.output
-        assert "tributo.xgboost.framework_native" in result.output
-        assert "Distribution:   ['framework_native']" in result.output
-        assert "Profiles:       ['cluster', 'local']" in result.output
-        assert "Validated:      ['cluster', 'local']" in result.output
+        assert "Stability:      beta" in result.output
+        assert "Implementations: -" in result.output
+        assert "Distribution:   -" in result.output
+        assert "Profiles:       -" in result.output
+        assert "Validated:      -" in result.output
 
     def test_info_unknown_algorithm(self, runner) -> None:
         result = runner.invoke(main, ["algo", "info", "nonexistent_algo_xyz"])
@@ -133,8 +159,8 @@ class TestAlgoInfo:
 
 
 class TestAlgoConfigSchema:
-    def test_schema_for_xgboost(self, runner) -> None:
-        result = runner.invoke(main, ["algo", "config-schema", "xgboost"])
+    def test_schema_for_registered_algorithm(self, runner) -> None:
+        result = runner.invoke(main, ["algo", "config-schema", _CLI_ALGORITHM])
         assert result.exit_code == 0
         schema = json.loads(result.stdout)
         assert "properties" in schema
@@ -174,24 +200,6 @@ class TestAlgoValidate:
                             "path": "/tmp/data.parquet",
                         }
                     },
-                    "model": {"objective": "binary:logistic"},
-                    "training": {"num_rounds": 50},
-                }
-            )
-        )
-        result = runner.invoke(
-            main,
-            ["algo", "validate", "--algo", "xgboost", "--config", str(config_file)],
-        )
-        assert result.exit_code == 0
-
-    def test_valid_config_missing_source_rejected(self, runner, tmp_path) -> None:
-        """Config without data.source → exit 1 (execution validation fails)."""
-        config_file = tmp_path / "no_source.json"
-        config_file.write_text(
-            json.dumps(
-                {
-                    "model": {"objective": "binary:logistic"},
                     "training": {"num_rounds": 50},
                 }
             )
@@ -202,7 +210,30 @@ class TestAlgoValidate:
                 "algo",
                 "validate",
                 "--algo",
-                "xgboost",
+                _CLI_ALGORITHM,
+                "--config",
+                str(config_file),
+            ],
+        )
+        assert result.exit_code == 0
+
+    def test_valid_config_missing_source_rejected(self, runner, tmp_path) -> None:
+        """Config without data.source → exit 1 (execution validation fails)."""
+        config_file = tmp_path / "no_source.json"
+        config_file.write_text(
+            json.dumps(
+                {
+                    "training": {"num_rounds": 50},
+                }
+            )
+        )
+        result = runner.invoke(
+            main,
+            [
+                "algo",
+                "validate",
+                "--algo",
+                _CLI_ALGORITHM,
                 "--config",
                 str(config_file),
             ],
@@ -256,7 +287,7 @@ class TestAlgoValidate:
                 "algo",
                 "validate",
                 "--algo",
-                "xgboost",
+                _CLI_ALGORITHM,
                 "--config",
                 str(config_file),
             ],

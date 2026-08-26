@@ -32,10 +32,12 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import dataclass
 from importlib.metadata import entry_points
 from inspect import Parameter, signature
 from typing import TYPE_CHECKING, Any, TypeGuard, cast
 
+from packaging.utils import canonicalize_name
 from pydantic import BaseModel
 
 from tributo.exceptions import JobConfigurationError
@@ -78,12 +80,73 @@ def _record_diagnostic(
         )
 
 
-def _get_enabled_plugins() -> set[str] | None:
-    """Parse ``TRIBUTO_PLUGINS`` env var.  Returns ``None`` if unset (load all)."""
+@dataclass(frozen=True)
+class _PluginSelector:
+    distribution: str | None = None
+    group: str | None = None
+    name: str | None = None
+
+
+def _parse_plugin_selector(value: str) -> _PluginSelector:
+    parts = value.split(":")
+    if len(parts) == 1 and parts[0]:
+        return _PluginSelector(name=parts[0])
+    if len(parts) == 2 and parts[0] == "distribution" and parts[1]:
+        return _PluginSelector(distribution=canonicalize_name(parts[1]))
+    if len(parts) == 3 and parts[0] == "group" and all(parts[1:]):
+        return _PluginSelector(group=parts[1], name=parts[2])
+    if (
+        len(parts) == 5
+        and parts[0] == "distribution"
+        and parts[2] == "group"
+        and all((parts[1], parts[3], parts[4]))
+    ):
+        return _PluginSelector(
+            distribution=canonicalize_name(parts[1]),
+            group=parts[3],
+            name=parts[4],
+        )
+    raise JobConfigurationError(
+        "TRIBUTO_PLUGINS selectors must be a bare name, distribution:<name>, "
+        "group:<group>:<name>, or "
+        "distribution:<name>:group:<group>:<name>"
+    )
+
+
+def _get_enabled_plugins() -> tuple[_PluginSelector, ...] | None:
+    """Parse ``TRIBUTO_PLUGINS`` into deterministic qualified selectors."""
     raw = os.environ.get("TRIBUTO_PLUGINS", "").strip()
     if not raw:
         return None
-    return {name.strip() for name in raw.split(",") if name.strip()}
+    selectors = tuple(
+        _parse_plugin_selector(item.strip()) for item in raw.split(",") if item.strip()
+    )
+    return tuple(
+        sorted(
+            set(selectors),
+            key=lambda item: (
+                item.distribution or "",
+                item.group or "",
+                item.name or "",
+            ),
+        )
+    )
+
+
+def _entry_point_enabled(
+    entry_point: Any,
+    group: str,
+    selectors: tuple[_PluginSelector, ...] | None,
+) -> bool:
+    if selectors is None:
+        return True
+    distribution = _entry_point_distribution_name(entry_point)
+    return any(
+        (selector.distribution is None or selector.distribution == distribution)
+        and (selector.group is None or selector.group == group)
+        and (selector.name is None or selector.name == entry_point.name)
+        for selector in selectors
+    )
 
 
 def discover_trainer_descriptors(
@@ -104,7 +167,7 @@ def discover_trainer_descriptors(
     enabled = _get_enabled_plugins()
     descriptors: list[Any] = []
     for ep in _iter_trainer_entry_points():
-        if enabled is not None and ep.name not in enabled:
+        if not _entry_point_enabled(ep, "tributo.trainers", enabled):
             logger.debug("Skipping trainer plugin %r (not in TRIBUTO_PLUGINS)", ep.name)
             continue
         if ":" not in ep.value:
@@ -165,6 +228,8 @@ def validate_distributed_algorithm_descriptor(
     descriptor: object,
     *,
     entry_point_name: str,
+    entry_point_distribution_name: str | None = None,
+    load_implementation: bool = True,
 ) -> DistributedAlgorithmDescriptor:
     """Validate one installed, trusted distributed algorithm descriptor."""
     import importlib
@@ -176,20 +241,33 @@ def validate_distributed_algorithm_descriptor(
     from tributo.algorithms.api import (
         DistributedAlgorithmDescriptor,
         DistributionStrategy,
+        InputDistribution,
     )
     from tributo.algorithms.api.models import FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS
     from tributo.algorithms.spi import (
         CollectiveAlgorithm,
         FrameworkNativeAlgorithm,
+        IterativeOptimizationAlgorithm,
+        JoblibEstimatorRecipe,
         MapReduceAlgorithm,
+        ParallelEnsembleAlgorithm,
         TorchTrainingRecipe,
+        TrainingRecipeV2,
     )
 
     if not isinstance(descriptor, DistributedAlgorithmDescriptor):
         raise TypeError("entry point does not export DistributedAlgorithmDescriptor")
-    if descriptor.name != entry_point_name:
+    if descriptor.name != entry_point_name and not entry_point_name.startswith(
+        f"{descriptor.name}."
+    ):
         raise ValueError(
-            "descriptor algorithm identity does not match entry-point name"
+            "descriptor entry-point name must equal the algorithm identity or use "
+            "the '<algorithm>.<implementation>' form"
+        )
+    owner_distribution = canonicalize_name(entry_point_distribution_name or "")
+    if owner_distribution and owner_distribution != descriptor.package_name:
+        raise ValueError(
+            "descriptor package identity does not match entry-point distribution"
         )
     installed_package_version = importlib.metadata.version(descriptor.package_name)
     if Version(installed_package_version) != Version(descriptor.package_version):
@@ -211,6 +289,12 @@ def validate_distributed_algorithm_descriptor(
         DistributionStrategy.RAY_TRAIN_COLLECTIVE: CollectiveAlgorithm,
         DistributionStrategy.RAY_MAP_REDUCE: MapReduceAlgorithm,
         DistributionStrategy.FRAMEWORK_NATIVE: FrameworkNativeAlgorithm,
+        DistributionStrategy.RAY_JOBLIB_ESTIMATOR: JoblibEstimatorRecipe,
+        DistributionStrategy.RAY_PARALLEL_ENSEMBLE: ParallelEnsembleAlgorithm,
+        DistributionStrategy.RAY_ITERATIVE_OPTIMIZATION: (
+            IterativeOptimizationAlgorithm
+        ),
+        DistributionStrategy.RAY_TRAIN_RECIPE_V2: TrainingRecipeV2,
     }[distribution_spec.strategy]
     if distribution_spec.strategy is DistributionStrategy.RAY_TRAIN_COLLECTIVE and str(
         implementation_descriptor.executable_factory_ref
@@ -237,23 +321,30 @@ def validate_distributed_algorithm_descriptor(
         raise ValueError(
             "implementation input compatibility omits its Worker input adapter"
         )
+    required_capability = (
+        "shardable"
+        if contract.input_distribution is not InputDistribution.FULL_DATASET
+        else "materializable"
+    )
     if (
         "ray_data" not in compatibility.accepted_input_views
         or "tributo.ray_data" not in compatibility.accepted_ingestion_engines
-        or "shardable" not in compatibility.required_input_capabilities
+        or required_capability not in compatibility.required_input_capabilities
     ):
         raise ValueError(
-            "implementation input compatibility omits the shardable Ray Data contract"
+            "implementation input compatibility omits the required Ray Data contract: "
+            f"{required_capability}"
         )
 
-    reference = implementation_descriptor.implementation_ref
-    implementation: object = importlib.import_module(reference.module)
-    for segment in reference.qualname.split("."):
-        implementation = getattr(implementation, segment)
-    if not isinstance(implementation, type) or not issubclass(
-        implementation, expected_base
-    ):
-        raise TypeError(f"implementation must inherit {expected_base.__name__}")
+    if load_implementation:
+        reference = implementation_descriptor.implementation_ref
+        implementation: object = importlib.import_module(reference.module)
+        for segment in reference.qualname.split("."):
+            implementation = getattr(implementation, segment)
+        if not isinstance(implementation, type) or not issubclass(
+            implementation, expected_base
+        ):
+            raise TypeError(f"implementation must inherit {expected_base.__name__}")
     return descriptor
 
 
@@ -265,12 +356,14 @@ def discover_algorithm_descriptors(
     enabled = _get_enabled_plugins()
     descriptors: list[Any] = []
     for ep in _iter_entry_points("tributo.algorithms"):
-        if enabled is not None and ep.name not in enabled:
+        if not _entry_point_enabled(ep, "tributo.algorithms", enabled):
             continue
         try:
             descriptor = validate_distributed_algorithm_descriptor(
                 ep.load(),
                 entry_point_name=ep.name,
+                entry_point_distribution_name=_entry_point_distribution_name(ep),
+                load_implementation=False,
             )
         except Exception as exc:
             _record_diagnostic(
@@ -307,8 +400,15 @@ def _entry_point_distribution_name(entry_point: Any) -> str:
 
 
 def _iter_entry_points(group: str) -> Any:
-    """Iterate over entry points using the established name ordering."""
-    yield from sorted(entry_points(group=group), key=lambda ep: ep.name)
+    """Iterate over entry points using deterministic owner/name ordering."""
+    yield from sorted(
+        entry_points(group=group),
+        key=lambda ep: (
+            _entry_point_distribution_name(ep),
+            ep.name,
+            ep.value,
+        ),
+    )
 
 
 def _iter_trainer_entry_points() -> Any:
@@ -349,7 +449,7 @@ def discover_exporter_plugins(
     classes: list[Any] = []
 
     for ep in _iter_entry_points("tributo.exporters"):
-        if enabled is not None and ep.name not in enabled:
+        if not _entry_point_enabled(ep, "tributo.exporters", enabled):
             logger.debug(
                 "Skipping exporter plugin %r (not in TRIBUTO_PLUGINS)", ep.name
             )
@@ -464,11 +564,17 @@ def resolve_hook_plugin(hook_id: str) -> type[Any]:
     side effect must never disappear because an entry point failed to import.
     """
     enabled = _get_enabled_plugins()
-    if enabled is not None and hook_id not in enabled:
-        raise JobConfigurationError(f"Hook {hook_id!r} is disabled by TRIBUTO_PLUGINS")
-
-    matches = [ep for ep in _iter_entry_points("tributo.hooks") if ep.name == hook_id]
+    all_matches = [
+        ep for ep in _iter_entry_points("tributo.hooks") if ep.name == hook_id
+    ]
+    matches = [
+        ep for ep in all_matches if _entry_point_enabled(ep, "tributo.hooks", enabled)
+    ]
     if not matches:
+        if all_matches:
+            raise JobConfigurationError(
+                f"Hook {hook_id!r} is disabled by TRIBUTO_PLUGINS"
+            )
         raise JobConfigurationError(f"Unknown hook_id {hook_id!r}")
     if len(matches) > 1:
         raise JobConfigurationError(
@@ -578,7 +684,7 @@ def discover_source_provider_plugins(
     classes: list[Any] = []
 
     for ep in _iter_entry_points("tributo.source_providers"):
-        if enabled is not None and ep.name not in enabled:
+        if not _entry_point_enabled(ep, "tributo.source_providers", enabled):
             logger.debug("Skipping source provider plugin %r", ep.name)
             continue
         try:
@@ -659,7 +765,7 @@ def discover_validator_plugins(
     classes: list[Any] = []
 
     for ep in _iter_entry_points("tributo.validators"):
-        if enabled is not None and ep.name not in enabled:
+        if not _entry_point_enabled(ep, "tributo.validators", enabled):
             logger.debug("Skipping validator plugin %r", ep.name)
             continue
         try:
@@ -738,7 +844,7 @@ def discover_flavor_plugins() -> list[Any]:
     classes: list[Any] = []
 
     for ep in _iter_entry_points("tributo.model_flavors"):
-        if enabled is not None and ep.name not in enabled:
+        if not _entry_point_enabled(ep, "tributo.model_flavors", enabled):
             logger.debug("Skipping flavor plugin %r", ep.name)
             continue
         try:
@@ -786,7 +892,7 @@ def discover_model_factory_plugins() -> list[Any]:
     classes: list[Any] = []
 
     for ep in _iter_entry_points("tributo.model_factories"):
-        if enabled is not None and ep.name not in enabled:
+        if not _entry_point_enabled(ep, "tributo.model_factories", enabled):
             logger.debug("Skipping model factory plugin %r", ep.name)
             continue
         try:
@@ -951,7 +1057,7 @@ def discover_broker_plugins(
     enabled = _get_enabled_plugins()
     classes: list[type[Any]] = []
     for ep in _iter_entry_points("tributo.brokers"):
-        if enabled is not None and ep.name not in enabled:
+        if not _entry_point_enabled(ep, "tributo.brokers", enabled):
             logger.debug("Skipping broker plugin %r", ep.name)
             continue
         try:
@@ -1011,15 +1117,17 @@ def discover_broker_plugins(
 def resolve_broker_plugin(broker_id: str) -> type[Any]:
     """Resolve one explicitly selected broker, using fail-closed semantics."""
     enabled = _get_enabled_plugins()
-    if enabled is not None and broker_id not in enabled:
-        raise JobConfigurationError(
-            f"Broker {broker_id!r} is disabled by TRIBUTO_PLUGINS"
-        )
-
-    matches = [
+    all_matches = [
         ep for ep in _iter_entry_points("tributo.brokers") if ep.name == broker_id
     ]
+    matches = [
+        ep for ep in all_matches if _entry_point_enabled(ep, "tributo.brokers", enabled)
+    ]
     if not matches:
+        if all_matches:
+            raise JobConfigurationError(
+                f"Broker {broker_id!r} is disabled by TRIBUTO_PLUGINS"
+            )
         raise JobConfigurationError(f"Unknown broker {broker_id!r}")
     if len(matches) > 1:
         raise JobConfigurationError(

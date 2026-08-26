@@ -63,8 +63,8 @@ def export(
 
     Args:
         source: An ``ExportSource`` produced by an ``ExportSourceProvider``
-            (e.g. ``RayXGBoostSourceProvider``).  Raw model objects are
-            not accepted — create a source through the matching provider.
+            plugin. Raw model objects are not accepted; create a source
+            through the matching installed provider.
         spec: An ``ExportSpec`` (alias for ``BundleOutputConfig``) defining
             targets, bundle URI, roles, and optional alias.
         storage_profile: Optional storage profile name for S3 credentials.
@@ -77,7 +77,7 @@ def export(
     if not hasattr(source, "source_kind"):
         raise TypeError(
             f"source must be an ExportSource, got {type(source).__name__}. "
-            "Use an ExportSourceProvider to create one (e.g. RayXGBoostSourceProvider)."
+            "Use an installed ExportSourceProvider to create one."
         )
 
     # The function-level storage_profile overrides the config-level one.

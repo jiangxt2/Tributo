@@ -118,6 +118,10 @@ class DistributionStrategy(str, Enum):
     RAY_TRAIN_COLLECTIVE = "ray_train_collective"
     FRAMEWORK_NATIVE = "framework_native"
     RAY_MAP_REDUCE = "ray_map_reduce"
+    RAY_JOBLIB_ESTIMATOR = "ray_joblib_estimator"
+    RAY_PARALLEL_ENSEMBLE = "ray_parallel_ensemble"
+    RAY_ITERATIVE_OPTIMIZATION = "ray_iterative_optimization"
+    RAY_TRAIN_RECIPE_V2 = "ray_train_recipe_v2"
 
 
 @PublicAPI(stability="alpha")
@@ -126,6 +130,7 @@ class InputDistribution(str, Enum):
 
     SHARDED = "sharded"
     FRAMEWORK_OWNED = "framework_owned"
+    FULL_DATASET = "full_dataset"
 
 
 @PublicAPI(stability="alpha")
@@ -135,6 +140,18 @@ class StateCoordination(str, Enum):
     ALL_REDUCE = "all_reduce"
     FRAMEWORK_NATIVE = "framework_native"
     ASSOCIATIVE_REDUCE = "associative_reduce"
+    ESTIMATOR_INTERNAL = "estimator_internal"
+    ORDERED_ENSEMBLE = "ordered_ensemble"
+    ITERATIVE_GLOBAL = "iterative_global"
+
+
+@PublicAPI(stability="alpha")
+class DistributedExactness(str, Enum):
+    """Relationship between one distributed implementation and its baseline."""
+
+    EXACT = "exact"
+    CONDITIONAL = "conditional"
+    APPROXIMATE = "approximate"
 
 
 @PublicAPI(stability="alpha")
@@ -351,6 +368,90 @@ class MapReducePolicy:
 
 @PublicAPI(stability="alpha")
 @dataclass(frozen=True)
+class JoblibEstimatorPolicy:
+    """Bounded contract for estimators that expose internal Joblib tasks."""
+
+    fit_operations: tuple[str, ...] = ("fit",)
+    n_jobs_parameter: str = "n_jobs"
+    max_materialized_rows: int = 100_000
+    exactness: DistributedExactness = DistributedExactness.EXACT
+
+    def __post_init__(self) -> None:
+        operations = tuple(self.fit_operations)
+        if not operations or any(
+            not isinstance(item, str) or not item for item in operations
+        ):
+            raise AlgorithmConfigurationError(
+                "Joblib fit_operations must contain non-empty strings"
+            )
+        if len(set(operations)) != len(operations):
+            raise AlgorithmConfigurationError(
+                "Joblib fit_operations must not contain duplicates"
+            )
+        object.__setattr__(self, "fit_operations", operations)
+        _string(self.n_jobs_parameter, "n_jobs_parameter")
+        _positive_integer(self.max_materialized_rows, "max_materialized_rows")
+        try:
+            exactness = DistributedExactness(self.exactness)
+        except (TypeError, ValueError) as exc:
+            raise AlgorithmConfigurationError("Joblib exactness is invalid") from exc
+        object.__setattr__(self, "exactness", exactness)
+
+
+@PublicAPI(stability="alpha")
+@dataclass(frozen=True)
+class ParallelEnsemblePolicy:
+    """Bounded contract for deterministic independent ensemble units."""
+
+    max_units: int
+    max_unit_model_bytes: int = 64 * 1024 * 1024
+    max_retries: int = 0
+    checkpoint_interval: int = 1
+    exactness: DistributedExactness = DistributedExactness.EXACT
+
+    def __post_init__(self) -> None:
+        _positive_integer(self.max_units, "max_units")
+        _positive_integer(self.max_unit_model_bytes, "max_unit_model_bytes")
+        _non_negative_integer(self.max_retries, "max_retries")
+        _positive_integer(self.checkpoint_interval, "checkpoint_interval")
+        try:
+            exactness = DistributedExactness(self.exactness)
+        except (TypeError, ValueError) as exc:
+            raise AlgorithmConfigurationError(
+                "Parallel Ensemble exactness is invalid"
+            ) from exc
+        object.__setattr__(self, "exactness", exactness)
+
+
+@PublicAPI(stability="alpha")
+@dataclass(frozen=True)
+class IterativeOptimizationPolicy:
+    """Bounded contract for synchronous partition-update training rounds."""
+
+    max_rounds: int
+    checkpoint_interval: int = 1
+    max_state_bytes: int = 64 * 1024 * 1024
+    max_update_bytes: int = 16 * 1024 * 1024
+    max_retries: int = 0
+    exactness: DistributedExactness = DistributedExactness.CONDITIONAL
+
+    def __post_init__(self) -> None:
+        _positive_integer(self.max_rounds, "max_rounds")
+        _positive_integer(self.checkpoint_interval, "checkpoint_interval")
+        _positive_integer(self.max_state_bytes, "max_state_bytes")
+        _positive_integer(self.max_update_bytes, "max_update_bytes")
+        _non_negative_integer(self.max_retries, "max_retries")
+        try:
+            exactness = DistributedExactness(self.exactness)
+        except (TypeError, ValueError) as exc:
+            raise AlgorithmConfigurationError(
+                "Iterative Optimization exactness is invalid"
+            ) from exc
+        object.__setattr__(self, "exactness", exactness)
+
+
+@PublicAPI(stability="alpha")
+@dataclass(frozen=True)
 class FrameworkNativePolicy:
     """Conditional contract for a framework-owned distributed trainer."""
 
@@ -392,7 +493,14 @@ class FrameworkNativePolicy:
             )
 
 
-StrategyPolicy = CollectivePolicy | MapReducePolicy | FrameworkNativePolicy
+StrategyPolicy = (
+    CollectivePolicy
+    | MapReducePolicy
+    | FrameworkNativePolicy
+    | JoblibEstimatorPolicy
+    | ParallelEnsemblePolicy
+    | IterativeOptimizationPolicy
+)
 
 
 @PublicAPI(stability="alpha")
@@ -482,6 +590,26 @@ class DistributionSpec:
                 InputDistribution.SHARDED,
                 StateCoordination.ASSOCIATIVE_REDUCE,
             ),
+            DistributionStrategy.RAY_JOBLIB_ESTIMATOR: (
+                JoblibEstimatorPolicy,
+                InputDistribution.FULL_DATASET,
+                StateCoordination.ESTIMATOR_INTERNAL,
+            ),
+            DistributionStrategy.RAY_PARALLEL_ENSEMBLE: (
+                ParallelEnsemblePolicy,
+                InputDistribution.FULL_DATASET,
+                StateCoordination.ORDERED_ENSEMBLE,
+            ),
+            DistributionStrategy.RAY_ITERATIVE_OPTIMIZATION: (
+                IterativeOptimizationPolicy,
+                InputDistribution.SHARDED,
+                StateCoordination.ITERATIVE_GLOBAL,
+            ),
+            DistributionStrategy.RAY_TRAIN_RECIPE_V2: (
+                CollectivePolicy,
+                InputDistribution.SHARDED,
+                StateCoordination.ALL_REDUCE,
+            ),
         }
         policy_type, expected_input, expected_state = expected[strategy]
         if not isinstance(self.policy, policy_type):
@@ -545,6 +673,33 @@ class DistributionSpec:
                 "finalizer_ref": self.policy.finalizer_ref,
                 "commutative": self.policy.commutative,
                 "max_retries": self.policy.max_retries,
+            }
+        elif isinstance(self.policy, JoblibEstimatorPolicy):
+            policy = {
+                "kind": "joblib_estimator",
+                "fit_operations": list(self.policy.fit_operations),
+                "n_jobs_parameter": self.policy.n_jobs_parameter,
+                "max_materialized_rows": self.policy.max_materialized_rows,
+                "exactness": self.policy.exactness.value,
+            }
+        elif isinstance(self.policy, ParallelEnsemblePolicy):
+            policy = {
+                "kind": "parallel_ensemble",
+                "max_units": self.policy.max_units,
+                "max_unit_model_bytes": self.policy.max_unit_model_bytes,
+                "max_retries": self.policy.max_retries,
+                "checkpoint_interval": self.policy.checkpoint_interval,
+                "exactness": self.policy.exactness.value,
+            }
+        elif isinstance(self.policy, IterativeOptimizationPolicy):
+            policy = {
+                "kind": "iterative_optimization",
+                "max_rounds": self.policy.max_rounds,
+                "checkpoint_interval": self.policy.checkpoint_interval,
+                "max_state_bytes": self.policy.max_state_bytes,
+                "max_update_bytes": self.policy.max_update_bytes,
+                "max_retries": self.policy.max_retries,
+                "exactness": self.policy.exactness.value,
             }
         else:
             policy = {
@@ -632,6 +787,59 @@ class DistributionSpec:
                     max_retries=_non_negative_integer(
                         policy_value["max_retries"], "max_retries"
                     ),
+                )
+            elif kind == "joblib_estimator":
+                policy = JoblibEstimatorPolicy(
+                    fit_operations=tuple(
+                        _string(item, "fit operation")
+                        for item in _sequence(
+                            policy_value["fit_operations"], "fit_operations"
+                        )
+                    ),
+                    n_jobs_parameter=_string(
+                        policy_value["n_jobs_parameter"], "n_jobs_parameter"
+                    ),
+                    max_materialized_rows=_positive_integer(
+                        policy_value["max_materialized_rows"],
+                        "max_materialized_rows",
+                    ),
+                    exactness=DistributedExactness(policy_value["exactness"]),
+                )
+            elif kind == "parallel_ensemble":
+                policy = ParallelEnsemblePolicy(
+                    max_units=_positive_integer(policy_value["max_units"], "max_units"),
+                    max_unit_model_bytes=_positive_integer(
+                        policy_value["max_unit_model_bytes"],
+                        "max_unit_model_bytes",
+                    ),
+                    max_retries=_non_negative_integer(
+                        policy_value["max_retries"], "max_retries"
+                    ),
+                    checkpoint_interval=_positive_integer(
+                        policy_value["checkpoint_interval"],
+                        "checkpoint_interval",
+                    ),
+                    exactness=DistributedExactness(policy_value["exactness"]),
+                )
+            elif kind == "iterative_optimization":
+                policy = IterativeOptimizationPolicy(
+                    max_rounds=_positive_integer(
+                        policy_value["max_rounds"], "max_rounds"
+                    ),
+                    checkpoint_interval=_positive_integer(
+                        policy_value["checkpoint_interval"],
+                        "checkpoint_interval",
+                    ),
+                    max_state_bytes=_positive_integer(
+                        policy_value["max_state_bytes"], "max_state_bytes"
+                    ),
+                    max_update_bytes=_positive_integer(
+                        policy_value["max_update_bytes"], "max_update_bytes"
+                    ),
+                    max_retries=_non_negative_integer(
+                        policy_value["max_retries"], "max_retries"
+                    ),
+                    exactness=DistributedExactness(policy_value["exactness"]),
                 )
             elif kind == "framework_native":
                 policy = FrameworkNativePolicy(
@@ -724,13 +932,17 @@ class DistributionSpec:
 
 __all__ = [
     "CollectivePolicy",
+    "DistributedExactness",
     "DistributionSpec",
     "DistributionStrategy",
     "ExecutionProfile",
     "FrameworkNativePolicy",
     "InputDistribution",
+    "IterativeOptimizationPolicy",
+    "JoblibEstimatorPolicy",
     "MapReducePolicy",
     "MetricReduction",
+    "ParallelEnsemblePolicy",
     "ResultPolicy",
     "StateCoordination",
     "StateField",

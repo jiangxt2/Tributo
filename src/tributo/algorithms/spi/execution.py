@@ -16,7 +16,7 @@ from tributo.algorithms.api import (
     WorkerExecutionResult,
 )
 from tributo.algorithms.api.distribution import StateField
-from tributo.algorithms.spi.input import WorkerInputPayload
+from tributo.algorithms.spi.input import WorkerInputPayload, WorkerInputPayloadSet
 from tributo.util.annotations import PublicAPI
 
 
@@ -37,7 +37,7 @@ class ExecutionEnvelope:
     """Serializable control/data handoff consumed by one WorkerBootstrap."""
 
     plan: ResolvedAlgorithmPlan
-    input_payload: WorkerInputPayload
+    input_payload: WorkerInputPayload | WorkerInputPayloadSet
     artifacts: tuple[ArtifactDraft, ...] = field(default_factory=tuple)
     cancelled: bool = False
 
@@ -49,7 +49,7 @@ class RuntimeExecutionEnvelope:
 
     run_id: str
     plan: ResolvedAlgorithmPlan
-    input_payloads: tuple[WorkerInputPayload, ...]
+    input_payloads: tuple[WorkerInputPayload | WorkerInputPayloadSet, ...]
     artifacts: tuple[ArtifactDraft, ...] = field(default_factory=tuple)
     cancelled: bool = False
 
@@ -66,6 +66,7 @@ class RuntimeExecutionEnvelope:
             in {
                 RuntimeTopology.DATA_PARALLEL,
                 RuntimeTopology.RAY_MAP_REDUCE,
+                RuntimeTopology.RAY_ITERATIVE_OPTIMIZATION,
             }
             else 1
         )
@@ -194,6 +195,11 @@ class MapReduceAlgorithm(ABC, Generic[BatchT, PartialStateT, ModelT]):
     def empty_partition(self) -> PartialStateT:
         """Return the reducer identity for an empty input shard."""
 
+    def coverage_counts(self, state: PartialStateT) -> Mapping[str, int]:
+        """Return optional orthogonal coverage dimensions for one map state."""
+        del state
+        return {}
+
     @property
     @abstractmethod
     def retry_safe(self) -> bool:
@@ -229,6 +235,177 @@ class FrameworkNativeAlgorithm(ABC):
         """Return the framework checkpoint used by existing Bundle exporting."""
 
 
+@PublicAPI(stability="alpha")
+@dataclass(frozen=True)
+class EnsembleUnitSpec:
+    """One deterministic independently trainable ensemble unit."""
+
+    unit_id: str
+    seed: int
+    payload: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.unit_id, str) or not self.unit_id:
+            raise AlgorithmConfigurationError("ensemble unit_id must be non-empty")
+        if not isinstance(self.seed, int) or isinstance(self.seed, bool):
+            raise AlgorithmConfigurationError("ensemble unit seed must be an integer")
+
+
+@PublicAPI(stability="alpha")
+class JoblibEstimatorRecipe(ABC):
+    """Estimator mathematics executed inside Tributo's Ray Joblib runtime."""
+
+    @abstractmethod
+    def build_estimator(self, config: Mapping[str, Any]) -> object:
+        """Construct an unfitted estimator."""
+
+    @abstractmethod
+    def fit_arguments(
+        self,
+        inputs: Mapping[str, object],
+        config: Mapping[str, Any],
+    ) -> tuple[tuple[object, ...], Mapping[str, object]]:
+        """Return positional and keyword arguments for estimator.fit()."""
+
+    @abstractmethod
+    def parallelism_contract(self) -> Mapping[str, object]:
+        """Describe estimator-internal parallel operations and exactness."""
+
+    @abstractmethod
+    def extract_model(self, fitted_estimator: object) -> object:
+        """Extract the fitted model staged by Tributo."""
+
+    @abstractmethod
+    def model_codec(self) -> object:
+        """Return a bounded codec exposing dumps(model) and loads(payload)."""
+
+
+UnitModelT = TypeVar("UnitModelT")
+EnsembleModelT = TypeVar("EnsembleModelT")
+
+
+@PublicAPI(stability="alpha")
+class ParallelEnsembleAlgorithm(ABC, Generic[UnitModelT, EnsembleModelT]):
+    """Independent ensemble units coordinated by Tributo Core."""
+
+    @abstractmethod
+    def plan_units(
+        self,
+        config: Mapping[str, Any],
+        input_descriptor: object,
+        seed: int,
+    ) -> tuple[EnsembleUnitSpec, ...]:
+        """Plan deterministic unit identities and seeds."""
+
+    @abstractmethod
+    def fit_unit(
+        self,
+        unit: EnsembleUnitSpec,
+        inputs: Mapping[str, object],
+        context: AlgorithmExecutionContext,
+    ) -> UnitModelT:
+        """Fit one independent unit without invoking Ray."""
+
+    @abstractmethod
+    def merge_units(self, ordered_units: tuple[UnitModelT, ...]) -> object:
+        """Merge rank-ordered unit models into bounded intermediate state."""
+
+    @abstractmethod
+    def finalize_ensemble(self, merged: object) -> EnsembleModelT:
+        """Create the final model from ordered unit state."""
+
+    @abstractmethod
+    def unit_schema(self) -> Mapping[str, object]:
+        """Return the stable unit-model schema."""
+
+    @property
+    @abstractmethod
+    def retry_safe(self) -> bool:
+        """Return whether one unit can be replayed without side effects."""
+
+
+GlobalStateT = TypeVar("GlobalStateT")
+LocalUpdateT = TypeVar("LocalUpdateT")
+
+
+@PublicAPI(stability="alpha")
+class IterativeOptimizationAlgorithm(
+    ABC,
+    Generic[BatchT, GlobalStateT, LocalUpdateT, ModelT],
+):
+    """Synchronous shard updates coordinated by Tributo Core."""
+
+    @abstractmethod
+    def initialize_state(
+        self,
+        config: Mapping[str, Any],
+        input_descriptor: object,
+    ) -> GlobalStateT:
+        """Create bounded global state before round zero."""
+
+    @abstractmethod
+    def compute_partition_update(
+        self,
+        batches: Iterable[BatchT],
+        state: GlobalStateT,
+        round_index: int,
+        context: AlgorithmExecutionContext,
+    ) -> LocalUpdateT:
+        """Compute one replay-safe shard update against immutable state."""
+
+    @abstractmethod
+    def merge_updates(self, left: LocalUpdateT, right: LocalUpdateT) -> LocalUpdateT:
+        """Associatively merge two local updates."""
+
+    @abstractmethod
+    def apply_update(
+        self,
+        state: GlobalStateT,
+        update: LocalUpdateT,
+        round_index: int,
+    ) -> GlobalStateT:
+        """Advance global state after the round barrier."""
+
+    @abstractmethod
+    def evaluate_round(
+        self,
+        state: GlobalStateT,
+        update: LocalUpdateT,
+        round_index: int,
+    ) -> Mapping[str, int | float]:
+        """Return bounded round metrics."""
+
+    @abstractmethod
+    def should_stop(
+        self,
+        state: GlobalStateT,
+        metrics: Mapping[str, int | float],
+        round_index: int,
+    ) -> bool:
+        """Return whether the next round should be skipped."""
+
+    @abstractmethod
+    def finalize_model(self, state: GlobalStateT) -> ModelT:
+        """Create the final model from global state."""
+
+    @abstractmethod
+    def state_schema(self) -> Mapping[str, object]:
+        """Return the bounded global-state schema."""
+
+    @abstractmethod
+    def update_schema(self) -> Mapping[str, object]:
+        """Return the bounded local-update schema."""
+
+    @abstractmethod
+    def checkpoint_codec(self) -> object:
+        """Return a codec exposing dumps(state) and loads(payload)."""
+
+    @property
+    @abstractmethod
+    def retry_safe(self) -> bool:
+        """Return whether one shard update can be replayed before the barrier."""
+
+
 __all__ = [
     "AlgorithmExecutionContext",
     "CollectiveAlgorithm",
@@ -236,7 +413,11 @@ __all__ = [
     "ExecutionEnvelope",
     "Fittable",
     "FrameworkNativeAlgorithm",
+    "EnsembleUnitSpec",
+    "IterativeOptimizationAlgorithm",
+    "JoblibEstimatorRecipe",
     "MapReduceAlgorithm",
+    "ParallelEnsembleAlgorithm",
     "PortableRuntimeAdapter",
     "Predictable",
     "RuntimeExecutionEnvelope",

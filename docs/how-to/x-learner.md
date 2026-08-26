@@ -93,7 +93,9 @@ batch-only; no online-serving support is claimed.
 
 ## Know the first-release boundary
 
-This implementation does not provide cross-fitting, sample weights, continuous
-treatment or outcome, multiple treatments, automatic retries, or training
-resume. `ray.max_failures` must remain zero. It is an X-Learner aligned with the
-fixed weekly-demo semantics, not a doubly robust or orthogonal estimator.
+This implementation uses deterministic five-fold cross-fitting by default;
+`training.cross_fit_folds` may select a value from 2 to 20. Every fold must
+contain treated and control examples. Sample weights, continuous treatment or
+outcome, multiple treatments, automatic retries, and training resume remain
+outside this adapter. It is an X-Learner, not a doubly robust or orthogonal
+estimator.

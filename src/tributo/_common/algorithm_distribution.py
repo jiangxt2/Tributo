@@ -72,6 +72,7 @@ class PreparedAlgorithmDistribution:
     requirements_name: str | None = None
     wheelhouse_name: str | None = None
     pip_check: bool = True
+    dependency_names: tuple[str, ...] = ()
 
 
 def _configuration_error(message: str) -> JobConfigurationError:
@@ -1129,11 +1130,6 @@ def _validate_offline_bundle(
         metadata.entry_points,
         context="local Bundle",
     )
-    if len(plugin_names) > 1:
-        raise _configuration_error(
-            "one Job may activate only one algorithm entry point; use TRIBUTO_PLUGINS explicitly "
-            "for a package that contains multiple descriptors"
-        )
     if artifact.sha256 is not None and artifact.sha256 != bundle_digest:
         raise _configuration_error("artifact sha256 does not match the Bundle digest")
     return (
@@ -1308,6 +1304,9 @@ def prepare_algorithm_distribution(
         requirements_name=requirements_name,
         wheelhouse_name=wheelhouse_name,
         pip_check=pip_check,
+        dependency_names=tuple(
+            canonicalize_name(Requirement(item).name) for item in declared_dependencies
+        ),
     )
 
 
@@ -1337,7 +1336,15 @@ def algorithm_runtime_env_patch(
             )
         env_vars[key] = value
     if prepared.plugin_names:
-        requested = ",".join(prepared.plugin_names)
+        # A Wheel may rely on exporter/flavor/validator entry points supplied
+        # by its declared algorithm dependencies.  Selecting only the root
+        # distribution would make those runtime capabilities disappear.
+        dependency_distributions = []
+        dependency_distributions.extend(prepared.dependency_names)
+        distributions = tuple(
+            dict.fromkeys((prepared.package_name, *dependency_distributions))
+        )
+        requested = ",".join(f"distribution:{name}" for name in distributions)
         existing_plugins = env_vars.get("TRIBUTO_PLUGINS")
         if existing_plugins and existing_plugins != requested:
             raise _configuration_error(

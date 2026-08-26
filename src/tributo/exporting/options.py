@@ -15,8 +15,6 @@ _COMPAT_NAMES = frozenset(
         "ONNXQuantizerOptions",
         "SafetensorsOptions",
         "TorchONNXOptions",
-        "XGBoostNativeOptions",
-        "XGBoostONNXOptions",
     }
 )
 

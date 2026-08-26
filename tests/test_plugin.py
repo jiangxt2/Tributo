@@ -51,11 +51,19 @@ class _EntryPoint:
 
 
 class _TrainerEntryPoint:
-    def __init__(self, name: str, value: str, loaded: Any) -> None:
+    def __init__(
+        self,
+        name: str,
+        value: str,
+        loaded: Any,
+        distribution_name: str | None = None,
+    ) -> None:
         self.name = name
         self.value = value
         self.loaded = loaded
         self.load_calls = 0
+        if distribution_name is not None:
+            self.dist = type("Distribution", (), {"name": distribution_name})()
 
     def load(self) -> Any:
         self.load_calls += 1
@@ -73,6 +81,24 @@ def _set_trainer_entry_points(
     *eps: _TrainerEntryPoint,
 ) -> None:
     monkeypatch.setattr(plugin, "_iter_trainer_entry_points", lambda: iter(eps))
+
+
+def _legacy_descriptor():
+    from tests.algorithms.test_legacy_trainer_adapter import _registration
+    from tributo.algorithms.api import QualifiedReference
+    from tributo.integrations.algorithm_runtimes.legacy_descriptors import (
+        LegacyTrainerDescriptor,
+    )
+
+    registration = _registration()
+    return LegacyTrainerDescriptor(
+        registration=registration,
+        trainer_ref=registration.implementation.implementation_ref,
+        config_model_ref=QualifiedReference.parse(
+            "tests.support.legacy_trainers:ProbeLegacyConfig"
+        ),
+        limitations=(),
+    )
 
 
 def test_resolves_only_exact_requested_hook(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -198,14 +224,12 @@ def test_mlflow_integration_selection_requires_explicit_opt_in() -> None:
 def test_trainer_descriptor_discovery_keeps_old_plugins_compatibility_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from tributo.integrations.algorithm_runtimes.legacy_descriptors import (
-        DNN_DESCRIPTOR,
-    )
+    descriptor = _legacy_descriptor()
 
     descriptor_ep = _TrainerEntryPoint(
-        "dnn",
-        "package.descriptors:DNN_DESCRIPTOR",
-        DNN_DESCRIPTOR,
+        descriptor.name,
+        "package.descriptors:LEGACY_DESCRIPTOR",
+        descriptor,
     )
     legacy_ep = _TrainerEntryPoint(
         "legacy",
@@ -221,7 +245,7 @@ def test_trainer_descriptor_discovery_keeps_old_plugins_compatibility_only(
         compatibility_entry_points=compatibility,
     )
 
-    assert descriptors == [DNN_DESCRIPTOR]
+    assert descriptors == [descriptor]
     assert compatibility == [legacy_ep]
     assert descriptor_ep.load_calls == 1
     assert legacy_ep.load_calls == 0
@@ -249,19 +273,20 @@ def test_trainer_descriptor_import_failure_is_diagnostic(
 def test_trainer_descriptor_identity_mismatch_fails_closed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from tributo.integrations.algorithm_runtimes.legacy_descriptors import (
-        DNN_DESCRIPTOR,
-    )
+    descriptor = _legacy_descriptor()
 
     mismatched = _TrainerEntryPoint(
         "different-name",
-        "package.descriptors:DNN_DESCRIPTOR",
-        DNN_DESCRIPTOR,
+        "package.descriptors:LEGACY_DESCRIPTOR",
+        descriptor,
     )
     _set_trainer_entry_points(monkeypatch, mismatched)
     diagnostics = []
 
-    with pytest.raises(JobConfigurationError, match="descriptor identity 'dnn'"):
+    with pytest.raises(
+        JobConfigurationError,
+        match=f"descriptor identity '{descriptor.name}'",
+    ):
         plugin.discover_trainer_descriptors(diagnostics=diagnostics)
 
     assert diagnostics[0].entry_point_name == "different-name"
@@ -322,6 +347,7 @@ def test_independent_distributed_algorithm_package_passes_conformance(
         "third_party_mean_regressor",
         "tributo_test_distributed_algorithm:DESCRIPTOR",
         fixture.DESCRIPTOR,
+        "tributo-test-distributed-algorithm",
     )
     _set_entry_points(monkeypatch, entry_point)
     real_version = importlib.metadata.version
@@ -369,6 +395,7 @@ def test_independent_torch_recipe_package_passes_narrow_conformance(
         "third_party_binary_linear",
         "tributo_test_torch_recipe_algorithm:DESCRIPTOR",
         fixture.DESCRIPTOR,
+        "tributo-test-torch-recipe-algorithm",
     )
     _set_entry_points(monkeypatch, entry_point)
     real_version = importlib.metadata.version
@@ -415,7 +442,7 @@ def test_algorithm_artifact_plugin_filter_loads_only_the_selected_entry_point(
     monkeypatch.setattr(
         plugin,
         "validate_distributed_algorithm_descriptor",
-        lambda descriptor, *, entry_point_name: descriptor,
+        lambda descriptor, **_kwargs: descriptor,
     )
 
     assert plugin.discover_algorithm_descriptors() == [selected.loaded]
@@ -466,84 +493,157 @@ def test_independent_fixture_single_and_multi_partition_results_match(
     assert single.row_count == 4
 
 
-def test_direct_conformance_accepts_every_first_party_formal_descriptor() -> None:
-    from tributo.algorithms.builtin import (
-        DNN_DESCRIPTOR,
-        MULTINOMIAL_NB_DESCRIPTOR,
-        PU_DESCRIPTOR,
-        XGBOOST_DESCRIPTOR,
-    )
-
-    descriptors = (
-        DNN_DESCRIPTOR,
-        PU_DESCRIPTOR,
-        XGBOOST_DESCRIPTOR,
-        MULTINOMIAL_NB_DESCRIPTOR,
-    )
-
-    assert [
-        plugin.validate_distributed_algorithm_descriptor(
-            descriptor,
-            entry_point_name=descriptor.name,
-        )
-        for descriptor in descriptors
-    ] == list(descriptors)
-
-
 def test_distributed_algorithm_discovery_rejects_wrong_recipe_base(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from tributo.algorithms.api import QualifiedReference
-    from tributo.algorithms.builtin import DNN_DESCRIPTOR
+
+    fixture_src = (
+        Path(__file__).parent / "fixtures" / "torch_recipe_algorithm_plugin" / "src"
+    )
+    monkeypatch.syspath_prepend(str(fixture_src))
+    fixture = importlib.import_module("tributo_test_torch_recipe_algorithm")
+    descriptor = fixture.DESCRIPTOR
 
     invalid_implementation = replace(
-        DNN_DESCRIPTOR.registration.implementation,
+        descriptor.registration.implementation,
         implementation_ref=QualifiedReference.parse("tests.test_plugin:_Hook"),
     )
     invalid_descriptor = replace(
-        DNN_DESCRIPTOR,
+        descriptor,
         registration=replace(
-            DNN_DESCRIPTOR.registration,
+            descriptor.registration,
             implementation=invalid_implementation,
         ),
     )
     _set_entry_points(
         monkeypatch,
         _TrainerEntryPoint(
-            "dnn",
+            descriptor.name,
             "tests.test_plugin:INVALID_DESCRIPTOR",
             invalid_descriptor,
-        ),
-    )
-    diagnostics = []
-
-    with pytest.raises(TypeError, match="TorchTrainingRecipe"):
-        plugin.validate_distributed_algorithm_descriptor(
-            invalid_descriptor,
-            entry_point_name="dnn",
-        )
-    assert plugin.discover_algorithm_descriptors(diagnostics=diagnostics) == []
-    assert diagnostics[0].entry_point_name == "dnn"
-    assert diagnostics[0].error_type == "TypeError"
-
-
-def test_distributed_algorithm_discovery_rejects_package_version_drift(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from tributo.algorithms.builtin import DNN_DESCRIPTOR
-
-    _set_entry_points(
-        monkeypatch,
-        _TrainerEntryPoint(
-            "dnn",
-            "tributo.algorithms.builtin.torch_collective:DNN_DESCRIPTOR",
-            DNN_DESCRIPTOR,
+            "tributo-test-torch-recipe-algorithm",
         ),
     )
     real_version = importlib.metadata.version
 
     def package_version(name: str) -> str:
-        return "1.0.1" if name == "tributo" else real_version(name)
+        if name == "tributo-test-torch-recipe-algorithm":
+            return "0.1.0"
+        return real_version(name)
+
+    monkeypatch.setattr(importlib.metadata, "version", package_version)
+    diagnostics = []
+
+    with pytest.raises(TypeError, match="TorchTrainingRecipe"):
+        plugin.validate_distributed_algorithm_descriptor(
+            invalid_descriptor,
+            entry_point_name=descriptor.name,
+        )
+    assert plugin.discover_algorithm_descriptors(diagnostics=diagnostics) == [
+        invalid_descriptor
+    ]
+    assert diagnostics == []
+
+
+def test_discovery_rejects_descriptor_claiming_another_distribution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture_src = (
+        Path(__file__).parent / "fixtures" / "distributed_algorithm_plugin" / "src"
+    )
+    monkeypatch.syspath_prepend(str(fixture_src))
+    fixture = importlib.import_module("tributo_test_distributed_algorithm")
+    entry_point = _TrainerEntryPoint(
+        "third_party_mean_regressor",
+        "tributo_test_distributed_algorithm:DESCRIPTOR",
+        fixture.DESCRIPTOR,
+        "different-owner",
+    )
+    _set_entry_points(monkeypatch, entry_point)
+    real_version = importlib.metadata.version
+
+    def package_version(name: str) -> str:
+        if name == "tributo-test-distributed-algorithm":
+            return "0.1.0"
+        return real_version(name)
+
+    monkeypatch.setattr(importlib.metadata, "version", package_version)
+    diagnostics = []
+
+    assert plugin.discover_algorithm_descriptors(diagnostics=diagnostics) == []
+    assert diagnostics[0].error_type == "ValueError"
+    assert "distribution" in diagnostics[0].reason.lower() or (
+        diagnostics[0].reason
+        == "Distributed algorithm descriptor failed conformance validation"
+    )
+
+
+def test_plugin_selectors_support_distribution_and_group_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selected = _TrainerEntryPoint(
+        "selected_algorithm",
+        "package:SELECTED",
+        object(),
+        "acme-algorithms",
+    )
+    other_distribution = _TrainerEntryPoint(
+        "selected_algorithm",
+        "other:SELECTED",
+        RuntimeError("must not load"),
+        "other-algorithms",
+    )
+    _set_entry_points(monkeypatch, selected, other_distribution)
+    monkeypatch.setenv(
+        "TRIBUTO_PLUGINS",
+        "distribution:acme-algorithms:group:tributo.algorithms:selected_algorithm",
+    )
+    monkeypatch.setattr(
+        plugin,
+        "validate_distributed_algorithm_descriptor",
+        lambda descriptor, **_kwargs: descriptor,
+    )
+
+    assert plugin.discover_algorithm_descriptors() == [selected.loaded]
+    assert selected.load_calls == 1
+    assert other_distribution.load_calls == 0
+
+
+def test_invalid_plugin_selector_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TRIBUTO_PLUGINS", "distribution:")
+
+    with pytest.raises(JobConfigurationError, match="selectors"):
+        plugin.discover_algorithm_descriptors()
+
+
+def test_distributed_algorithm_discovery_rejects_package_version_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture_src = (
+        Path(__file__).parent / "fixtures" / "distributed_algorithm_plugin" / "src"
+    )
+    monkeypatch.syspath_prepend(str(fixture_src))
+    fixture = importlib.import_module("tributo_test_distributed_algorithm")
+    descriptor = fixture.DESCRIPTOR
+
+    _set_entry_points(
+        monkeypatch,
+        _TrainerEntryPoint(
+            descriptor.name,
+            "tributo_test_distributed_algorithm:DESCRIPTOR",
+            descriptor,
+            "tributo-test-distributed-algorithm",
+        ),
+    )
+    real_version = importlib.metadata.version
+
+    def package_version(name: str) -> str:
+        if name == "tributo-test-distributed-algorithm":
+            return "0.1.1"
+        return real_version(name)
 
     monkeypatch.setattr(importlib.metadata, "version", package_version)
     diagnostics = []

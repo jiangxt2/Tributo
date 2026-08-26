@@ -184,7 +184,6 @@ def test_model_export_external_suite_owns_mlflow_contract_and_minio_lifecycle() 
     assert "run_model_export_it.sh" not in workflow
     assert "tests/integrations/test_e2e_mlflow.py" in runner
     for full_only_path in (
-        "tests/training/exporters/test_trainer_bundle_contract.py",
         "tests/integration/test_export_s3.py",
         "tests/integration/test_minio_compat.py",
     ):
@@ -229,7 +228,7 @@ def test_model_export_runner_is_isolated_and_cleans_its_own_project() -> None:
     assert "test_it_component_versions.py" in runner
     assert "--collect-only" in runner
     assert "--preflight-only" in runner
-    assert "walking-skeleton" in runner
+    assert "walking-skeleton" not in runner
     assert 'TRIBUTO_IT_SOURCE_ROOT="${PREFLIGHT_SOURCE}"' in runner
     assert runner.index("create-source-snapshot") < runner.index("command -v docker")
     assert "-u HTTP_PROXY" in runner

@@ -1,6 +1,7 @@
 """Framework-neutral planning and execution coordination."""
 
 from tributo.algorithms.core.builder import AlgorithmBuilder
+from tributo.algorithms.core.contracts import validate_contract_value
 from tributo.algorithms.core.dispatcher import (
     AlgorithmDispatcher,
     AlgorithmRunCoordinator,
@@ -22,4 +23,5 @@ __all__ = [
     "LocalRuntimeOptions",
     "RayRuntimeManager",
     "RayRuntimeSession",
+    "validate_contract_value",
 ]

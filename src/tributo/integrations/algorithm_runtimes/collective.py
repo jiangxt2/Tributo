@@ -38,6 +38,9 @@ from tributo.util.annotations import DeveloperAPI
 RAY_TRAIN_COLLECTIVE_RUNTIME_ID = FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS[
     DistributionStrategy.RAY_TRAIN_COLLECTIVE
 ].runtime_id
+RAY_TRAIN_RECIPE_V2_RUNTIME_ID = FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS[
+    DistributionStrategy.RAY_TRAIN_RECIPE_V2
+].runtime_id
 
 
 def _ray_run_name(algorithm: str, run_id: str) -> str:
@@ -87,9 +90,12 @@ def _collective_execution_result(
 def _load_algorithm(envelope: RuntimeExecutionEnvelope) -> CollectiveAlgorithm:
     plan = envelope.plan
     spec = plan.distribution_spec
-    if spec is None or spec.strategy is not DistributionStrategy.RAY_TRAIN_COLLECTIVE:
+    if spec is None or spec.strategy not in {
+        DistributionStrategy.RAY_TRAIN_COLLECTIVE,
+        DistributionStrategy.RAY_TRAIN_RECIPE_V2,
+    }:
         raise AlgorithmConfigurationError(
-            "collective runtime requires a ray_train_collective DistributionSpec"
+            "collective runtime requires a collective or RecipeV2 DistributionSpec"
         )
     _validate_module_digest(
         plan.implementation.implementation_ref,
@@ -101,7 +107,11 @@ def _load_algorithm(envelope: RuntimeExecutionEnvelope) -> CollectiveAlgorithm:
         raise AlgorithmConfigurationError(
             "collective executable factory reference is not callable"
         )
-    algorithm = factory(plan=plan, implementation=implementation, artifacts=())
+    algorithm = factory(
+        plan=plan,
+        implementation=implementation,
+        artifacts=envelope.artifacts,
+    )
     if not isinstance(algorithm, CollectiveAlgorithm):
         raise AlgorithmConfigurationError(
             "collective executable factory must return CollectiveAlgorithm"
@@ -171,7 +181,7 @@ def _worker_evidence(
             )
         if (
             not evidence.input_rows
-            or sum(evidence.input_rows.values()) <= 0
+            or evidence.input_rows.get("train", 0) <= 0
             or not evidence.rows_processed
             or not evidence.batch_count
             or not evidence.collective_steps
@@ -212,8 +222,13 @@ def _worker_evidence(
         name: sum(input_rows.get(name, 0) for input_rows in input_rows_by_worker)
         for name in expected_input_rows
     }
+    expected_names = set(expected_input_rows)
     if observed_input_rows != dict(expected_input_rows) or any(
-        set(input_rows) != set(expected_input_rows)
+        not expected_names.issubset(input_rows)
+        or any(
+            name not in expected_names and not name.startswith("coverage.")
+            for name in input_rows
+        )
         for input_rows in input_rows_by_worker
     ):
         raise AlgorithmExecutionError(
@@ -398,4 +413,14 @@ class RayTrainCollectiveRuntime:
             prepared.close()
 
 
-__all__ = ["RayTrainCollectiveRuntime"]
+@DeveloperAPI
+class RayTrainRecipeV2Runtime(RayTrainCollectiveRuntime):
+    """Execute TrainingRecipeV2 through the same Core-owned Ray Train loop."""
+
+    @property
+    def runtime_id(self) -> str:
+        """Return the dedicated RecipeV2 runtime identity."""
+        return RAY_TRAIN_RECIPE_V2_RUNTIME_ID
+
+
+__all__ = ["RayTrainCollectiveRuntime", "RayTrainRecipeV2Runtime"]

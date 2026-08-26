@@ -185,6 +185,19 @@ class NativeAttributionModel(Protocol):
     @property
     def native_objective(self) -> str | None: ...
 
+    def native_attribution_support(
+        self,
+        request: ExplainabilityRequest,
+    ) -> SupportDecision: ...
+
+    def prepare_native_attribution(
+        self,
+        request: ExplainabilityRequest,
+        *,
+        feature_names: tuple[str, ...],
+        reference_data: np.ndarray | None,
+    ) -> PreparedExplainer: ...
+
 
 @PublicAPI(stability="alpha")
 @dataclass(frozen=True)

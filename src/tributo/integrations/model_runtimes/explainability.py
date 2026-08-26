@@ -275,7 +275,12 @@ def _native_runtime_context(
     model = runtime.model
     if not isinstance(model, NativeAttributionModel):
         raise TypeError("Runtime did not provide native attribution capability")
-    native_model = model.native_model_object
+    requested_names = tuple(request.feature_columns)
+    native_names = model.native_feature_names
+    if requested_names and native_names and requested_names != native_names:
+        raise ValueError(
+            "requested feature names do not match the native model feature order"
+        )
     return ExplainableModelContext(
         bundle_uri=request.bundle_uri,
         model_role=model_role,
@@ -283,13 +288,8 @@ def _native_runtime_context(
         artifact_format=artifact.format,
         flavor_id=artifact.flavor_id,
         artifact_path=None,
-        model_object=native_model,
-        feature_names=resolve_xgboost_feature_names(
-            runtime.resolved_artifact,
-            native_model,
-            request,
-        )
-        or model.native_feature_names,
+        model_object=model,
+        feature_names=requested_names or native_names,
         objective=model.native_objective,
         model_digest=artifact.tree_digest,
         preprocessor_digest=manifest_role_digest(manifest, "preprocessor"),
@@ -571,34 +571,6 @@ def select_onnx_output(
     )
 
 
-def resolve_xgboost_feature_names(
-    resolved: Any, booster: Any, request: ExplainabilityRequest
-) -> tuple[str, ...]:
-    sidecar_names: tuple[str, ...] = ()
-    sidecar = resolved.path_for("feature_names.json")
-    if sidecar.is_file():
-        raw = json.loads(sidecar.read_text(encoding="utf-8"))
-        if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
-            raise ValueError("XGBoost feature_names.json must contain a string list")
-        sidecar_names = tuple(raw)
-
-    booster_names = tuple(booster.feature_names or ())
-    requested_names = tuple(request.feature_columns)
-    if requested_names and booster_names and requested_names != booster_names:
-        raise ValueError(
-            "XGBoost request feature names do not match the booster feature order"
-        )
-    for label, names in (("request", requested_names), ("booster", booster_names)):
-        if names and sidecar_names and names != sidecar_names:
-            raise ValueError(
-                f"XGBoost {label} feature names do not match feature_names.json"
-            )
-    resolved_names = requested_names or sidecar_names or booster_names
-    if resolved_names and len(resolved_names) != booster.num_features():
-        raise ValueError("XGBoost feature names count does not match the booster")
-    return resolved_names
-
-
 def _load_reference(
     request: ExplainabilityRequest,
     reference_provider: ReferenceProvider,
@@ -654,9 +626,7 @@ def _dependency_versions(backend: str) -> tuple[tuple[str, str], ...]:
     from importlib.metadata import PackageNotFoundError, version
 
     packages = ["shap", "numpy"]
-    if backend == "tree":
-        packages.append("xgboost")
-    elif backend == "model_agnostic":
+    if backend == "model_agnostic":
         packages.append("onnxruntime")
     versions: list[tuple[str, str]] = []
     for package in packages:

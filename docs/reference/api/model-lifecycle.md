@@ -424,22 +424,6 @@ documentation for every public stability tier.
 :no-members:
 ```
 
-```{autoclass} tributo.integrations.exporters.options.XGBoostJSONOptions
-:no-members:
-```
-
-```{autoclass} tributo.integrations.exporters.options.XGBoostNativeOptions
-:no-members:
-```
-
-```{autoclass} tributo.integrations.exporters.options.XGBoostONNXOptions
-:no-members:
-```
-
-```{autoclass} tributo.integrations.exporters.options.XGBoostUBJOptions
-:no-members:
-```
-
 
 ## `tributo.integrations.exporters.prebuilt_onnx`
 
@@ -477,39 +461,6 @@ documentation for every public stability tier.
 ```
 
 
-## `tributo.integrations.exporters.x_learner`
-
-```{autoclass} tributo.integrations.exporters.x_learner.XLearnerCausalReportExporter
-:no-members:
-```
-
-```{autoclass} tributo.integrations.exporters.x_learner.XLearnerExporter
-:no-members:
-```
-
-
-## `tributo.integrations.exporters.xgboost_native`
-
-```{autoclass} tributo.integrations.exporters.xgboost_native.XGBoostJSONExporter
-:no-members:
-```
-
-```{autoclass} tributo.integrations.exporters.xgboost_native.XGBoostNativeExporter
-:no-members:
-```
-
-```{autoclass} tributo.integrations.exporters.xgboost_native.XGBoostUBJExporter
-:no-members:
-```
-
-
-## `tributo.integrations.exporters.xgboost_onnx`
-
-```{autoclass} tributo.integrations.exporters.xgboost_onnx.XGBoostONNXExporter
-:no-members:
-```
-
-
 ## `tributo.integrations.hooks.mlflow_hook`
 
 ```{autoclass} tributo.integrations.hooks.mlflow_hook.MLflowHookOptions
@@ -538,13 +489,6 @@ documentation for every public stability tier.
 ## `tributo.integrations.validators.onnx_runtime`
 
 ```{autoclass} tributo.integrations.validators.onnx_runtime.ONNXRuntimeValidator
-:no-members:
-```
-
-
-## `tributo.integrations.validators.xgboost_native`
-
-```{autoclass} tributo.integrations.validators.xgboost_native.XGBoostNativeRuntimeValidator
 :no-members:
 ```
 

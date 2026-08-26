@@ -1,82 +1,24 @@
-"""Export-boundary helpers for explainability companion artifacts.
-
-This module is the integration point between the generic Bundle exporter and
-the explainability capability planner.  Format-specific knowledge stays here;
-the core export lifecycle only delegates to this helper.
-"""
+"""Algorithm-neutral export boundary for explainability configuration."""
 
 from __future__ import annotations
 
-from tributo.exporting.models import BundleOutputConfig, ExportSource, ExportTarget
+from tributo.exporting.models import BundleOutputConfig, ExportSource
 from tributo.util.annotations import PublicAPI
 
 
 @PublicAPI(stability="alpha")
 def prepare_bundle_output_config(
-    config: BundleOutputConfig, source: ExportSource
+    config: BundleOutputConfig,
+    source: ExportSource,
 ) -> BundleOutputConfig:
-    """Add the XGBoost UBJ companion required by automatic Tree SHAP.
+    """Preserve explicit targets; algorithm Wheels add required companions.
 
-    The helper is deliberately conservative: only an XGBoost source can
-    trigger this companion.  Other sources must explicitly select an
-    approximate model-agnostic backend and provide its reference binding.
+    Core never infers an algorithm-specific model format from ``source_kind``.
+    A Wheel that offers exact native attribution must publish its companion
+    artifact and bind ``explainability_model`` explicitly.
     """
-    explainability = config.explainability
-    if not explainability.enabled or config.targets is None:
-        return config
-    data = config.model_dump()
-    data["targets"] = [target.model_dump() for target in config.targets]
-    changed = False
-    if (
-        source.source_kind == "xgboost_result"
-        and explainability.backend == "auto"
-        and not any(
-            target.format in {"ubj", "xgboost-json"}
-            or target.exporter_id in {"xgboost-ubj-v1", "xgboost-json-v1"}
-            for target in config.targets
-        )
-    ):
-        data["targets"].append(
-            ExportTarget(
-                name="explainability-model",
-                format="ubj",
-                exporter_id="xgboost-ubj-v1",
-                required=True,
-            ).model_dump()
-        )
-        data["roles"] = {
-            **config.roles,
-            "explainability_model": "explainability-model",
-        }
-        changed = True
-    if source.source_kind == "xgboost_result" and explainability.backend in {
-        "auto",
-        "tree",
-    }:
-        for target in data["targets"]:
-            if target["format"] not in {"ubj", "xgboost-json"} and target.get(
-                "exporter_id"
-            ) not in {"xgboost-ubj-v1", "xgboost-json-v1"}:
-                continue
-            validation = dict(target.get("validation") or {})
-            validation["xgboost-native-runtime-v1"] = {
-                **validation.get("xgboost-native-runtime-v1", {}),
-                "require_tree_shap": True,
-            }
-            target["validation"] = validation
-            changed = True
-            break
-    if source.source_kind in {"dnn_result", "pu_result"}:
-        for target in data["targets"]:
-            if target["format"] == "onnx":
-                target["options"] = {
-                    **target.get("options", {}),
-                    "include_feature_map": True,
-                }
-                changed = True
-    if not changed:
-        return config
-    return BundleOutputConfig.model_validate(data)
+    del source
+    return config
 
 
 __all__ = ["prepare_bundle_output_config"]

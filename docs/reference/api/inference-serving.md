@@ -432,20 +432,6 @@ documentation for every public stability tier.
 ```
 
 
-## `tributo.integrations.flavors.x_learner`
-
-```{autoclass} tributo.integrations.flavors.x_learner.XLearnerFlavor
-:no-members:
-```
-
-
-## `tributo.integrations.flavors.xgboost_native`
-
-```{autoclass} tributo.integrations.flavors.xgboost_native.XGBoostNativeFlavor
-:no-members:
-```
-
-
 ## `tributo.integrations.model_importers.artifact`
 
 ```{autoclass} tributo.integrations.model_importers.artifact.ArtifactImportOptions

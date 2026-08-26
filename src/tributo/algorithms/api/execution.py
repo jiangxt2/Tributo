@@ -525,13 +525,68 @@ class ExecutionReceipt:
                 worker.rows_processed is not None and worker.rows_processed > 0
                 for worker in self.workers
             )
-            and (
-                self.strategy is DistributionStrategy.RAY_MAP_REDUCE
-                or {worker.model_state_digest for worker in self.workers}
-                == {self.state.global_model_digest}
-                or self._staged_composite_matches_anchor()
-            )
+            and self._strategy_state_proves_model()
         )
+
+    def _strategy_state_proves_model(self) -> bool:
+        """Validate the contribution relation for the selected strategy."""
+        if self.strategy is DistributionStrategy.RAY_MAP_REDUCE:
+            return True
+        if self.strategy is DistributionStrategy.RAY_JOBLIB_ESTIMATOR:
+            details = self.state.details
+            return (
+                details.get("execution_capability") == "estimator_internal_parallel"
+                and isinstance(details.get("joblib_task_count"), int)
+                and cast(int, details["joblib_task_count"]) >= len(self.workers)
+                and details.get("observed_worker_count") == len(self.workers)
+                and all(worker.model_state_digest is None for worker in self.workers)
+            )
+        if self.strategy is DistributionStrategy.RAY_PARALLEL_ENSEMBLE:
+            details = self.state.details
+            unit_count = details.get("unit_count")
+            unit_digest = details.get("unit_ids_digest")
+            return (
+                details.get("execution_capability") == "single_model_distributed"
+                and isinstance(unit_count, int)
+                and not isinstance(unit_count, bool)
+                and unit_count >= len(self.workers)
+                and isinstance(unit_digest, str)
+                and _DIGEST.fullmatch(unit_digest) is not None
+                and all(
+                    worker.model_state_digest is not None for worker in self.workers
+                )
+            )
+        if self.strategy is DistributionStrategy.RAY_ITERATIVE_OPTIMIZATION:
+            details = self.state.details
+            rounds = details.get("rounds_completed")
+            expected = details.get("expected_input_rows")
+            observed = details.get("observed_input_rows")
+            worker_state_digests = {
+                worker.model_state_digest for worker in self.workers
+            }
+            return (
+                details.get("execution_capability") == "single_model_distributed"
+                and isinstance(rounds, int)
+                and not isinstance(rounds, bool)
+                and rounds >= 1
+                and isinstance(expected, int)
+                and not isinstance(expected, bool)
+                and expected == observed
+                and len(worker_state_digests) == 1
+                and None not in worker_state_digests
+            )
+        return {worker.model_state_digest for worker in self.workers} == {
+            self.state.global_model_digest
+        } or self._staged_composite_matches_anchor()
+
+    @property
+    def execution_capability(self) -> str:
+        """Classify observed execution without conflating trial parallelism."""
+        if self.strategy is DistributionStrategy.RAY_JOBLIB_ESTIMATOR:
+            return (
+                "estimator_internal_parallel" if self.distributed else "single_worker"
+            )
+        return "single_model_distributed" if self.distributed else "single_worker"
 
     def _staged_composite_matches_anchor(self) -> bool:
         """Recompute staged state and bind receipt workers to its anchor model."""
@@ -649,6 +704,7 @@ class ExecutionReceipt:
             "distributed": self.distributed,
             "cross_node": self.cross_node,
             "cluster_distributed": self.cluster_distributed,
+            "execution_capability": self.execution_capability,
         }
 
 
