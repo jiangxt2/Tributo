@@ -6,7 +6,7 @@ import hashlib
 import pickle
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import ray
 
@@ -522,8 +522,9 @@ def _tree_reduce(
             if index + 1 == len(current):
                 next_level.append(current[index])
                 continue
+            merge_pair = cast(Any, _merge_pair)
             next_level.append(
-                _merge_pair.options(
+                merge_pair.options(
                     num_cpus=num_cpus,
                     num_gpus=num_gpus,
                     resources=dict(custom_resources),
@@ -563,8 +564,9 @@ class RayMapReduceRuntime:
             )
         policy = _policy(envelope.plan)
         try:
+            map_partition = cast(Any, _map_partition)
             references = [
-                _map_partition.options(
+                map_partition.options(
                     num_cpus=envelope.plan.runtime.num_cpus,
                     num_gpus=envelope.plan.runtime.num_gpus,
                     resources=dict(envelope.plan.runtime.custom_resources),
@@ -583,8 +585,9 @@ class RayMapReduceRuntime:
                 custom_resources=envelope.plan.runtime.custom_resources,
                 max_retries=policy.max_retries,
             )
+            finalize_model = cast(Any, _finalize_model)
             result = ray.get(
-                _finalize_model.options(
+                finalize_model.options(
                     num_cpus=envelope.plan.runtime.num_cpus,
                     num_gpus=envelope.plan.runtime.num_gpus,
                     resources=dict(envelope.plan.runtime.custom_resources),

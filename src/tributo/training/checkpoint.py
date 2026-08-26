@@ -310,9 +310,9 @@ def publish_checkpoint_directory(
     ]
     payload_files = [path for path in files if path not in manifest_files]
     for path in (*payload_files, *manifest_files):
-        relative = path.relative_to(source).as_posix()
+        relative_uri = path.relative_to(source).as_posix()
         store.write_bytes(
-            prefix + relative,
+            prefix + relative_uri,
             path.read_bytes(),
             content_type="application/json" if path.suffix == ".json" else None,
         )

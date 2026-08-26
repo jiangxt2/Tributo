@@ -121,7 +121,10 @@ class TestBuiltinSpecs:
     def test_builtins_declare_capabilities(self) -> None:
         from tributo.training.registry import get_trainer
 
-        xgb = get_trainer("xgboost")
+        try:
+            xgb = get_trainer("xgboost")
+        except JobConfigurationError:
+            pytest.skip("official algorithm wheels are not installed in the dev suite")
         assert xgb.capabilities == (
             Capability.TUNABLE,
             Capability.EXPORTABLE,
@@ -129,12 +132,17 @@ class TestBuiltinSpecs:
         )
 
         pytest.importorskip("torch")
-        assert get_trainer("pu").capabilities == (
+        try:
+            pu = get_trainer("pu")
+            dnn = get_trainer("dnn")
+        except JobConfigurationError:
+            pytest.skip("official algorithm wheels are not installed in the dev suite")
+        assert pu.capabilities == (
             Capability.TUNABLE,
             Capability.EXPORTABLE,
             Capability.DISTRIBUTED,
         )
-        assert get_trainer("dnn").capabilities == (
+        assert dnn.capabilities == (
             Capability.TUNABLE,
             Capability.EXPORTABLE,
             Capability.DISTRIBUTED,

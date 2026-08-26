@@ -66,6 +66,28 @@ REQUIRED_RUNTIME_IMAGE=""
 REQUIRED_RUNTIME_IMAGE_ID=""
 
 cd "${PROJECT_ROOT}"
+if [[ -z "${TRIBUTO_ALGORITHMS_ROOT:-}" ]]; then
+  echo "TRIBUTO_ALGORITHMS_ROOT is required; refusing the ambiguous default path" >&2
+  exit 2
+fi
+if ! OFFICIAL_ALGORITHMS_COMMIT="$(git -C "${OFFICIAL_ALGORITHMS_ROOT}" rev-parse --verify HEAD^{commit} 2>/dev/null)"; then
+  echo "TRIBUTO_ALGORITHMS_ROOT must be a Git checkout with a committed HEAD: ${OFFICIAL_ALGORITHMS_ROOT}" >&2
+  exit 2
+fi
+if [[ -n "$(git -C "${OFFICIAL_ALGORITHMS_ROOT}" status --porcelain=v1)" ]]; then
+  echo "Official algorithm source has uncommitted changes; Wheels will be built from the worktree" >&2
+  OFFICIAL_ALGORITHMS_WORKTREE_STATE="dirty"
+else
+  OFFICIAL_ALGORITHMS_WORKTREE_STATE="clean"
+fi
+for required_package in \
+  boosting classical causal-core causal-dr causal-xlearner; do
+  if [[ ! -f "${OFFICIAL_ALGORITHMS_ROOT}/packages/${required_package}/pyproject.toml" ]]; then
+    echo "Official algorithm checkout is missing packages/${required_package}: ${OFFICIAL_ALGORITHMS_ROOT}" >&2
+    exit 2
+  fi
+done
+echo "Official algorithm source: ${OFFICIAL_ALGORITHMS_ROOT} (HEAD ${OFFICIAL_ALGORITHMS_COMMIT}, worktree ${OFFICIAL_ALGORITHMS_WORKTREE_STATE})"
 if [[ -e "${LOG_DIR}" ]]; then
   echo "Refusing to reuse existing IT log directory ${LOG_DIR}" >&2
   exit 2
@@ -481,7 +503,14 @@ test_targets=(
   tests/training/test_dnn_pu_training.py::test_offline_wheelhouse_installs_unique_dependency_on_driver_and_workers
   tests/training/test_dnn_pu_training.py::test_remote_offline_wheelhouse_archive_installs_on_driver_and_workers
 )
-if [[ "${TRIBUTO_DISTRIBUTED_ALGORITHM_RERUN_FAILED_ONLY:-0}" == "1" ]]; then
+if [[ "${TRIBUTO_DISTRIBUTED_ALGORITHM_SCOPE:-all}" == "priority" ]]; then
+  test_targets=(
+    tests/training/test_dnn_pu_training.py::test_priority_algorithm_wheels_complete_on_ray_cluster
+  )
+elif [[ "${TRIBUTO_DISTRIBUTED_ALGORITHM_SCOPE:-all}" != "all" ]]; then
+  echo "TRIBUTO_DISTRIBUTED_ALGORITHM_SCOPE must be all or priority" >&2
+  exit 2
+elif [[ "${TRIBUTO_DISTRIBUTED_ALGORITHM_RERUN_FAILED_ONLY:-0}" == "1" ]]; then
   test_targets=(
     tests/training/test_dnn_pu_training.py::test_official_algorithm_wheels_complete_on_ray_cluster
   )

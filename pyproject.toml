@@ -232,6 +232,9 @@ ignore = ["E501", "B008", "B905"]
 # The package root intentionally imports public symbols after defining
 # ``__version__`` so metadata fallback is initialized first.
 "src/tributo/__init__.py" = ["E402"]
+# Gate jobs intentionally import shared job helpers after adding their job
+# directory to ``sys.path`` so Ray Jobs can execute the files directly.
+"tests/training/jobs/priority_algorithm_gate_job.py" = ["E402"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["tributo"]

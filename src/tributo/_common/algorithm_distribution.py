@@ -1339,7 +1339,7 @@ def algorithm_runtime_env_patch(
         # A Wheel may rely on exporter/flavor/validator entry points supplied
         # by its declared algorithm dependencies.  Selecting only the root
         # distribution would make those runtime capabilities disappear.
-        dependency_distributions = []
+        dependency_distributions: list[str] = []
         dependency_distributions.extend(prepared.dependency_names)
         distributions = tuple(
             dict.fromkeys((prepared.package_name, *dependency_distributions))

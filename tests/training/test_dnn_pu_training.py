@@ -52,15 +52,15 @@ def disable_uv_runtime_env_hook(monkeypatch: pytest.MonkeyPatch) -> None:
 def _result_from_logs(logs: str) -> list[dict[str, Any]]:
     marker = "RESULT: "
     decoder = json.JSONDecoder()
-    offset = 0
-    while (marker_offset := logs.find(marker, offset)) >= 0:
-        payload = logs[marker_offset + len(marker) :].lstrip()
-        try:
-            result, _ = decoder.raw_decode(payload)
-        except json.JSONDecodeError:
-            offset = marker_offset + len(marker)
+    for line in logs.splitlines():
+        if not line.startswith(marker):
             continue
-        return cast(list[dict[str, Any]], result)
+        try:
+            result, _ = decoder.raw_decode(line[len(marker) :].lstrip())
+        except json.JSONDecodeError:
+            continue
+        if isinstance(result, list):
+            return cast(list[dict[str, Any]], result)
     raise AssertionError(f"RESULT line not found in job logs:\n{logs}")
 
 
@@ -244,6 +244,7 @@ def _submit_official_algorithm_gate_job(
     *,
     root: Path,
     wheels: tuple[Path, ...],
+    entrypoint: str = "python tests/training/jobs/official_algorithm_gate_job.py",
 ) -> dict[str, Any]:
     submission_id = f"official-algorithms-{uuid.uuid4().hex}"
     runtime_env = {
@@ -266,7 +267,7 @@ def _submit_official_algorithm_gate_job(
         },
     }
     job_id = job_client.submit_job(
-        entrypoint="python tests/training/jobs/official_algorithm_gate_job.py",
+        entrypoint=entrypoint,
         runtime_env=runtime_env,
         submission_id=submission_id,
     )
@@ -358,6 +359,60 @@ def test_official_algorithm_wheels_complete_on_ray_cluster(
             assert receipt["cluster_distributed"] is True
             assert receipt["cross_node"] is True
             assert len({worker["node_id"] for worker in receipt["workers"]}) == 2
+
+
+def test_priority_algorithm_wheels_complete_on_ray_cluster(
+    job_client: JobSubmissionClient,
+) -> None:
+    """Prove the selected XGBoost, RF, LR, and causal paths cross nodes."""
+    if os.environ.get("TRIBUTO_DOCKER_DISTRIBUTED_ALGORITHM_IT") != "1":
+        pytest.fail("priority algorithm IT must run in its owned Docker cluster")
+    wheels = _official_algorithm_wheels()
+    gate_root = Path(
+        f"/workspace/tributo-work/tributo-priority-algorithm-gate-{uuid.uuid4().hex}"
+    )
+    result = _submit_official_algorithm_gate_job(
+        job_client,
+        root=gate_root,
+        wheels=wheels,
+        entrypoint="python tests/training/jobs/priority_algorithm_gate_job.py",
+    )
+    assert result["status"] == JobStatus.SUCCEEDED, (
+        f"priority algorithm Gate failed:\n{result['message']}\n{result['logs']}"
+    )
+    records = _result_from_logs(str(result["logs"]))
+    assert {record["algorithm"] for record in records} == {
+        "random_forest",
+        "logistic_regression",
+        "xgboost",
+        "linear_dml_ate",
+        "doubly_robust_ate",
+        "x_learner",
+    }
+    assert len(records) == 6
+    assert all(record["onnx_exported"] is True for record in records)
+    assert all(
+        record["inference_roundtrip"] is True
+        for record in records
+        if record["algorithm"]
+        in {"random_forest", "logistic_regression", "xgboost", "x_learner"}
+    )
+    for record in records:
+        receipt = record["receipt"]
+        assert record["status"] == "succeeded"
+        assert receipt["distributed"] is True
+        assert receipt["cluster_distributed"] is True
+        assert len({worker["node_id"] for worker in receipt["workers"]}) == 2
+    baseline = _object_from_logs(str(result["logs"]), "BASELINE_RESULT: ")
+    assert baseline["random_forest_exact"] is True
+    assert baseline["logistic_prediction_equivalent"] is True
+    recovery = _object_from_logs(str(result["logs"]), "RECOVERY_RESULT: ")
+    assert recovery["ensemble_resumed"] is True
+    assert recovery["iterative_resumed"] is True
+    assert recovery["ensemble_corruption_rejected"] is True
+    assert recovery["iterative_corruption_rejected"] is True
+    inference = _object_from_logs(str(result["logs"]), "INFERENCE_RESULT: ")
+    assert inference["node_count"] == 2
 
 
 def test_out_of_tree_torch_recipe_completes_on_ray_cluster(

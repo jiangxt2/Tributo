@@ -35,6 +35,7 @@ from tributo.algorithms.spi import (
     PreparedInput,
     RuntimeExecutionEnvelope,
 )
+from tributo.exceptions import BundleExportError
 from tributo.integrations.algorithm_runtimes.portable_metrics import (
     portable_fit_only_metrics,
 )
@@ -43,6 +44,32 @@ from tributo.util.annotations import DeveloperAPI
 FRAMEWORK_NATIVE_RUNTIME_ID = FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS[
     DistributionStrategy.FRAMEWORK_NATIVE
 ].runtime_id
+
+
+def _bundle_export_failure_message(error: BundleExportError) -> str:
+    """Keep required Bundle node failures visible across a Ray Job boundary."""
+    execution = error.execution_result
+    if execution is None:
+        return "framework-native Bundle export failed without an execution result"
+    failures: list[dict[str, object]] = []
+    for node in getattr(execution, "node_results", ()):
+        status = getattr(node, "status", None)
+        if status == "succeeded":
+            continue
+        failure = getattr(node, "failure", None)
+        failures.append(
+            {
+                "node_id": getattr(node, "node_id", None),
+                "status": status,
+                "exporter_id": getattr(node, "exporter_id", None),
+                "code": getattr(failure, "code", None),
+                "category": getattr(failure, "category", None),
+                "message": str(getattr(failure, "message", ""))[:4096],
+            }
+        )
+    return "framework-native Bundle export failed: " + json.dumps(
+        failures, sort_keys=True, separators=(",", ":")
+    )
 
 
 def _framework_execution_result(
@@ -487,12 +514,17 @@ class FrameworkNativeRuntime:
                     resources_per_worker=resources,
                     expected_training_rows=expected_training_rows,
                 )
-            execution = _framework_execution_result(
-                algorithm=algorithm,
-                result=result,
-                plan=envelope.plan,
-                run_id=envelope.run_id,
-            )
+            try:
+                execution = _framework_execution_result(
+                    algorithm=algorithm,
+                    result=result,
+                    plan=envelope.plan,
+                    run_id=envelope.run_id,
+                )
+            except BundleExportError as exc:
+                raise AlgorithmExecutionError(
+                    _bundle_export_failure_message(exc)
+                ) from exc
             versions = _actual_environment_versions(
                 envelope.plan.environment.python,
                 envelope.plan.environment.dependencies,

@@ -175,6 +175,7 @@ def _execute(
     config: dict[str, object],
     label_name: str | None = "label",
     resume_from: str | None = None,
+    require_onnx: bool = False,
 ) -> dict[str, object]:
     from tributo.algorithms import build_algorithm_dispatcher
     from tributo.algorithms.api import (
@@ -241,6 +242,11 @@ def _execute(
     from tributo.exporting.runtime import BundleModelLoader
 
     manifest = BundleReader().read_manifest(bundle_uri)
+    onnx_exported = any(artifact.format == "onnx" for artifact in manifest.artifacts)
+    if require_onnx and not onnx_exported:
+        raise AssertionError(
+            "official algorithm Bundle did not contain an ONNX artifact"
+        )
     inference_roundtrip = False
     if (
         "inference" in manifest.roles
@@ -278,6 +284,7 @@ def _execute(
         "implementation_id": implementation_id,
         "status": result.execution.status,
         "bundle_uri": bundle_uri,
+        "onnx_exported": onnx_exported,
         "inference_roundtrip": inference_roundtrip,
         "receipt": receipt.to_dict(),
     }
