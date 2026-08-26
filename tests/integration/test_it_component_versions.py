@@ -40,13 +40,13 @@ def test_component_versions_match_lock_and_are_digest_pinned() -> None:
     assert re.fullmatch(r"3\.(12|13)", versions["PYTHON_VERSION"])
     python_tag = versions["PYTHON_VERSION"].replace(".", "")
     assert f":{versions['RAY_VERSION']}-py{python_tag}@sha256:" in versions["RAY_IMAGE"]
-    assert f":{versions['UV_VERSION']}@sha256:" in versions["UV_IMAGE"]
+    assert re.fullmatch(r"\d+\.\d+\.\d+", versions["UV_VERSION"])
+    assert f":{versions['HIVE_VERSION']}@sha256:" in versions["HIVE_IMAGE"]
     assert f":{versions['MINIO_RELEASE']}@sha256:" in versions["MINIO_IMAGE"]
     assert f":{versions['POSTGRES_VERSION']}@sha256:" in versions["POSTGRES_IMAGE"]
     for key in (
         "RAY_IMAGE",
-        "UV_IMAGE",
-        "TOOL_IMAGE",
+        "HIVE_IMAGE",
         "MINIO_IMAGE",
         "POSTGRES_IMAGE",
     ):
@@ -64,16 +64,31 @@ def test_dockerfiles_and_compose_consume_the_version_contract() -> None:
     versions = load_it_component_versions()
 
     assert profile["base_image"] == versions["RAY_IMAGE"]
-    assert profile["uv_image"] == versions["UV_IMAGE"]
-    assert profile["tool_image"] == versions["TOOL_IMAGE"]
+    assert profile["dependency_mode"] == "host-uv-export"
+    assert profile["uv_version"] == versions["UV_VERSION"]
+    assert profile["hive_image"] == versions["HIVE_IMAGE"]
     assert profile["minio_image"] == versions["MINIO_IMAGE"]
+    assert profile["postgres_image"] == versions["POSTGRES_IMAGE"]
+    assert "postgresql" in profile["extras"]
+    assert "uv_image" not in profile
+    assert "tool_image" not in profile
     assert "ARG BASE_IMAGE" in dockerfile
     assert "FROM ${BASE_IMAGE}" in dockerfile
-    assert "ARG UV_IMAGE" in dockerfile
-    assert "FROM ${UV_IMAGE} AS uv" in dockerfile
-    assert "COPY --from=uv" in dockerfile
+    assert "ARG UV_IMAGE" not in dockerfile
+    assert "FROM ${UV_IMAGE}" not in dockerfile
+    assert "COPY --from=uv" not in dockerfile
+    assert "COPY --from=locked-requirements" in dockerfile
+    assert "python -m pip install --require-hashes" in dockerfile
     assert "image: ${TRIBUTO_IT_RUNTIME_IMAGE:" in compose
     assert "image: ${TRIBUTO_IT_MINIO_IMAGE:" in compose
+    assert compose.count("image: ${TRIBUTO_IT_RUNTIME_IMAGE:") >= 3
+    assert "TRIBUTO_IT_TOOL_IMAGE" not in compose
+    assert "python:3.12.13-alpine3.22" not in compose
+    assert "hiveserver2:" in compose
+    assert "hive-init:" in compose
+    assert "setup_hive_fixture.py" in compose
+    assert "/opt/hive/bin/beeline" not in compose
+    assert "JAVA_TOOL_OPTIONS" not in compose
     assert "build:" not in compose
     assert "MLFLOW_VERSION" in compose
     assert "mlflow-init:" in compose
@@ -94,15 +109,15 @@ def test_full_runtime_profile_matches_the_image_builder_contract() -> None:
 
     assert profile["base_image"] == config["base_image"]
     assert profile["base_image_mirror"] == config["base_image_mirror"]
-    assert profile["uv_image"] == config["uv_image"]
-    assert profile["uv_image_mirror"] == config["uv_image_mirror"]
+    assert "uv_image" not in profile
+    assert "uv_image_mirror" not in profile
+    assert "uv_image" not in config
+    assert "uv_image_mirror" not in config
+    assert profile["dependency_mode"] == config["dependency_mode"] == "host-uv-export"
+    assert profile["uv_version"] == config["uv_version"]
     assert (
         profile["base_image"].rsplit("@", 1)[1]
         == profile["base_image_mirror"].rsplit("@", 1)[1]
-    )
-    assert (
-        profile["uv_image"].rsplit("@", 1)[1]
-        == profile["uv_image_mirror"].rsplit("@", 1)[1]
     )
     assert profile["extras"] == config["runtime_extras"]
     assert profile["python_version"] == "3.12"
@@ -116,12 +131,15 @@ def test_full_runtime_profile_matches_the_image_builder_contract() -> None:
         "thrift": "thrift",
     }.items():
         assert profile["version_contract"][contract_key] == locked[package]
-    for extra in config["runtime_extras"]:
-        assert f"--extra {extra}" in dockerfile
-    assert "--no-default-groups" in dockerfile
-    assert "--no-dev" in dockerfile
     assert "TRIBUTO_BASE_IMAGE" in dockerfile
+    assert "python -m venv /opt/tributo/.venv" in dockerfile
+    assert "ARG UV_IMAGE" not in dockerfile
+    assert "FROM ${UV_IMAGE}" not in dockerfile
+    assert "uv sync" not in dockerfile
+    assert "COPY --from=locked-requirements" in dockerfile
+    assert "COPY --from=project-wheelhouse" in dockerfile
     assert "COPY --from=external-wheelhouse" in dockerfile
+    assert "python -m pip install --require-hashes" in dockerfile
 
     runner = (ROOT / "scripts/run_runtime_image_it.sh").read_text()
     assert 'case "$runtime_platform" in' in runner

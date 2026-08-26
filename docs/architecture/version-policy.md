@@ -158,5 +158,8 @@ version and the Manifest schema version.
   FileIO rejection, empty-table, and MinIO Iceberg tests. Tributo must not
   support a second FileIO by inheriting backend-specific string semantics;
   that requires a separately declared and tested Connector/Binding.
+- `ray-hive` is pinned to `==1.0`. Any version change must rerun Provider and
+  Binding contracts plus the Hive 4.2.0 Data Ingestion Gate, including worker
+  execution, projection, schema, receipt, and credential-boundary evidence.
 
 <!-- END -->

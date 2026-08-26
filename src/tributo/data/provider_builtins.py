@@ -1,6 +1,6 @@
 """Built-in logical providers for canonical bounded ingestion.
 
-Parquet, CSV, Iceberg, Lance, ClickHouse, Doris, and PostgreSQL normalize input
+Parquet, CSV, Iceberg, Lance, ClickHouse, Doris, PostgreSQL, and Hive normalize input
 and build logical plans. Execution is delegated directly to Ray Data, Daft, or
 an installed engine Binding. Provider IDs identify logical sources, not
 execution engines.
@@ -15,10 +15,12 @@ credential; the digest used for identity never leaks the raw query.
 from __future__ import annotations
 
 import logging
+import math
 import os
+import re
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, ClassVar, Mapping
-from urllib.parse import unquote, urlsplit, urlunsplit
+from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 from pydantic import ValidationError
 
@@ -94,6 +96,30 @@ _ICEBERG_OPTION_KEYS: frozenset[str] = frozenset(
         "table_identifier",
         "catalog_properties",
         "s3",
+    }
+)
+_HIVE_OPTION_KEYS: frozenset[str] = frozenset(
+    {
+        "columns",
+        "username",
+        "password_env",
+        "auth",
+        "transport",
+        "fetch_rows",
+        "target_batch_bytes",
+        "query_timeout",
+        "connect_timeout",
+        "rpc_timeout",
+        "session_options",
+    }
+)
+_HIVE_SESSION_OPTION_KEYS: frozenset[str] = frozenset(
+    {
+        "hive.cli.print.header",
+        "hive.fetch.task.conversion",
+        "hive.local.time.zone",
+        "hive.resultset.use.unique.column.names",
+        "hive.server2.thrift.resultset.serialize.in.tasks",
     }
 )
 
@@ -1200,6 +1226,230 @@ class PostgreSqlProvider(_SqlProvider):
     aliases = frozenset({"postgresql"})
 
 
+class HiveProvider(DataSourceProvider):
+    """Logical HiveServer2 table source delegated to the ray-hive Binding."""
+
+    provider_id = "tributo.hive"
+    aliases = frozenset({"hive"})
+    projection_option_name = "columns"
+
+    def normalize(self, source: CanonicalSourceInput) -> ResolvedSource:
+        if not isinstance(source, ProviderSourceConfig):
+            raise JobConfigurationError(
+                f"{self.provider_id}: only ProviderSourceConfig is supported"
+            )
+        _check_provider(source.provider, self.provider_id, self.aliases)
+        _check_option_keys(self.provider_id, source.options, _HIVE_OPTION_KEYS)
+        options = dict(source.options)
+        parsed = self._parse_uri(source.uri)
+        columns = self._columns(options.get("columns"))
+        session_options = self._session_options(options.get("session_options"))
+        username = self._optional_text(options, "username")
+        password_env = self._optional_text(options, "password_env")
+        if (
+            password_env is not None
+            and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", password_env) is None
+        ):
+            raise JobConfigurationError(
+                f"{self.provider_id}: password_env must be an environment variable name"
+            )
+        auth = str(options.get("auth") or "NOSASL").upper()
+        if auth not in {"NONE", "NOSASL", "LDAP"}:
+            raise JobConfigurationError(
+                f"{self.provider_id}: auth must be NONE, NOSASL, or LDAP"
+            )
+        transport = str(options.get("transport") or "binary").lower()
+        if transport != "binary":
+            raise JobConfigurationError(
+                f"{self.provider_id}: initial Hive support requires binary transport"
+            )
+        if auth == "LDAP" and (not username or not password_env):
+            raise JobConfigurationError(
+                f"{self.provider_id}: LDAP requires username and password_env"
+            )
+        if auth != "LDAP" and password_env is not None:
+            raise JobConfigurationError(
+                f"{self.provider_id}: password_env is only valid with LDAP"
+            )
+
+        fetch_rows = self._positive_int(options, "fetch_rows", 10_000)
+        target_batch_bytes = self._positive_int(
+            options, "target_batch_bytes", 64 * 1024 * 1024
+        )
+        query_timeout = self._positive_number(options, "query_timeout", 600.0)
+        connect_timeout = self._positive_number(options, "connect_timeout", 10.0)
+        rpc_timeout = self._positive_number(options, "rpc_timeout", 60.0)
+        host, port, database, table = parsed
+        uri_host = host if ":" not in host or host.startswith("[") else f"[{host}]"
+        canonical_uri = (
+            f"hive://{uri_host}:{port}/"
+            f"{quote(database, safe='')}/{quote(table, safe='')}"
+        )
+        identity: dict[str, Any] = {"database": database, "table": table}
+        if columns:
+            identity["columns"] = list(columns)
+        if session_options:
+            identity["session_options"] = dict(session_options)
+        runtime = {
+            "host": host,
+            "port": port,
+            "database": database,
+            "table": table,
+            "columns": columns,
+            "username": username,
+            "password_env": password_env,
+            "auth": auth,
+            "transport": transport,
+            "fetch_rows": fetch_rows,
+            "target_batch_bytes": target_batch_bytes,
+            "query_timeout": query_timeout,
+            "connect_timeout": connect_timeout,
+            "rpc_timeout": rpc_timeout,
+            "session_options": session_options,
+        }
+        return ResolvedSource(
+            provider_id=self.provider_id,
+            canonical_uri=canonical_uri,
+            identity_options=identity,
+            runtime_options=runtime,
+        )
+
+    def plan(self, resolved: ResolvedSource) -> "LogicalScanPlan":
+        from tributo.data.scan_plan import (
+            ConsistencyRequirement,
+            SqlScan,
+            SqlTableRead,
+        )
+
+        database = resolved.identity_options.get("database")
+        table = resolved.identity_options.get("table")
+        if not isinstance(database, str) or not isinstance(table, str):
+            raise JobConfigurationError(
+                f"{self.provider_id}: resolved source has no Hive table target"
+            )
+        session_options = resolved.identity_options.get("session_options")
+        plan_options = (
+            {"session_options_digest": digest(dict(session_options))}
+            if isinstance(session_options, Mapping)
+            else {}
+        )
+        return SqlScan(
+            provider_id=self.provider_id,
+            connector_id="hive",
+            target=SqlTableRead(
+                schema=database,
+                table=table,
+                projection=tuple(resolved.identity_options.get("columns", ())),
+            ),
+            consistency=ConsistencyRequirement.STATEMENT,
+            options=plan_options,
+        )
+
+    @staticmethod
+    def _parse_uri(uri: str) -> tuple[str, int, str, str]:
+        try:
+            parsed = urlsplit(uri)
+            host = parsed.hostname
+            port = parsed.port if parsed.port is not None else 10000
+        except ValueError as exc:
+            raise JobConfigurationError("tributo.hive: invalid Hive URI") from exc
+        if parsed.scheme != "hive" or host is None:
+            raise JobConfigurationError(
+                "tributo.hive: uri must be hive://host[:port]/database/table"
+            )
+        if parsed.username is not None or parsed.password is not None:
+            raise JobConfigurationError(
+                "tributo.hive: uri must not contain userinfo; use explicit options"
+            )
+        if parsed.query or parsed.fragment:
+            raise JobConfigurationError(
+                "tributo.hive: uri must not contain query or fragment"
+            )
+        if not 1 <= port <= 65535:
+            raise JobConfigurationError(
+                "tributo.hive: uri port must be between 1 and 65535"
+            )
+        raw_parts = parsed.path.split("/")
+        if len(raw_parts) != 3 or raw_parts[0] or not all(raw_parts[1:]):
+            raise JobConfigurationError(
+                "tributo.hive: uri path must contain exactly database/table"
+            )
+        parts = tuple(unquote(part) for part in raw_parts[1:])
+        if any("\x00" in part or "/" in part for part in parts):
+            raise JobConfigurationError(
+                "tributo.hive: uri path must contain exactly database/table"
+            )
+        return host, port, parts[0], parts[1]
+
+    @staticmethod
+    def _columns(value: Any) -> tuple[str, ...]:
+        if value is None or value == []:
+            return ()
+        if not isinstance(value, list) or any(
+            not isinstance(column, str) or not column or "\x00" in column
+            for column in value
+        ):
+            raise JobConfigurationError(
+                "tributo.hive: columns must be a list of non-empty strings"
+            )
+        if len(set(value)) != len(value):
+            raise JobConfigurationError("tributo.hive: columns must be unique")
+        return tuple(value)
+
+    @staticmethod
+    def _session_options(value: Any) -> dict[str, str]:
+        if value is None:
+            return {}
+        if not isinstance(value, Mapping) or any(
+            not isinstance(key, str) or not isinstance(item, str)
+            for key, item in value.items()
+        ):
+            raise JobConfigurationError(
+                "tributo.hive: session_options must map strings to strings"
+            )
+        unknown = sorted(set(value) - _HIVE_SESSION_OPTION_KEYS)
+        if unknown:
+            raise JobConfigurationError(
+                f"tributo.hive: unsupported session option {unknown[0]!r}"
+            )
+        return dict(sorted(value.items()))
+
+    @staticmethod
+    def _optional_text(options: Mapping[str, Any], key: str) -> str | None:
+        value = options.get(key)
+        if value is None:
+            return None
+        if not isinstance(value, str) or "\x00" in value:
+            raise JobConfigurationError(
+                f"tributo.hive: option {key!r} must be a string"
+            )
+        return value
+
+    @staticmethod
+    def _positive_int(options: Mapping[str, Any], key: str, default: int) -> int:
+        value = options.get(key, default)
+        # ``type(...) is int`` intentionally rejects bool, which is an int subclass.
+        if type(value) is not int or value <= 0:
+            raise JobConfigurationError(
+                f"tributo.hive: option {key!r} must be a positive integer"
+            )
+        return value
+
+    @staticmethod
+    def _positive_number(options: Mapping[str, Any], key: str, default: float) -> float:
+        value = options.get(key, default)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int | float)
+            or not math.isfinite(value)
+            or value <= 0
+        ):
+            raise JobConfigurationError(
+                f"tributo.hive: option {key!r} must be a positive number"
+            )
+        return float(value)
+
+
 # ── Built-in registration (module import triggers registration) ──
 
 from tributo.data.provider_registry import register_provider  # noqa: E402
@@ -1212,5 +1462,6 @@ for _provider_cls in (
     ClickHouseProvider,
     DorisProvider,
     PostgreSqlProvider,
+    HiveProvider,
 ):
     register_provider(_provider_cls)

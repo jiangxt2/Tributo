@@ -5,7 +5,7 @@ exporter, registry, and stream-source contracts.
 
 | Area | Supported integrations |
 | --- | --- |
-| Data | Verified Parquet, CSV, Iceberg, Lance, and PostgreSQL paths; gated external ClickHouse/Doris adapters |
+| Data | Verified Parquet, CSV, Iceberg, Lance, PostgreSQL, and Ray HiveServer2 paths; gated external ClickHouse/Doris adapters |
 | Training | Ray Train, XGBoost, and PyTorch |
 | Tracking and registry | MLflow |
 | Model runtime | ONNX Runtime and Ray Serve |

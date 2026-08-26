@@ -137,6 +137,7 @@ JobTimeoutError
 JSON
 json
 Kafka
+Kerberos
 Kubernetes
 KubeRay
 kwargs

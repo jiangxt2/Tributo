@@ -26,12 +26,21 @@ import time
 import tomllib
 import uuid
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Iterator, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from tools.host_uv_export import (  # noqa: E402
+    HostDependencyExport,
+    HostUVExportError,
+    export_locked_requirements,
+)
+
 COMPOSE_FILE = ROOT / "tests" / "integrations" / "docker-compose.data-ingestion.yml"
 DEFAULT_LOCK_TIMEOUT_SECONDS = 3600.0
 MANAGED_LABEL = "io.tributo.it.managed-runtime"
@@ -41,6 +50,8 @@ LOCK_SHA_LABEL = "io.tributo.it.lock-sha256"
 BASE_IMAGE_LABEL = "io.tributo.it.base-image"
 PLATFORM_LABEL = "io.tributo.it.platform"
 CONTRACT_SHA_LABEL = "io.tributo.it.contract-sha256"
+UV_VERSION_LABEL = "io.tributo.it.uv-version"
+REQUIREMENTS_SHA_LABEL = "io.tributo.it.requirements-sha256"
 CREATED_BY_LABEL = "io.tributo.it.created-by"
 SNAPSHOT_MANIFEST = ".tributo-source-manifest.json"
 SNAPSHOT_DIGEST = ".tributo-source-sha256"
@@ -75,6 +86,8 @@ PROJECT_PREFIXES = frozenset({"tributo-ingestion", "tributo-lance-vector"})
 DIGEST_REFERENCE_PATTERN = re.compile(r"^.+:[^/@]+@sha256:[0-9a-f]{64}$")
 LOCAL_RUNTIME_BASE_IMAGE = "tributo-ray-base:2.55.1-py312"
 LOCAL_RUNTIME_UV_IMAGE = "tributo-uv:0.11.23"
+HOST_UV_EXPORT_MODE = "host-uv-export"
+UV_IMAGE_MODE = "uv-image"
 DOCKER_PROXY_VARIABLES = (
     "HTTP_PROXY",
     "HTTPS_PROXY",
@@ -117,8 +130,22 @@ class RuntimeProfile:
         return str(self.definition["base_image"])
 
     @property
-    def uv_image(self) -> str:
-        return str(self.definition["uv_image"])
+    def dependency_mode(self) -> str:
+        return str(self.definition.get("dependency_mode", UV_IMAGE_MODE))
+
+    @property
+    def uses_host_uv(self) -> bool:
+        return self.dependency_mode == HOST_UV_EXPORT_MODE
+
+    @property
+    def uv_version(self) -> str | None:
+        value = self.definition.get("uv_version")
+        return str(value) if value is not None else None
+
+    @property
+    def uv_image(self) -> str | None:
+        value = self.definition.get("uv_image")
+        return str(value) if value is not None else None
 
     @property
     def base_image_mirror(self) -> str | None:
@@ -131,12 +158,23 @@ class RuntimeProfile:
         return str(value) if value is not None else None
 
     @property
-    def tool_image(self) -> str:
-        return str(self.definition["tool_image"])
+    def tool_image(self) -> str | None:
+        value = self.definition.get("tool_image")
+        return str(value) if value is not None else None
 
     @property
     def minio_image(self) -> str:
         return str(self.definition["minio_image"])
+
+    @property
+    def hive_image(self) -> str | None:
+        value = self.definition.get("hive_image")
+        return str(value) if value is not None else None
+
+    @property
+    def postgres_image(self) -> str | None:
+        value = self.definition.get("postgres_image")
+        return str(value) if value is not None else None
 
     @property
     def version_contract(self) -> dict[str, str]:
@@ -154,6 +192,9 @@ class RuntimeIdentity:
     lock_sha256: str
     contract_sha256: str
     local_tag: str
+    uv_version: str | None = None
+    requirements_sha256: str | None = None
+    requirements_content: bytes | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -252,8 +293,6 @@ def load_profile(
         "minio_image",
         "python_version",
         "runtime_repository",
-        "tool_image",
-        "uv_image",
         "version_contract",
     }
     if not isinstance(definition, dict):
@@ -261,22 +300,56 @@ def load_profile(
     missing = sorted(required - definition.keys())
     if missing:
         raise TributoITError(f"runtime profile {name!r} is missing fields: {missing}")
+    dependency_mode = str(definition.get("dependency_mode", UV_IMAGE_MODE))
+    if dependency_mode not in {HOST_UV_EXPORT_MODE, UV_IMAGE_MODE}:
+        raise TributoITError(
+            f"runtime profile {name!r} has unsupported dependency_mode "
+            f"{dependency_mode!r}"
+        )
+    if dependency_mode == HOST_UV_EXPORT_MODE:
+        if "uv_version" not in definition:
+            raise TributoITError(f"runtime profile {name!r} must define uv_version")
+        forbidden = sorted(
+            {"uv_image", "uv_image_mirror", "tool_image"} & definition.keys()
+        )
+        if forbidden:
+            raise TributoITError(
+                f"runtime profile {name!r} host uv mode forbids fields: {forbidden}"
+            )
+    else:
+        legacy_missing = sorted({"tool_image", "uv_image"} - definition.keys())
+        if legacy_missing:
+            raise TributoITError(
+                f"runtime profile {name!r} is missing fields: {legacy_missing}"
+            )
     image_fields = [
         str(definition["base_image"]),
         str(definition["minio_image"]),
-        str(definition["tool_image"]),
-        str(definition["uv_image"]),
     ]
-    mirror_fields = [
-        definition.get("base_image_mirror"),
-        definition.get("uv_image_mirror"),
-    ]
-    if any(value is not None for value in mirror_fields):
-        if any(value is None for value in mirror_fields):
+    for optional_image in (
+        "hive_image",
+        "postgres_image",
+        "tool_image",
+        "uv_image",
+    ):
+        value = definition.get(optional_image)
+        if value is not None:
+            image_fields.append(str(value))
+    base_mirror = definition.get("base_image_mirror")
+    uv_mirror = definition.get("uv_image_mirror")
+    if base_mirror is not None:
+        image_fields.append(str(base_mirror))
+    if dependency_mode == UV_IMAGE_MODE:
+        if (base_mirror is None) != (uv_mirror is None):
             raise TributoITError(
                 f"runtime profile {name!r} must define both base/uv image mirrors"
             )
-        image_fields.extend(str(value) for value in mirror_fields)
+        if uv_mirror is not None:
+            image_fields.append(str(uv_mirror))
+    elif uv_mirror is not None:
+        raise TributoITError(
+            f"runtime profile {name!r} host uv mode forbids uv_image_mirror"
+        )
     invalid_images = [
         reference
         for reference in image_fields
@@ -291,11 +364,28 @@ def load_profile(
     if not dockerfile.is_file():
         raise TributoITError(f"runtime Dockerfile is missing: {dockerfile}")
     dockerfile_text = dockerfile.read_text(encoding="utf-8")
-    missing_extras = [
-        str(extra)
-        for extra in definition["extras"]
-        if f"--extra {extra}" not in dockerfile_text
-    ]
+    extras = definition["extras"]
+    if not isinstance(extras, list) or any(
+        not isinstance(extra, str) or not extra for extra in extras
+    ):
+        raise TributoITError(f"runtime profile {name!r} extras must be strings")
+    if dependency_mode == HOST_UV_EXPORT_MODE:
+        project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+        known_extras = project.get("project", {}).get("optional-dependencies", {})
+        missing_extras = sorted(set(extras) - set(known_extras))
+        forbidden_dockerfile_tokens = ("ARG UV_IMAGE", "FROM ${UV_IMAGE}", "uv sync")
+        present_tokens = [
+            token for token in forbidden_dockerfile_tokens if token in dockerfile_text
+        ]
+        if present_tokens:
+            raise TributoITError(
+                f"runtime profile {name!r} host uv Dockerfile still uses uv: "
+                f"{present_tokens}"
+            )
+    else:
+        missing_extras = [
+            str(extra) for extra in extras if f"--extra {extra}" not in dockerfile_text
+        ]
     if missing_extras:
         raise TributoITError(
             f"runtime Dockerfile does not install profile extras: {missing_extras}"
@@ -341,27 +431,54 @@ def _effective_dockerignore(profile: RuntimeProfile) -> tuple[str, bytes]:
     return "<none>", b""
 
 
+def _host_dependency_export(profile: RuntimeProfile) -> HostDependencyExport:
+    """Validate the lock and export hashed requirements without mutating it."""
+    if not profile.uses_host_uv:
+        raise TributoITError(
+            f"runtime profile {profile.name!r} does not use host uv export"
+        )
+    baseline_version = profile.uv_version
+    if baseline_version is None:
+        raise TributoITError(
+            f"runtime profile {profile.name!r} does not define uv_version"
+        )
+    try:
+        return export_locked_requirements(
+            root=profile.root,
+            extras=tuple(str(extra) for extra in profile.definition["extras"]),
+            baseline_uv_version=baseline_version,
+            run=lambda args, cwd: _run(args, cwd=cwd),
+            warning_prefix="Tributo IT was validated with uv",
+        )
+    except HostUVExportError as exc:
+        raise TributoITError(str(exc)) from exc
+
+
 def runtime_identity(profile: RuntimeProfile, platform: str) -> RuntimeIdentity:
     """Compute the content identity for a runtime without source-tree inputs."""
     platform = normalize_platform(platform)
     lock_content = (profile.root / "uv.lock").read_bytes()
     contract_content = _canonical_json(profile.version_contract)
     ignore_path, ignore_content = _effective_dockerignore(profile)
-    runtime_definition = {
+    dependency_export = (
+        _host_dependency_export(profile) if profile.uses_host_uv else None
+    )
+    runtime_definition: dict[str, Any] = {
         key: profile.definition[key]
         for key in (
             "base_image",
+            "dependency_mode",
             "extras",
             "python_version",
-            "uv_image",
             "version_contract",
         )
+        if key in profile.definition
     }
-    for key in ("base_image_mirror", "uv_image_mirror"):
+    for key in ("base_image_mirror", "uv_image", "uv_image_mirror", "uv_version"):
         if key in profile.definition:
             runtime_definition[key] = profile.definition[key]
     parts = [
-        ("schema", b"tributo-it-runtime-v2"),
+        ("schema", b"tributo-it-runtime-v3"),
         ("profile", _canonical_json(runtime_definition)),
         ("dockerfile", profile.dockerfile.read_bytes()),
         (f"dockerignore:{ignore_path}", ignore_content),
@@ -369,6 +486,13 @@ def runtime_identity(profile: RuntimeProfile, platform: str) -> RuntimeIdentity:
         ("uv.lock", lock_content),
         ("platform", platform.encode("utf-8")),
     ]
+    if dependency_export is not None:
+        parts.extend(
+            (
+                ("host-uv-version", dependency_export.uv_version.encode("utf-8")),
+                ("requirements.txt", dependency_export.content),
+            )
+        )
     runtime_key = _hash_parts(parts)[:24]
     local_tag = f"{profile.repository}:{profile.name}-{runtime_key}"
     return RuntimeIdentity(
@@ -378,6 +502,9 @@ def runtime_identity(profile: RuntimeProfile, platform: str) -> RuntimeIdentity:
         lock_sha256=hashlib.sha256(lock_content).hexdigest(),
         contract_sha256=hashlib.sha256(contract_content).hexdigest(),
         local_tag=local_tag,
+        uv_version=(dependency_export.uv_version if dependency_export else None),
+        requirements_sha256=(dependency_export.sha256 if dependency_export else None),
+        requirements_content=(dependency_export.content if dependency_export else None),
     )
 
 
@@ -395,7 +522,7 @@ def _image_inspect(reference: str) -> dict[str, Any] | None:
 
 
 def _expected_labels(identity: RuntimeIdentity) -> dict[str, str]:
-    return {
+    labels = {
         MANAGED_LABEL: "true",
         PROFILE_LABEL: identity.profile.name,
         RUNTIME_KEY_LABEL: identity.runtime_key,
@@ -405,6 +532,11 @@ def _expected_labels(identity: RuntimeIdentity) -> dict[str, str]:
         CONTRACT_SHA_LABEL: identity.contract_sha256,
         CREATED_BY_LABEL: "tools/tributo_it.py",
     }
+    if identity.uv_version is not None:
+        labels[UV_VERSION_LABEL] = identity.uv_version
+    if identity.requirements_sha256 is not None:
+        labels[REQUIREMENTS_SHA_LABEL] = identity.requirements_sha256
+    return labels
 
 
 def _version_check_code(identity: RuntimeIdentity) -> str:
@@ -753,7 +885,7 @@ def _prepare_runtime_build_inputs(
     identity: RuntimeIdentity,
     *,
     build_input_mode: RuntimeBuildInputMode,
-) -> tuple[str, str]:
+) -> tuple[str, str | None]:
     """Resolve builder-visible inputs under the selected image source policy."""
     profile = identity.profile
     if build_input_mode == RuntimeBuildInputMode.CANONICAL:
@@ -764,9 +896,9 @@ def _prepare_runtime_build_inputs(
         )
     if profile.base_image_mirror is None and profile.uv_image_mirror is None:
         return profile.base_image, profile.uv_image
-    if profile.base_image_mirror is None or profile.uv_image_mirror is None:
+    if profile.base_image_mirror is None:
         raise TributoITError(
-            f"runtime profile {profile.name!r} must define both base/uv image mirrors"
+            f"runtime profile {profile.name!r} is missing base_image_mirror"
         )
     _prepare_mirrored_image(
         mirror=profile.base_image_mirror,
@@ -774,6 +906,12 @@ def _prepare_runtime_build_inputs(
         local=LOCAL_RUNTIME_BASE_IMAGE,
         platform=identity.platform,
     )
+    if profile.uses_host_uv:
+        return LOCAL_RUNTIME_BASE_IMAGE, None
+    if profile.uv_image_mirror is None or profile.uv_image is None:
+        raise TributoITError(
+            f"runtime profile {profile.name!r} must define a uv image and mirror"
+        )
     _prepare_mirrored_image(
         mirror=profile.uv_image_mirror,
         canonical=profile.uv_image,
@@ -822,11 +960,25 @@ def _build_runtime(
             str(metadata_file),
             "--build-arg",
             f"BASE_IMAGE={base_image}",
-            "--build-arg",
-            f"UV_IMAGE={uv_image}",
             "--build-context",
             f"external-wheelhouse={wheelhouse}",
         ]
+        requirements_context: tempfile.TemporaryDirectory[str] | None = None
+        if identity.requirements_content is not None:
+            requirements_context = tempfile.TemporaryDirectory(
+                prefix="tributo-it-requirements-"
+            )
+            requirements_path = Path(requirements_context.name) / "requirements.txt"
+            requirements_path.write_bytes(identity.requirements_content)
+            requirements_path.chmod(0o600)
+            command.extend(
+                (
+                    "--build-context",
+                    f"locked-requirements={requirements_context.name}",
+                )
+            )
+        elif uv_image is not None:
+            command.extend(("--build-arg", f"UV_IMAGE={uv_image}"))
         if identity.profile.base_image_mirror is not None:
             command.extend(
                 ("--build-arg", f"TRIBUTO_BASE_IMAGE={identity.profile.base_image}")
@@ -865,6 +1017,8 @@ def _build_runtime(
             return validate_runtime_image(identity)
         finally:
             wheelhouse_context.cleanup()
+            if requirements_context is not None:
+                requirements_context.cleanup()
     finally:
         metadata_file.unlink(missing_ok=True)
 
@@ -1238,21 +1392,43 @@ def create_source_snapshot(
 def _compose_environment(
     project: str,
     runtime: PreparedRuntime,
-    profile: RuntimeProfile,
     *,
-    tool_image: str,
     minio_image: str,
+    hive_image: str | None,
+    postgres_image: str | None,
 ) -> dict[str, str]:
     env = os.environ.copy()
+    versions_file = ROOT / "tests" / "integrations" / "component-versions.env"
+    for line_number, raw_line in enumerate(
+        versions_file.read_text(encoding="utf-8").splitlines(), start=1
+    ):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, separator, value = line.partition("=")
+        if not separator or not key or not value:
+            raise TributoITError(
+                f"invalid component version at {versions_file}:{line_number}"
+            )
+        env[key] = value
     env.update(
         {
             "COMPOSE_PROJECT_NAME": project,
             "TRIBUTO_IT_RUNTIME_IMAGE": runtime.identity.local_tag,
             "TRIBUTO_IT_SOURCE_ROOT": str(ROOT),
-            "TRIBUTO_IT_TOOL_IMAGE": tool_image,
             "TRIBUTO_IT_MINIO_IMAGE": minio_image,
+            "TRIBUTO_IT_RAY_HEAD_CPUS": "0",
         }
     )
+    profiles: list[str] = []
+    if hive_image is not None:
+        env["TRIBUTO_IT_HIVE_IMAGE"] = hive_image
+        profiles.append("hive-ingestion")
+    if postgres_image is not None:
+        env["TRIBUTO_IT_POSTGRES_IMAGE"] = postgres_image
+        profiles.append("postgres-ingestion")
+    if profiles:
+        env["COMPOSE_PROFILES"] = ",".join(profiles)
     return env
 
 
@@ -1280,8 +1456,9 @@ def validate_compose_contract(
     runtime: PreparedRuntime,
     profile: RuntimeProfile,
     *,
-    tool_image: str | None = None,
     minio_image: str | None = None,
+    hive_image: str | None = None,
+    postgres_image: str | None = None,
 ) -> None:
     """Validate the resolved config rather than trusting YAML inheritance."""
     services = config.get("services")
@@ -1313,25 +1490,80 @@ def validate_compose_contract(
 
     source_init = services["source-init"]
     workspace_init = services["workspace-init"]
-    expected_tool_image = tool_image or profile.tool_image
     expected_minio_image = minio_image or profile.minio_image
-    if source_init.get("image") != expected_tool_image:
-        raise TributoITError("source-init must use the pinned tool image")
-    if workspace_init.get("image") != expected_tool_image:
-        raise TributoITError("workspace-init must use the pinned tool image")
-    if source_init.get("restart") != "no":
-        raise TributoITError('source-init must set restart: "no"')
+    if source_init.get("image") != runtime.identity.local_tag:
+        raise TributoITError("source-init must reuse the prepared runtime")
+    if workspace_init.get("image") != runtime.identity.local_tag:
+        raise TributoITError("workspace-init must reuse the prepared runtime")
+    for name, service in (
+        ("source-init", source_init),
+        ("workspace-init", workspace_init),
+    ):
+        if str(service.get("user")) != "0:0":
+            raise TributoITError(f"{name} must explicitly run as root")
+    for name, service in (
+        ("source-init", source_init),
+        ("workspace-init", workspace_init),
+    ):
+        if service.get("restart") != "no":
+            raise TributoITError(f'{name} must set restart: "no"')
     source_input = _volume_mount(source_init, "/host-source")
     if source_input is None or not source_input.get("read_only"):
         raise TributoITError("source-init checkout input must be read-only")
     if services["minio"].get("image") != expected_minio_image:
         raise TributoITError("MinIO must use its pinned readable tag@digest")
+    hive_services = {"hiveserver2", "hive-init"}.intersection(services)
+    if hive_services and hive_services != {"hiveserver2", "hive-init"}:
+        raise TributoITError("resolved Compose config has an incomplete Hive profile")
+    if hive_services:
+        if hive_image is None:
+            raise TributoITError("active Hive profile requires a prepared Hive image")
+        if services["hiveserver2"].get("image") != hive_image:
+            raise TributoITError("hiveserver2 must use the pinned Hive image")
+        if services["hive-init"].get("image") != runtime.identity.local_tag:
+            raise TributoITError("hive-init must reuse the prepared runtime")
+    postgres_services = {"postgres", "postgres-test"}.intersection(services)
+    if postgres_services:
+        if postgres_services != {"postgres", "postgres-test"}:
+            raise TributoITError(
+                "resolved Compose config has an incomplete PostgreSQL profile"
+            )
+        if postgres_image is None:
+            raise TributoITError(
+                "active PostgreSQL profile requires a prepared PostgreSQL image"
+            )
+        if services["postgres"].get("image") != postgres_image:
+            raise TributoITError("postgres must use the pinned PostgreSQL image")
+        if services["postgres-test"].get("image") != runtime.identity.local_tag:
+            raise TributoITError("postgres-test must reuse the prepared runtime")
+        if services["postgres-test"].get("restart") != "no":
+            raise TributoITError('postgres-test must set restart: "no"')
+        dependency = (services["postgres-test"].get("depends_on") or {}).get(
+            "postgres"
+        ) or {}
+        if dependency.get("condition") != "service_healthy":
+            raise TributoITError("postgres-test must depend on healthy PostgreSQL")
     runtime_users = {
         name
         for name, service in services.items()
         if service.get("image") == runtime.identity.local_tag
     }
-    if runtime_users != {"ray-head", "ray-worker"}:
+    expected_runtime_users = {
+        "ray-head",
+        "ray-worker",
+        "source-init",
+        "workspace-init",
+    }
+    if hive_services:
+        expected_runtime_users.add("hive-init")
+    if postgres_services:
+        expected_runtime_users.add("postgres-test")
+    root_initializers = {"source-init", "workspace-init"}
+    for name in expected_runtime_users - root_initializers:
+        configured_user = str(services[name].get("user") or "").split(":", 1)[0]
+        if configured_user in {"0", "root"}:
+            raise TributoITError(f"{name} must not override the runtime user as root")
+    if runtime_users != expected_runtime_users:
         raise TributoITError(
             f"unexpected services use the Tributo runtime: {sorted(runtime_users)}"
         )
@@ -1560,7 +1792,13 @@ def _assert_project_absent(project: str) -> None:
 
 def _service_ids(env: dict[str, str]) -> dict[str, str]:
     identities: dict[str, str] = {}
-    for service in ("ray-head", "ray-worker", "minio"):
+    services = ["ray-head", "ray-worker", "minio"]
+    profiles = env.get("COMPOSE_PROFILES", "").split(",")
+    if "hive-ingestion" in profiles:
+        services.append("hiveserver2")
+    if "postgres-ingestion" in profiles:
+        services.append("postgres")
+    for service in services:
         result = _run(_compose_args("ps", "--quiet", service), env=env)
         values = [line for line in result.stdout.splitlines() if line]
         if len(values) != 1:
@@ -1601,7 +1839,27 @@ def _wait_for_services(env: dict[str, str], timeout_seconds: float = 180.0) -> N
             env=env,
             check=False,
         )
-        if ray_result.returncode == 0 and minio_result.returncode == 0:
+        postgres_result = subprocess.CompletedProcess([], 0)
+        if "postgres-ingestion" in env.get("COMPOSE_PROFILES", "").split(","):
+            postgres_result = _run(
+                _compose_args(
+                    "exec",
+                    "-T",
+                    "postgres",
+                    "pg_isready",
+                    "-U",
+                    "tributo",
+                    "-d",
+                    "tributo",
+                ),
+                env=env,
+                check=False,
+            )
+        if (
+            ray_result.returncode == 0
+            and minio_result.returncode == 0
+            and postgres_result.returncode == 0
+        ):
             return
         last_output = "\n".join(
             part.strip()
@@ -1611,6 +1869,41 @@ def _wait_for_services(env: dict[str, str], timeout_seconds: float = 180.0) -> N
         time.sleep(2)
     raise TributoITError(
         f"Ray and MinIO were not ready within {timeout_seconds:.0f}s: {last_output}"
+    )
+
+
+def _wait_for_completed_service(
+    env: dict[str, str], service: str, timeout_seconds: float = 300.0
+) -> None:
+    """Wait for one Compose initialization service and require exit code zero."""
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        result = _run(
+            _compose_args("ps", "--all", "--quiet", service),
+            env=env,
+            check=False,
+        )
+        container_ids = [line for line in result.stdout.splitlines() if line]
+        if len(container_ids) == 1:
+            state = _run(
+                [
+                    "docker",
+                    "inspect",
+                    "--format",
+                    "{{.State.Status}} {{.State.ExitCode}}",
+                    container_ids[0],
+                ],
+                env=env,
+            ).stdout.strip()
+            if state == "exited 0":
+                return
+            if state.startswith("exited "):
+                raise TributoITError(
+                    f"Compose service {service} failed with state {state}"
+                )
+        time.sleep(2)
+    raise TributoITError(
+        f"Compose service {service} did not complete within {timeout_seconds:.0f}s"
     )
 
 
@@ -1707,6 +2000,8 @@ def _run_docker_ray_suite(
     project_prefix: str,
     test_module: str,
     display_name: str,
+    enable_hive: bool = False,
+    enable_postgresql: bool = False,
 ) -> None:
     """Run one module on the shared isolated Ray/MinIO lifecycle."""
     project = os.environ.get("COMPOSE_PROJECT_NAME") or _default_project(project_prefix)
@@ -1757,24 +2052,39 @@ def _run_docker_ray_suite(
             f"({prepared.image_id}, initial source={prepared.source})",
             flush=True,
         )
-        ensure_digest_image(profile.tool_image)
         ensure_digest_image(profile.minio_image)
-        tool_image = _local_digest_reference(profile.tool_image)
         minio_image = _local_digest_reference(profile.minio_image)
+        hive_image: str | None = None
+        if enable_hive and profile.hive_image is None:
+            raise TributoITError(
+                f"runtime profile {profile.name!r} does not define hive_image"
+            )
+        if enable_hive and profile.hive_image is not None:
+            ensure_digest_image(profile.hive_image)
+            hive_image = _local_digest_reference(profile.hive_image)
+        postgres_image: str | None = None
+        if enable_postgresql:
+            if profile.postgres_image is None:
+                raise TributoITError(
+                    f"runtime profile {profile.name!r} does not define postgres_image"
+                )
+            ensure_digest_image(profile.postgres_image)
+            postgres_image = _local_digest_reference(profile.postgres_image)
         env = _compose_environment(
             project,
             prepared,
-            profile,
-            tool_image=tool_image,
             minio_image=minio_image,
+            hive_image=hive_image,
+            postgres_image=postgres_image,
         )
         config = resolved_compose_config(env)
         validate_compose_contract(
             config,
             prepared,
             profile,
-            tool_image=tool_image,
             minio_image=minio_image,
+            hive_image=hive_image,
+            postgres_image=postgres_image,
         )
         _run(
             _compose_args(
@@ -1787,7 +2097,11 @@ def _run_docker_ray_suite(
             env=env,
             capture_output=False,
         )
+        if enable_hive:
+            _wait_for_completed_service(env, "hive-init")
         _wait_for_services(env)
+        if enable_postgresql:
+            _wait_for_completed_service(env, "postgres-test")
         before_ids = _service_ids(env)
         head_digest = _snapshot_digest_in_service(env, "ray-head")
         worker_digest = _snapshot_digest_in_service(env, "ray-worker")
@@ -1891,6 +2205,8 @@ def run_data_ingestion(profile: RuntimeProfile) -> None:
         project_prefix="tributo-ingestion",
         test_module="tests.integrations.test_data_ingestion_dual_engine",
         display_name="Data Ingestion",
+        enable_hive=True,
+        enable_postgresql=True,
     )
 
 
@@ -2030,6 +2346,38 @@ def runtime_gc_dry_run(profile_name: str | None, platform: str) -> None:
     print(json.dumps({"dry_run": True, "images": report}, indent=2, sort_keys=True))
 
 
+def export_requirements(
+    output: Path,
+    *,
+    extras: Sequence[str],
+    baseline_uv_version: str,
+) -> HostDependencyExport:
+    """Export validated locked requirements for a non-Docker build context."""
+    try:
+        exported = export_locked_requirements(
+            root=ROOT,
+            extras=extras,
+            baseline_uv_version=baseline_uv_version,
+            run=lambda args, cwd: _run(args, cwd=cwd),
+            warning_prefix="Tributo IT was validated with uv",
+        )
+    except HostUVExportError as exc:
+        raise TributoITError(str(exc)) from exc
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(exported.content)
+    print(
+        json.dumps(
+            {
+                "output": str(output),
+                "sha256": exported.sha256,
+                "uv_version": exported.uv_version,
+            },
+            sort_keys=True,
+        )
+    )
+    return exported
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -2067,6 +2415,10 @@ def _parser() -> argparse.ArgumentParser:
     snapshot_parser.add_argument("--owner-uid", type=int, default=1000)
     snapshot_parser.add_argument("--owner-gid", type=int, default=100)
 
+    infrastructure_parser = subparsers.add_parser("prepare-infrastructure")
+    infrastructure_parser.add_argument("--profile", default="data-ingestion")
+    infrastructure_parser.add_argument("--include-hive", action="store_true")
+
     run_parser = subparsers.add_parser("run-data-ingestion")
     run_parser.add_argument("--profile", default="data-ingestion")
 
@@ -2076,6 +2428,11 @@ def _parser() -> argparse.ArgumentParser:
     gc_parser = subparsers.add_parser("runtime-gc-dry-run")
     gc_parser.add_argument("--profile")
     gc_parser.add_argument("--platform")
+
+    export_parser = subparsers.add_parser("export-requirements")
+    export_parser.add_argument("--output-file", type=Path, required=True)
+    export_parser.add_argument("--uv-version", required=True)
+    export_parser.add_argument("--extra", action="append", required=True)
     return parser
 
 
@@ -2098,6 +2455,32 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         if args.command == "run-lance-vector-index":
             run_lance_vector_index(load_profile(args.profile))
+            return 0
+
+        if args.command == "prepare-infrastructure":
+            profile = load_profile(args.profile)
+            ensure_digest_image(profile.minio_image)
+            infrastructure_refs = {
+                "minio": _local_digest_reference(profile.minio_image)
+            }
+            if args.include_hive:
+                if profile.hive_image is None:
+                    raise TributoITError(
+                        f"runtime profile {profile.name!r} does not define hive_image"
+                    )
+                ensure_digest_image(profile.hive_image)
+                infrastructure_refs["hive"] = _local_digest_reference(
+                    profile.hive_image
+                )
+            print(json.dumps(infrastructure_refs, sort_keys=True))
+            return 0
+
+        if args.command == "export-requirements":
+            export_requirements(
+                args.output_file,
+                extras=tuple(args.extra),
+                baseline_uv_version=args.uv_version,
+            )
             return 0
 
         platform = (

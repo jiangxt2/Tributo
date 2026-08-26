@@ -44,7 +44,7 @@ covered by the external `runtime-image` suite.
 | Surface | Level | Notes |
 |--------|-------|-------|
 | `tools/build_tributo_image.py` | `alpha` | JSON-only Buildx builder for the pinned image validated for CPU execution by default, with explicit `linux/amd64`/`linux/arm64` targeting; it performs dependency-closure discovery, manifest sealing, and fail-closed import checks |
-| `tools/tributo-runtime-full.json` | `alpha` | Multi-architecture pinned Ray/uv image references, native-platform default, complete first-party runtime-extra closure including locked v1.0 ClickHouse/Doris connectors and the external `ray-hive` package, and optional external wheelhouse support |
+| `tools/tributo-runtime-full.json` | `alpha` | Multi-architecture pinned Ray/uv image references, native-platform default, complete first-party runtime-extra closure including locked v1.0 ClickHouse/Doris connectors and `ray-hive` for the built-in Ray HiveServer2 Binding, and optional external wheelhouse support |
 | `manifest.json` / `image-profile.json` | `alpha` | Build attestations consumed for immutable image selection and algorithm artifact compatibility; not a registry or deployment API |
 
 ### Training (tributo.training.*)

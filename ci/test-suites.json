@@ -145,6 +145,7 @@
         "tests/integrations/conformance/test_model_importer_contract.py",
         "tests/integrations/test_artifact_model_importer.py",
         "tests/integrations/test_mlflow_model_importer.py",
+        "tests/integrations/test_setup_hive_fixture.py",
         "tests/training/test_catalog_pipeline_integration.py"
       ],
       "extras": ["dev"],
@@ -155,6 +156,7 @@
         "tests/integrations/conformance/test_model_importer_contract.py",
         "tests/integrations/test_artifact_model_importer.py",
         "tests/integrations/test_mlflow_model_importer.py",
+        "tests/integrations/test_setup_hive_fixture.py",
         "tests/training/test_catalog_pipeline_integration.py"
       ],
       "trigger_domains": ["code"],
@@ -407,6 +409,8 @@
         "tests/integration/test_data_ingestion_conformance.py",
         "tests/integration/test_postgresql_ingestion.py",
         "tests/integration/test_table_format_ingestion.py",
+        "tests/integrations/hive-setup.sql",
+        "tests/integrations/setup_hive_fixture.py",
         "tests/integrations/test_data_ingestion_dual_engine.py",
         "tests/integrations/Dockerfile.data-ingestion*",
         "tests/integrations/docker-compose.data-ingestion.yml",
@@ -419,7 +423,7 @@
         "pyproject.toml",
         "uv.lock"
       ],
-      "requires": ["docker", "multi_node_ray", "minio"],
+      "requires": ["docker", "multi_node_ray", "minio", "hive", "postgres"],
       "budget_seconds": 4800,
       "ci_allowed": false,
       "forbid_skips": true,

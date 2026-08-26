@@ -8,11 +8,11 @@ reports required evidence, but no GitHub Actions event executes these suites.
 
 The data-ingestion image installs database drivers and the v1.0 database
 connectors through Tributo extras. `daft-clickhouse==1.0`,
-`daft-doris==1.0`, and `ray-doris==1.0` are resolved by `uv.lock` and included
-in the canonical full runtime image. The full image also includes the locked
-external `ray-hive==1.0` HiveServer2 package; package presence does not claim a
-Tributo Hive Provider/Binding. A custom external wheelhouse is only for
-packages outside that locked set.
+`daft-doris==1.0`, `ray-doris==1.0`, and `ray-hive==1.0` are resolved by
+`uv.lock`. The Data Ingestion Gate validates the Tributo Ray HiveServer2
+Provider/Binding separately from the canonical full-runtime package-presence
+gate. A custom external wheelhouse is only for packages outside that locked
+set.
 
 ---
 
@@ -26,11 +26,11 @@ packages outside that locked set.
 | Runtime image gate | `../../scripts/run_runtime_image_it.sh`, `jobs/runtime_image_gate_job.py` | `manual_external` | Pinned full image, first-party and Alpha imports on driver/worker, Ray Data, Ray Jobs, and image attestations | Docker Buildx + two-node Ray cluster on a matching native host architecture |
 | MLflow Hook | `test_e2e_mlflow.py` | `manual_external` | Committed Bundle upload, replay deduplication, explicit run reuse, and failure semantics | Isolated model-export runner |
 | ClickHouse E2E | `test_e2e_clickhouse.py` | `quarantine` | ClickHouse table → Daft ClickHouse Binding → explicit Daft-to-Ray adapter → XGBoost distributed training → MLflow → ONNX | Full image or `tributo[clickhouse]`; lifecycle and ownership contract pending |
-| Dual-engine Docker | `test_data_ingestion_dual_engine.py` | `manual_external` | Local Parquet, full ETL chain, typed handles, worker-version evidence | Docker Ray cluster + Daft |
+| Data Ingestion Docker | `test_data_ingestion_dual_engine.py` | `manual_external` | Local/S3 Parquet, Iceberg-on-MinIO Ray/Daft reads, native writes, Ray HiveServer2 structured projection, typed handles, and worker-version evidence | Docker Ray cluster + Daft + MinIO + Hive 4.2.0 |
 | Lance vector index | `test_lance_vector_index.py` | `manual_external` | Distributed IVF_FLAT/IVF_PQ build, append coverage, global Top-K, fallback, optimization, compaction, Ray Jobs, and S3 result delivery | Docker Ray cluster + Lance-Ray + MinIO |
 | File conformance | `../integration/test_data_ingestion_conformance.py` | `manual_external` | Local/MinIO Parquet and CSV through Ray Data and Daft | Local Ray runtime + MinIO |
 | Table conformance | `../integration/test_table_format_ingestion.py` | `manual_external` | Local/MinIO Iceberg and Lance through Ray Data and Daft | Local Ray runtime + MinIO |
-| PostgreSQL conformance | `../integration/test_postgresql_ingestion.py` | `manual_external` | Structured table read through Ray Data and Daft | Local Ray runtime + PostgreSQL |
+| PostgreSQL conformance | `../integration/test_postgresql_ingestion.py` | `manual_external` | Structured table read through Ray Data and Daft | Data Ingestion Docker gate + PostgreSQL 16.14 |
 | Inference Ray Jobs | `../integration/test_inference_ray_jobs.py`, `../integration/test_lance_result_sink_ray.py` | `manual_external` | Bundle, real post-training inline/detached inference, MLflow import, external artifacts, retry identity, credential domains, empty/NaN behavior, Lance-Ray local/S3 create/append/overwrite, and vector schemas | Isolated version-locked Docker Ray + Lance-Ray + MLflow + MinIO |
 | Streaming | `test_e2e_streaming.py` | `quarantine` | Streaming inference service | Model and service lifecycle pending |
 | Tune trial correctness | `../integration/test_tune_ray_cluster.py` | `manual_external` | Ray Jobs → two concurrent XGBoost Tune trials, strict target metric, isolated checkpoints, ResultGrid, and zero Bundle publication | Isolated version-locked Docker Ray cluster via `run_tune_it.sh` |
@@ -159,7 +159,7 @@ components used by the model-export and ingestion external validations:
 | Ray | 2.55.1 |
 | uv | 0.11.23 |
 | MinIO | RELEASE.2025-09-07T16-13-09Z |
-| PostgreSQL | 17.6 |
+| PostgreSQL | 16.14 |
 | MLflow | 2.22.5 |
 | boto3 / botocore | 1.43.56 / 1.43.56 |
 | XGBoost | 3.3.0 |
@@ -168,8 +168,12 @@ components used by the model-export and ingestion external validations:
 | Transformers | 4.57.6 |
 | PyArrow / pandas | 19.0.1 / 2.3.3 |
 
-Ray, uv, the source-snapshot tool image, MinIO, and PostgreSQL image references
-also include immutable SHA-256 digests.
+Ray, Hive, MinIO, and PostgreSQL image references include immutable SHA-256
+digests. All Docker IT runtime profiles use host uv with `0.11.23` as the CI
+baseline to validate the lock and export hashed requirements. A different
+local uv version warns and proceeds only when locked validation and export
+succeed. The inference and full-runtime images install the host-built Tributo
+wheel and do not pull uv or standalone Python tool images.
 `test_it_component_versions.py` ties all Python versions to `uv.lock` and
 fails if the Dockerfile or Compose file bypasses the version contract.
 
@@ -195,17 +199,21 @@ Run the complete Data Ingestion Docker gate from the repository root:
 ```
 
 This is the only supported lifecycle entry for
-`test_data_ingestion_dual_engine.py`. It computes a dependency-only runtime
-key from the runtime profile, Dockerfile, effective Docker ignore file,
-`pyproject.toml`, `uv.lock`, version contract, and Docker platform. A matching
+`test_data_ingestion_dual_engine.py`. Host uv first checks `uv.lock` and exports
+hashed requirements without the Tributo project. It computes a dependency-only
+runtime key from the actual uv version, exported-requirements digest, runtime
+profile, Dockerfile, effective Docker ignore file, `pyproject.toml`, `uv.lock`,
+version contract, and Docker platform. A matching
 `tributo-it-runtime:data-ingestion-<runtime-key>` image is validated and reused;
 when missing, exactly one process builds it through a profile/key/platform/
 daemon-scoped file lock and a single `docker buildx build --load` output.
 
 Compose never builds or implicitly pulls an image. The runner explicitly
-prepares digest-pinned infrastructure images, copies the checkout once through
-`source-init` into a run-scoped source volume, and mounts that snapshot read-only
-on the Ray head and worker. The snapshot also projects deterministic
+prepares digest-pinned Ray, MinIO, and Hive images. `source-init` and
+`workspace-init` reuse the already prepared Tributo Runtime; there is no
+standalone Python tool image. The checkout is copied once into a run-scoped
+source volume and mounted read-only on the Ray head and worker. The snapshot
+also projects deterministic
 `importlib.metadata` and entry-point metadata from `pyproject.toml`, so Tributo
 remains source-delivered without installing it into the dependency runtime.
 Test data, caches, and temporary files use a separate writable volume. The suite
@@ -229,9 +237,11 @@ repository to prefer a published runtime before the local Buildx fallback.
 
 The CI impact planner reports the ingestion suite when its source, contracts,
 runtime definition, or runner changes. The external runner obtains one
-content-addressed runtime, starts one Ray head, one Ray worker, and MinIO with
+content-addressed runtime, starts one zero-CPU Ray head, one Ray worker, MinIO,
+PostgreSQL 16.14, and HiveServer2 4.2.0 with
 `docker-compose.data-ingestion.yml`, freezes the checkout in a run-scoped
-read-only volume, and requires Driver/Worker version and snapshot evidence.
+read-only volume, and requires Driver/Worker version, snapshot, Hive
+projection, PostgreSQL dual-engine conformance, and Iceberg-on-MinIO evidence.
 Infrastructure absence cannot be represented as passing evidence.
 
 ## Lance Vector Index External Validation Gate

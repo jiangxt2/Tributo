@@ -2,9 +2,9 @@
   "schema_version": 1,
   "image": "tributo-runtime-full:local",
   "base_image": "rayproject/ray:2.55.1-py312@sha256:911245f2478ad2e9f67ac13978dc2a75bcae0498b9f188b10bba703324b78379",
-  "uv_image": "ghcr.io/astral-sh/uv:0.11.23@sha256:d0a0a753ab981624b49c97abc98821c1c09f4ca69d1ef5cee69c501be3d88479",
   "base_image_mirror": "docker.m.daocloud.io/rayproject/ray:2.55.1-py312@sha256:911245f2478ad2e9f67ac13978dc2a75bcae0498b9f188b10bba703324b78379",
-  "uv_image_mirror": "ghcr.m.daocloud.io/astral-sh/uv:0.11.23@sha256:d0a0a753ab981624b49c97abc98821c1c09f4ca69d1ef5cee69c501be3d88479",
+  "dependency_mode": "host-uv-export",
+  "uv_version": "0.11.23",
   "platform": "auto",
   "runtime_extras": [
     "data",

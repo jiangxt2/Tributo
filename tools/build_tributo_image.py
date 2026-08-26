@@ -35,6 +35,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from tools.host_uv_export import (  # noqa: E402
+    HostDependencyExport,
+    HostUVExportError,
+    export_locked_requirements,
+)
 from tools.runtime_image_contract import (  # noqa: E402
     REQUIRED_DISTRIBUTION_VERSIONS,
     REQUIRED_DISTRIBUTIONS,
@@ -55,20 +60,12 @@ BASE_IMAGE = (
     "rayproject/ray:2.55.1-py312@"
     "sha256:911245f2478ad2e9f67ac13978dc2a75bcae0498b9f188b10bba703324b78379"
 )
-UV_IMAGE = (
-    "ghcr.io/astral-sh/uv:0.11.23@"
-    "sha256:d0a0a753ab981624b49c97abc98821c1c09f4ca69d1ef5cee69c501be3d88479"
-)
 BASE_IMAGE_MIRROR = (
     "docker.m.daocloud.io/rayproject/ray:2.55.1-py312@"
     "sha256:911245f2478ad2e9f67ac13978dc2a75bcae0498b9f188b10bba703324b78379"
 )
-UV_IMAGE_MIRROR = (
-    "ghcr.m.daocloud.io/astral-sh/uv:0.11.23@"
-    "sha256:d0a0a753ab981624b49c97abc98821c1c09f4ca69d1ef5cee69c501be3d88479"
-)
 LOCAL_BASE_IMAGE = "tributo-ray-base:2.55.1-py312"
-LOCAL_UV_IMAGE = "tributo-uv:0.11.23"
+UV_VERSION = "0.11.23"
 PLATFORM_AUTO = "auto"
 SUPPORTED_PLATFORMS = ("linux/amd64", "linux/arm64")
 RAY_VERSION = "2.55.1"
@@ -129,9 +126,8 @@ class RuntimeImageConfig:
 
     image: str
     base_image: str
-    uv_image: str
     base_image_mirror: str
-    uv_image_mirror: str
+    uv_version: str
     platform: str
     runtime_extras: tuple[str, ...]
     external_wheelhouse: Path | None
@@ -222,12 +218,6 @@ def local_base_image(value: str) -> str:
     return f"{LOCAL_BASE_IMAGE}-{architecture}"
 
 
-def local_uv_image(value: str) -> str:
-    """Return an architecture-scoped local uv image tag."""
-    architecture = normalize_platform(value).rsplit("/", 1)[1]
-    return f"{LOCAL_UV_IMAGE}-{architecture}"
-
-
 def _validate_digest_reference(value: object, field: str) -> str:
     rendered = str(value)
     if IMAGE_REFERENCE.fullmatch(rendered) is None:
@@ -249,9 +239,9 @@ def _validate_config_payload(
         "schema_version",
         "image",
         "base_image",
-        "uv_image",
         "base_image_mirror",
-        "uv_image_mirror",
+        "dependency_mode",
+        "uv_version",
         "platform",
         "runtime_extras",
         "external_wheelhouse",
@@ -269,26 +259,21 @@ def _validate_config_payload(
     if RUNTIME_IMAGE.fullmatch(image) is None:
         raise ImageBuildError("image must be a readable tag such as repository:tag")
     base_image = _validate_digest_reference(payload["base_image"], "base_image")
-    uv_image = _validate_digest_reference(payload["uv_image"], "uv_image")
     if base_image != BASE_IMAGE:
         raise ImageBuildError(f"base_image must be the pinned Ray image {BASE_IMAGE!r}")
-    if uv_image != UV_IMAGE:
-        raise ImageBuildError(f"uv_image must be the pinned uv image {UV_IMAGE!r}")
     base_image_mirror = _validate_digest_reference(
         payload["base_image_mirror"], "base_image_mirror"
-    )
-    uv_image_mirror = _validate_digest_reference(
-        payload["uv_image_mirror"], "uv_image_mirror"
     )
     if base_image_mirror != BASE_IMAGE_MIRROR:
         raise ImageBuildError(
             "base_image_mirror must be the pinned DaoCloud Ray mirror "
             f"{BASE_IMAGE_MIRROR!r}"
         )
-    if uv_image_mirror != UV_IMAGE_MIRROR:
-        raise ImageBuildError(
-            f"uv_image_mirror must be the pinned DaoCloud uv mirror {UV_IMAGE_MIRROR!r}"
-        )
+    if payload["dependency_mode"] != "host-uv-export":
+        raise ImageBuildError("dependency_mode must be 'host-uv-export'")
+    uv_version = str(payload["uv_version"])
+    if uv_version != UV_VERSION:
+        raise ImageBuildError(f"uv_version must be the host uv baseline {UV_VERSION!r}")
     configured_platform = payload["platform"]
     if configured_platform != PLATFORM_AUTO:
         normalize_platform(configured_platform)
@@ -333,9 +318,8 @@ def _validate_config_payload(
     return RuntimeImageConfig(
         image=image,
         base_image=base_image,
-        uv_image=uv_image,
         base_image_mirror=base_image_mirror,
-        uv_image_mirror=uv_image_mirror,
+        uv_version=uv_version,
         platform=platform,
         runtime_extras=RUNTIME_EXTRAS,
         external_wheelhouse=external_path,
@@ -428,6 +412,8 @@ def build_command(
     *,
     root: Path,
     wheelhouse_context: Path,
+    requirements_context: Path,
+    project_wheelhouse_context: Path,
     manifest_sha256: str,
     metadata_file: Path | None = None,
 ) -> list[str]:
@@ -448,8 +434,6 @@ def build_command(
         "--build-arg",
         f"BASE_IMAGE={local_base_image(config.platform)}",
         "--build-arg",
-        f"UV_IMAGE={local_uv_image(config.platform)}",
-        "--build-arg",
         f"TRIBUTO_BASE_IMAGE={config.base_image}",
         "--build-arg",
         f"TRIBUTO_PLATFORM={config.platform}",
@@ -461,6 +445,10 @@ def build_command(
         f"TRIBUTO_VERSION={project_version(root)}",
         "--build-context",
         f"external-wheelhouse={wheelhouse_context}",
+        "--build-context",
+        f"locked-requirements={requirements_context}",
+        "--build-context",
+        f"project-wheelhouse={project_wheelhouse_context}",
     ]
     if metadata_file is not None:
         command.extend(("--metadata-file", str(metadata_file)))
@@ -544,6 +532,66 @@ def _run(
     return result
 
 
+def _host_dependency_export(
+    config: RuntimeImageConfig,
+    *,
+    root: Path,
+    log: _CommandLog,
+) -> HostDependencyExport:
+    """Export the full runtime dependency closure with local uv."""
+    try:
+        return export_locked_requirements(
+            root=root,
+            extras=config.runtime_extras,
+            baseline_uv_version=config.uv_version,
+            run=lambda args, cwd: _run(args, cwd=cwd, log=log),
+            warning_prefix="full runtime baseline uv is",
+        )
+    except HostUVExportError as exc:
+        raise ImageBuildError(str(exc)) from exc
+
+
+@contextmanager
+def prepared_requirements(export: HostDependencyExport) -> Iterator[Path]:
+    """Materialize host-exported requirements as a named build context."""
+    with tempfile.TemporaryDirectory(
+        prefix="tributo-runtime-requirements-"
+    ) as temporary:
+        context = Path(temporary)
+        (context / "requirements.txt").write_bytes(export.content)
+        yield context
+
+
+@contextmanager
+def prepared_project_wheelhouse(*, root: Path, log: _CommandLog) -> Iterator[Path]:
+    """Build the project wheel with host uv for offline image installation."""
+    uv = shutil.which("uv")
+    if uv is None:
+        raise ImageBuildError("host uv is required to build the Tributo project wheel")
+    with tempfile.TemporaryDirectory(
+        prefix="tributo-runtime-project-wheel-"
+    ) as temporary:
+        context = Path(temporary)
+        _run(
+            [
+                uv,
+                "build",
+                "--wheel",
+                "--out-dir",
+                str(context),
+                "--no-create-gitignore",
+            ],
+            cwd=root,
+            log=log,
+        )
+        wheels = sorted(context.glob("tributo-*.whl"))
+        if len(wheels) != 1:
+            raise ImageBuildError(
+                f"expected exactly one Tributo project wheel, found {len(wheels)}"
+            )
+        yield context
+
+
 def _prepare_pinned_image(
     *,
     mirror: str,
@@ -588,13 +636,6 @@ def _prepare_pinned_images(
         mirror=config.base_image_mirror,
         canonical=config.base_image,
         local=local_base_image(config.platform),
-        platform=config.platform,
-        log=log,
-    )
-    _prepare_pinned_image(
-        mirror=config.uv_image_mirror,
-        canonical=config.uv_image,
-        local=local_uv_image(config.platform),
         platform=config.platform,
         log=log,
     )
@@ -765,6 +806,8 @@ def _build_once(
     *,
     root: Path,
     wheelhouse_context: Path,
+    requirements_context: Path,
+    project_wheelhouse_context: Path,
     manifest_sha256: str,
     log: _CommandLog,
 ) -> None:
@@ -775,6 +818,8 @@ def _build_once(
             config,
             root=root,
             wheelhouse_context=wheelhouse_context,
+            requirements_context=requirements_context,
+            project_wheelhouse_context=project_wheelhouse_context,
             manifest_sha256=manifest_sha256,
             metadata_file=Path(metadata.name),
         )
@@ -787,6 +832,7 @@ def _manifest_core(
     config: RuntimeImageConfig,
     *,
     root: Path,
+    dependency_export: HostDependencyExport,
     distributions: dict[str, str],
     external_wheels: list[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -794,17 +840,14 @@ def _manifest_core(
         "schema_version": 1,
         "image": config.image,
         "base_image": config.base_image,
-        "uv_image": config.uv_image,
+        "dependency_mode": "host-uv-export",
+        "host_uv_version": dependency_export.uv_version,
+        "requirements_sha256": dependency_export.sha256,
         "image_sources": {
             "base_image": {
                 "canonical": config.base_image,
                 "mirror": config.base_image_mirror,
                 "local": local_base_image(config.platform),
-            },
-            "uv_image": {
-                "canonical": config.uv_image,
-                "mirror": config.uv_image_mirror,
-                "local": local_uv_image(config.platform),
             },
         },
         "platform": config.platform,
@@ -827,6 +870,7 @@ def _profile_manifest(
     config: RuntimeImageConfig,
     *,
     root: Path,
+    dependency_export: HostDependencyExport,
     distributions: dict[str, str],
     external_wheels: list[dict[str, Any]],
     manifest_sha256: str,
@@ -839,6 +883,7 @@ def _profile_manifest(
         **_manifest_core(
             config,
             root=root,
+            dependency_export=dependency_export,
             distributions=distributions,
             external_wheels=external_wheels,
         ),
@@ -908,12 +953,19 @@ def build_image(
         raise ImageBuildError(f"runtime Dockerfile is missing: {dockerfile}")
     external_wheels = wheel_records(config.external_wheelhouse)
     log = _CommandLog()
+    dependency_export = _host_dependency_export(config, root=root, log=log)
     _prepare_pinned_images(config, log=log)
-    with prepared_wheelhouse(config.external_wheelhouse) as wheelhouse_context:
+    with (
+        prepared_wheelhouse(config.external_wheelhouse) as wheelhouse_context,
+        prepared_requirements(dependency_export) as requirements_context,
+        prepared_project_wheelhouse(root=root, log=log) as project_wheelhouse_context,
+    ):
         _build_once(
             config,
             root=root,
             wheelhouse_context=wheelhouse_context,
+            requirements_context=requirements_context,
+            project_wheelhouse_context=project_wheelhouse_context,
             manifest_sha256="unsealed",
             log=log,
         )
@@ -924,6 +976,7 @@ def build_image(
         core = _manifest_core(
             config,
             root=root,
+            dependency_export=dependency_export,
             distributions=distributions,
             external_wheels=external_wheels,
         )
@@ -932,6 +985,8 @@ def build_image(
             config,
             root=root,
             wheelhouse_context=wheelhouse_context,
+            requirements_context=requirements_context,
+            project_wheelhouse_context=project_wheelhouse_context,
             manifest_sha256=manifest_sha256,
             log=log,
         )
@@ -948,6 +1003,7 @@ def build_image(
         manifest, profile = _profile_manifest(
             config,
             root=root,
+            dependency_export=dependency_export,
             distributions=final_distributions,
             external_wheels=external_wheels,
             manifest_sha256=manifest_sha256,

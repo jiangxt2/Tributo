@@ -66,6 +66,11 @@ docker_clean=(
   docker
 )
 
+tributo_it() {
+  uv run --no-project --python 3.12 python \
+    "${PROJECT_ROOT}/tools/tributo_it.py" "$@"
+}
+
 cd "${PROJECT_ROOT}"
 mkdir -p "${LOG_DIR}"
 
@@ -158,7 +163,7 @@ command -v uv >/dev/null
 test -r "${VERSIONS_FILE}"
 test -r "${COMPOSE_FILE}"
 
-python3 "${PROJECT_ROOT}/tools/tributo_it.py" create-source-snapshot \
+tributo_it create-source-snapshot \
   --source "${PROJECT_ROOT}" \
   --destination "${PREFLIGHT_SOURCE}" \
   --owner-uid "$(id -u)" \
@@ -216,19 +221,17 @@ fi
 if [[ "${TRIBUTO_IT_ALLOW_LOCAL_BUILD:-1}" != "1" ]]; then
   prepare_args+=(--no-local-build)
 fi
-python3 "${PROJECT_ROOT}/tools/tributo_it.py" "${prepare_args[@]}"
+tributo_it "${prepare_args[@]}"
 
 export TRIBUTO_IT_RUNTIME_IMAGE
 TRIBUTO_IT_RUNTIME_IMAGE="$(
-  python3 "${PROJECT_ROOT}/tools/tributo_it.py" runtime-key --profile data-ingestion |
+  tributo_it runtime-key --profile data-ingestion |
     python3 -c 'import json, sys; print(json.loads(sys.stdin.read().splitlines()[-1])["local_tag"])'
 )"
 export TRIBUTO_IT_MINIO_IMAGE="${MINIO_IMAGE%%@*}"
 export TRIBUTO_IT_SOURCE_ROOT="${PREFLIGHT_SOURCE}"
-export TRIBUTO_IT_TOOL_IMAGE="${TOOL_IMAGE%%@*}"
 
-python3 -c \
-  'from tools.tributo_it import ensure_digest_image, load_profile; p = load_profile("data-ingestion"); ensure_digest_image(p.tool_image); ensure_digest_image(p.minio_image)' \
+tributo_it prepare-infrastructure --profile data-ingestion \
   2>&1 | tee "${LOG_DIR}/image-prepare.log"
 
 compose --profile model-export config --quiet
