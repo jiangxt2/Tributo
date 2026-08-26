@@ -107,7 +107,7 @@ endpoint.
 | Constrained algorithm descriptor SPI | Alpha | Trusted packages from the selected image or a validated Job artifact; no arbitrary dependency resolution, isolation, hot reload, or PluginManager lifecycle |
 | Algorithm Wheel distribution | Alpha | Image Profiles plus code-only `py_modules` Wheels by default; opt-in offline Wheelhouse installs use `--no-index`, an attested manifest, and the existing entry-point registry. No online dependency resolution or untrusted-code sandbox is provided |
 | Graph training | Alpha skeleton | No built-in PyG/DGL trainer |
-| X-Learner causal estimation | Alpha, conformance-tested | Binary treatment/outcome, numeric tabular features, deterministic 5-fold cross-fitting over five native Ray Train XGBoost stages, causal report, and batch CATE inference; multi-node Gate pending |
+| X-Learner causal estimation | Alpha, conformance-tested | Binary treatment/outcome, numeric tabular features, deterministic 5-fold cross-fitting over five native Ray Train XGBoost stages, causal report, and batch CATE inference; priority multi-node Gate passed, while the full 27-record Gate remains pending |
 | Streaming user recovery decisions | Not implemented | Kafka source remains separate; no recovery algorithm or source-to-sink runtime is planned by the algorithm-module refactor |
 
 The tabular DNN, PU, and XGBoost legacy Trainer implementations remain
