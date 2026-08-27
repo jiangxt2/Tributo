@@ -317,6 +317,7 @@ class AlgorithmRunCoordinator:
             requested_resources_per_worker=WorkerResources(
                 num_cpus=plan.runtime.num_cpus,
                 num_gpus=plan.runtime.num_gpus,
+                memory_bytes=getattr(plan.runtime, "memory_bytes", None),
                 custom=plan.runtime.custom_resources,
             ),
             workers=workers,
@@ -401,6 +402,7 @@ class AlgorithmDispatcher:
         resources = WorkerResources(
             num_cpus=plan.runtime.num_cpus,
             num_gpus=plan.runtime.num_gpus,
+            memory_bytes=getattr(plan.runtime, "memory_bytes", None),
             custom=plan.runtime.custom_resources,
         )
         with self._runtime_manager.open(

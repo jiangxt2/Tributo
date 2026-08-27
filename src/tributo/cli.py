@@ -1415,6 +1415,7 @@ def algo_run(config_path: str, master: str | None, wait: bool) -> None:
                 WorkerResources(
                     num_cpus=resources.num_cpus,
                     num_gpus=resources.num_gpus,
+                    memory_bytes=resources.memory_bytes,
                     custom=resources.custom,
                 )
                 if resources is not None

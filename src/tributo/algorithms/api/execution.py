@@ -40,6 +40,14 @@ def _integer(value: object, field_name: str) -> int:
     return value
 
 
+def _positive_integer(value: object, field_name: str) -> int:
+    """Validate a positive integer in worker evidence payloads."""
+    result = _integer(value, field_name)
+    if result < 1:
+        raise AlgorithmConfigurationError(f"{field_name} must be positive")
+    return result
+
+
 def _number(value: object, field_name: str) -> float:
     if (
         not isinstance(value, (int, float))
@@ -225,6 +233,13 @@ class WorkerExecutionEvidence:
                 resources=WorkerResources(
                     num_cpus=_number(resources["num_cpus"], "worker num_cpus"),
                     num_gpus=_number(resources["num_gpus"], "worker num_gpus"),
+                    memory_bytes=(
+                        _positive_integer(
+                            resources["memory_bytes"], "worker memory_bytes"
+                        )
+                        if "memory_bytes" in resources
+                        else None
+                    ),
                     custom={
                         _non_empty(name, "custom resource name"): _number(
                             amount, "custom resource amount"
@@ -433,6 +448,13 @@ class ExecutionReceipt:
         if any(
             worker.resources.num_cpus < requested_resources.num_cpus
             or worker.resources.num_gpus < requested_resources.num_gpus
+            or (
+                requested_resources.memory_bytes is not None
+                and (
+                    worker.resources.memory_bytes is None
+                    or worker.resources.memory_bytes < requested_resources.memory_bytes
+                )
+            )
             or any(
                 worker.resources.custom.get(name, 0.0) < amount
                 for name, amount in requested_resources.custom.items()

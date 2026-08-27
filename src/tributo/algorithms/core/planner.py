@@ -293,6 +293,7 @@ class AlgorithmPlanner:
             framework_parallelism=1,
             num_cpus=resolved.num_cpus,
             num_gpus=resolved.num_gpus,
+            memory_bytes=resolved.memory_bytes,
             custom_resources=resolved.custom,
             max_retries=max_retries,
             execution_profile=request.profile,
@@ -315,6 +316,13 @@ class AlgorithmPlanner:
                 "requested GPU per worker must exactly match the tested "
                 "DistributionSpec capability; CPU fallback is forbidden"
             )
+        if declared.memory_bytes is not None and (
+            requested.memory_bytes is None
+            or requested.memory_bytes < declared.memory_bytes
+        ):
+            raise AlgorithmConfigurationError(
+                "requested memory per worker is below the DistributionSpec requirement"
+            )
         for name, minimum in declared.custom.items():
             if requested.custom.get(name, 0.0) < minimum:
                 raise AlgorithmConfigurationError(
@@ -333,6 +341,8 @@ class AlgorithmPlanner:
             "GPU": total.num_gpus,
             **dict(total.custom),
         }
+        if total.memory_bytes is not None:
+            required["memory"] = total.memory_bytes
         missing = {
             name: (amount, float(available_resources.get(name, 0.0)))
             for name, amount in required.items()

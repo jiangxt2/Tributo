@@ -38,6 +38,16 @@ from tributo.runtime import (
 
 if TYPE_CHECKING:
     from tributo.job import RayJob, TributoClient
+    from tributo.kuberay_submission import (
+        KubeRayDeploymentConfig,
+        KubeRayJobRequest,
+        KubeRayJobStatus,
+        KubeRayJobSubmission,
+        KubeRayJobSubmitter,
+        KubeRayResourceProfile,
+        KubeRayWorkerResources,
+        build_kuberay_rayjob_manifest,
+    )
     from tributo.runtime_providers import (
         LocalRayJobsProvider,
         RuntimeLease,
@@ -64,6 +74,32 @@ _LAZY_EXPORTS = {
         "resolve_runtime_provider",
     ),
     "run_local_entrypoint": ("tributo.runtime_providers", "run_local_entrypoint"),
+    "KubeRayDeploymentConfig": (
+        "tributo.kuberay_submission",
+        "KubeRayDeploymentConfig",
+    ),
+    "KubeRayJobRequest": ("tributo.kuberay_submission", "KubeRayJobRequest"),
+    "KubeRayJobStatus": ("tributo.kuberay_submission", "KubeRayJobStatus"),
+    "KubeRayJobSubmission": (
+        "tributo.kuberay_submission",
+        "KubeRayJobSubmission",
+    ),
+    "KubeRayJobSubmitter": (
+        "tributo.kuberay_submission",
+        "KubeRayJobSubmitter",
+    ),
+    "KubeRayResourceProfile": (
+        "tributo.kuberay_submission",
+        "KubeRayResourceProfile",
+    ),
+    "KubeRayWorkerResources": (
+        "tributo.kuberay_submission",
+        "KubeRayWorkerResources",
+    ),
+    "build_kuberay_rayjob_manifest": (
+        "tributo.kuberay_submission",
+        "build_kuberay_rayjob_manifest",
+    ),
 }
 
 
@@ -102,6 +138,14 @@ __all__: list[str] = [
     "register_runtime_provider",
     "resolve_runtime_provider",
     "run_local_entrypoint",
+    "KubeRayDeploymentConfig",
+    "KubeRayJobRequest",
+    "KubeRayJobStatus",
+    "KubeRayJobSubmission",
+    "KubeRayJobSubmitter",
+    "KubeRayResourceProfile",
+    "KubeRayWorkerResources",
+    "build_kuberay_rayjob_manifest",
     # Exceptions
     "TributoError",
     "JobSubmissionError",

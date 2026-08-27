@@ -168,6 +168,7 @@ def _fit_estimator(
                 ray_remote_args={
                     "num_cpus": plan.runtime.num_cpus,
                     "num_gpus": plan.runtime.num_gpus,
+                    "memory": plan.runtime.memory_bytes,
                     "resources": dict(plan.runtime.custom_resources),
                     "scheduling_strategy": "SPREAD",
                 },

@@ -144,6 +144,7 @@ def _worker_evidence(
     worker_count: int,
     num_cpus: float,
     num_gpus: float,
+    memory_bytes: int | None = None,
     custom_resources: Mapping[str, float],
     expected_input_rows: Mapping[str, int],
 ) -> tuple[list[dict[str, object]], str]:
@@ -193,6 +194,13 @@ def _worker_evidence(
         if not isinstance(resources, Mapping) or (
             float(resources.get("num_cpus", 0.0)) < num_cpus
             or float(resources.get("num_gpus", 0.0)) < num_gpus
+            or (
+                memory_bytes is not None
+                and (
+                    resources.get("memory_bytes") is None
+                    or int(resources["memory_bytes"]) < memory_bytes
+                )
+            )
         ):
             raise AlgorithmExecutionError(
                 "collective worker evidence does not satisfy requested resources"
@@ -282,6 +290,8 @@ class RayTrainCollectiveRuntime:
             resource_map = {"CPU": plan.runtime.num_cpus}
             if plan.runtime.num_gpus:
                 resource_map["GPU"] = plan.runtime.num_gpus
+            if plan.runtime.memory_bytes is not None:
+                resource_map["memory"] = plan.runtime.memory_bytes
             resource_map.update(plan.runtime.custom_resources)
             ray_config = plan.algorithm_config.get("ray", {})
             if not isinstance(ray_config, Mapping):
@@ -347,6 +357,7 @@ class RayTrainCollectiveRuntime:
                 worker_count=plan.runtime.worker_count,
                 num_cpus=plan.runtime.num_cpus,
                 num_gpus=plan.runtime.num_gpus,
+                memory_bytes=plan.runtime.memory_bytes,
                 custom_resources=plan.runtime.custom_resources,
                 expected_input_rows=expected_input_rows,
             )

@@ -171,6 +171,40 @@ documentation for every public stability tier.
 ```
 
 
+## `tributo.kuberay_submission`
+
+```{autoclass} tributo.kuberay_submission.KubeRayDeploymentConfig
+:no-members:
+```
+
+```{autoclass} tributo.kuberay_submission.KubeRayJobRequest
+:no-members:
+```
+
+```{autoclass} tributo.kuberay_submission.KubeRayJobStatus
+:no-members:
+```
+
+```{autoclass} tributo.kuberay_submission.KubeRayJobSubmission
+:no-members:
+```
+
+```{autoclass} tributo.kuberay_submission.KubeRayJobSubmitter
+:no-members:
+```
+
+```{autoclass} tributo.kuberay_submission.KubeRayResourceProfile
+:no-members:
+```
+
+```{autoclass} tributo.kuberay_submission.KubeRayWorkerResources
+:no-members:
+```
+
+```{autofunction} tributo.kuberay_submission.build_kuberay_rayjob_manifest
+```
+
+
 ## `tributo.ray_jobs`
 
 ```{autoclass} tributo.ray_jobs.RayJobSubmission
