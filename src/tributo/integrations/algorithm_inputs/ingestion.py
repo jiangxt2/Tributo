@@ -34,6 +34,8 @@ from tributo.data import (
     IngestionRequest,
     IngestionRuntimeContext,
     RayDataHandle,
+    RayHandleAdaptation,
+    adapt_daft_result_to_ray,
 )
 from tributo.util.annotations import DeveloperAPI, PublicAPI
 
@@ -51,6 +53,8 @@ _HANDLE_ADAPTER_REFS = {
     "daft_dataframe": f"{_ADAPTER_MODULE}:prepare_daft_input",
 }
 HandleKind = Literal["ray_data", "daft_dataframe"]
+HandleAdapterId = Literal["tributo.daft_to_ray"]
+_DAFT_TO_RAY_ADAPTER_ID: HandleAdapterId = "tributo.daft_to_ray"
 
 
 @PublicAPI(stability="alpha")
@@ -86,6 +90,10 @@ class IngestionInputInvocation:
         repr=False,
         compare=False,
     )
+    handle_adapter_id: HandleAdapterId | None = field(
+        default=None,
+        kw_only=True,
+    )
 
     def __post_init__(self) -> None:
         if not isinstance(self.request, IngestionRequest):
@@ -96,6 +104,11 @@ class IngestionInputInvocation:
             self.runtime_context, IngestionRuntimeContext
         ):
             raise AlgorithmInputError("ingestion runtime context has an invalid type")
+        if self.handle_adapter_id not in (None, _DAFT_TO_RAY_ADAPTER_ID):
+            raise AlgorithmInputError(
+                "unsupported ingestion handle adapter; expected "
+                f"{_DAFT_TO_RAY_ADAPTER_ID!r}"
+            )
 
 
 class _IngestionOpenResultDelegate:
@@ -151,7 +164,11 @@ class IngestionInputResolver:
     ) -> ResolvedInputDescriptor:
         """Map one side-effect-free Gateway descriptor into the Core plan."""
         invocation = self._lookup_invocation(binding, context.values)
-        ingestion_descriptor = self._describe_request(invocation.request)
+        source_descriptor = self._describe_request(invocation.request)
+        ingestion_descriptor = self._describe_adapted_handle(
+            source_descriptor,
+            invocation.handle_adapter_id,
+        )
         if ingestion_descriptor.handle_kind not in self._accepted_handle_kinds:
             raise AlgorithmInputError(
                 "ingestion handle kind is incompatible with this algorithm runtime: "
@@ -183,6 +200,10 @@ class IngestionInputResolver:
             resolver_payload={
                 "bridge_descriptor_version": _BRIDGE_DESCRIPTOR_VERSION,
                 "ingestion_descriptor": ingestion_descriptor.model_dump(mode="json"),
+                "source_ingestion_descriptor": source_descriptor.model_dump(
+                    mode="json"
+                ),
+                "handle_adapter_id": invocation.handle_adapter_id,
             },
             compatible_worker_input_adapter_refs=tuple(
                 sorted(
@@ -224,6 +245,10 @@ class IngestionInputResolver:
         result = self._open_request(invocation)
         try:
             self._validate_open_result(result, expected)
+            adaptation = self._adapt_open_result(
+                result,
+                invocation.handle_adapter_id,
+            )
         except AlgorithmInputError as exc:
             try:
                 result.cancel()
@@ -236,19 +261,29 @@ class IngestionInputResolver:
 
         owner = _IngestionOpenResultDelegate(result)
         receipt = result.receipt.model_dump(mode="json")
+        provenance: dict[str, object] = {
+            "resolver_id": self.resolver_id,
+            "reference": binding.reference,
+            "binding_digest": expected.binding_digest,
+            "engine_id": result.receipt.engine_id,
+            "handle_kind": expected.view_kind,
+            "request_digest": result.receipt.request_digest,
+            "dataset_ref": result.receipt.dataset_ref,
+            "receipt": receipt,
+        }
+        lease_handle: RayDataHandle | DaftDataFrameHandle = result.handle
+        if adaptation is not None:
+            lease_handle = adaptation.handle
+            provenance.update(
+                {
+                    "handle_adapter_id": _DAFT_TO_RAY_ADAPTER_ID,
+                    "conversion_receipt": adaptation.receipt.model_dump(mode="json"),
+                }
+            )
         return ResolvedInputLease(
-            handle=result.handle,
+            handle=lease_handle,
             binding=binding,
-            provenance={
-                "resolver_id": self.resolver_id,
-                "reference": binding.reference,
-                "binding_digest": expected.binding_digest,
-                "engine_id": result.receipt.engine_id,
-                "handle_kind": expected.view_kind,
-                "request_digest": result.receipt.request_digest,
-                "dataset_ref": result.receipt.dataset_ref,
-                "receipt": receipt,
-            },
+            provenance=provenance,
             close_callback=owner.close,
             cancel_callback=owner.cancel,
         )
@@ -281,6 +316,31 @@ class IngestionInputResolver:
             raise AlgorithmInputError("IngestionGateway returned an invalid descriptor")
         return descriptor
 
+    @staticmethod
+    def _describe_adapted_handle(
+        descriptor: IngestionDescriptor,
+        adapter_id: HandleAdapterId | None,
+    ) -> IngestionDescriptor:
+        """Project the source descriptor into the explicitly requested handle."""
+        if adapter_id is None:
+            return descriptor
+        if adapter_id != _DAFT_TO_RAY_ADAPTER_ID:
+            raise AlgorithmInputError(
+                f"unsupported ingestion handle adapter {adapter_id!r}"
+            )
+        if descriptor.engine_id != "tributo.daft" or descriptor.handle_kind != (
+            "daft_dataframe"
+        ):
+            raise AlgorithmInputError(
+                "tributo.daft_to_ray requires a DaftDataFrameHandle source"
+            )
+        return descriptor.model_copy(
+            update={
+                "engine_id": "tributo.ray_data",
+                "handle_kind": "ray_data",
+            }
+        )
+
     def _open_request(
         self,
         invocation: IngestionInputInvocation,
@@ -301,11 +361,32 @@ class IngestionInputResolver:
         return result
 
     @staticmethod
+    def _adapt_open_result(
+        result: IngestionOpenResult,
+        adapter_id: HandleAdapterId | None,
+    ) -> RayHandleAdaptation | None:
+        if adapter_id is None:
+            return None
+        if adapter_id != _DAFT_TO_RAY_ADAPTER_ID:
+            raise AlgorithmInputError(
+                f"unsupported ingestion handle adapter {adapter_id!r}"
+            )
+        try:
+            return adapt_daft_result_to_ray(result)
+        except Exception as exc:
+            raise AlgorithmInputError(
+                f"Daft-to-Ray handle adaptation failed: {type(exc).__name__}"
+            ) from exc
+
+    @staticmethod
     def _validate_open_result(
         result: IngestionOpenResult,
         descriptor: ResolvedInputDescriptor,
     ) -> None:
-        ingestion_payload = descriptor.resolver_payload.get("ingestion_descriptor")
+        ingestion_payload = descriptor.resolver_payload.get(
+            "source_ingestion_descriptor",
+            descriptor.resolver_payload.get("ingestion_descriptor"),
+        )
         try:
             planned = IngestionDescriptor.model_validate(ingestion_payload)
         except Exception as exc:

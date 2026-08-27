@@ -20,6 +20,8 @@ from tributo.data.refs import digest
 from tributo.data.source_config import (
     CanonicalSourceInput,
     ProviderSourceConfig,
+    RayReadTaskOptions,
+    SqlSourceConfig,
 )
 from tributo.exceptions import JobConfigurationError
 
@@ -817,6 +819,95 @@ class TestSqlProviderNormalize:
         )
         assert resolved.provider_id == "tributo.doris"
         assert resolved.runtime_options["host"] == "fe.example"
+
+    def test_doris_provider_shape_preserves_validated_read_options_in_runtime(
+        self,
+    ) -> None:
+        resolved = DorisProvider().normalize(
+            ProviderSourceConfig(
+                provider="tributo.doris",
+                uri="doris://fe.example/analytics",
+                options={
+                    "table": "events",
+                    "tablet_size": 128,
+                    "on_query_plan_error": "error",
+                    "ray_remote_args": {
+                        "num_cpus": 1.5,
+                        "scheduling_strategy": "SPREAD",
+                        "max_retries": 3,
+                    },
+                },
+            )
+        )
+
+        assert resolved.runtime_options["tablet_size"] == 128
+        assert resolved.runtime_options["on_query_plan_error"] == "error"
+        assert resolved.runtime_options["ray_remote_args"] == {
+            "num_cpus": 1.5,
+            "scheduling_strategy": "SPREAD",
+            "max_retries": 3,
+        }
+
+    def test_doris_builtin_shape_preserves_validated_read_options_in_runtime(
+        self,
+    ) -> None:
+        resolved = DorisProvider().normalize(
+            SqlSourceConfig(
+                dialect="doris",
+                host="fe.example",
+                database="analytics",
+                table="events",
+                tablet_size=128,
+                on_query_plan_error="single_task",
+                ray_remote_args=RayReadTaskOptions(
+                    num_cpus=1,
+                    scheduling_strategy="SPREAD",
+                    max_retries=0,
+                ),
+            )
+        )
+
+        assert resolved.runtime_options["tablet_size"] == 128
+        assert resolved.runtime_options["on_query_plan_error"] == "single_task"
+        assert resolved.runtime_options["ray_remote_args"] == {
+            "num_cpus": 1,
+            "scheduling_strategy": "SPREAD",
+            "max_retries": 0,
+        }
+
+    @pytest.mark.parametrize(
+        "option",
+        [
+            {"tablet_size": 0},
+            {"tablet_size": True},
+            {"tablet_size": 1.5},
+            {"on_query_plan_error": "fallback"},
+            {"ray_remote_args": {"max_retries": -1}},
+            {"ray_remote_args": {"scheduling_strategy": "DEFAULT"}},
+            {"ray_remote_args": {"resources": {"olap_worker": 1}}},
+        ],
+    )
+    def test_doris_provider_shape_rejects_invalid_read_options(
+        self, option: dict[str, object]
+    ) -> None:
+        with pytest.raises(JobConfigurationError):
+            DorisProvider().normalize(
+                ProviderSourceConfig(
+                    provider="tributo.doris",
+                    uri="doris://fe.example/analytics",
+                    options={"table": "events", **option},
+                )
+            )
+
+    def test_doris_read_options_are_rejected_for_clickhouse_provider(self) -> None:
+        with pytest.raises(JobConfigurationError, match="Doris-only"):
+            ClickHouseProvider().normalize(
+                ProviderSourceConfig(
+                    provider="tributo.clickhouse",
+                    uri="clickhouse://ch.example/analytics",
+                    options={"table": "events", "tablet_size": 128},
+                )
+            )
 
     def test_provider_shape_requires_sql(self) -> None:
         with pytest.raises(JobConfigurationError, match="required"):

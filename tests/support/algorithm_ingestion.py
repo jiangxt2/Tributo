@@ -18,6 +18,7 @@ from tributo.data import (
 )
 from tributo.data.scan_plan import ScanKind
 from tributo.integrations.algorithm_inputs import IngestionInputInvocation
+from tributo.integrations.algorithm_inputs.ingestion import HandleAdapterId
 
 
 def _digest(value: str) -> str:
@@ -85,6 +86,8 @@ class StubDaftFrame:
     selected: tuple[str, ...] = ()
     row_limit: int | None = None
     ray_conversion_calls: int = 0
+    to_ray_dataset_calls: int = 0
+    ray_dataset: StubRayDataset | None = None
 
     def select(self, *columns: str) -> StubDaftFrame:
         missing = sorted(set(columns) - set(self.columns))
@@ -104,7 +107,9 @@ class StubDaftFrame:
 
     def to_ray_dataset(self) -> object:
         self.ray_conversion_calls += 1
-        raise AssertionError("Daft input must not convert implicitly to Ray Data")
+        self.to_ray_dataset_calls += 1
+        self.ray_dataset = StubRayDataset(self.columns)
+        return self.ray_dataset
 
 
 @dataclass
@@ -189,6 +194,7 @@ def ingestion_invocation(
     *,
     engine: Literal["ray", "daft"] = "ray",
     credentials: bool = False,
+    handle_adapter_id: HandleAdapterId | None = None,
 ) -> IngestionInputInvocation:
     s3 = (
         {
@@ -206,7 +212,8 @@ def ingestion_invocation(
             ),
             engine=engine,
             trace_context={"trace_id": "algorithm-input-test"},
-        )
+        ),
+        handle_adapter_id=handle_adapter_id,
     )
 
 

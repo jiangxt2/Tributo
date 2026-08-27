@@ -7,10 +7,19 @@ dispatch in ``training/data_loader.py`` and ``inference/pipeline.py``.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictFloat,
+    StrictInt,
+    field_validator,
+    model_validator,
+)
 
 from tributo._common.config import StrictConfigModel
 from tributo.data.base import S3Config
@@ -23,6 +32,35 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _SqlDialect = Literal["clickhouse", "doris", "postgresql", "mysql"]
+
+
+@PublicAPI(stability="beta")
+class RayReadTaskOptions(StrictConfigModel):
+    """Validated Ray task options supported by the Doris read Binding.
+
+    This deliberately exposes a small, portable subset of ``ray_remote_args``.
+    Placement remains owned by Ray; Tributo only permits the OLAP read policy
+    required by the Doris Binding.
+
+    ``scheduling_strategy`` is intentionally limited to ``"SPREAD"`` and
+    ``max_retries`` must be non-negative; arbitrary Ray resource dictionaries
+    are not part of this configuration contract.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    num_cpus: StrictFloat | StrictInt | None = Field(default=None, gt=0)
+    scheduling_strategy: Literal["SPREAD"] | None = None
+    max_retries: StrictInt | None = Field(default=None, ge=0)
+
+    @field_validator("num_cpus")
+    @classmethod
+    def _validate_finite_num_cpus(
+        cls, value: StrictFloat | StrictInt | None
+    ) -> StrictFloat | StrictInt | None:
+        if value is not None and not math.isfinite(float(value)):
+            raise ValueError("num_cpus must be finite")
+        return value
 
 
 @PublicAPI(stability="beta")
@@ -82,6 +120,9 @@ class SqlSourceConfig(StrictConfigModel):
             ``None`` means no parameters.
         columns: Column names to project in the SQL reader (``None`` = all
             columns).
+        tablet_size: Doris tablet grouping size (Doris only).
+        on_query_plan_error: Doris query-plan error policy (Doris only).
+        ray_remote_args: Typed Doris Ray task options (Doris only).
     """
 
     type: Literal["sql"] = "sql"  # noqa: A003
@@ -97,6 +138,9 @@ class SqlSourceConfig(StrictConfigModel):
     sql: str = Field(default="", repr=False)
     table: str | None = None
     protocol: Literal["mysql", "flight"] | None = None
+    tablet_size: StrictInt | None = Field(default=None, gt=0)
+    on_query_plan_error: Literal["single_task", "error"] | None = None
+    ray_remote_args: RayReadTaskOptions | None = None
     params: dict[str, Any] | None = Field(default=None, repr=False)
     columns: list[str] | None = None
     partitioning: SqlPartitioning | None = None
@@ -127,6 +171,18 @@ class SqlSourceConfig(StrictConfigModel):
             object.__setattr__(self, "protocol", "mysql")
         if self.dialect != "doris" and self.protocol is not None:
             raise ValueError("protocol is only valid for Doris table reads")
+        if self.dialect != "doris" and any(
+            value is not None
+            for value in (
+                self.tablet_size,
+                self.on_query_plan_error,
+                self.ray_remote_args,
+            )
+        ):
+            raise ValueError(
+                "tablet_size, on_query_plan_error, and ray_remote_args are "
+                "only valid for Doris sources"
+            )
         return self
 
 

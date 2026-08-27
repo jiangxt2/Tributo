@@ -16,6 +16,28 @@ from tributo.data.ingestion import IngestionOpenResult
 from tributo.util.annotations import PublicAPI
 
 
+def _require_daft_ray_runner() -> None:
+    """Require the explicitly configured Daft Ray runner.
+
+    ``DataFrame.to_ray_dataset`` has a different driver-materialization
+    behavior under Daft's native runner.  The adapter therefore never
+    configures or infers a runner itself; the Ray Job/Application must call
+    ``daft.set_runner_ray`` before entering the ingestion path.
+    """
+    try:
+        import daft
+    except Exception as exc:  # pragma: no cover - a Daft handle implies Daft
+        raise RuntimeError("Daft Ray runner is unavailable") from exc
+    try:
+        runner: object = daft.get_or_create_runner()
+    except Exception as exc:
+        raise RuntimeError("Daft Ray runner is not configured") from exc
+    if getattr(runner, "name", None) != "ray":
+        raise RuntimeError(
+            "Daft-to-Ray adapter requires the explicitly configured Daft Ray runner"
+        )
+
+
 @PublicAPI(stability="alpha")
 class HandleConversionReceipt(BaseModel):
     """Credential-free evidence for one explicit native-handle conversion."""
@@ -51,8 +73,9 @@ def adapt_daft_result_to_ray(result: IngestionOpenResult) -> RayHandleAdaptation
     """Convert a live Daft result through Daft's public Ray Dataset adapter.
 
     This is an explicit consumer-boundary operation, never an engine-routing
-    fallback. Daft may execute its lazy plan while transferring partitions to
-    Ray, but the adapter does not collect the complete dataset on the driver
+    fallback. The caller must configure Daft's Ray runner before this function
+    is invoked. Daft may execute its lazy plan while transferring partitions to
+    Ray, but the Ray runner does not collect the complete dataset on the driver
     and does not promise row-order preservation.
     """
     if result.closed:
@@ -62,6 +85,7 @@ def adapt_daft_result_to_ray(result: IngestionOpenResult) -> RayHandleAdaptation
     if result.receipt.engine_id != "tributo.daft":
         raise ValueError("Daft handle and ingestion receipt engine do not match")
 
+    _require_daft_ray_runner()
     dataset = result.handle.dataframe.to_ray_dataset()
     return RayHandleAdaptation(
         handle=RayDataHandle(dataset),

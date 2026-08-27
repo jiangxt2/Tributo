@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, MutableMapping, cast
 
+import daft
 import pytest
 
 from tributo._common.storage_profiles import StorageProfile
@@ -446,6 +448,11 @@ def test_daft_to_ray_adapter_is_explicit_and_records_conversion(
         "tributo.data.handle_adapters.importlib.metadata.version",
         lambda name: "2.55.1",
     )
+    monkeypatch.setattr(
+        daft,
+        "get_or_create_runner",
+        lambda: SimpleNamespace(name="ray"),
+    )
     source_receipt = (
         IngestionGateway(_Bindings())
         .open(_request())
@@ -465,6 +472,32 @@ def test_daft_to_ray_adapter_is_explicit_and_records_conversion(
     assert converted.receipt.execution_may_be_triggered is True
     assert converted.receipt.full_driver_materialization is False
     assert converted.receipt.order_preserved is False
+
+
+def test_daft_to_ray_adapter_rejects_native_runner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _DaftFrame:
+        def to_ray_dataset(self) -> object:
+            raise AssertionError("native runner must be rejected before conversion")
+
+    monkeypatch.setattr(
+        daft,
+        "get_or_create_runner",
+        lambda: SimpleNamespace(name="native"),
+    )
+    source_receipt = (
+        IngestionGateway(_Bindings())
+        .open(_request())
+        .receipt.model_copy(update={"engine_id": "tributo.daft"})
+    )
+    source = IngestionOpenResult(
+        handle=DaftDataFrameHandle(_DaftFrame()),
+        receipt=source_receipt,
+    )
+
+    with pytest.raises(RuntimeError, match="requires the explicitly configured"):
+        adapt_daft_result_to_ray(source)
 
 
 def test_daft_to_ray_adapter_rejects_wrong_or_closed_handle() -> None:

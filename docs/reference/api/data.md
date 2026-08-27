@@ -210,6 +210,10 @@ documentation for every public stability tier.
 :no-members:
 ```
 
+```{autoclass} tributo.data.source_config.RayReadTaskOptions
+:no-members:
+```
+
 ```{autoclass} tributo.data.source_config.SqlPartitioning
 :no-members:
 ```

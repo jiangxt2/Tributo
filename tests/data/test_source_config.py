@@ -19,6 +19,7 @@ from tributo.data.source_config import (
     ParquetSourceConfig,
     ProviderSourceConfig,
     RawSourceConfig,
+    RayReadTaskOptions,
     SqlPartitioning,
     SqlSourceConfig,
     apply_source_projection,
@@ -319,6 +320,73 @@ class TestSqlPartitioning:
     ) -> None:
         with pytest.raises(ValidationError):
             SqlPartitioning.model_validate(value)
+
+
+class TestRayReadTaskOptions:
+    def test_doris_options_accept_the_supported_strict_subset(self) -> None:
+        options = RayReadTaskOptions(
+            num_cpus=1.5,
+            scheduling_strategy="SPREAD",
+            max_retries=3,
+        )
+
+        assert options.model_dump() == {
+            "num_cpus": 1.5,
+            "scheduling_strategy": "SPREAD",
+            "max_retries": 3,
+        }
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            {"num_cpus": True},
+            {"num_cpus": 0},
+            {"num_cpus": "1"},
+            {"num_cpus": float("inf")},
+            {"num_cpus": float("-inf")},
+            {"num_cpus": float("nan")},
+            {"scheduling_strategy": "DEFAULT"},
+            {"max_retries": -1},
+            {"max_retries": "3"},
+            {"resources": {"olap_worker": 1}},
+        ],
+    )
+    def test_unsupported_values_fail_closed(self, value: dict[str, object]) -> None:
+        with pytest.raises(ValidationError):
+            RayReadTaskOptions.model_validate(value)
+
+    def test_doris_only_fields_are_rejected_for_other_sql_dialects(self) -> None:
+        with pytest.raises(ValidationError, match="only valid for Doris"):
+            SqlSourceConfig(
+                dialect="clickhouse",
+                table="events",
+                tablet_size=100,
+            )
+
+    def test_doris_source_config_serializes_task_options_without_credentials(
+        self,
+    ) -> None:
+        source = SqlSourceConfig(
+            dialect="doris",
+            table="events",
+            tablet_size=100,
+            on_query_plan_error="error",
+            ray_remote_args=RayReadTaskOptions(
+                num_cpus=1,
+                scheduling_strategy="SPREAD",
+                max_retries=0,
+            ),
+        )
+
+        assert source.ray_remote_args is not None
+        assert source.ray_remote_args.scheduling_strategy == "SPREAD"
+        assert "password" not in repr(source)
+
+    def test_doris_task_options_are_immutable_after_validation(self) -> None:
+        options = RayReadTaskOptions(max_retries=0)
+
+        with pytest.raises(ValidationError):
+            options.max_retries = 1
 
 
 class TestPydanticValidation:
