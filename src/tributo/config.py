@@ -157,6 +157,7 @@ class AlgorithmWorkerResourcesConfig(StrictConfigModel):
 
     num_cpus: float = Field(ge=0)
     num_gpus: float = Field(default=0, ge=0)
+    memory_bytes: int | None = Field(default=None, gt=0)
     custom: dict[str, float] = Field(default_factory=dict)
 
     @field_validator("custom")

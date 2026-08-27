@@ -276,6 +276,8 @@ class RayRuntimeManager:
             "GPU": total.num_gpus,
             **dict(total.custom),
         }
+        if total.memory_bytes is not None:
+            required["memory"] = total.memory_bytes
         shortages = {
             name: (amount, float(cluster_resources.get(name, 0.0)))
             for name, amount in required.items()
@@ -294,6 +296,8 @@ class RayRuntimeManager:
             "GPU": resources_per_worker.num_gpus,
             **dict(resources_per_worker.custom),
         }
+        if resources_per_worker.memory_bytes is not None:
+            per_worker["memory"] = resources_per_worker.memory_bytes
         alive_resources = [
             node.get("Resources", {}) for node in nodes if node.get("Alive", False)
         ]

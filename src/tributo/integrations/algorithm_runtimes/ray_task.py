@@ -81,6 +81,7 @@ class RayTaskRuntime:
                 _execute_on_worker.options(
                     num_cpus=envelope.plan.runtime.num_cpus,
                     num_gpus=envelope.plan.runtime.num_gpus,
+                    memory=envelope.plan.runtime.memory_bytes,
                     max_retries=envelope.plan.runtime.max_retries,
                     retry_exceptions=False,
                 ).remote(

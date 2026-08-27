@@ -204,6 +204,7 @@ class WorkerResources:
     num_cpus: float = 1.0
     num_gpus: float = 0.0
     custom: Mapping[str, float] = field(default_factory=dict)
+    memory_bytes: int | None = None
 
     def __post_init__(self) -> None:
         for field_name in ("num_cpus", "num_gpus"):
@@ -235,6 +236,14 @@ class WorkerResources:
                 )
             normalized[name] = float(value)
         object.__setattr__(self, "custom", FrozenDict(normalized))
+        if self.memory_bytes is not None and (
+            not isinstance(self.memory_bytes, int)
+            or isinstance(self.memory_bytes, bool)
+            or self.memory_bytes <= 0
+        ):
+            raise AlgorithmConfigurationError(
+                "memory_bytes must be a positive integer when provided"
+            )
 
     def scaled(self, worker_count: int) -> WorkerResources:
         """Return total resources for *worker_count* identical workers."""
@@ -243,15 +252,23 @@ class WorkerResources:
             num_cpus=self.num_cpus * worker_count,
             num_gpus=self.num_gpus * worker_count,
             custom={name: value * worker_count for name, value in self.custom.items()},
+            memory_bytes=(
+                self.memory_bytes * worker_count
+                if self.memory_bytes is not None
+                else None
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
         """Return a portable representation."""
-        return {
+        value = {
             "num_cpus": self.num_cpus,
             "num_gpus": self.num_gpus,
             "custom": dict(sorted(self.custom.items())),
         }
+        if self.memory_bytes is not None:
+            value["memory_bytes"] = self.memory_bytes
+        return value
 
 
 @PublicAPI(stability="alpha")
@@ -898,6 +915,11 @@ class DistributionSpec:
                 resources_per_worker=WorkerResources(
                     num_cpus=_number(resources["num_cpus"], "num_cpus"),
                     num_gpus=_number(resources["num_gpus"], "num_gpus"),
+                    memory_bytes=(
+                        _positive_integer(resources["memory_bytes"], "memory_bytes")
+                        if "memory_bytes" in resources
+                        else None
+                    ),
                     custom={
                         _string(name, "custom resource name"): _number(
                             amount, "custom resource amount"

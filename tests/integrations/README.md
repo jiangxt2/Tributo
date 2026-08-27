@@ -36,7 +36,46 @@ set.
 | Tune trial correctness | `../integration/test_tune_ray_cluster.py` | `manual_external` | Ray Jobs → two concurrent XGBoost Tune trials, strict target metric, isolated checkpoints, ResultGrid, and zero Bundle publication | Isolated version-locked Docker Ray cluster via `run_tune_it.sh` |
 | Explainability Ray Jobs | `../integration/test_explainability_ray_jobs.py` | `manual_external` | Explanation submission, distributed execution, and output evidence | Lifecycle-owned Ray Jobs runner |
 | Distributed algorithms | `../integration/test_distributed_algorithm_local.py` | `manual_external` | Collective and MapReduce execution, sharding, receipts, and Bundle atomicity | Isolated multi-worker Ray environment |
+| KubeRay RayJob resource profiles | `../integration/test_kuberay_rayjob_resources.py` | `manual_external` | Tributo KubeRay submission adapter, multiple worker CPU/memory profiles, formal XGBoost ExecutionReceipt/Bundle, and cleanup | Kind 1 control-plane + 3 workers, fixed KubeRay Operator, and local XGBoost Tributo image |
 | Ray runtime environment | `../integration/test_ray_runtime_env.py` | `manual_external` | uv runtime-environment propagation into Ray workers | Host capable of starting the required Ray runtime |
+
+### KubeRay RayJob resource profiles
+
+This is a heavyweight manual external gate. Do not run the runner or invoke
+the test module directly during normal development, pre-checks, or routine
+reviews unless the user explicitly requests this KubeRay IT. One run creates
+a disposable four-node Kind cluster, loads a large runtime image into every
+node, installs KubeRay, and executes two distributed XGBoost jobs.
+
+The KubeRay gate uses a small XGBoost image so it can reuse a locally cached Ray
+runtime without building the full algorithm image. It installs the current
+Tributo wheel and the official boosting wheel from the sibling
+`tributo-algorithms` checkout:
+
+```bash
+TRIBUTO_ALGORITHMS_ROOT=/path/to/tributo-algorithms \
+TRIBUTO_KUBERAY_RUNTIME_IMAGE=tributo-kuberay-xgboost:it-local \
+  bash scripts/build_kuberay_xgboost_image.sh
+TRIBUTO_KIND_NODE_IMAGE='kindest/node:v1.36.1@sha256:3489c7674813ba5d8b1a9977baea8a6e553784dab7b84759d1014dbd78f7ebd5' \
+TRIBUTO_KUBERAY_RUNTIME_IMAGE=tributo-kuberay-xgboost:it-local \
+  ./scripts/run_kuberay_rayjob_it.sh
+```
+
+The runner creates and destroys one uniquely named Kind cluster. The Python IT
+submits each business `RayJob` through `KubeRayJobSubmitter`; the shell runner
+only owns Kind, Operator setup, diagnostics, and scoped cleanup. The fixed node
+image must match the local Docker architecture.
+
+The IT runs two positive profiles: two workers with 1 CPU/1 GiB each, and
+three workers with 2 CPU/2 GiB each. The image contains three small CSV parts
+so the three-worker case has deterministic non-empty Ray Data input shards.
+The workload prints a credential-free Ray resource snapshot; the test checks
+aggregate cluster capacity and that enough alive Ray nodes can satisfy one
+requested worker.
+
+For an internal or offline environment, set
+`TRIBUTO_KUBERAY_CHART_ARCHIVE` to a locally available archive for the same
+`TRIBUTO_KUBERAY_VERSION`; the runner then skips the public Helm repository.
 
 ---
 

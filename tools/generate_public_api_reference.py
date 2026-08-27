@@ -182,6 +182,7 @@ def component_for(symbol: PublicSymbol) -> str:
         "config",
         "exceptions",
         "job",
+        "kuberay_submission",
         "ray_jobs",
         "runtime",
         "runtime_providers",

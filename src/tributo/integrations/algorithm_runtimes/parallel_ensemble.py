@@ -430,6 +430,7 @@ class RayParallelUnitRuntime:
                 _fit_units.options(
                     num_cpus=envelope.plan.runtime.num_cpus,
                     num_gpus=envelope.plan.runtime.num_gpus,
+                    memory=envelope.plan.runtime.memory_bytes,
                     resources=dict(envelope.plan.runtime.custom_resources),
                     scheduling_strategy="SPREAD",
                     max_retries=policy.max_retries,

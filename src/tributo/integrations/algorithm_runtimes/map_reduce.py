@@ -24,7 +24,6 @@ from tributo.algorithms.api import (
     StateField,
     WorkerExecutionEvidence,
     WorkerExecutionResult,
-    WorkerResources,
 )
 from tributo.algorithms.api.models import FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS
 from tributo.algorithms.core.worker import (
@@ -41,6 +40,7 @@ from tributo.algorithms.spi import (
     TabularBatchInputView,
     WorkerInputPayload,
 )
+from tributo.integrations.algorithm_runtimes.decomposition import assigned_resources
 from tributo.util.annotations import DeveloperAPI
 
 RAY_MAP_REDUCE_RUNTIME_ID = FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS[
@@ -368,7 +368,6 @@ def _map_partition(
                 f"{rank}/{plan.runtime.worker_count}"
             ).encode("ascii")
         ).hexdigest()
-        assigned = ray.get_runtime_context().get_assigned_resources()
         raw_coverage = algorithm.coverage_counts(state)
         if not isinstance(raw_coverage, Mapping) or any(
             not isinstance(name, str)
@@ -387,15 +386,7 @@ def _map_partition(
             rank=rank,
             world_size=plan.runtime.worker_count,
             shard_id=shard_id,
-            resources=WorkerResources(
-                num_cpus=float(assigned.get("CPU", 0.0)),
-                num_gpus=float(assigned.get("GPU", 0.0)),
-                custom={
-                    str(name): float(value)
-                    for name, value in assigned.items()
-                    if name not in {"CPU", "GPU", "memory", "object_store_memory"}
-                },
-            ),
+            resources=assigned_resources(),
             model_state_digest=state_digest,
             rows_processed=tracked.row_count,
             input_rows={
@@ -511,6 +502,7 @@ def _tree_reduce(
     *,
     num_cpus: float,
     num_gpus: float,
+    memory_bytes: int | None,
     custom_resources: Mapping[str, float],
     max_retries: int,
 ) -> ray.ObjectRef:
@@ -527,6 +519,7 @@ def _tree_reduce(
                 merge_pair.options(
                     num_cpus=num_cpus,
                     num_gpus=num_gpus,
+                    memory=memory_bytes,
                     resources=dict(custom_resources),
                     max_retries=max_retries,
                     retry_exceptions=False,
@@ -569,6 +562,7 @@ class RayMapReduceRuntime:
                 map_partition.options(
                     num_cpus=envelope.plan.runtime.num_cpus,
                     num_gpus=envelope.plan.runtime.num_gpus,
+                    memory=envelope.plan.runtime.memory_bytes,
                     resources=dict(envelope.plan.runtime.custom_resources),
                     scheduling_strategy="SPREAD",
                     max_retries=policy.max_retries,
@@ -582,6 +576,7 @@ class RayMapReduceRuntime:
                 envelope.artifacts,
                 num_cpus=envelope.plan.runtime.num_cpus,
                 num_gpus=envelope.plan.runtime.num_gpus,
+                memory_bytes=envelope.plan.runtime.memory_bytes,
                 custom_resources=envelope.plan.runtime.custom_resources,
                 max_retries=policy.max_retries,
             )
@@ -590,6 +585,7 @@ class RayMapReduceRuntime:
                 finalize_model.options(
                     num_cpus=envelope.plan.runtime.num_cpus,
                     num_gpus=envelope.plan.runtime.num_gpus,
+                    memory=envelope.plan.runtime.memory_bytes,
                     resources=dict(envelope.plan.runtime.custom_resources),
                 ).remote(
                     envelope.plan,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import pickle
 from collections.abc import Mapping
 from typing import Any, cast
@@ -112,9 +113,24 @@ def runtime_identity() -> dict[str, str]:
 def assigned_resources() -> WorkerResources:
     """Convert actual Ray-assigned resources into receipt evidence."""
     assigned = ray.get_runtime_context().get_assigned_resources()
+    assigned_memory = assigned.get("memory")
+    memory_bytes: int | None = None
+    if assigned_memory is not None:
+        if (
+            not isinstance(assigned_memory, (int, float))
+            or isinstance(assigned_memory, bool)
+            or not math.isfinite(float(assigned_memory))
+            or float(assigned_memory) <= 0
+            or not float(assigned_memory).is_integer()
+        ):
+            raise AlgorithmExecutionError(
+                "Ray assigned memory must be a positive integer quantity"
+            )
+        memory_bytes = int(assigned_memory)
     return WorkerResources(
         num_cpus=float(assigned.get("CPU", 0.0)),
         num_gpus=float(assigned.get("GPU", 0.0)),
+        memory_bytes=memory_bytes,
         custom={
             str(name): float(value)
             for name, value in assigned.items()

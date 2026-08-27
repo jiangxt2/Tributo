@@ -689,6 +689,7 @@ class RuntimeBinding:
     strategy: DistributionStrategy | None = None
     distribution_digest: str | None = None
     resume_from: str | None = None
+    memory_bytes: int | None = None
 
     def __post_init__(self) -> None:
         _require_namespaced_id(self.runtime_id, "runtime_id")
@@ -750,6 +751,14 @@ class RuntimeBinding:
             )
         object.__setattr__(self, "num_cpus", float(self.num_cpus))
         object.__setattr__(self, "num_gpus", float(self.num_gpus))
+        if self.memory_bytes is not None and (
+            not isinstance(self.memory_bytes, int)
+            or isinstance(self.memory_bytes, bool)
+            or self.memory_bytes <= 0
+        ):
+            raise AlgorithmConfigurationError(
+                "runtime memory_bytes must be a positive integer when provided"
+            )
         if (
             not math.isfinite(self.num_cpus)
             or not math.isfinite(self.num_gpus)
@@ -1670,6 +1679,36 @@ class ResolvedAlgorithmPlan:
 
     def to_dict(self, *, include_plan_id: bool = True) -> dict[str, Any]:
         """Return the canonical public plan projection."""
+        runtime_payload: dict[str, Any] = {
+            "runtime_id": self.runtime.runtime_id,
+            "worker_input_adapter_ref": str(self.runtime.worker_input_adapter_ref),
+            "topology": self.runtime.topology.value,
+            "worker_count": self.runtime.worker_count,
+            "framework_parallelism": self.runtime.framework_parallelism,
+            "result_reducer_ref": (
+                str(self.runtime.result_reducer_ref)
+                if self.runtime.result_reducer_ref is not None
+                else None
+            ),
+            "num_cpus": self.runtime.num_cpus,
+            "num_gpus": self.runtime.num_gpus,
+            "custom_resources": dict(sorted(self.runtime.custom_resources.items())),
+            "max_retries": self.runtime.max_retries,
+            "execution_profile": (
+                self.runtime.execution_profile.value
+                if self.runtime.execution_profile is not None
+                else None
+            ),
+            "strategy": (
+                self.runtime.strategy.value
+                if self.runtime.strategy is not None
+                else None
+            ),
+            "distribution_digest": self.runtime.distribution_digest,
+            "resume_from": self.runtime.resume_from,
+        }
+        if self.runtime.memory_bytes is not None:
+            runtime_payload["memory_bytes"] = self.runtime.memory_bytes
         payload: dict[str, Any] = {
             "format_version": self.format_version,
             "operation": self.operation.value,
@@ -1737,34 +1776,7 @@ class ResolvedAlgorithmPlan:
                 "python": self.environment.python,
                 "dependencies": list(self.environment.dependencies),
             },
-            "runtime": {
-                "runtime_id": self.runtime.runtime_id,
-                "worker_input_adapter_ref": str(self.runtime.worker_input_adapter_ref),
-                "topology": self.runtime.topology.value,
-                "worker_count": self.runtime.worker_count,
-                "framework_parallelism": self.runtime.framework_parallelism,
-                "result_reducer_ref": (
-                    str(self.runtime.result_reducer_ref)
-                    if self.runtime.result_reducer_ref is not None
-                    else None
-                ),
-                "num_cpus": self.runtime.num_cpus,
-                "num_gpus": self.runtime.num_gpus,
-                "custom_resources": dict(sorted(self.runtime.custom_resources.items())),
-                "max_retries": self.runtime.max_retries,
-                "execution_profile": (
-                    self.runtime.execution_profile.value
-                    if self.runtime.execution_profile is not None
-                    else None
-                ),
-                "strategy": (
-                    self.runtime.strategy.value
-                    if self.runtime.strategy is not None
-                    else None
-                ),
-                "distribution_digest": self.runtime.distribution_digest,
-                "resume_from": self.runtime.resume_from,
-            },
+            "runtime": runtime_payload,
             "distribution_spec": (
                 self.distribution_spec.to_dict()
                 if self.distribution_spec is not None

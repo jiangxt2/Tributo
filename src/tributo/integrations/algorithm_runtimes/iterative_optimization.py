@@ -509,6 +509,7 @@ def _tree_reduce(
                     _merge_updates.options(
                         num_cpus=plan.runtime.num_cpus,
                         num_gpus=plan.runtime.num_gpus,
+                        memory=plan.runtime.memory_bytes,
                         resources=dict(plan.runtime.custom_resources),
                         max_retries=policy.max_retries,
                         retry_exceptions=True,
@@ -563,6 +564,7 @@ class RayIterativeOptimizationRuntime:
                     _compute_update.options(
                         num_cpus=envelope.plan.runtime.num_cpus,
                         num_gpus=envelope.plan.runtime.num_gpus,
+                        memory=envelope.plan.runtime.memory_bytes,
                         resources=dict(envelope.plan.runtime.custom_resources),
                         scheduling_strategy="SPREAD",
                         max_retries=policy.max_retries,

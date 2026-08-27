@@ -158,6 +158,13 @@ def _validated_framework_evidence(
     if any(
         worker.resources.num_cpus < resources_per_worker.num_cpus
         or worker.resources.num_gpus < resources_per_worker.num_gpus
+        or (
+            resources_per_worker.memory_bytes is not None
+            and (
+                worker.resources.memory_bytes is None
+                or worker.resources.memory_bytes < resources_per_worker.memory_bytes
+            )
+        )
         or any(
             worker.resources.custom.get(name, 0.0) < amount
             for name, amount in resources_per_worker.custom.items()
@@ -490,6 +497,7 @@ class FrameworkNativeRuntime:
             resources = WorkerResources(
                 num_cpus=plan.runtime.num_cpus,
                 num_gpus=plan.runtime.num_gpus,
+                memory_bytes=plan.runtime.memory_bytes,
                 custom=plan.runtime.custom_resources,
             )
             distribution = plan.distribution_spec

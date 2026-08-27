@@ -1,0 +1,23 @@
+ARG BASE_IMAGE=tributo-it-runtime:data-ingestion-7a93c219a137c0e7f74e5650
+
+FROM ${BASE_IMAGE}
+
+USER root
+
+COPY --from=tributo-wheelhouse / /opt/tributo-kuberay/tributo-wheelhouse/
+COPY --from=boosting-wheelhouse / /opt/tributo-kuberay/boosting-wheelhouse/
+COPY --chown=1000:100 src /opt/tributo-kuberay/src
+COPY --from=xgboost-data kuberay_xgboost_data_parts/ /opt/tributo-kuberay/xgboost-data-parts/
+
+RUN /opt/tributo/.venv/bin/python -m pip install --no-deps \
+    /opt/tributo-kuberay/tributo-wheelhouse/*.whl \
+    /opt/tributo-kuberay/boosting-wheelhouse/*.whl
+
+RUN /opt/tributo/.venv/bin/python -c \
+    "import onnxmltools, xgboost, tributo_algorithms_boosting; assert xgboost.__version__; assert onnxmltools.__version__"
+
+ENV PYTHONPATH="/opt/tributo-kuberay/src"
+
+WORKDIR /workspace
+
+USER 1000:100
