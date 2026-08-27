@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import importlib.metadata
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
 import pyarrow as pa
+from pydantic import ValidationError
 
 from tributo.data.bindings._shared import canonical_engine_schema, residual_decisions
 from tributo.data.bindings._sql_shared import require_sql_table, resolve_sql_target
@@ -22,12 +24,14 @@ from tributo.data.ingestion import (
 )
 from tributo.data.refs import schema_fingerprint
 from tributo.data.scan_plan import SqlScan
+from tributo.data.source_config import RayReadTaskOptions
 from tributo.data.transform_compiler import (
     CompiledPipeline,
     ConcreteTransformCompiler,
     TransformBackend,
     apply_pipeline_to_ray_ds,
 )
+from tributo.exceptions import JobConfigurationError
 
 
 @dataclass(frozen=True)
@@ -36,6 +40,48 @@ class _RayDorisNativePlan:
     input_schema: pa.Schema
     transforms: CompiledPipeline
     transport_id: str
+
+
+def _validated_doris_read_options(
+    runtime_options: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Return only the validated Doris-specific reader arguments."""
+    tablet_size = runtime_options.get("tablet_size")
+    if tablet_size is not None and (type(tablet_size) is not int or tablet_size <= 0):
+        raise JobConfigurationError(
+            "Doris option 'tablet_size' must be a strict positive integer"
+        )
+
+    query_plan_policy = runtime_options.get("on_query_plan_error")
+    if query_plan_policy is not None and (
+        not isinstance(query_plan_policy, str)
+        or query_plan_policy not in {"single_task", "error"}
+    ):
+        raise JobConfigurationError(
+            "Doris option 'on_query_plan_error' must be 'single_task' or 'error'"
+        )
+
+    raw_remote_args = runtime_options.get("ray_remote_args")
+    if raw_remote_args is None:
+        ray_remote_args = None
+    else:
+        try:
+            ray_remote_args = RayReadTaskOptions.model_validate(raw_remote_args)
+        except ValidationError:
+            raise JobConfigurationError(
+                "Doris option 'ray_remote_args' contains unsupported Ray task options"
+            ) from None
+
+    validated: dict[str, Any] = {}
+    if tablet_size is not None:
+        validated["tablet_size"] = tablet_size
+    if query_plan_policy is not None:
+        validated["on_query_plan_error"] = query_plan_policy
+    if ray_remote_args is not None:
+        validated["ray_remote_args"] = ray_remote_args.model_dump(
+            mode="json", exclude_none=True
+        )
+    return validated
 
 
 class RayDorisBinding:
@@ -53,6 +99,7 @@ class RayDorisBinding:
 
     @staticmethod
     def _build(request: BindingCompileRequest, plan: SqlScan) -> _RayDorisNativePlan:
+        validated_read_options = _validated_doris_read_options(request.runtime_options)
         from ray_doris import read_doris
 
         target = resolve_sql_target(plan, request.runtime_options)
@@ -72,6 +119,7 @@ class RayDorisBinding:
             options["http_port"] = int(http_port)
         if flight_port is not None:
             options["flight_port"] = int(flight_port)
+        options.update(validated_read_options)
         if request.read_options.batch_size is not None:
             options["batch_size"] = request.read_options.batch_size
         if request.read_options.concurrency is not None:

@@ -539,6 +539,13 @@ def test_ray_doris_binding_delegates_to_external_connector(
                 "user": "reader",
                 "password": "secret",
                 "protocol": "mysql",
+                "tablet_size": 128,
+                "on_query_plan_error": "error",
+                "ray_remote_args": {
+                    "num_cpus": 1.5,
+                    "scheduling_strategy": "SPREAD",
+                    "max_retries": 3,
+                },
             },
             read_options=ReadOptions(target_parallelism=2, batch_size=128),
         )
@@ -548,8 +555,38 @@ def test_ray_doris_binding_delegates_to_external_connector(
     assert calls[0]["table"] == "analytics.events"
     assert calls[0]["override_num_blocks"] == 6
     assert calls[0]["batch_size"] == 128
+    assert calls[0]["tablet_size"] == 128
+    assert calls[0]["on_query_plan_error"] == "error"
+    assert calls[0]["ray_remote_args"] == {
+        "num_cpus": 1.5,
+        "scheduling_strategy": "SPREAD",
+        "max_retries": 3,
+    }
     assert result.reader_api == "ray_doris.read_doris"
     assert result.transport_id == "mysql"
+
+
+def test_ray_doris_binding_rejects_unvalidated_ray_remote_args(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = ModuleType("ray_doris")
+    module.read_doris = lambda **kwargs: _RayDataset()
+    monkeypatch.setitem(sys.modules, "ray_doris", module)
+    with pytest.raises(BindingStageError, match="invalid_configuration"):
+        RayDorisBinding().compile(
+            _request(
+                _sql_plan("doris"),
+                runtime_options={
+                    "host": "doris.example",
+                    "port": 9030,
+                    "database": "analytics",
+                    "user": "reader",
+                    "password": "secret",
+                    "protocol": "mysql",
+                    "ray_remote_args": {"resources": {"olap_worker": 1}},
+                },
+            )
+        )
 
 
 @pytest.mark.parametrize(

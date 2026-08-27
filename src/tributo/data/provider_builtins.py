@@ -38,6 +38,7 @@ from tributo.data.source_config import (
     IcebergSourceConfig,
     ParquetSourceConfig,
     ProviderSourceConfig,
+    RayReadTaskOptions,
     SqlPartitioning,
     SqlSourceConfig,
 )
@@ -82,6 +83,9 @@ _SQL_OPTION_KEYS: frozenset[str] = frozenset(
         "columns",
         "partitioning",
         "protocol",
+        "tablet_size",
+        "on_query_plan_error",
+        "ray_remote_args",
     }
 )
 _LANCE_OPTION_KEYS: frozenset[str] = frozenset(
@@ -401,6 +405,9 @@ _SQL_OPTION_TYPES: dict[str, type] = {
     "password": str,
     "partitioning": dict,
     "protocol": str,
+    "tablet_size": int,
+    "on_query_plan_error": str,
+    "ray_remote_args": dict,
 }
 _LANCE_OPTION_TYPES: dict[str, type] = {
     "columns": list,
@@ -428,6 +435,51 @@ def _check_option_keys(
         raise JobConfigurationError(
             f"{provider_id}: unknown option(s) {unknown}; supported: {sorted(allowed)}"
         )
+
+
+_DORIS_READ_OPTION_KEYS: frozenset[str] = frozenset(
+    {"tablet_size", "on_query_plan_error", "ray_remote_args"}
+)
+
+
+def _validate_doris_read_options(
+    provider_id: str,
+    dialect: str,
+    options: Mapping[str, Any],
+) -> RayReadTaskOptions | None:
+    """Validate Doris-only task and query-plan options for both source shapes."""
+    configured = sorted(
+        key for key in _DORIS_READ_OPTION_KEYS if options.get(key) is not None
+    )
+    if dialect != "doris" and configured:
+        raise JobConfigurationError(
+            f"{provider_id}: Doris-only option(s) {configured} are not valid "
+            f"for {dialect} sources"
+        )
+    if dialect != "doris":
+        return None
+
+    tablet_size = options.get("tablet_size")
+    if tablet_size is not None and (type(tablet_size) is not int or tablet_size <= 0):
+        raise JobConfigurationError(
+            f"{provider_id}: option 'tablet_size' must be a strict positive integer"
+        )
+    policy = options.get("on_query_plan_error")
+    if policy is not None and policy not in {"single_task", "error"}:
+        raise JobConfigurationError(
+            f"{provider_id}: option 'on_query_plan_error' must be "
+            "'single_task' or 'error'"
+        )
+    raw_remote_args = options.get("ray_remote_args")
+    if raw_remote_args is None:
+        return None
+    try:
+        return RayReadTaskOptions.model_validate(raw_remote_args)
+    except ValidationError:
+        raise JobConfigurationError(
+            f"{provider_id}: option 'ray_remote_args' does not match the "
+            "supported Doris Ray task options"
+        ) from None
 
 
 # Sensitive query parameter names/prefixes live in ``refs`` (shared with the
@@ -956,6 +1008,11 @@ class _SqlProvider(DataSourceProvider):
                 self.provider_id, source.options, self._allowed_option_keys
             )
             _require_option_types(self.provider_id, source.options, _SQL_OPTION_TYPES)
+            ray_read_options = _validate_doris_read_options(
+                self.provider_id,
+                self._dialect(),
+                source.options,
+            )
             options = dict(source.options)
             sql = options.pop("sql", None)
             table = options.pop("table", None)
@@ -963,6 +1020,9 @@ class _SqlProvider(DataSourceProvider):
             columns = options.pop("columns", None)
             partitioning_raw = options.pop("partitioning", None)
             protocol = options.pop("protocol", None)
+            tablet_size = options.pop("tablet_size", None)
+            on_query_plan_error = options.pop("on_query_plan_error", None)
+            options.pop("ray_remote_args", None)
             partitioning = (
                 SqlPartitioning.model_validate(partitioning_raw)
                 if partitioning_raw is not None
@@ -1067,6 +1127,13 @@ class _SqlProvider(DataSourceProvider):
                 runtime["protocol"] = protocol
             if params is not None:
                 runtime["params"] = params
+            runtime["tablet_size"] = tablet_size
+            runtime["on_query_plan_error"] = on_query_plan_error
+            runtime["ray_remote_args"] = (
+                ray_read_options.model_dump(mode="json", exclude_none=True)
+                if ray_read_options is not None
+                else None
+            )
             return ResolvedSource(
                 provider_id=self.provider_id,
                 canonical_uri=self._canonical_uri(runtime=runtime),
@@ -1108,6 +1175,13 @@ class _SqlProvider(DataSourceProvider):
                 "table": source.table,
                 "protocol": source.protocol,
                 "params": source.params,
+                "tablet_size": source.tablet_size,
+                "on_query_plan_error": source.on_query_plan_error,
+                "ray_remote_args": (
+                    source.ray_remote_args.model_dump(mode="json", exclude_none=True)
+                    if source.ray_remote_args is not None
+                    else None
+                ),
             }
             return ResolvedSource(
                 provider_id=self.provider_id,

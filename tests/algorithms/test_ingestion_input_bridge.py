@@ -37,6 +37,7 @@ from tributo.data import (
     IngestionGateway,
     IngestionOpenResult,
     IngestionRequest,
+    IngestionRuntimeContext,
     RayDataHandle,
 )
 from tributo.integrations.algorithm_inputs import (
@@ -98,6 +99,17 @@ def test_request_ref_rejects_non_identity_values() -> None:
     )
     with pytest.raises(AlgorithmInputError, match="request key"):
         IngestionRequestRef("https://user:secret@example.test/data")
+
+
+def test_invocation_keeps_runtime_context_as_second_positional_argument() -> None:
+    invocation = ingestion_invocation()
+    context = IngestionRuntimeContext()
+
+    restored = type(invocation)(invocation.request, context)
+
+    assert restored.request == invocation.request
+    assert restored.runtime_context is context
+    assert restored.handle_adapter_id is None
 
 
 def test_planned_descriptor_contains_gateway_facts_but_not_request_body() -> None:
@@ -275,6 +287,104 @@ def test_daft_handle_is_materialized_without_implicit_ray_conversion() -> None:
     lease.close()
 
 
+def test_explicit_daft_to_ray_adapter_produces_ray_descriptor_and_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        daft,
+        "get_or_create_runner",
+        lambda: SimpleNamespace(name="ray"),
+    )
+    gateway = StubIngestionGateway(_COLUMNS)
+    resolver = _resolver(gateway)
+    binding = _binding()
+    invocation = ingestion_invocation(
+        engine="daft",
+        handle_adapter_id="tributo.daft_to_ray",
+    )
+
+    descriptor = resolver.describe(
+        binding,
+        InputResolutionContext(values={binding.reference: invocation}),
+    )
+
+    assert descriptor.engine_id == "tributo.ray_data"
+    assert descriptor.view_kind == "ray_data"
+    assert "shardable" in descriptor.input_capabilities
+    assert descriptor.resolver_payload["handle_adapter_id"] == "tributo.daft_to_ray"
+    assert (
+        descriptor.resolver_payload["source_ingestion_descriptor"]["handle_kind"]
+        == "daft_dataframe"
+    )
+
+    lease = resolver.open(
+        binding,
+        descriptor,
+        InputExecutionContext({binding.reference: invocation}),
+    )
+    try:
+        assert isinstance(lease.handle, RayDataHandle)
+        assert gateway.last_daft_frame is not None
+        assert gateway.last_daft_frame.ray_conversion_calls == 1
+        conversion = cast(dict[str, object], lease.provenance["conversion_receipt"])
+        assert conversion["adapter_id"] == "tributo.daft_to_ray"
+        assert conversion["full_driver_materialization"] is False
+        assert lease.provenance["engine_id"] == "tributo.daft"
+        assert lease.provenance["handle_kind"] == "ray_data"
+    finally:
+        lease.close()
+
+
+def test_explicit_daft_to_ray_adapter_rejects_native_runner_and_cancels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        daft,
+        "get_or_create_runner",
+        lambda: SimpleNamespace(name="native"),
+    )
+    gateway = StubIngestionGateway(_COLUMNS)
+    resolver = _resolver(gateway)
+    binding = _binding()
+    invocation = ingestion_invocation(
+        engine="daft",
+        handle_adapter_id="tributo.daft_to_ray",
+    )
+    descriptor = resolver.describe(
+        binding,
+        InputResolutionContext(values={binding.reference: invocation}),
+    )
+
+    with pytest.raises(AlgorithmInputError, match="adaptation failed"):
+        resolver.open(
+            binding,
+            descriptor,
+            InputExecutionContext({binding.reference: invocation}),
+        )
+
+    assert gateway.last_daft_frame is not None
+    assert gateway.last_daft_frame.ray_conversion_calls == 0
+    assert gateway.lifecycle_events == ["cancelled"]
+
+
+def test_daft_to_ray_adapter_is_rejected_for_ray_source_during_planning() -> None:
+    gateway = StubIngestionGateway(_COLUMNS)
+    resolver = _resolver(gateway)
+    binding = _binding()
+    invocation = ingestion_invocation(
+        engine="ray",
+        handle_adapter_id="tributo.daft_to_ray",
+    )
+
+    with pytest.raises(AlgorithmInputError, match="requires a DaftDataFrameHandle"):
+        resolver.describe(
+            binding,
+            InputResolutionContext(values={binding.reference: invocation}),
+        )
+
+    assert gateway.open_calls == 0
+
+
 def test_real_daft_handle_uses_public_worker_materialization_api() -> None:
     binding = _binding()
     prepared = prepare_ingestion_input(
@@ -338,6 +448,7 @@ def _data_parallel_plan(
     gateway: StubIngestionGateway,
     *,
     engine: Literal["ray", "daft"],
+    handle_adapter_id: Literal["tributo.daft_to_ray"] | None = None,
 ) -> tuple[
     IngestionInputResolver,
     AlgorithmRequest,
@@ -362,7 +473,10 @@ def _data_parallel_plan(
         request_for("external_function", AlgorithmOperation.FIT),
         input_binding=_binding(),
     )
-    invocation = ingestion_invocation(engine=engine)
+    invocation = ingestion_invocation(
+        engine=engine,
+        handle_adapter_id=handle_adapter_id,
+    )
     resolution_context = InputResolutionContext(
         values={request.input_binding.reference: invocation}
     )
@@ -450,3 +564,41 @@ def test_data_parallel_daft_input_is_rejected_before_gateway_open() -> None:
         _data_parallel_plan(gateway, engine="daft")
 
     assert gateway.open_calls == 0
+
+
+def test_explicit_daft_to_ray_adapter_supports_data_parallel_sharding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        daft,
+        "get_or_create_runner",
+        lambda: SimpleNamespace(name="ray"),
+    )
+    gateway = StubIngestionGateway(_COLUMNS)
+    resolver, request, plan, execution_context = _data_parallel_plan(
+        gateway,
+        engine="daft",
+        handle_adapter_id="tributo.daft_to_ray",
+    )
+
+    lease = resolver.open(
+        request.input_binding,
+        plan.input_descriptor,
+        execution_context,
+    )
+    try:
+        runtime_binding = IngestionInputRuntimeAdapter().bind(lease, plan)
+        try:
+            assert isinstance(lease.handle, RayDataHandle)
+            assert gateway.last_daft_frame is not None
+            assert gateway.last_daft_frame.ray_conversion_calls == 1
+            assert gateway.last_daft_frame.to_ray_dataset_calls == 1
+            assert gateway.last_daft_frame.ray_dataset is not None
+            assert gateway.last_daft_frame.ray_dataset.streaming_split_calls == [
+                (2, False)
+            ]
+            assert len(runtime_binding.payloads) == 2
+        finally:
+            runtime_binding.close()
+    finally:
+        lease.close()
