@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 _SqlDialect = Literal["clickhouse", "doris", "postgresql", "mysql"]
 
 
-@PublicAPI(stability="alpha")
+@PublicAPI(stability="beta")
 class RayReadTaskOptions(StrictConfigModel):
     """Validated Ray task options supported by the Doris read Binding.
 
