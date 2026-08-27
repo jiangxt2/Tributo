@@ -92,16 +92,16 @@ def test_flavor_load_failure_is_not_misclassified_as_unsupported() -> None:
 
 def test_first_party_flavor_metadata_reuses_capability_matrix() -> None:
     from tributo.integrations.flavors.onnx_runtime import ONNXRuntimeFlavor
-    from tributo.integrations.flavors.xgboost_native import XGBoostNativeFlavor
 
     entries = {entry.flavor_id: entry for entry in FLAVOR_SUPPORT_MATRIX}
-    for flavor in (ONNXRuntimeFlavor, XGBoostNativeFlavor):
-        entry = entries[flavor.flavor_id]
-        assert flavor.api_version == 1
-        assert entry.loader == f"{flavor.__module__}:{flavor.__qualname__}"
-        assert set(flavor.required_dependencies).issubset(entry.dependencies)
-        assert entry.batch_inference_capable is True
-        assert entry.online_serveable is True
+    entry = entries[ONNXRuntimeFlavor.flavor_id]
+    assert ONNXRuntimeFlavor.api_version == 1
+    assert entry.loader == (
+        f"{ONNXRuntimeFlavor.__module__}:{ONNXRuntimeFlavor.__qualname__}"
+    )
+    assert set(ONNXRuntimeFlavor.required_dependencies).issubset(entry.dependencies)
+    assert entry.batch_inference_capable is True
+    assert entry.online_serveable is True
 
 
 def test_plugin_capabilities_are_the_execution_source_of_truth() -> None:
@@ -109,13 +109,7 @@ def test_plugin_capabilities_are_the_execution_source_of_truth() -> None:
 
     capabilities = get_default_capability_registry()
     onnx = capabilities.for_flavor("onnx-runtime-v1")
-    native = capabilities.for_flavor("xgboost-native-v1")
 
     assert onnx.operations == ("prediction.batch", "prediction.online")
     assert onnx.conditional_operations == ()
     assert "attribution.tree-shap" not in onnx.operations
-    assert native.operations == (
-        "prediction.batch",
-        "prediction.online",
-    )
-    assert native.conditional_operations == ("attribution.tree-shap",)

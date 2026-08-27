@@ -21,7 +21,14 @@ from tributo.algorithms.api import (
     ResolvedAlgorithmPlan,
 )
 from tributo.algorithms.core.worker import _load_reference, _validate_module_digest
-from tributo.algorithms.spi import CollectiveAlgorithm, TorchTrainingRecipe
+from tributo.algorithms.spi import (
+    CollectiveAlgorithm,
+    MetricPlan,
+    OptimizationPlan,
+    TorchTrainingRecipe,
+    TrainingRecipeV2,
+    TrainingStepResult,
+)
 from tributo.util.annotations import DeveloperAPI
 
 _TRAINER_TYPE = "torch_recipe"
@@ -109,7 +116,7 @@ def _mapping(value: object, name: str) -> Mapping[str, Any]:
 
 def _recipe_type(
     reference: object, code_digest: str | None
-) -> type[TorchTrainingRecipe]:
+) -> type[TorchTrainingRecipe] | type[TrainingRecipeV2]:
     from tributo.algorithms.api import QualifiedReference
 
     if not isinstance(reference, QualifiedReference):
@@ -117,20 +124,24 @@ def _recipe_type(
     _validate_module_digest(reference, code_digest)
     implementation = _load_reference(reference)
     if not isinstance(implementation, type) or not issubclass(
-        implementation, TorchTrainingRecipe
+        implementation, (TorchTrainingRecipe, TrainingRecipeV2)
     ):
         raise AlgorithmConfigurationError(
-            "Torch recipe implementation must subclass TorchTrainingRecipe"
+            "Torch recipe implementation must subclass TorchTrainingRecipe or "
+            "TrainingRecipeV2"
         )
-    if getattr(implementation, "api_version", None) != 1:
-        raise AlgorithmConfigurationError("Torch recipe api_version must be 1")
+    expected_version = 2 if issubclass(implementation, TrainingRecipeV2) else 1
+    if getattr(implementation, "api_version", None) != expected_version:
+        raise AlgorithmConfigurationError(
+            f"Torch recipe api_version must be {expected_version}"
+        )
     return implementation
 
 
 def _new_recipe(
     reference: object,
     code_digest: str | None,
-) -> TorchTrainingRecipe:
+) -> TorchTrainingRecipe | TrainingRecipeV2:
     recipe_cls = _recipe_type(reference, code_digest)
     try:
         return recipe_cls()
@@ -146,7 +157,7 @@ class _TorchRecipeCollectiveAlgorithm(CollectiveAlgorithm):
     def __init__(
         self,
         plan: ResolvedAlgorithmPlan,
-        recipe: TorchTrainingRecipe,
+        recipe: TorchTrainingRecipe | TrainingRecipeV2,
     ) -> None:
         self._plan = plan
         self._recipe = recipe
@@ -201,10 +212,27 @@ class _TorchRecipeCollectiveAlgorithm(CollectiveAlgorithm):
 
     def build_model(self, config: Mapping[str, Any]) -> object:
         """Build a model through the user recipe."""
+        if isinstance(self._recipe, TrainingRecipeV2):
+            modules = self._recipe.build_modules(config)
+            if not isinstance(modules, Mapping) or "model" not in modules:
+                raise AlgorithmConfigurationError(
+                    "TrainingRecipeV2 build_modules must provide model"
+                )
+            return modules["model"]
         return self._recipe.model_factory(_mapping(config.get("model", {}), "model"))
 
     def build_optimizer(self, model: object, config: Mapping[str, Any]) -> object:
         """Build an optimizer through the user recipe."""
+        if isinstance(self._recipe, TrainingRecipeV2):
+            plan = self._recipe.optimization_plan(
+                model,
+                _mapping(config.get("optimizer", {}), "optimizer"),
+            )
+            if not isinstance(plan, OptimizationPlan):
+                raise AlgorithmConfigurationError(
+                    "TrainingRecipeV2 optimization_plan must return OptimizationPlan"
+                )
+            return plan.optimizer
         return self._recipe.optimizer_factory(
             model,
             _mapping(config.get("optimizer", {}), "optimizer"),
@@ -212,6 +240,13 @@ class _TorchRecipeCollectiveAlgorithm(CollectiveAlgorithm):
 
     def build_loss(self, config: Mapping[str, Any]) -> object:
         """Build a loss through the user recipe."""
+        if isinstance(self._recipe, TrainingRecipeV2):
+            modules = self._recipe.build_modules(config)
+            if not isinstance(modules, Mapping) or "loss" not in modules:
+                raise AlgorithmConfigurationError(
+                    "TrainingRecipeV2 build_modules must provide loss"
+                )
+            return modules["loss"]
         return self._recipe.loss_factory(_mapping(config.get("loss", {}), "loss"))
 
     def checkpoint_state(self, model: object, optimizer: object) -> Mapping[str, Any]:
@@ -247,18 +282,20 @@ class _TorchRecipeCollectiveAlgorithm(CollectiveAlgorithm):
         )
         worker_config["_tributo_algorithm"] = self._plan.resolution.algorithm
         worker_config["_tributo_input_binding_digest"] = (
-            self._plan.input_descriptor.binding_digest
+            self._plan.primary_input_descriptor.binding_digest
         )
         worker_config["_tributo_distribution_spec_digest"] = (
             self._plan.runtime.distribution_digest
         )
         worker_config["_tributo_resume_from"] = self._plan.runtime.resume_from
         worker_config["_tributo_feature_names"] = list(
-            self._plan.input_binding.feature_names
+            self._plan.primary_input_binding.feature_names
         )
-        worker_config["_tributo_label_name"] = self._plan.input_binding.label_name
+        worker_config["_tributo_label_name"] = (
+            self._plan.primary_input_binding.label_name
+        )
         worker_config["_tributo_weight_name"] = (
-            self._plan.input_binding.sample_weight_name
+            self._plan.primary_input_binding.sample_weight_name
         )
         torch_recipe_train_loop_per_worker(worker_config, self._recipe)
 
@@ -329,14 +366,36 @@ def _dense_batch(
 
 
 def _prepare_batch(
-    recipe: TorchTrainingRecipe,
+    recipe: TorchTrainingRecipe | TrainingRecipeV2,
     batch: object,
     *,
     feature_names: tuple[str, ...],
-    label_name: str,
+    label_name: str | None,
     weight_name: str | None,
     config: Mapping[str, Any],
 ) -> tuple[Any, Any, Any | None, int]:
+    if isinstance(recipe, TrainingRecipeV2):
+        prepared = recipe.batch_adapter(
+            batch,
+            feature_names=feature_names,
+            label_name=label_name,
+            weight_name=weight_name,
+            config=config,
+        )
+        if not isinstance(prepared, tuple) or len(prepared) != 4:
+            raise AlgorithmConfigurationError(
+                "TrainingRecipeV2 batch_adapter must return four values"
+            )
+        features, targets, weights, rows = prepared
+        if not isinstance(rows, int) or isinstance(rows, bool) or rows < 0:
+            raise AlgorithmConfigurationError(
+                "TrainingRecipeV2 batch_adapter returned an invalid row count"
+            )
+        return features, targets, weights, rows
+    if label_name is None:
+        raise AlgorithmConfigurationError(
+            "TorchTrainingRecipe requires one label column"
+        )
     if not isinstance(recipe, _FirstPartyTorchRecipeAdapter):
         return _dense_batch(
             batch,
@@ -519,7 +578,7 @@ def _checkpoint_contract(
 
 
 def _recipe_checkpoint_contract(
-    recipe: TorchTrainingRecipe,
+    recipe: TorchTrainingRecipe | TrainingRecipeV2,
     *,
     config: Mapping[str, Any],
     feature_count: int,
@@ -551,7 +610,7 @@ def _recipe_checkpoint_contract(
 
 
 def _write_recipe_checkpoint_artifacts(
-    recipe: TorchTrainingRecipe,
+    recipe: TorchTrainingRecipe | TrainingRecipeV2,
     checkpoint_dir: Path,
 ) -> tuple[str, ...]:
     if not isinstance(recipe, _FirstPartyTorchRecipeAdapter):
@@ -590,15 +649,17 @@ def _evaluate_dataset(
     data: object,
     *,
     split: str,
-    recipe: TorchTrainingRecipe,
+    recipe: TorchTrainingRecipe | TrainingRecipeV2,
     model: object,
     loss_fn: object,
     metrics: Mapping[str, Any],
     reducers: Mapping[str, MetricReduction],
     loop: _LoopConfig,
     feature_names: tuple[str, ...],
-    label_name: str,
+    label_name: str | None,
     weight_name: str | None,
+    modules: Mapping[str, object],
+    config: Mapping[str, Any],
 ) -> tuple[dict[str, float], int]:
     import torch
 
@@ -647,7 +708,7 @@ def _evaluate_dataset(
                 feature_names=feature_names,
                 label_name=label_name,
                 weight_name=weight_name,
-                config={},
+                config=config,
             )
             rows = prepared[3]
         (global_rows,) = all_reduce_values((float(rows),))
@@ -656,7 +717,23 @@ def _evaluate_dataset(
         if prepared is not None:
             features, targets, weights, rows = prepared
             with torch.no_grad():
-                predictions = recipe.forward(unwrapped, features)
+                if isinstance(recipe, TrainingRecipeV2):
+                    step = recipe.validation_step(
+                        {**modules, "model": unwrapped},
+                        features,
+                        targets,
+                        weights,
+                        config,
+                    )
+                    if not isinstance(step, TrainingStepResult):
+                        raise AlgorithmConfigurationError(
+                            "TrainingRecipeV2 validation_step must return "
+                            "TrainingStepResult"
+                        )
+                    predictions = step.predictions
+                    loss = step.loss
+                else:
+                    predictions = recipe.forward(unwrapped, features)
                 if not isinstance(predictions, torch.Tensor):
                     raise AlgorithmConfigurationError(
                         "Torch recipe forward must return one Tensor"
@@ -664,7 +741,8 @@ def _evaluate_dataset(
                 aligned_targets = targets
                 if predictions.numel() == targets.numel():
                     aligned_targets = targets.reshape_as(predictions)
-                loss = recipe.compute_loss(loss_fn, predictions, aligned_targets)
+                if not isinstance(recipe, TrainingRecipeV2):
+                    loss = recipe.compute_loss(loss_fn, predictions, aligned_targets)
             if not isinstance(loss, torch.Tensor) or loss.ndim != 0:
                 raise AlgorithmConfigurationError(
                     "Torch recipe evaluation loss must return one scalar batch mean"
@@ -700,7 +778,7 @@ def _evaluate_dataset(
 @DeveloperAPI
 def torch_recipe_train_loop_per_worker(
     config: Mapping[str, Any],
-    recipe: TorchTrainingRecipe,
+    recipe: TorchTrainingRecipe | TrainingRecipeV2,
 ) -> None:
     """Execute one dense-tabular recipe with Ray Data and replicated DDP."""
     import numpy as np
@@ -732,9 +810,17 @@ def torch_recipe_train_loop_per_worker(
     feature_names = tuple(config.get("_tributo_feature_names") or ())
     label_name = config.get("_tributo_label_name")
     weight_name = config.get("_tributo_weight_name")
-    if not feature_names or not isinstance(label_name, str) or not label_name:
+    if not feature_names:
+        raise AlgorithmConfigurationError("Torch recipe requires feature columns")
+    if not isinstance(recipe, TrainingRecipeV2) and (
+        not isinstance(label_name, str) or not label_name
+    ):
         raise AlgorithmConfigurationError(
-            "Torch recipe requires feature columns and one label column"
+            "TorchTrainingRecipe requires one label column"
+        )
+    if label_name is not None and (not isinstance(label_name, str) or not label_name):
+        raise AlgorithmConfigurationError(
+            "TrainingRecipeV2 label column must be non-empty when provided"
         )
     if weight_name is not None and not isinstance(weight_name, str):
         raise AlgorithmConfigurationError("sample weight column must be a string")
@@ -751,7 +837,47 @@ def torch_recipe_train_loop_per_worker(
     random.seed(loop.seed + rank)
     np.random.seed(loop.seed + rank)
 
-    model: Any = recipe.model_factory(_mapping(config.get("model", {}), "model"))
+    modules: dict[str, object]
+    optimization_plan: OptimizationPlan | None = None
+    if isinstance(recipe, TrainingRecipeV2):
+        built_modules = recipe.build_modules(config)
+        if (
+            not isinstance(built_modules, Mapping)
+            or "model" not in built_modules
+            or "loss" not in built_modules
+        ):
+            raise AlgorithmConfigurationError(
+                "TrainingRecipeV2 build_modules must provide model and loss"
+            )
+        modules = dict(built_modules)
+        model: Any = modules["model"]
+        loss_fn = modules["loss"]
+        optimization_plan = recipe.optimization_plan(
+            model,
+            _mapping(config.get("optimizer", {}), "optimizer"),
+        )
+        if not isinstance(optimization_plan, OptimizationPlan):
+            raise AlgorithmConfigurationError(
+                "TrainingRecipeV2 optimization_plan must return OptimizationPlan"
+            )
+        optimizer: Any = optimization_plan.optimizer
+        metric_plan = recipe.metric_plan(_mapping(config.get("metrics", {}), "metrics"))
+        if not isinstance(metric_plan, MetricPlan):
+            raise AlgorithmConfigurationError(
+                "TrainingRecipeV2 metric_plan must return MetricPlan"
+            )
+        metrics = metric_plan.factories
+    else:
+        model = recipe.model_factory(_mapping(config.get("model", {}), "model"))
+        loss_fn = recipe.loss_factory(_mapping(config.get("loss", {}), "loss"))
+        optimizer = recipe.optimizer_factory(
+            model,
+            _mapping(config.get("optimizer", {}), "optimizer"),
+        )
+        metrics = recipe.metric_factories(
+            _mapping(config.get("metrics", {}), "metrics")
+        )
+        modules = {"model": model, "loss": loss_fn}
     if not isinstance(model, torch.nn.Module):
         raise AlgorithmConfigurationError(
             "Torch recipe model_factory must return torch.nn.Module"
@@ -764,21 +890,15 @@ def torch_recipe_train_loop_per_worker(
             "replicated Torch recipes reject BatchNorm until synchronized buffers "
             "have a separate gate"
         )
-    loss_fn = recipe.loss_factory(_mapping(config.get("loss", {}), "loss"))
     if not callable(loss_fn):
         raise AlgorithmConfigurationError(
             "Torch recipe loss_factory must return a callable"
         )
-    optimizer: Any = recipe.optimizer_factory(
-        model,
-        _mapping(config.get("optimizer", {}), "optimizer"),
-    )
     for method in ("zero_grad", "step", "state_dict", "load_state_dict"):
         if not callable(getattr(optimizer, method, None)):
             raise AlgorithmConfigurationError(
                 "Torch recipe optimizer does not implement the optimizer contract"
             )
-    metrics = recipe.metric_factories(_mapping(config.get("metrics", {}), "metrics"))
     if not isinstance(metrics, Mapping) or any(
         not isinstance(name, str) or not name or not callable(metric)
         for name, metric in metrics.items()
@@ -801,6 +921,17 @@ def torch_recipe_train_loop_per_worker(
         raise AlgorithmConfigurationError(
             "Torch recipe metric names must exactly match CollectivePolicy reducers"
         )
+    scheduler: Any = (
+        optimization_plan.scheduler if optimization_plan is not None else None
+    )
+    if scheduler is not None and any(
+        not callable(getattr(scheduler, method, None))
+        for method in ("step", "state_dict", "load_state_dict")
+    ):
+        raise AlgorithmConfigurationError(
+            "TrainingRecipeV2 scheduler does not implement the scheduler contract"
+        )
+    scaler = torch.amp.GradScaler("cuda", enabled=loop.amp)
 
     checkpoint = ray.train.get_checkpoint()
     if checkpoint is None:
@@ -839,6 +970,20 @@ def torch_recipe_train_loop_per_worker(
                     weights_only=True,
                 )
             )
+            scheduler_path = checkpoint_dir / "scheduler.pt"
+            if scheduler is not None:
+                if not scheduler_path.is_file():
+                    raise AlgorithmConfigurationError(
+                        "TrainingRecipeV2 checkpoint is missing scheduler state"
+                    )
+                scheduler.load_state_dict(
+                    torch.load(scheduler_path, map_location="cpu", weights_only=True)
+                )
+            scaler_path = checkpoint_dir / "scaler.pt"
+            if scaler_path.is_file():
+                scaler.load_state_dict(
+                    torch.load(scaler_path, map_location="cpu", weights_only=True)
+                )
             rng = json.loads((checkpoint_dir / "rng_state.json").read_text())
             training_state_path = checkpoint_dir / "training_state.json"
             training_state = (
@@ -859,9 +1004,9 @@ def torch_recipe_train_loop_per_worker(
         patience_counter = int(training_state.get("patience_counter", 0))
 
     model, device = prepare_model(model)
+    modules["model"] = model
     if loop.amp and getattr(device, "type", None) != "cuda":
         raise AlgorithmConfigurationError("Torch recipe AMP requires a CUDA worker")
-    scaler = torch.amp.GradScaler("cuda", enabled=loop.amp)
     train_data = ray.train.get_dataset_shard("train")
     if train_data is None:
         raise AlgorithmConfigurationError("Torch recipe did not receive train data")
@@ -919,7 +1064,9 @@ def torch_recipe_train_loop_per_worker(
         local_rows = 0
         local_batches = 0
         collective_steps = 0
+        local_coverage_counts: dict[str, int] = {}
         model.train()
+        optimizer.zero_grad()
         while True:
             active = current is not None
             prepared = _empty_batch(template) if current is None else current
@@ -927,12 +1074,32 @@ def torch_recipe_train_loop_per_worker(
             (global_rows,) = all_reduce_values((float(rows),))
             if global_rows <= 0:
                 break
-            optimizer.zero_grad()
             with torch.autocast(
                 device_type=device.type,
                 enabled=loop.amp,
             ):
-                predictions = recipe.forward(model, features)
+                if isinstance(recipe, TrainingRecipeV2):
+                    step = recipe.training_step(
+                        modules,
+                        features,
+                        targets,
+                        weights,
+                        config,
+                    )
+                    if not isinstance(step, TrainingStepResult):
+                        raise AlgorithmConfigurationError(
+                            "TrainingRecipeV2 training_step must return "
+                            "TrainingStepResult"
+                        )
+                    predictions = step.predictions
+                    raw_loss = step.loss
+                    if active:
+                        for name, count in step.coverage_counts.items():
+                            local_coverage_counts[name] = (
+                                local_coverage_counts.get(name, 0) + count
+                            )
+                else:
+                    predictions = recipe.forward(model, features)
                 if not isinstance(predictions, torch.Tensor):
                     raise AlgorithmConfigurationError(
                         "Torch recipe forward must return one Tensor"
@@ -942,7 +1109,7 @@ def torch_recipe_train_loop_per_worker(
                 aligned_targets = targets
                 if predictions.numel() == targets.numel():
                     aligned_targets = targets.reshape_as(predictions)
-                if active:
+                if active and not isinstance(recipe, TrainingRecipeV2):
                     raw_loss = recipe.compute_loss(
                         loss_fn,
                         predictions,
@@ -957,13 +1124,39 @@ def torch_recipe_train_loop_per_worker(
                             "Torch recipe loss produced a non-finite value"
                         )
                     local_loss_sum = raw_loss * rows
-                else:
+                elif not active:
                     raw_loss = predictions.sum() * 0.0
                     local_loss_sum = raw_loss
+                else:
+                    if not isinstance(raw_loss, torch.Tensor) or raw_loss.ndim != 0:
+                        raise AlgorithmConfigurationError(
+                            "TrainingRecipeV2 loss must return one scalar batch mean"
+                        )
+                    if not bool(torch.isfinite(raw_loss)):
+                        raise AlgorithmConfigurationError(
+                            "TrainingRecipeV2 loss produced a non-finite value"
+                        )
+                    local_loss_sum = raw_loss * rows
                 backward_loss = local_loss_sum * world_size / global_rows
             scaler.scale(backward_loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
+            accumulation = (
+                optimization_plan.gradient_accumulation_steps
+                if optimization_plan is not None
+                else 1
+            )
+            if (collective_steps + 1) % accumulation == 0:
+                if (
+                    optimization_plan is not None
+                    and optimization_plan.max_gradient_norm is not None
+                ):
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(
+                        model.parameters(),
+                        optimization_plan.max_gradient_norm,
+                    )
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad()
 
             if active:
                 _metric_update(
@@ -999,8 +1192,40 @@ def torch_recipe_train_loop_per_worker(
                 else None
             )
 
+        accumulation = (
+            optimization_plan.gradient_accumulation_steps
+            if optimization_plan is not None
+            else 1
+        )
+        remainder = collective_steps % accumulation
+        if remainder:
+            gradient_scale = accumulation / remainder
+            for parameter in model.parameters():
+                if parameter.grad is not None:
+                    parameter.grad.mul_(gradient_scale)
+            if (
+                optimization_plan is not None
+                and optimization_plan.max_gradient_norm is not None
+            ):
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(
+                    model.parameters(),
+                    optimization_plan.max_gradient_norm,
+                )
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad()
+
         epoch_metrics = {"epoch": epoch + 1, **_reduce_metrics(states, reducers)}
+        if scheduler is not None:
+            scheduler.step()
         input_rows = {"train": local_rows}
+        input_rows.update(
+            {
+                f"coverage.{name}": count
+                for name, count in sorted(local_coverage_counts.items())
+            }
+        )
         for split, data in evaluation_data.items():
             if split == "test" and epoch + 1 != loop.epochs:
                 continue
@@ -1016,6 +1241,8 @@ def torch_recipe_train_loop_per_worker(
                 feature_names=feature_names,
                 label_name=label_name,
                 weight_name=weight_name,
+                modules=modules,
+                config=config,
             )
             epoch_metrics.update(split_metrics)
             input_rows[split] = split_rows
@@ -1074,6 +1301,14 @@ def torch_recipe_train_loop_per_worker(
                     checkpoint_dir / "model.pt",
                 )
                 torch.save(optimizer.state_dict(), checkpoint_dir / "optimizer.pt")
+                torch.save(scaler.state_dict(), checkpoint_dir / "scaler.pt")
+                scheduler_files: tuple[str, ...] = ()
+                if scheduler is not None:
+                    torch.save(
+                        scheduler.state_dict(),
+                        checkpoint_dir / "scheduler.pt",
+                    )
+                    scheduler_files = ("scheduler.pt",)
                 if output_shape is None:
                     raise AlgorithmConfigurationError(
                         "Torch recipe did not observe a model output shape"
@@ -1124,6 +1359,8 @@ def torch_recipe_train_loop_per_worker(
                         "model.pt",
                         "model_config.json",
                         "optimizer.pt",
+                        "scaler.pt",
+                        *scheduler_files,
                         "rng_state.json",
                         "training_state.json",
                         *extra_files,

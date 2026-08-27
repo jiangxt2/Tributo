@@ -146,8 +146,7 @@
         "tests/integrations/test_artifact_model_importer.py",
         "tests/integrations/test_mlflow_model_importer.py",
         "tests/integrations/test_setup_hive_fixture.py",
-        "tests/training/test_catalog_pipeline_integration.py",
-        "tests/training/test_identity_integration.py"
+        "tests/training/test_catalog_pipeline_integration.py"
       ],
       "extras": ["dev"],
       "test_paths": [
@@ -158,8 +157,7 @@
         "tests/integrations/test_artifact_model_importer.py",
         "tests/integrations/test_mlflow_model_importer.py",
         "tests/integrations/test_setup_hive_fixture.py",
-        "tests/training/test_catalog_pipeline_integration.py",
-        "tests/training/test_identity_integration.py"
+        "tests/training/test_catalog_pipeline_integration.py"
       ],
       "trigger_domains": ["code"],
       "trigger_paths": [],
@@ -486,7 +484,6 @@
       "extras": [],
       "test_paths": [
         "scripts/run_inference_it.sh",
-        "tests/integration/test_inference_ray_jobs.py",
         "tests/integration/test_lance_result_sink_ray.py"
       ],
       "trigger_domains": [],
@@ -500,9 +497,7 @@
         "src/tributo/integrations/model_importers/**",
         "src/tributo/integrations/sinks/**",
         "tests/inference/**",
-        "tests/integration/test_inference_ray_jobs.py",
         "tests/integration/test_lance_result_sink_ray.py",
-        "tests/integration/jobs/post_training_inference_job.py",
         "tests/integrations/Dockerfile.inference*",
         "tests/integrations/docker-compose.inference.yml",
         "tests/integrations/inference-it-versions.conf",
@@ -517,7 +512,7 @@
       "ci_allowed": false,
       "forbid_skips": true,
       "log_contract": "/tmp/<compose-project>-*.log",
-      "rationale": "Detached Ray Jobs, worker execution, MLflow, and MinIO require the owned cluster."
+      "rationale": "Ray Data Predictor actors and Lance result writes require the owned cluster; the official training-to-inference proof is owned by distributed-algorithm-cluster."
     },
     {
       "id": "model-export-cluster",
@@ -531,16 +526,9 @@
       "extras": [],
       "test_paths": [
         "scripts/run_model_export_it.sh",
-        "tests/integration/test_export_review_fixes.py",
-        "tests/integration/test_export_trainer_bundle_vertical_slice.py",
-        "tests/integration/test_export_vertical_slice.py",
         "tests/integration/test_minio_compat.py",
-        "tests/integration/test_model_export_ray_cluster.py",
-        "tests/integration/test_walking_skeleton.py",
         "tests/integrations/test_e2e_mlflow.py",
-        "tests/training/exporters/test_first_party_conformance.py",
-        "tests/training/exporters/test_trainer_bundle_contract.py",
-        "tests/training/test_xgboost_training.py"
+        "tests/training/exporters/test_first_party_conformance.py"
       ],
       "trigger_domains": [],
       "trigger_paths": [
@@ -552,8 +540,6 @@
         "src/tributo/training/**",
         "tests/training/exporters/**",
         "tests/integration/test_export*",
-        "tests/integration/test_model_export_ray_cluster.py",
-        "tests/integration/test_walking_skeleton.py",
         "tests/integrations/test_e2e_mlflow.py",
         "tests/integrations/Dockerfile.data-ingestion*",
         "tests/integrations/docker-compose.data-ingestion.yml",
@@ -570,7 +556,7 @@
       "ci_allowed": false,
       "forbid_skips": true,
       "log_contract": "/tmp/<compose-project>/tests.log, services.log, and image-prepare.log",
-      "rationale": "The distributed training-to-serving walking skeleton is required external evidence, not a PR CI task."
+      "rationale": "Exporter, MLflow Hook, and S3/MinIO publication contracts require owned external services; algorithm training and inference are validated by distributed-algorithm-cluster."
     },
     {
       "id": "tune-cluster",
@@ -647,8 +633,10 @@
         "scripts/run_distributed_algorithm_it.sh",
         "scripts/run_distributed_algorithm_local_it.sh",
         "tests/algorithms/test_distributed_ray_runtime.py",
+        "tests/algorithms/test_decomposition_runtimes.py",
         "tests/integration/algorithm_jobs/test_portable_execution_jobs.py",
         "tests/integration/test_distributed_algorithm_local.py",
+        "tests/training/jobs/official_algorithm_gate_job.py",
         "tests/training/test_dnn_pu_training.py"
       ],
       "trigger_domains": [],
@@ -659,6 +647,7 @@
         "tests/integration/algorithm_jobs/**",
         "tests/integration/test_distributed_algorithm_local.py",
         "tests/training/jobs/distributed_algorithm_gate_job.py",
+        "tests/training/jobs/official_algorithm_gate_job.py",
         "tests/training/test_dnn_pu_training.py",
         "tests/integrations/docker-compose.distributed-algorithm.yml",
         "scripts/run_distributed_algorithm_it.sh",
@@ -666,12 +655,12 @@
         "pyproject.toml",
         "uv.lock"
       ],
-      "requires": ["docker", "multi_node_ray", "ray_jobs", "plugin_wheel"],
+      "requires": ["docker", "multi_node_ray", "ray_jobs", "plugin_wheel", "ray_data_inference"],
       "budget_seconds": 4800,
       "ci_allowed": false,
       "forbid_skips": true,
       "log_contract": "run-scoped local or Compose logs and cleanup evidence",
-      "rationale": "Multi-worker scheduling, sharding, and plugin distribution require external cluster evidence."
+      "rationale": "Official and community Wheels require external evidence for multi-worker training, Tune checkpoints, Bundle publication, and cross-node Ray Data inference."
     },
     {
       "id": "ray-runtime-environment",
@@ -757,32 +746,6 @@
       "forbid_skips": true,
       "log_contract": "none until model and service lifecycles are owned",
       "rationale": "Fixed model paths, external downloads, and environment-dependent skips prevent reliable evidence."
-    },
-    {
-      "id": "quarantine-legacy-e2e",
-      "owner": "integrations",
-      "domain": "legacy-e2e",
-      "tier": "quarantine",
-      "workflow": "none",
-      "owns_tests": true,
-      "entrypoint": [],
-      "args": [],
-      "extras": ["training", "clickhouse", "registry"],
-      "test_paths": [
-        "tests/integrations/test_e2e_clickhouse.py",
-        "tests/integrations/test_e2e_multi_class.py"
-      ],
-      "trigger_domains": [],
-      "trigger_paths": [
-        "tests/integrations/test_e2e_clickhouse.py",
-        "tests/integrations/test_e2e_multi_class.py"
-      ],
-      "requires": ["unowned_clickhouse", "unowned_mlflow", "standalone_script"],
-      "budget_seconds": 0,
-      "ci_allowed": false,
-      "forbid_skips": true,
-      "log_contract": "none until converted to a lifecycle-owned pytest suite",
-      "rationale": "Standalone scripts depend on an undocumented pre-existing multi-service cluster."
     }
   ]
 }

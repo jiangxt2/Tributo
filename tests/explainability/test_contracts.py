@@ -178,7 +178,7 @@ def test_auto_bundle_config_does_not_inject_native_target_without_algorithm_cont
     assert [target.name for target in config.targets or []] == ["onnx-model"]
 
 
-def test_xgboost_auto_bundle_config_adds_ubj_companion_at_service_boundary() -> None:
+def test_core_does_not_infer_algorithm_specific_explainability_companions() -> None:
     config = BundleOutputConfig(
         bundle_uri="/models/bundle",
         targets=[ExportTarget(name="onnx-model", format="onnx")],
@@ -192,17 +192,15 @@ def test_xgboost_auto_bundle_config_adds_ubj_companion_at_service_boundary() -> 
     prepared = BundleExportService._prepare_explainability_config(
         config, ExportSource(source_kind="xgboost_result")
     )
-    assert [target.format for target in prepared.targets or []] == ["onnx", "ubj"]
-    assert prepared.roles["explainability_model"] == "explainability-model"
-    native = next(target for target in prepared.targets or [] if target.format == "ubj")
-    assert native.validation["xgboost-native-runtime-v1"] == {"require_tree_shap": True}
+    assert [target.format for target in prepared.targets or []] == ["onnx"]
+    assert "explainability_model" not in prepared.roles
 
 
-def test_xgboost_tree_bundle_requires_native_treeshap_validation() -> None:
+def test_tree_bundle_preserves_wheel_owned_validation_and_explicit_role() -> None:
     config = BundleOutputConfig(
         bundle_uri="/models/bundle",
         targets=[ExportTarget(name="native", format="ubj")],
-        roles={"inference": "native"},
+        roles={"inference": "native", "explainability_model": "native"},
         explainability=ExplainabilityConfig(enabled=True, backend="tree"),
     )
 
@@ -211,9 +209,8 @@ def test_xgboost_tree_bundle_requires_native_treeshap_validation() -> None:
     )
 
     assert prepared.targets is not None
-    assert prepared.targets[0].validation["xgboost-native-runtime-v1"] == {
-        "require_tree_shap": True
-    }
+    assert prepared.targets[0].validation == {}
+    assert prepared.roles["explainability_model"] == "native"
 
 
 def test_descriptor_can_bind_the_actual_companion_model_role() -> None:
@@ -275,16 +272,6 @@ def test_assembler_writes_companion_role_into_v2_descriptor(tmp_path) -> None:
     assert staged.manifest.schema_version == 2
     assert staged.manifest.explainability is not None
     assert staged.manifest.explainability.model_roles == ("explainability_model",)
-
-
-def test_legacy_output_cannot_enable_explainability() -> None:
-    from tributo.training.xgboost_trainer import OutputConfig
-
-    with pytest.raises(ValidationError, match="requires output.bundle_uri"):
-        OutputConfig(
-            onnx_path="/models/model.onnx",
-            explainability={"enabled": True, "backend": "tree"},
-        )
 
 
 def test_result_policy_is_explicit_and_serializable() -> None:

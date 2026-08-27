@@ -21,6 +21,15 @@ def _inference_suite() -> dict[str, object]:
     )
 
 
+def _distributed_algorithm_suite() -> dict[str, object]:
+    payload = json.loads(_MANIFEST.read_text(encoding="utf-8"))
+    return next(
+        suite
+        for suite in payload["suites"]
+        if suite["id"] == "distributed-algorithm-cluster"
+    )
+
+
 def test_inference_it_versions_are_explicit_and_immutable() -> None:
     versions = _VERSIONS.read_text(encoding="utf-8")
 
@@ -90,14 +99,22 @@ def test_inference_runner_always_performs_exact_scoped_cleanup() -> None:
     assert "docker rm" not in runner
 
 
-def test_inference_cluster_is_external_and_absent_from_ci() -> None:
+def test_inference_evidence_is_external_and_absent_from_ci() -> None:
     workflow = _WORKFLOW.read_text(encoding="utf-8")
     suite = _inference_suite()
+    distributed = _distributed_algorithm_suite()
+    runner = _RUNNER.read_text(encoding="utf-8")
 
     assert suite["tier"] == "manual_external"
     assert suite["workflow"] == "external"
     assert suite["entrypoint"] == ["./scripts/run_inference_it.sh"]
-    assert "tests/integration/test_inference_ray_jobs.py" in suite["test_paths"]
+    assert "tests/integration/test_lance_result_sink_ray.py" in suite["test_paths"]
+    assert "tests/integration/test_inference_ray_jobs.py" not in runner
+    assert (
+        "tests/training/jobs/official_algorithm_gate_job.py"
+        in distributed["test_paths"]
+    )
+    assert "tests/training/test_dnn_pu_training.py" in distributed["test_paths"]
     assert "inference-distributed:" not in workflow
     assert "run_inference_it.sh" not in workflow
 

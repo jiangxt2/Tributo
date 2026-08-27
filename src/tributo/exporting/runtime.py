@@ -227,13 +227,9 @@ class FlavorSupportEntry:
     producer_ids: tuple[str, ...] = ()
 
 
-#: Frozen artifact capability matrix. ONNX Runtime remains the selected
-#: primary artifact for O1, DNN, PU, and XGBoost. Native XGBoost is an
-#: additional explicit executable flavor. Other first-party export flavors
-#: are readable Bundle artifacts, but fail closed at executable gates until
-#: a matching loader is implemented. XGBoost UBJ and JSON are two canonical
-#: serialization formats produced for the shared ``xgboost-native-v1``
-#: runtime flavor. Other flavor IDs produced by exporters
+#: Frozen Core-owned artifact capability matrix. Algorithm Wheels contribute
+#: additional exporter/flavor rows through entry points; Core never lists an
+#: algorithm identity here. Other Core export flavors
 #: (``safetensors-v1``, ``torch-export-v1``, ``hf-onnx-v1``,
 #: ``onnx-int8-v1``) are never loaded by guessing.
 FLAVOR_SUPPORT_MATRIX: tuple[FlavorSupportEntry, ...] = (
@@ -248,39 +244,7 @@ FLAVOR_SUPPORT_MATRIX: tuple[FlavorSupportEntry, ...] = (
         readable=True,
         batch_inference_capable=True,
         online_serveable=True,
-        verticals=("o1", "dnn", "pu", "xgboost"),
-        trainer_types=("dnn", "pu", "xgboost"),
-        producer_ids=("torch-onnx-v1", "xgboost-onnx-v1"),
-    ),
-    FlavorSupportEntry(
-        flavor_id="xgboost-native-v1",
-        artifact_role="model",
-        loader=("tributo.integrations.flavors.xgboost_native:XGBoostNativeFlavor"),
-        dependencies=("xgboost",),
-        signature_required=True,
-        security_mode=SECURITY_MODE_SAFE,
-        exportable=True,
-        readable=True,
-        batch_inference_capable=True,
-        online_serveable=True,
-        verticals=("xgboost",),
-        trainer_types=("xgboost",),
-        producer_ids=("xgboost-json-v1", "xgboost-ubj-v1"),
-    ),
-    FlavorSupportEntry(
-        flavor_id="x-learner-v1",
-        artifact_role="model",
-        loader="tributo.integrations.flavors.x_learner:XLearnerFlavor",
-        dependencies=("xgboost",),
-        signature_required=True,
-        security_mode=SECURITY_MODE_SAFE,
-        exportable=True,
-        readable=True,
-        batch_inference_capable=True,
-        online_serveable=False,
-        verticals=("x_learner",),
-        trainer_types=("x_learner",),
-        producer_ids=("x-learner-v1",),
+        producer_ids=("torch-onnx-v1",),
     ),
     FlavorSupportEntry(
         flavor_id="report",
@@ -293,9 +257,7 @@ FLAVOR_SUPPORT_MATRIX: tuple[FlavorSupportEntry, ...] = (
         readable=True,
         batch_inference_capable=False,
         online_serveable=False,
-        verticals=("causal",),
-        trainer_types=("x_learner",),
-        producer_ids=("causal-report-v1",),
+        producer_ids=(),
     ),
     FlavorSupportEntry(
         flavor_id="safetensors-v1",
@@ -308,8 +270,6 @@ FLAVOR_SUPPORT_MATRIX: tuple[FlavorSupportEntry, ...] = (
         readable=True,
         batch_inference_capable=False,
         online_serveable=False,
-        verticals=("dnn", "pu"),
-        trainer_types=("dnn", "pu"),
         producer_ids=("torch-safetensors-v1",),
     ),
     FlavorSupportEntry(
@@ -323,8 +283,6 @@ FLAVOR_SUPPORT_MATRIX: tuple[FlavorSupportEntry, ...] = (
         readable=True,
         batch_inference_capable=False,
         online_serveable=False,
-        verticals=("dnn", "pu"),
-        trainer_types=("dnn", "pu"),
         producer_ids=("torch-export-v1",),
     ),
     FlavorSupportEntry(

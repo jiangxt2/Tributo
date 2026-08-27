@@ -41,9 +41,6 @@ from tributo.integrations.model_runtimes.explainability import (
     manifest_role_digest as _manifest_role_digest,
 )
 from tributo.integrations.model_runtimes.explainability import (
-    resolve_xgboost_feature_names as _resolve_xgboost_feature_names,
-)
-from tributo.integrations.model_runtimes.explainability import (
     select_onnx_output as _select_onnx_output,
 )
 from tributo.integrations.model_runtimes.explainability import (
@@ -209,7 +206,7 @@ def test_tree_descriptor_resolves_explainability_role_when_request_omits_role() 
         ("regression", "prediction", ("batch", 1), 1),
     ],
 )
-def test_xgboost_output_bound_comes_from_typed_manifest_signature(
+def test_native_output_bound_comes_from_typed_manifest_signature(
     task_type: str,
     field_name: str,
     shape: tuple[str | int, ...],
@@ -224,7 +221,7 @@ def test_xgboost_output_bound_comes_from_typed_manifest_signature(
         result_uri="/data/explanations",
         request_id="request-output-bound",
     )
-    artifact = SimpleNamespace(name="native", flavor_id="xgboost-native-v1")
+    artifact = SimpleNamespace(name="native", flavor_id="external-tree-v1")
     manifest = SimpleNamespace(
         roles={"explainability_model": "native"},
         artifacts=(artifact,),
@@ -240,7 +237,7 @@ def test_xgboost_output_bound_comes_from_typed_manifest_signature(
     )
 
 
-def test_xgboost_output_bound_requires_a_fixed_typed_signature() -> None:
+def test_native_output_bound_requires_a_fixed_typed_signature() -> None:
     request = ExplainabilityRequest(
         bundle_uri="/models/bundle",
         input=IngestionRequest(
@@ -252,7 +249,7 @@ def test_xgboost_output_bound_requires_a_fixed_typed_signature() -> None:
     )
     manifest = SimpleNamespace(
         roles={"explainability_model": "native"},
-        artifacts=(SimpleNamespace(name="native", flavor_id="xgboost-native-v1"),),
+        artifacts=(SimpleNamespace(name="native", flavor_id="external-tree-v1"),),
         source_info=SimpleNamespace(task_type="classification"),
         output_signature=SimpleNamespace(output_fields=()),
     )
@@ -497,33 +494,6 @@ def test_receipt_and_idempotency_record_output_selection() -> None:
         reference_provider=SimpleNamespace(),
     )
     assert all_key != predicted_key
-
-
-def test_xgboost_feature_order_is_checked_without_sidecar() -> None:
-    class FakeBooster:
-        feature_names = ["feature_a", "feature_b"]
-
-        @staticmethod
-        def num_features() -> int:
-            return 2
-
-    class ResolvedArtifact:
-        @staticmethod
-        def path_for(name: str) -> Path:
-            assert name == "feature_names.json"
-            return Path("/does/not/exist")
-
-    request = ExplainabilityRequest(
-        bundle_uri="/models/bundle",
-        input=IngestionRequest(
-            source=ParquetSourceConfig(path="/data/input.parquet"), engine="ray"
-        ),
-        feature_columns=("feature_b", "feature_a"),
-        result_uri="/data/explanations",
-        request_id="request-feature-order",
-    )
-    with pytest.raises(ValueError, match="feature order"):
-        _resolve_xgboost_feature_names(ResolvedArtifact(), FakeBooster(), request)
 
 
 def test_schema_signature_is_derived_from_attribution_contract() -> None:

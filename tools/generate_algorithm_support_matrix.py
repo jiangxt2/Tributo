@@ -23,11 +23,22 @@ class SupportMatrixGenerationError(ValueError):
 
 
 def load_support_snapshot() -> tuple[AlgorithmSupportRecord, ...]:
-    """Load registered support facts without importing frameworks directly."""
+    """Load Core-owned support facts without importing frameworks directly.
+
+    Algorithms whose native implementation has migrated to the official
+    algorithm-wheel repository remain discoverable at runtime when their
+    wheels are installed, but their implementation evidence is owned and
+    validated by that repository.  Excluding those records keeps this Core
+    documentation snapshot deterministic across environments with and without
+    optional algorithm wheels.
+    """
     from tributo.training.catalog import get_algorithm_catalog
     from tributo.training.support_snapshot import build_algorithm_support_snapshot
 
-    return build_algorithm_support_snapshot(get_algorithm_catalog().list_records())
+    records = get_algorithm_catalog().list_records()
+    return build_algorithm_support_snapshot(
+        record for record in records if not record.native_migration_complete
+    )
 
 
 def _code(value: str) -> str:

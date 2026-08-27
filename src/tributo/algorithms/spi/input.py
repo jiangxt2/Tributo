@@ -65,15 +65,28 @@ class ResolvedInputLease:
         *,
         handle: object,
         provenance: Mapping[str, Any],
+        binding: InputBinding | None = None,
         close_callback: Callable[[], None] | None = None,
         cancel_callback: Callable[[], None] | None = None,
     ) -> None:
         self.handle = handle
         self.provenance = deep_freeze(provenance)
+        if binding is not None and not isinstance(binding, InputBinding):
+            raise TypeError("resolved input lease binding must be InputBinding")
+        self.binding = binding
         self._close_callback = close_callback
         self._cancel_callback = cancel_callback
         self._closed = False
         self._lock = threading.Lock()
+
+    def attach_binding(self, binding: InputBinding) -> None:
+        """Attach the role binding once for backward-compatible resolvers."""
+        if not isinstance(binding, InputBinding):
+            raise TypeError("resolved input lease binding must be InputBinding")
+        with self._lock:
+            if self.binding is not None and self.binding != binding:
+                raise AlgorithmInputError("resolved input lease binding drifted")
+            self.binding = binding
 
     @property
     def closed(self) -> bool:
@@ -140,19 +153,79 @@ class WorkerInputPayload:
 
 
 @PublicAPI(stability="alpha")
+@dataclass(frozen=True)
+class WorkerInputPayloadSet:
+    """Serializable role-keyed payloads assigned to one Worker rank."""
+
+    payloads: tuple[WorkerInputPayload, ...]
+    primary_role: str = "train"
+
+    def __post_init__(self) -> None:
+        payloads = tuple(self.payloads)
+        if not payloads or any(
+            not isinstance(item, WorkerInputPayload) for item in payloads
+        ):
+            raise AlgorithmInputError(
+                "Worker input payload sets require WorkerInputPayload values"
+            )
+        roles = tuple(item.input_name for item in payloads)
+        if len(set(roles)) != len(roles):
+            raise AlgorithmInputError("Worker input payload roles must be unique")
+        if self.primary_role not in roles:
+            raise AlgorithmInputError(
+                "Worker input payload primary_role must reference a payload"
+            )
+        partition_coordinates = {
+            (item.partition_index, item.partition_count) for item in payloads
+        }
+        if len(partition_coordinates) != 1:
+            raise AlgorithmInputError(
+                "Worker input roles must share one partition coordinate"
+            )
+        object.__setattr__(self, "payloads", payloads)
+
+    @property
+    def partition_index(self) -> int:
+        """Return the shared Worker partition index."""
+        return self.payloads[0].partition_index
+
+    @property
+    def partition_count(self) -> int:
+        """Return the shared Worker partition count."""
+        return self.payloads[0].partition_count
+
+    @property
+    def expected_total_rows(self) -> int | None:
+        """Return primary-role row coverage for compatibility checks."""
+        return self.get(self.primary_role).expected_total_rows
+
+    def get(self, role: str) -> WorkerInputPayload:
+        """Return one role payload."""
+        for payload in self.payloads:
+            if payload.input_name == role:
+                return payload
+        raise AlgorithmInputError(f"unknown Worker input role: {role!r}")
+
+
+@PublicAPI(stability="alpha")
 class RuntimeInputBinding:
     """Driver-owned handoff from an input lease to a Runtime Adapter."""
 
     def __init__(
         self,
-        payloads: WorkerInputPayload | tuple[WorkerInputPayload, ...],
+        payloads: (
+            WorkerInputPayload
+            | WorkerInputPayloadSet
+            | tuple[WorkerInputPayload | WorkerInputPayloadSet, ...]
+        ),
     ) -> None:
         normalized = payloads if isinstance(payloads, tuple) else (payloads,)
         if not normalized or any(
-            not isinstance(payload, WorkerInputPayload) for payload in normalized
+            not isinstance(payload, (WorkerInputPayload, WorkerInputPayloadSet))
+            for payload in normalized
         ):
             raise AlgorithmInputError(
-                "runtime input binding requires WorkerInputPayload values"
+                "runtime input binding requires Worker input payload values"
             )
         partition_count = len(normalized)
         if any(payload.partition_count != partition_count for payload in normalized):
@@ -175,7 +248,7 @@ class RuntimeInputBinding:
         self._lock = threading.Lock()
 
     @property
-    def payload(self) -> WorkerInputPayload:
+    def payload(self) -> WorkerInputPayload | WorkerInputPayloadSet:
         """Return the only payload for a single-Worker binding."""
         if len(self.payloads) != 1:
             raise AlgorithmInputError(
@@ -294,7 +367,10 @@ class InputRuntimeAdapter(Protocol):
 class WorkerInputAdapter(Protocol):
     """Worker-side conversion from a payload to framework-neutral views."""
 
-    def __call__(self, payload: WorkerInputPayload) -> PreparedInput: ...
+    def __call__(
+        self,
+        payload: WorkerInputPayload | WorkerInputPayloadSet,
+    ) -> PreparedInput: ...
 
 
 __all__ = [
@@ -309,4 +385,5 @@ __all__ = [
     "TabularBatchInputView",
     "WorkerInputAdapter",
     "WorkerInputPayload",
+    "WorkerInputPayloadSet",
 ]

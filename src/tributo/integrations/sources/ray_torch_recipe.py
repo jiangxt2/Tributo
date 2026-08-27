@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from tributo.algorithms.api import QualifiedReference
 from tributo.algorithms.core.worker import _load_reference, _validate_module_digest
-from tributo.algorithms.spi import TorchTrainingRecipe
+from tributo.algorithms.spi import TorchTrainingRecipe, TrainingRecipeV2
 from tributo.exporting.models import ExportCheckpointV1, ExportSource
 from tributo.training.checkpoint import checkpoint_directory
 from tributo.util.annotations import PublicAPI
@@ -94,9 +94,12 @@ def _build_source(
     _validate_module_digest(reference, options.recipe_code_digest)
     recipe_cls = _load_reference(reference)
     if not isinstance(recipe_cls, type) or not issubclass(
-        recipe_cls, TorchTrainingRecipe
+        recipe_cls, (TorchTrainingRecipe, TrainingRecipeV2)
     ):
-        raise ValueError("recipe reference does not resolve to TorchTrainingRecipe")
+        raise ValueError(
+            "recipe reference does not resolve to TorchTrainingRecipe or "
+            "TrainingRecipeV2"
+        )
     try:
         recipe = recipe_cls()
     except TypeError as exc:
@@ -104,7 +107,13 @@ def _build_source(
     model_config = payload.get("model", {})
     if not isinstance(model_config, dict):
         raise ValueError("Torch recipe model config must be a JSON object")
-    model = recipe.model_factory(model_config)
+    if isinstance(recipe, TrainingRecipeV2):
+        modules = recipe.build_modules({"model": model_config})
+        if not isinstance(modules, dict) or "model" not in modules:
+            raise ValueError("TrainingRecipeV2 build_modules did not provide model")
+        model = modules["model"]
+    else:
+        model = recipe.model_factory(model_config)
     if not isinstance(model, torch.nn.Module):
         raise ValueError("Torch recipe model_factory did not return nn.Module")
     state = torch.load(model_path, map_location="cpu", weights_only=True)

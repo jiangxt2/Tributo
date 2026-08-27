@@ -250,6 +250,16 @@ class SourceProviderRegistry:
             )
         return top
 
+    def get(self, provider_id: str) -> type[ExportSourceProvider]:
+        """Return one explicitly selected provider or fail closed."""
+        try:
+            return self._by_id[provider_id]
+        except KeyError as exc:
+            raise JobConfigurationError(
+                f"Unknown ExportSourceProvider {provider_id!r}. "
+                f"Registered: {sorted(self._by_id)}"
+            ) from exc
+
     def list_all(self) -> list[str]:
         return sorted(self._by_id)
 

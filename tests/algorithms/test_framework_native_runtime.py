@@ -15,7 +15,9 @@ from tributo.algorithms.api import (
     WorkerResources,
 )
 from tributo.algorithms.spi import FrameworkNativeAlgorithm
+from tributo.exceptions import BundleExportError
 from tributo.integrations.algorithm_runtimes.framework_native import (
+    _bundle_export_failure_message,
     _framework_execution_result,
     _validated_framework_evidence,
     _validated_staged_framework_evidence,
@@ -179,6 +181,33 @@ def test_framework_native_fit_only_skips_checkpoint_and_exporter() -> None:
     assert execution.metrics == {"score": 0.75}
     assert execution.outputs == {}
     assert execution.artifacts == ()
+
+
+def test_bundle_failure_preserves_failed_node_diagnostics() -> None:
+    error = BundleExportError(
+        "Bundle export failed: failed",
+        execution_result=SimpleNamespace(
+            node_results=(
+                SimpleNamespace(status="succeeded"),
+                SimpleNamespace(
+                    node_id="x-learner-onnx",
+                    status="failed",
+                    exporter_id="official-x-learner-onnx-v1",
+                    failure=SimpleNamespace(
+                        code="INVALID_GRAPH",
+                        category="validation",
+                        message="ONNX Runtime rejected the graph",
+                    ),
+                ),
+            )
+        ),
+    )
+
+    message = _bundle_export_failure_message(error)
+
+    assert "x-learner-onnx" in message
+    assert "INVALID_GRAPH" in message
+    assert "ONNX Runtime rejected the graph" in message
 
 
 def test_framework_native_fit_only_rejects_nonportable_user_metrics() -> None:

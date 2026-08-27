@@ -11,6 +11,7 @@ from tributo.algorithms.api import (
     AlgorithmRegistration,
     BackendInputCompatibility,
     CollectivePolicy,
+    ContractBindingSet,
     DistributedAlgorithmDescriptor,
     DistributionSpec,
     DistributionStrategy,
@@ -19,8 +20,12 @@ from tributo.algorithms.api import (
     ExecutionProfile,
     FrameworkNativePolicy,
     ImplementationDescriptor,
+    InputDistribution,
+    IterativeOptimizationPolicy,
+    JoblibEstimatorPolicy,
     MapReducePolicy,
     MetricReduction,
+    ParallelEnsemblePolicy,
     QualifiedReference,
     ResultPolicy,
     RuntimeBinding,
@@ -71,11 +76,15 @@ class AlgorithmBuilder:
     def _formal_input_compatibility(
         topology: RuntimeTopology,
         adapter: QualifiedReference,
+        *,
+        sharded: bool,
     ) -> BackendInputCompatibility:
         return BackendInputCompatibility(
             accepted_input_views=("ray_data",),
             accepted_ingestion_engines=("tributo.ray_data",),
-            required_input_capabilities=("shardable",),
+            required_input_capabilities=(
+                ("shardable",) if sharded else ("materializable",)
+            ),
             supported_explicit_adapters=(adapter,),
             distribution_policy=(topology,),
         )
@@ -96,7 +105,14 @@ class AlgorithmBuilder:
         supported_worker_range: WorkerRange,
         supported_execution_profiles: tuple[ExecutionProfile, ...],
         resources_per_worker: WorkerResources,
-        policy: CollectivePolicy | MapReducePolicy | FrameworkNativePolicy,
+        policy: (
+            CollectivePolicy
+            | MapReducePolicy
+            | FrameworkNativePolicy
+            | JoblibEstimatorPolicy
+            | ParallelEnsemblePolicy
+            | IterativeOptimizationPolicy
+        ),
         package_name: str,
         package_version: str,
         tributo_version_spec: str,
@@ -112,6 +128,8 @@ class AlgorithmBuilder:
         limitations: tuple[str, ...] = (),
         is_default: bool = False,
         code_digest: str | None = None,
+        contract_bindings: ContractBindingSet | None = None,
+        descriptor_api_version: int = 1,
     ) -> DistributedAlgorithmDescriptor:
         """Lower one formal distributed implementation to its public descriptor.
 
@@ -141,7 +159,11 @@ class AlgorithmBuilder:
         coordination = contract.state_coordination
         adapter = QualifiedReference.parse(contract.worker_input_adapter_ref)
         compatibility = input_compatibility or (
-            AlgorithmBuilder._formal_input_compatibility(topology, adapter)
+            AlgorithmBuilder._formal_input_compatibility(
+                topology,
+                adapter,
+                sharded=input_distribution is not InputDistribution.FULL_DATASET,
+            )
         )
         if compatibility.distribution_policy != (topology,):
             raise AlgorithmConfigurationError(
@@ -152,14 +174,19 @@ class AlgorithmBuilder:
                 "input compatibility must include the strategy's standard Ray Data "
                 "Worker adapter"
             )
+        required_capability = (
+            "shardable"
+            if input_distribution is not InputDistribution.FULL_DATASET
+            else "materializable"
+        )
         if (
             "ray_data" not in compatibility.accepted_input_views
             or "tributo.ray_data" not in compatibility.accepted_ingestion_engines
-            or "shardable" not in compatibility.required_input_capabilities
+            or required_capability not in compatibility.required_input_capabilities
         ):
             raise AlgorithmConfigurationError(
                 "formal distributed input compatibility must retain the standard "
-                "shardable Ray Data contract"
+                f"{required_capability} Ray Data contract"
             )
 
         registration = AlgorithmRegistration(
@@ -196,6 +223,7 @@ class AlgorithmBuilder:
                 distributed_min_workers=distributed_min_workers,
                 result_policy=result_policy,
             ),
+            contract_bindings=contract_bindings,
             is_default=is_default,
         )
         return DistributedAlgorithmDescriptor(
@@ -208,6 +236,7 @@ class AlgorithmBuilder:
             supported=supported,
             validated_execution_profiles=validated_execution_profiles,
             limitations=limitations,
+            api_version=descriptor_api_version,
         )
 
     @staticmethod
@@ -234,6 +263,8 @@ class AlgorithmBuilder:
         limitations: tuple[str, ...] = (),
         is_default: bool = False,
         code_digest: str | None = None,
+        contract_bindings: ContractBindingSet | None = None,
+        descriptor_api_version: int = 1,
     ) -> DistributedAlgorithmDescriptor:
         """Lower four PyTorch factories to the existing Ray collective runtime.
 
@@ -308,6 +339,261 @@ class AlgorithmBuilder:
             limitations=limitations,
             is_default=is_default,
             code_digest=code_digest,
+            contract_bindings=contract_bindings,
+            descriptor_api_version=descriptor_api_version,
+        )
+
+    @staticmethod
+    def from_joblib_estimator_recipe(
+        *,
+        spec: AlgorithmSpec,
+        implementation_id: str,
+        implementation_version: str,
+        recipe: str,
+        environment: EnvironmentSpec,
+        allowed_config_keys: tuple[str, ...],
+        supported_worker_range: WorkerRange,
+        supported_execution_profiles: tuple[ExecutionProfile, ...],
+        resources_per_worker: WorkerResources,
+        package_name: str,
+        package_version: str,
+        tributo_version_spec: str,
+        policy: JoblibEstimatorPolicy | None = None,
+        input_compatibility: BackendInputCompatibility | None = None,
+        result_policy: ResultPolicy = ResultPolicy.BUNDLE_REQUIRED,
+        exporter: str | None = None,
+        flavor_id: str | None = None,
+        distributed_min_workers: int = 2,
+        contract_bindings: ContractBindingSet | None = None,
+        descriptor_api_version: int = 2,
+        is_default: bool = False,
+    ) -> DistributedAlgorithmDescriptor:
+        """Lower estimator mathematics to the Core Ray Joblib Runtime."""
+        return AlgorithmBuilder.from_distributed_algorithm(
+            spec=spec,
+            implementation_id=implementation_id,
+            implementation_version=implementation_version,
+            implementation=recipe,
+            executable_factory=(
+                "tributo.integrations.algorithm_runtimes.decomposition:create_algorithm"
+            ),
+            distribution=package_name,
+            framework="sklearn",
+            environment=environment,
+            allowed_config_keys=allowed_config_keys,
+            strategy=DistributionStrategy.RAY_JOBLIB_ESTIMATOR,
+            supported_worker_range=supported_worker_range,
+            supported_execution_profiles=supported_execution_profiles,
+            resources_per_worker=resources_per_worker,
+            policy=policy or JoblibEstimatorPolicy(),
+            package_name=package_name,
+            package_version=package_version,
+            tributo_version_spec=tributo_version_spec,
+            result_policy=result_policy,
+            input_compatibility=input_compatibility,
+            exporter=exporter,
+            flavor_id=flavor_id,
+            distributed_min_workers=distributed_min_workers,
+            contract_bindings=contract_bindings,
+            descriptor_api_version=descriptor_api_version,
+            is_default=is_default,
+        )
+
+    @staticmethod
+    def from_training_recipe_v2(
+        *,
+        spec: AlgorithmSpec,
+        implementation_id: str,
+        implementation_version: str,
+        recipe: str,
+        environment: EnvironmentSpec,
+        metric_reducers: Mapping[str, MetricReduction],
+        supported_worker_range: WorkerRange,
+        supported_execution_profiles: tuple[ExecutionProfile, ...],
+        resources_per_worker: WorkerResources,
+        package_name: str,
+        package_version: str,
+        tributo_version_spec: str,
+        contract_bindings: ContractBindingSet,
+        backend: Literal["auto", "gloo", "nccl"] = "auto",
+        distributed_min_workers: int = 2,
+        descriptor_api_version: int = 2,
+        is_default: bool = False,
+    ) -> DistributedAlgorithmDescriptor:
+        """Lower TrainingRecipeV2 Step/Plan Hooks to the Core DDP loop."""
+        try:
+            normalized_reducers = {
+                name: MetricReduction(reduction)
+                for name, reduction in metric_reducers.items()
+            }
+        except (TypeError, ValueError) as exc:
+            raise AlgorithmConfigurationError(
+                "TrainingRecipeV2 metric reducer is invalid"
+            ) from exc
+        if "train_loss" in normalized_reducers and (
+            normalized_reducers["train_loss"] is not MetricReduction.SUM_COUNT
+        ):
+            raise AlgorithmConfigurationError(
+                "TrainingRecipeV2 train_loss uses the fixed sum_count reducer"
+            )
+        normalized_reducers["train_loss"] = MetricReduction.SUM_COUNT
+        return AlgorithmBuilder.from_distributed_algorithm(
+            spec=spec,
+            implementation_id=implementation_id,
+            implementation_version=implementation_version,
+            implementation=recipe,
+            executable_factory=(
+                "tributo.integrations.algorithm_runtimes.torch_recipe:"
+                "create_torch_recipe_algorithm"
+            ),
+            distribution=package_name,
+            framework="pytorch",
+            environment=environment,
+            allowed_config_keys=(
+                "loss",
+                "metrics",
+                "model",
+                "optimizer",
+                "output",
+                "ray",
+                "training",
+            ),
+            strategy=DistributionStrategy.RAY_TRAIN_RECIPE_V2,
+            supported_worker_range=supported_worker_range,
+            supported_execution_profiles=supported_execution_profiles,
+            resources_per_worker=resources_per_worker,
+            policy=CollectivePolicy(
+                backend=backend,
+                metric_reducers=normalized_reducers,
+                checkpoint_owner_rank=0,
+                same_world_size_resume=True,
+                rank_seeded=True,
+            ),
+            package_name=package_name,
+            package_version=package_version,
+            tributo_version_spec=tributo_version_spec,
+            result_policy=ResultPolicy.BUNDLE_REQUIRED,
+            exporter=(
+                "tributo.integrations.algorithm_runtimes.torch_recipe:"
+                "export_torch_recipe_result"
+            ),
+            flavor_id="onnx-runtime-v1",
+            distributed_min_workers=distributed_min_workers,
+            contract_bindings=contract_bindings,
+            descriptor_api_version=descriptor_api_version,
+            is_default=is_default,
+        )
+
+    @staticmethod
+    def from_parallel_ensemble(
+        *,
+        spec: AlgorithmSpec,
+        implementation_id: str,
+        implementation_version: str,
+        algorithm: str,
+        environment: EnvironmentSpec,
+        allowed_config_keys: tuple[str, ...],
+        supported_worker_range: WorkerRange,
+        supported_execution_profiles: tuple[ExecutionProfile, ...],
+        resources_per_worker: WorkerResources,
+        package_name: str,
+        package_version: str,
+        tributo_version_spec: str,
+        policy: ParallelEnsemblePolicy,
+        input_compatibility: BackendInputCompatibility | None = None,
+        result_policy: ResultPolicy = ResultPolicy.BUNDLE_REQUIRED,
+        exporter: str | None = None,
+        flavor_id: str | None = None,
+        distributed_min_workers: int = 2,
+        contract_bindings: ContractBindingSet | None = None,
+        descriptor_api_version: int = 2,
+        is_default: bool = False,
+    ) -> DistributedAlgorithmDescriptor:
+        """Lower independent unit Hook methods to the Core Ensemble Runtime."""
+        return AlgorithmBuilder.from_distributed_algorithm(
+            spec=spec,
+            implementation_id=implementation_id,
+            implementation_version=implementation_version,
+            implementation=algorithm,
+            executable_factory=(
+                "tributo.integrations.algorithm_runtimes.decomposition:create_algorithm"
+            ),
+            distribution=package_name,
+            framework=None,
+            environment=environment,
+            allowed_config_keys=allowed_config_keys,
+            strategy=DistributionStrategy.RAY_PARALLEL_ENSEMBLE,
+            supported_worker_range=supported_worker_range,
+            supported_execution_profiles=supported_execution_profiles,
+            resources_per_worker=resources_per_worker,
+            policy=policy,
+            package_name=package_name,
+            package_version=package_version,
+            tributo_version_spec=tributo_version_spec,
+            result_policy=result_policy,
+            input_compatibility=input_compatibility,
+            exporter=exporter,
+            flavor_id=flavor_id,
+            distributed_min_workers=distributed_min_workers,
+            contract_bindings=contract_bindings,
+            descriptor_api_version=descriptor_api_version,
+            is_default=is_default,
+        )
+
+    @staticmethod
+    def from_iterative_optimization(
+        *,
+        spec: AlgorithmSpec,
+        implementation_id: str,
+        implementation_version: str,
+        algorithm: str,
+        environment: EnvironmentSpec,
+        allowed_config_keys: tuple[str, ...],
+        supported_worker_range: WorkerRange,
+        supported_execution_profiles: tuple[ExecutionProfile, ...],
+        resources_per_worker: WorkerResources,
+        package_name: str,
+        package_version: str,
+        tributo_version_spec: str,
+        policy: IterativeOptimizationPolicy,
+        input_compatibility: BackendInputCompatibility | None = None,
+        result_policy: ResultPolicy = ResultPolicy.BUNDLE_REQUIRED,
+        exporter: str | None = None,
+        flavor_id: str | None = None,
+        distributed_min_workers: int = 2,
+        contract_bindings: ContractBindingSet | None = None,
+        descriptor_api_version: int = 2,
+        is_default: bool = False,
+    ) -> DistributedAlgorithmDescriptor:
+        """Lower shard-update Hook methods to the Core Iterative Runtime."""
+        return AlgorithmBuilder.from_distributed_algorithm(
+            spec=spec,
+            implementation_id=implementation_id,
+            implementation_version=implementation_version,
+            implementation=algorithm,
+            executable_factory=(
+                "tributo.integrations.algorithm_runtimes.decomposition:create_algorithm"
+            ),
+            distribution=package_name,
+            framework=None,
+            environment=environment,
+            allowed_config_keys=allowed_config_keys,
+            strategy=DistributionStrategy.RAY_ITERATIVE_OPTIMIZATION,
+            supported_worker_range=supported_worker_range,
+            supported_execution_profiles=supported_execution_profiles,
+            resources_per_worker=resources_per_worker,
+            policy=policy,
+            package_name=package_name,
+            package_version=package_version,
+            tributo_version_spec=tributo_version_spec,
+            result_policy=result_policy,
+            input_compatibility=input_compatibility,
+            exporter=exporter,
+            flavor_id=flavor_id,
+            distributed_min_workers=distributed_min_workers,
+            contract_bindings=contract_bindings,
+            descriptor_api_version=descriptor_api_version,
+            is_default=is_default,
         )
 
     @staticmethod

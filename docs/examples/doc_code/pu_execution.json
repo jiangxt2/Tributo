@@ -14,27 +14,28 @@
     "label": "is_confirmed_positive"
   },
   "algorithm_config": {
-    "features": [
-      {"name": "account_age", "type": "dense"},
-      {"name": "monthly_usage", "type": "dense"}
-    ],
-    "label_col": "is_confirmed_positive",
     "model": {
-      "dnn_hidden_units": [128, 64, 32],
-      "dnn_dropout": 0.3
+      "input_features": 2,
+      "hidden_units": [128, 64, 32]
     },
-    "pu": {
-      "loss_type": "nnpu",
+    "loss": {
+      "type": "nnpu",
       "class_prior": 0.3
     },
+    "optimizer": {
+      "learning_rate": 0.001
+    },
+    "metrics": {},
     "training": {
       "epochs": 50,
       "batch_size": 1024,
-      "learning_rate": 0.001
+      "prefetch_batches": 0,
+      "seed": 42
     },
     "ray": {
-      "num_workers": 2,
-      "max_failures": 0
+      "max_failures": 0,
+      "storage_path": "/shared/ray-results/pu-fraud",
+      "resume": {"checkpoint_interval": 1}
     },
     "output": {
       "bundle_uri": "/shared/models/pu-fraud"

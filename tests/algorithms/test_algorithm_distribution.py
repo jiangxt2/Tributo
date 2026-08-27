@@ -220,7 +220,7 @@ def test_code_only_wheel_is_validated_and_wired_to_py_modules(tmp_path: Path) ->
         == hashlib.sha256(wheel.read_bytes()).hexdigest()
     )
     assert patch["py_modules"] == [str(wheel)]
-    assert patch["env_vars"]["TRIBUTO_PLUGINS"] == "demo_algorithm"
+    assert patch["env_vars"]["TRIBUTO_PLUGINS"] == "distribution:demo-algorithm"
     assert "TRIBUTO_ALGORITHM_PREFLIGHT_RECEIPT" in patch["env_vars"]
     assert prepared.receipt.tributo_version
     assert prepared.receipt.ray_version == "2.55.1"
@@ -285,7 +285,7 @@ def test_remote_offline_bundle_uses_attested_manifest_without_network() -> None:
     assert patch["pip"]["packages"] == [
         "-r ${RAY_RUNTIME_ENV_CREATE_WORKING_DIR}/requirements.lock"
     ]
-    assert patch["env_vars"]["TRIBUTO_PLUGINS"] == "demo_algorithm"
+    assert patch["env_vars"]["TRIBUTO_PLUGINS"] == "distribution:demo-algorithm"
 
 
 def test_remote_offline_bundle_requires_complete_manifest_closure() -> None:

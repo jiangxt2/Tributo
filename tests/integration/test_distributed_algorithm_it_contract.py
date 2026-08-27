@@ -59,6 +59,8 @@ def test_distributed_gate_uses_cached_images_and_scoped_compose_cleanup() -> Non
     compose_override = _DISTRIBUTED_COMPOSE.read_text(encoding="utf-8")
 
     assert "tributo-distributed-algorithm-it-" in runner
+    assert "TRIBUTO_ALGORITHMS_ROOT is required" in runner
+    assert "OFFICIAL_ALGORITHMS_COMMIT" in runner
     assert "prepare-runtime --profile data-ingestion" in runner
     assert "runtime-key --profile data-ingestion" in runner
     assert "--scale ray-worker=2" in runner
@@ -99,9 +101,13 @@ def test_distributed_gate_uses_cached_images_and_scoped_compose_cleanup() -> Non
     assert "Global Docker image changes are diagnostic only" in runner
     assert "report_global_image_changes || cleanup_status=1" not in runner
     assert "report_existing_container_changes || cleanup_status=1" not in runner
-    assert "test_formal_distributed_algorithms_complete_on_ray_cluster" in runner
+    assert "test_formal_distributed_algorithms_complete_on_ray_cluster" not in runner
+    assert "test_official_algorithm_wheels_complete_on_ray_cluster" in runner
     assert "test_out_of_tree_torch_recipe_completes_on_ray_cluster" in runner
     assert "TRIBUTO_DISTRIBUTED_ALGORITHM_RERUN_FAILED_ONLY" in runner
+    assert "CASE_RESULT: " in (
+        _ROOT / "tests" / "training" / "jobs" / "priority_algorithm_gate_job.py"
+    ).read_text(encoding="utf-8")
     assert (
         "test_remote_offline_wheelhouse_archive_installs_on_driver_and_workers"
         in runner

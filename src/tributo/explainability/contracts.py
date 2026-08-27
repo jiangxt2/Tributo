@@ -175,11 +175,12 @@ class ExplainabilityConfig(BaseModel):
             "log_loss",
         }:
             reference_policy = "required"
-        dependencies = {"shap": ">=0.52.0,<0.53.0"}
-        if selected_backend == "tree":
-            dependencies["xgboost"] = ">=2.1.0,<4.0.0"
-        elif selected_backend == "model_agnostic":
-            dependencies["onnxruntime"] = ">=1.16.0,<2.0.0"
+        dependencies = {}
+        if selected_backend == "model_agnostic":
+            dependencies = {
+                "onnxruntime": ">=1.16.0,<2.0.0",
+                "shap": ">=0.52.0,<0.53.0",
+            }
         return ExplainabilityDescriptor(
             adapter_id=f"{self.explainer}-v1",
             backend=selected_backend,

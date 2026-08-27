@@ -29,8 +29,11 @@ from tributo.algorithms.api import (
     ImplementationDescriptor,
     InputBinding,
     InputDistribution,
+    IterativeOptimizationPolicy,
+    JoblibEstimatorPolicy,
     MapReducePolicy,
     MetricReduction,
+    ParallelEnsemblePolicy,
     QualifiedReference,
     ResolvedInputDescriptor,
     ResultPolicy,
@@ -51,8 +54,18 @@ from .conftest import fake_runtime_binding, make_spec
 
 def _formal_policy(
     strategy: DistributionStrategy,
-) -> CollectivePolicy | MapReducePolicy | FrameworkNativePolicy:
-    if strategy is DistributionStrategy.RAY_TRAIN_COLLECTIVE:
+) -> (
+    CollectivePolicy
+    | MapReducePolicy
+    | FrameworkNativePolicy
+    | JoblibEstimatorPolicy
+    | ParallelEnsemblePolicy
+    | IterativeOptimizationPolicy
+):
+    if strategy in {
+        DistributionStrategy.RAY_TRAIN_COLLECTIVE,
+        DistributionStrategy.RAY_TRAIN_RECIPE_V2,
+    }:
         return CollectivePolicy(
             backend="gloo",
             metric_reducers={"loss": MetricReduction.WEIGHTED_MEAN},
@@ -64,6 +77,12 @@ def _formal_policy(
             reducer_ref="tests.support.portable_algorithms:merge_map_reduce_states",
             finalizer_ref="tests.support.portable_algorithms:finalize_map_reduce_model",
         )
+    if strategy is DistributionStrategy.RAY_JOBLIB_ESTIMATOR:
+        return JoblibEstimatorPolicy()
+    if strategy is DistributionStrategy.RAY_PARALLEL_ENSEMBLE:
+        return ParallelEnsemblePolicy(max_units=8)
+    if strategy is DistributionStrategy.RAY_ITERATIVE_OPTIMIZATION:
+        return IterativeOptimizationPolicy(max_rounds=4)
     return FrameworkNativePolicy(
         framework="example",
         evidence_collector_ref=(
@@ -85,6 +104,12 @@ def _formal_descriptor(
         DistributionStrategy.RAY_TRAIN_COLLECTIVE: ExecutionMode.COLLECTIVE,
         DistributionStrategy.RAY_MAP_REDUCE: ExecutionMode.MAP_REDUCE,
         DistributionStrategy.FRAMEWORK_NATIVE: ExecutionMode.FRAMEWORK_NATIVE,
+        DistributionStrategy.RAY_JOBLIB_ESTIMATOR: ExecutionMode.JOBLIB_ESTIMATOR,
+        DistributionStrategy.RAY_PARALLEL_ENSEMBLE: ExecutionMode.PARALLEL_ENSEMBLE,
+        DistributionStrategy.RAY_ITERATIVE_OPTIMIZATION: (
+            ExecutionMode.ITERATIVE_OPTIMIZATION
+        ),
+        DistributionStrategy.RAY_TRAIN_RECIPE_V2: ExecutionMode.TRAINING_RECIPE_V2,
     }[strategy]
     return AlgorithmBuilder.from_distributed_algorithm(
         spec=make_spec(

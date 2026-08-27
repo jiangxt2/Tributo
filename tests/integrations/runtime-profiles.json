@@ -12,6 +12,7 @@
         "training",
         "registry",
         "model-export-hf",
+        "graph",
         "data-daft",
         "hive-ray",
         "vector-index",

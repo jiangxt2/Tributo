@@ -6,7 +6,7 @@ import hashlib
 import pickle
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import ray
 
@@ -15,6 +15,7 @@ from tributo.algorithms.api import (
     AlgorithmExecutionError,
     AlgorithmExecutionResult,
     AlgorithmInputError,
+    ArtifactDraft,
     DistributionStrategy,
     MapReducePolicy,
     QualifiedReference,
@@ -180,6 +181,7 @@ def _policy(plan: ResolvedAlgorithmPlan) -> MapReducePolicy:
 def _algorithm(
     plan: ResolvedAlgorithmPlan,
     policy: MapReducePolicy,
+    artifacts: tuple[ArtifactDraft, ...] = (),
 ) -> MapReduceAlgorithm[Any, Any, Any]:
     _validate_module_digest(
         plan.implementation.implementation_ref,
@@ -191,7 +193,7 @@ def _algorithm(
         raise AlgorithmConfigurationError(
             "MapReduce executable factory reference is not callable"
         )
-    algorithm = factory(plan=plan, implementation=implementation, artifacts=())
+    algorithm = factory(plan=plan, implementation=implementation, artifacts=artifacts)
     if not isinstance(algorithm, MapReduceAlgorithm):
         raise AlgorithmConfigurationError(
             "MapReduce executable factory must return MapReduceAlgorithm"
@@ -311,9 +313,10 @@ def _map_partition(
     plan: ResolvedAlgorithmPlan,
     payload: WorkerInputPayload,
     rank: int,
+    artifacts: tuple[ArtifactDraft, ...] = (),
 ) -> _MapReduceStageResult:
     policy = _policy(plan)
-    algorithm = _algorithm(plan, policy)
+    algorithm = _algorithm(plan, policy, artifacts)
     versions = _actual_environment_versions(
         plan.environment.python,
         plan.environment.dependencies,
@@ -341,6 +344,7 @@ def _map_partition(
         tracked = _TrackedBatches(_input_batches(prepared))
         context = AlgorithmExecutionContext(
             inputs=prepared.views,
+            artifacts=artifacts,
             worker_metadata={
                 **identity,
                 "world_rank": rank,
@@ -360,11 +364,23 @@ def _map_partition(
         )
         shard_id = hashlib.sha256(
             (
-                f"{plan.input_descriptor.binding_digest}:"
+                f"{plan.primary_input_descriptor.binding_digest}:"
                 f"{rank}/{plan.runtime.worker_count}"
             ).encode("ascii")
         ).hexdigest()
         assigned = ray.get_runtime_context().get_assigned_resources()
+        raw_coverage = algorithm.coverage_counts(state)
+        if not isinstance(raw_coverage, Mapping) or any(
+            not isinstance(name, str)
+            or not name
+            or not isinstance(count, int)
+            or isinstance(count, bool)
+            or count < 0
+            for name, count in raw_coverage.items()
+        ):
+            raise AlgorithmExecutionError(
+                "MapReduce coverage_counts must contain named non-negative integers"
+            )
         evidence = WorkerExecutionEvidence(
             worker_id=identity["worker_id"],
             node_id=identity["node_id"],
@@ -382,6 +398,13 @@ def _map_partition(
             ),
             model_state_digest=state_digest,
             rows_processed=tracked.row_count,
+            input_rows={
+                "train": tracked.row_count,
+                **{
+                    f"coverage.{name}": count
+                    for name, count in sorted(raw_coverage.items())
+                },
+            },
         )
         return _MapReduceStageResult(
             state=values,
@@ -401,9 +424,10 @@ def _merge_pair(
     plan: ResolvedAlgorithmPlan,
     left: _MapReduceStageResult,
     right: _MapReduceStageResult,
+    artifacts: tuple[ArtifactDraft, ...] = (),
 ) -> _MapReduceStageResult:
     policy = _policy(plan)
-    algorithm = _algorithm(plan, policy)
+    algorithm = _algorithm(plan, policy, artifacts)
     if dict(left.actual_versions) != dict(right.actual_versions):
         raise AlgorithmExecutionError(
             "MapReduce stages loaded inconsistent dependency versions"
@@ -438,9 +462,10 @@ def _finalize_model(
     plan: ResolvedAlgorithmPlan,
     stage: _MapReduceStageResult,
     run_id: str,
+    artifacts: tuple[ArtifactDraft, ...] = (),
 ) -> WorkerExecutionResult:
     policy = _policy(plan)
-    algorithm = _algorithm(plan, policy)
+    algorithm = _algorithm(plan, policy, artifacts)
     observed_input_rows = _validate_input_coverage(stage)
     execution = _map_reduce_execution_result(
         algorithm=algorithm,
@@ -482,6 +507,7 @@ def _finalize_model(
 def _tree_reduce(
     plan: ResolvedAlgorithmPlan,
     references: list[ray.ObjectRef],
+    artifacts: tuple[ArtifactDraft, ...],
     *,
     num_cpus: float,
     num_gpus: float,
@@ -496,14 +522,15 @@ def _tree_reduce(
             if index + 1 == len(current):
                 next_level.append(current[index])
                 continue
+            merge_pair = cast(Any, _merge_pair)
             next_level.append(
-                _merge_pair.options(
+                merge_pair.options(
                     num_cpus=num_cpus,
                     num_gpus=num_gpus,
                     resources=dict(custom_resources),
                     max_retries=max_retries,
                     retry_exceptions=False,
-                ).remote(plan, current[index], current[index + 1])
+                ).remote(plan, current[index], current[index + 1], artifacts)
             )
         current = next_level
     return current[0]
@@ -526,33 +553,50 @@ class RayMapReduceRuntime:
             )
         if envelope.cancelled:
             raise AlgorithmExecutionError("MapReduce execution was cancelled")
+        payloads = tuple(
+            payload
+            for payload in envelope.input_payloads
+            if isinstance(payload, WorkerInputPayload)
+        )
+        if len(payloads) != len(envelope.input_payloads):
+            raise AlgorithmInputError(
+                "MapReduce currently accepts exactly one input role"
+            )
         policy = _policy(envelope.plan)
         try:
+            map_partition = cast(Any, _map_partition)
             references = [
-                _map_partition.options(
+                map_partition.options(
                     num_cpus=envelope.plan.runtime.num_cpus,
                     num_gpus=envelope.plan.runtime.num_gpus,
                     resources=dict(envelope.plan.runtime.custom_resources),
                     scheduling_strategy="SPREAD",
                     max_retries=policy.max_retries,
                     retry_exceptions=False,
-                ).remote(envelope.plan, payload, rank)
-                for rank, payload in enumerate(envelope.input_payloads)
+                ).remote(envelope.plan, payload, rank, envelope.artifacts)
+                for rank, payload in enumerate(payloads)
             ]
             final_state = _tree_reduce(
                 envelope.plan,
                 references,
+                envelope.artifacts,
                 num_cpus=envelope.plan.runtime.num_cpus,
                 num_gpus=envelope.plan.runtime.num_gpus,
                 custom_resources=envelope.plan.runtime.custom_resources,
                 max_retries=policy.max_retries,
             )
+            finalize_model = cast(Any, _finalize_model)
             result = ray.get(
-                _finalize_model.options(
+                finalize_model.options(
                     num_cpus=envelope.plan.runtime.num_cpus,
                     num_gpus=envelope.plan.runtime.num_gpus,
                     resources=dict(envelope.plan.runtime.custom_resources),
-                ).remote(envelope.plan, final_state, envelope.run_id)
+                ).remote(
+                    envelope.plan,
+                    final_state,
+                    envelope.run_id,
+                    envelope.artifacts,
+                )
             )
         except ray.exceptions.RayError as exc:
             raise AlgorithmExecutionError(

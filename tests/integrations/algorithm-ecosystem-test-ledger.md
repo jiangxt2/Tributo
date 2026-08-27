@@ -1,0 +1,17 @@
+# Algorithm Ecosystem Test Ledger
+
+This ledger tracks non-duplicated evidence for the algorithm decomposition and
+official Wheel delivery change. A passed long-running suite is not repeated
+unless relevant production code, test code, infrastructure, configuration, or
+the execution environment changes.
+
+| Suite | Scope | Code state | Reason | Result |
+| --- | --- | --- | --- | --- |
+| Core decomposition contracts | Strategy serialization, Builder, Planner, Receipt, plugin ownership | Current worktree | Fast contract baseline | Passed: 58 tests plus support-evidence and conformance contract coverage |
+| Core legacy compatibility | Existing Torch recipe, collective, plugin, input lifecycle | Current worktree | Protect existing public paths | Passed: 40 recipe/plugin tests and 29 input tests |
+| Decomposition local Ray | Joblib estimator tasks, ensemble units, iterative rounds/checkpoint, resume, corruption rejection | Current worktree | Development diagnosis before cluster IT | Passed: 5 tests with local Ray; resume and fail-closed corruption paths included |
+| Official Wheel unit/static/build | All 14 packages, 27 official Entry Points, public SPI, Descriptor-only discovery, mypy, Ruff, independent Wheel build | Current Core plus official Monorepo | Prove package boundaries before cluster installation | Passed: 68 tests including the X-Learner ONNX exporter contract; 27-entry-point Conformance; Ruff and mypy(packages); all Wheels built |
+| Official Wheel local end-to-end | Ray Data, decomposition runtimes, RecipeV2 DDP, Graph/XGBoost Framework Native, causal MapReduce, finite staged Framework Native, checkpoint, ONNX/Safetensors/report Bundle | Current Core plus installed fixed Wheels | Diagnose runtime and exporter boundaries | Passed prior category paths plus out-of-tree XGBoost, five-stage X-Learner with typed safe batch Flavor, and three-stage AIPW/DR with distributed nuisance models, finite ATE, stage evidence, report and ONNX Bundle |
+| Distributed algorithm Docker IT | All official categories, RF Joblib/Native, LR iterative, cross-node Bundle/inference, Tune, recovery, failure injection | Final candidate before Gate | Required cross-node execution proof | Blocked after final attempts: official Ray Job exceeded pytest 1200s while serially running the 27-record gate; every run cleaned its Compose project. Earlier targets and individual local proofs passed. |
+| Priority six-algorithm Docker IT | XGBoost, RF Joblib, LR iterative, Linear DML, DR/AIPW, X-Learner; cross-node Bundle/ONNX, baseline, checkpoint recovery, and batch inference | Current priority Gate change | Requested focused evidence after the 27-record timeout | Passed: 1 test in 431.19s on a 3-node Docker Ray cluster; all six records reported distributed/cluster_distributed/cross-node execution and ONNX artifacts; RF/LR baseline, checkpoint recovery/corruption rejection, and 16-row two-node batch inference passed. The Gate uses two folds for DR/X-Learner to bound nested Trainer pressure; implementations retain five-fold defaults. |
+| Final static and unit suite | Cumulative Ruff, mypy, Core regression, official Wheel tests, Conformance | Final implementation candidate | Final merge-readiness evidence | Core affected tests `17 passed`; official boosting/DR/X-Learner tests `10 passed`; Ruff and mypy affected modules passed; priority Docker Gate passed. The 27-record full Gate remains a separate scope that previously timed out. |

@@ -52,16 +52,25 @@ def disable_uv_runtime_env_hook(monkeypatch: pytest.MonkeyPatch) -> None:
 def _result_from_logs(logs: str) -> list[dict[str, Any]]:
     marker = "RESULT: "
     decoder = json.JSONDecoder()
-    offset = 0
-    while (marker_offset := logs.find(marker, offset)) >= 0:
-        payload = logs[marker_offset + len(marker) :].lstrip()
-        try:
-            result, _ = decoder.raw_decode(payload)
-        except json.JSONDecodeError:
-            offset = marker_offset + len(marker)
+    for line in logs.splitlines():
+        if not line.startswith(marker):
             continue
-        return cast(list[dict[str, Any]], result)
+        try:
+            result, _ = decoder.raw_decode(line[len(marker) :].lstrip())
+        except json.JSONDecodeError:
+            continue
+        if isinstance(result, list):
+            return cast(list[dict[str, Any]], result)
     raise AssertionError(f"RESULT line not found in job logs:\n{logs}")
+
+
+def _object_from_logs(logs: str, marker: str) -> dict[str, Any]:
+    decoder = json.JSONDecoder()
+    marker_offset = logs.find(marker)
+    if marker_offset < 0:
+        raise AssertionError(f"{marker.strip()} line not found in job logs")
+    value, _ = decoder.raw_decode(logs[marker_offset + len(marker) :].lstrip())
+    return cast(dict[str, Any], value)
 
 
 def _plugin_wheel() -> Path:
@@ -82,6 +91,35 @@ def _torch_recipe_plugin_wheel() -> Path:
     if not wheel.is_file() or wheel.suffix != ".whl":
         pytest.fail(f"Torch recipe plugin wheel is unavailable: {wheel}")
     return wheel
+
+
+def _official_algorithm_wheels() -> tuple[Path, ...]:
+    configured = (
+        os.environ.get("TRIBUTO_CORE_WHEEL"),
+        os.environ.get("TRIBUTO_OFFICIAL_CLASSICAL_WHEEL"),
+        os.environ.get("TRIBUTO_OFFICIAL_TIMESERIES_WHEEL"),
+        os.environ.get("TRIBUTO_OFFICIAL_REPRESENTATION_WHEEL"),
+        os.environ.get("TRIBUTO_OFFICIAL_GRAPH_PYG_WHEEL"),
+        os.environ.get("TRIBUTO_OFFICIAL_TABULAR_TORCH_WHEEL"),
+        os.environ.get("TRIBUTO_OFFICIAL_RECSYS_TORCH_WHEEL"),
+        os.environ.get("TRIBUTO_OFFICIAL_TRANSFORMERS_NLP_WHEEL"),
+        os.environ.get("TRIBUTO_OFFICIAL_CAUSAL_CORE_WHEEL"),
+        os.environ.get("TRIBUTO_OFFICIAL_CAUSAL_DISCOVERY_WHEEL"),
+        os.environ.get("TRIBUTO_OFFICIAL_MULTISTAGE_TORCH_WHEEL"),
+        os.environ.get("TRIBUTO_OFFICIAL_BOOSTING_WHEEL"),
+        os.environ.get("TRIBUTO_OFFICIAL_CAUSAL_XLEARNER_WHEEL"),
+        os.environ.get("TRIBUTO_OFFICIAL_CAUSAL_DR_WHEEL"),
+        os.environ.get("TRIBUTO_OFFICIAL_CAUSAL_DOWHY_WHEEL"),
+    )
+    if any(not value for value in configured):
+        pytest.fail(
+            "official algorithm IT requires classical, timeseries, representation, "
+            "graph-pyg, tabular-torch, recsys-torch, transformers-nlp, causal-core, causal-discovery, multistage-torch, boosting, causal-xlearner, causal-dr, and causal-dowhy Wheels"
+        )
+    wheels = tuple(Path(cast(str, value)) for value in configured)
+    if any(not wheel.is_file() or wheel.suffix != ".whl" for wheel in wheels):
+        pytest.fail(f"official algorithm Wheel is unavailable: {wheels}")
+    return wheels
 
 
 def _algorithm_image_profile() -> ImageProfile:
@@ -201,82 +239,180 @@ def _submit_torch_recipe_gate_job(
     return result
 
 
-def test_formal_distributed_algorithms_complete_on_ray_cluster(
+def _submit_official_algorithm_gate_job(
+    job_client: JobSubmissionClient,
+    *,
+    root: Path,
+    wheels: tuple[Path, ...],
+    entrypoint: str = "python tests/training/jobs/official_algorithm_gate_job.py",
+) -> dict[str, Any]:
+    submission_id = f"official-algorithms-{uuid.uuid4().hex}"
+    runtime_env = {
+        "working_dir": "/workspace/tributo-src",
+        "pip": {
+            "packages": [str(wheel) for wheel in wheels],
+            "pip_check": False,
+            "pip_install_options": [
+                "--disable-pip-version-check",
+                "--no-cache-dir",
+                "--no-deps",
+            ],
+        },
+        "env_vars": {
+            "RAY_ENABLE_UV_RUN_RUNTIME_ENV": "0",
+            "RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO": "0",
+            "TRIBUTO_OFFICIAL_ALGORITHM_GATE_ROOT": str(root),
+            "TRIBUTO_RUN_ID": submission_id,
+            "TRIBUTO_ATTEMPT_ID": "attempt-1",
+        },
+    }
+    job_id = job_client.submit_job(
+        entrypoint=entrypoint,
+        runtime_env=runtime_env,
+        submission_id=submission_id,
+    )
+    result = wait_for_job(job_client, job_id, timeout=1800)
+    result["message"] = job_client.get_job_info(job_id).message or ""
+    if log_path := os.environ.get("TRIBUTO_DISTRIBUTED_GATE_LOG"):
+        with Path(log_path).open("a", encoding="utf-8") as stream:
+            stream.write(
+                f"===== official-algorithms status={result['status']} "
+                f"job_id={job_id} =====\n"
+            )
+            if result["message"]:
+                stream.write(f"Ray Job message: {result['message']}\n")
+            stream.write(str(result["logs"]))
+            stream.write("\n")
+    return result
+
+
+def test_official_algorithm_wheels_complete_on_ray_cluster(
     job_client: JobSubmissionClient,
 ) -> None:
-    """Prove built-ins, a wheel plugin, and required-artifact atomicity."""
+    """Prove official decomposition and RecipeV2 Wheels train across nodes."""
     if os.environ.get("TRIBUTO_DOCKER_DISTRIBUTED_ALGORITHM_IT") != "1":
-        pytest.fail("distributed algorithm IT must run in its owned Docker cluster")
-    plugin_wheel = _plugin_wheel()
+        pytest.fail("official algorithm IT must run in its owned Docker cluster")
+    wheels = _official_algorithm_wheels()
     gate_root = Path(
-        f"/workspace/tributo-work/tributo-distributed-gate-{uuid.uuid4().hex}"
+        f"/workspace/tributo-work/tributo-official-algorithm-gate-{uuid.uuid4().hex}"
     )
-    success_root = gate_root / "success"
-    failure_root = gate_root / "required-artifact-failure"
-    try:
-        job_result = _submit_gate_job(
-            job_client,
-            mode="docker-distributed",
-            root=success_root,
-            plugin_wheel=plugin_wheel,
-        )
-        assert job_result["status"] == JobStatus.SUCCEEDED, (
-            "distributed algorithm Gate failed:\n"
-            f"{job_result['message']}\n{job_result['logs']}"
-        )
+    result = _submit_official_algorithm_gate_job(
+        job_client,
+        root=gate_root,
+        wheels=wheels,
+    )
+    assert result["status"] == JobStatus.SUCCEEDED, (
+        f"official algorithm Gate failed:\n{result['message']}\n{result['logs']}"
+    )
+    records = _result_from_logs(str(result["logs"]))
+    assert len(records) == 27
+    tune_result = _object_from_logs(str(result["logs"]), "TUNE_RESULT: ")
+    assert tune_result["trial_count"] == 2
+    assert tune_result["checkpoint_count"] == 2
+    assert tune_result["formal_bundle_published"] is False
+    baseline_result = _object_from_logs(str(result["logs"]), "BASELINE_RESULT: ")
+    assert baseline_result["random_forest_exact"] is True
+    assert baseline_result["random_forest_max_probability_delta"] <= 1e-6
+    assert baseline_result["logistic_prediction_equivalent"] is True
+    assert (
+        baseline_result["logistic_max_probability_delta"]
+        <= baseline_result["logistic_probability_tolerance"]
+    )
+    recovery_result = _object_from_logs(str(result["logs"]), "RECOVERY_RESULT: ")
+    assert recovery_result == {
+        "ensemble_corruption_rejected": True,
+        "ensemble_restored_unit_count": 8,
+        "ensemble_resumed": True,
+        "iterative_corruption_rejected": True,
+        "iterative_first_rounds": 1,
+        "iterative_resumed": True,
+        "iterative_resumed_rounds": 2,
+    }
+    failure_result = _object_from_logs(str(result["logs"]), "FAILURE_RESULT: ")
+    assert failure_result["failed_closed"] is True
+    assert failure_result["manifest_published"] is False
+    inference_result = _object_from_logs(str(result["logs"]), "INFERENCE_RESULT: ")
+    assert inference_result["status"] == "completed"
+    assert inference_result["row_count"] == 16
+    assert inference_result["node_count"] == 2
+    assert sum(record["inference_roundtrip"] is True for record in records) >= 15
+    assert {record["receipt"]["strategy"] for record in records} == {
+        "ray_joblib_estimator",
+        "ray_parallel_ensemble",
+        "ray_iterative_optimization",
+        "ray_map_reduce",
+        "ray_train_recipe_v2",
+        "framework_native",
+    }
+    for record in records:
+        receipt = record["receipt"]
+        assert record["status"] == "succeeded"
+        assert receipt["distributed"] is True
+        assert receipt["driver_materialized_training_rows"] == 0
+        assert len(receipt["workers"]) == 2
+        if receipt["strategy"] in {
+            "ray_joblib_estimator",
+            "ray_parallel_ensemble",
+            "ray_iterative_optimization",
+            "ray_map_reduce",
+        }:
+            assert receipt["cluster_distributed"] is True
+            assert receipt["cross_node"] is True
+            assert len({worker["node_id"] for worker in receipt["workers"]}) == 2
 
-        results = _result_from_logs(str(job_result["logs"]))
-        assert {result["algorithm"] for result in results} == {
-            "dnn",
-            "pu",
-            "xgboost",
-            "x_learner",
-            "multinomial_nb",
-            "third_party_mean_regressor",
-        }
-        assert {
-            (result["algorithm"], result["worker_count"])
-            for result in results
-            if result["algorithm"] == "third_party_mean_regressor"
-        } == {
-            ("third_party_mean_regressor", 1),
-            ("third_party_mean_regressor", 2),
-        }
-        for result in results:
-            receipt = result["receipt"]
-            assert result["status"] == "succeeded"
-            assert receipt["execution_profile"] == "cluster"
-            assert receipt["requested_worker_count"] == result["worker_count"]
-            assert receipt["distributed"] is (result["worker_count"] >= 2)
-            assert receipt["cross_node"] is (result["worker_count"] >= 2)
-            assert receipt["cluster_distributed"] is (result["worker_count"] >= 2)
-            assert receipt["driver_materialized_training_rows"] == 0
-            assert len(receipt["workers"]) == result["worker_count"]
-            assert (
-                len({worker["node_id"] for worker in receipt["workers"]})
-                == (result["worker_count"])
-            )
-            assert (
-                len({worker["shard_id"] for worker in receipt["workers"]})
-                == (result["worker_count"])
-            )
-            if result["algorithm"] == "third_party_mean_regressor":
-                assert receipt["result_policy"] == "fit_only"
-                assert receipt["artifact_ids"] == []
-            else:
-                assert receipt["result_policy"] == "bundle_required"
-                assert receipt["artifact_ids"]
 
-        failure_result = _submit_gate_job(
-            job_client,
-            mode="docker-required-artifact-failure",
-            root=failure_root,
-            plugin_wheel=plugin_wheel,
-        )
-        assert failure_result["status"] == JobStatus.FAILED
-        assert not tuple(failure_root.rglob("manifest.json"))
-    finally:
-        shutil.rmtree(gate_root, ignore_errors=True)
+def test_priority_algorithm_wheels_complete_on_ray_cluster(
+    job_client: JobSubmissionClient,
+) -> None:
+    """Prove the selected XGBoost, RF, LR, and causal paths cross nodes."""
+    if os.environ.get("TRIBUTO_DOCKER_DISTRIBUTED_ALGORITHM_IT") != "1":
+        pytest.fail("priority algorithm IT must run in its owned Docker cluster")
+    wheels = _official_algorithm_wheels()
+    gate_root = Path(
+        f"/workspace/tributo-work/tributo-priority-algorithm-gate-{uuid.uuid4().hex}"
+    )
+    result = _submit_official_algorithm_gate_job(
+        job_client,
+        root=gate_root,
+        wheels=wheels,
+        entrypoint="python tests/training/jobs/priority_algorithm_gate_job.py",
+    )
+    assert result["status"] == JobStatus.SUCCEEDED, (
+        f"priority algorithm Gate failed:\n{result['message']}\n{result['logs']}"
+    )
+    records = _result_from_logs(str(result["logs"]))
+    assert {record["algorithm"] for record in records} == {
+        "random_forest",
+        "logistic_regression",
+        "xgboost",
+        "linear_dml_ate",
+        "doubly_robust_ate",
+        "x_learner",
+    }
+    assert len(records) == 6
+    assert all(record["onnx_exported"] is True for record in records)
+    assert all(
+        record["inference_roundtrip"] is True
+        for record in records
+        if record["algorithm"]
+        in {"random_forest", "logistic_regression", "xgboost", "x_learner"}
+    )
+    for record in records:
+        receipt = record["receipt"]
+        assert record["status"] == "succeeded"
+        assert receipt["distributed"] is True
+        assert receipt["cluster_distributed"] is True
+        assert len({worker["node_id"] for worker in receipt["workers"]}) == 2
+    baseline = _object_from_logs(str(result["logs"]), "BASELINE_RESULT: ")
+    assert baseline["random_forest_exact"] is True
+    assert baseline["logistic_prediction_equivalent"] is True
+    recovery = _object_from_logs(str(result["logs"]), "RECOVERY_RESULT: ")
+    assert recovery["ensemble_resumed"] is True
+    assert recovery["iterative_resumed"] is True
+    assert recovery["ensemble_corruption_rejected"] is True
+    assert recovery["iterative_corruption_rejected"] is True
+    inference = _object_from_logs(str(result["logs"]), "INFERENCE_RESULT: ")
+    assert inference["node_count"] == 2
 
 
 def test_out_of_tree_torch_recipe_completes_on_ray_cluster(

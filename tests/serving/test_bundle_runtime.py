@@ -207,12 +207,9 @@ class TestFlavorSupportMatrix:
         assert entry.security_mode == SECURITY_MODE_SAFE
         assert entry.signature_required is True
         assert "onnxruntime" in entry.dependencies
-        assert entry.verticals == ("o1", "dnn", "pu", "xgboost")
-        assert entry.trainer_types == ("dnn", "pu", "xgboost")
-        assert set(entry.producer_ids) == {
-            "torch-onnx-v1",
-            "xgboost-onnx-v1",
-        }
+        assert entry.verticals == ()
+        assert entry.trainer_types == ()
+        assert entry.producer_ids == ("torch-onnx-v1",)
 
     def test_capability_matrix_does_not_infer_execution_from_readability(
         self,

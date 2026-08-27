@@ -9,7 +9,7 @@ SUITE="full"
 PREFLIGHT_ONLY=0
 
 usage() {
-  echo "Usage: $0 [--suite ci|full|walking-skeleton] [--preflight-only]" >&2
+  echo "Usage: $0 [--suite ci|full] [--preflight-only]" >&2
 }
 
 while [[ $# -gt 0 ]]; do
@@ -36,7 +36,7 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
-if [[ "${SUITE}" != "ci" && "${SUITE}" != "full" && "${SUITE}" != "walking-skeleton" ]]; then
+if [[ "${SUITE}" != "ci" && "${SUITE}" != "full" ]]; then
   usage
   exit 2
 fi
@@ -182,14 +182,12 @@ env \
   -p no:cacheprovider \
   "${PREFLIGHT_SOURCE}/tests/training/exporters/test_first_party_conformance.py" \
   "${PREFLIGHT_SOURCE}/tests/integrations/test_e2e_mlflow.py" \
-  "${PREFLIGHT_SOURCE}/tests/integration/test_walking_skeleton.py" \
   -o addopts= -m integration --collect-only -q \
   2>&1 | tee "${PREFLIGHT_COLLECTION_LOG}"
 
 for required_module in \
   "tests/training/exporters/test_first_party_conformance.py::" \
-  "tests/integrations/test_e2e_mlflow.py::" \
-  "tests/integration/test_walking_skeleton.py::"; do
+  "tests/integrations/test_e2e_mlflow.py::"; do
   if ! grep -Fq "${required_module}" "${PREFLIGHT_COLLECTION_LOG}"; then
     echo "Model-export preflight did not collect ${required_module%::}" >&2
     exit 1
@@ -250,39 +248,17 @@ compose --profile model-export exec -T \
   -o cache_dir=/workspace/tributo-work/cache/pytest-model-export \
   -vv --tb=short 2>&1 | tee "${TEST_LOG}"
 
-if [[ "${SUITE}" == "walking-skeleton" ]]; then
-  compose --profile model-export exec -T \
-    --env TRIBUTO_DOCKER_MODEL_EXPORT_IT=1 \
-    ray-head \
-    python -m pytest \
-    tests/integration/test_walking_skeleton.py \
-    -o addopts= \
-    -o cache_dir=/workspace/tributo-work/cache/pytest-model-export \
-    -m integration -vv --tb=short --timeout=900 2>&1 | tee -a "${TEST_LOG}"
-else
-  compose --profile model-export exec -T \
-    --env TRIBUTO_DOCKER_MODEL_EXPORT_IT=1 \
-    ray-head \
-    python -m pytest \
-    tests/training/exporters/test_first_party_conformance.py \
-    tests/integrations/test_e2e_mlflow.py \
-    tests/integration/test_walking_skeleton.py \
-    -o addopts= \
-    -o cache_dir=/workspace/tributo-work/cache/pytest-model-export \
-    -m integration -vv --tb=short --timeout=900 2>&1 | tee -a "${TEST_LOG}"
-fi
+compose --profile model-export exec -T \
+  --env TRIBUTO_DOCKER_MODEL_EXPORT_IT=1 \
+  ray-head \
+  python -m pytest \
+  tests/training/exporters/test_first_party_conformance.py \
+  tests/integrations/test_e2e_mlflow.py \
+  -o addopts= \
+  -o cache_dir=/workspace/tributo-work/cache/pytest-model-export \
+  -m integration -vv --tb=short --timeout=900 2>&1 | tee -a "${TEST_LOG}"
 
 if [[ "${SUITE}" == "full" ]]; then
-  compose --profile model-export exec -T \
-    --env TRIBUTO_DOCKER_MODEL_EXPORT_IT=1 \
-    ray-head \
-    python -m pytest \
-    tests/training/exporters/test_trainer_bundle_contract.py \
-    -o addopts= \
-    -o cache_dir=/workspace/tributo-work/cache/pytest-model-export \
-    -m integration -vv --tb=short --timeout=900 \
-    2>&1 | tee -a "${TEST_LOG}"
-
   compose --profile model-export exec -T \
     --env TRIBUTO_DOCKER_MODEL_EXPORT_IT=1 \
     ray-head \

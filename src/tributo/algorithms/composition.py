@@ -28,12 +28,22 @@ def build_algorithm_dispatcher(
     )
     from tributo.integrations.algorithm_runtimes.collective import (
         RayTrainCollectiveRuntime,
+        RayTrainRecipeV2Runtime,
     )
     from tributo.integrations.algorithm_runtimes.framework_native import (
         FrameworkNativeRuntime,
     )
+    from tributo.integrations.algorithm_runtimes.iterative_optimization import (
+        RayIterativeOptimizationRuntime,
+    )
+    from tributo.integrations.algorithm_runtimes.joblib_estimator import (
+        RayJoblibEstimatorRuntime,
+    )
     from tributo.integrations.algorithm_runtimes.map_reduce import (
         RayMapReduceRuntime,
+    )
+    from tributo.integrations.algorithm_runtimes.parallel_ensemble import (
+        RayParallelUnitRuntime,
     )
     from tributo.integrations.algorithm_runtimes.ray_task import RayTaskRuntime
     from tributo.training.registry import get_execution_registry
@@ -46,8 +56,12 @@ def build_algorithm_dispatcher(
     runtimes = (
         RayTaskRuntime(),
         RayTrainCollectiveRuntime(),
+        RayTrainRecipeV2Runtime(),
         RayMapReduceRuntime(),
         FrameworkNativeRuntime(),
+        RayJoblibEstimatorRuntime(),
+        RayParallelUnitRuntime(),
+        RayIterativeOptimizationRuntime(),
     )
     return AlgorithmDispatcher(
         AlgorithmPlanner(

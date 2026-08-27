@@ -26,6 +26,7 @@ from tributo.algorithms.input.fake import FakeInputInvocation, FakeTabularPayloa
 from tributo.algorithms.spi import ExecutionEnvelope, InputExecutionContext
 from tributo.integrations.algorithm_runtimes.legacy_descriptors import (
     BUILTIN_LEGACY_DESCRIPTORS,
+    LegacyTrainerDescriptor,
 )
 
 from .conftest import make_spec, request_for
@@ -111,36 +112,15 @@ def _envelope(config: dict[str, object]) -> ExecutionEnvelope:
     return ExecutionEnvelope(plan=plan, input_payload=payload)
 
 
-def test_builtin_descriptors_are_lightweight_and_not_native_migrations() -> None:
-    assert [item.name for item in BUILTIN_LEGACY_DESCRIPTORS] == [
-        "dnn",
-        "pu",
-        "xgboost",
-    ]
-    assert all(
-        item.registration.implementation.execution_mode is ExecutionMode.LEGACY_TRAINER
-        for item in BUILTIN_LEGACY_DESCRIPTORS
-    )
-    assert all(
-        not item.native_migration_complete for item in BUILTIN_LEGACY_DESCRIPTORS
-    )
-    assert all(
-        not item.tested and not item.supported for item in BUILTIN_LEGACY_DESCRIPTORS
-    )
-    assert all(item.stability == "beta" for item in BUILTIN_LEGACY_DESCRIPTORS)
-
+def test_core_has_no_builtin_legacy_trainer_descriptors() -> None:
+    assert BUILTIN_LEGACY_DESCRIPTORS == ()
     script = """
 import sys
 import tributo.training
 from tributo.integrations.algorithm_runtimes.legacy_descriptors import BUILTIN_LEGACY_DESCRIPTORS
-assert len(BUILTIN_LEGACY_DESCRIPTORS) == 3
+assert BUILTIN_LEGACY_DESCRIPTORS == ()
 assert "TuneRunner" in tributo.training.__all__
 assert "submit_training_job" in tributo.training.__all__
-assert "tributo.training.xgboost_trainer" not in sys.modules
-assert "tributo.training.dnn_trainer" not in sys.modules
-assert "tributo.training.pu_trainer" not in sys.modules
-assert "xgboost" not in sys.modules
-assert "torch" not in sys.modules
 """
     result = subprocess.run(
         [sys.executable, "-c", script],
@@ -152,8 +132,17 @@ assert "torch" not in sys.modules
 
 
 def test_legacy_descriptor_cannot_claim_alpha_stability() -> None:
+    registration = _registration()
+    descriptor = LegacyTrainerDescriptor(
+        registration=registration,
+        trainer_ref=registration.implementation.implementation_ref,
+        config_model_ref=QualifiedReference.parse(
+            "tests.support.legacy_trainers:ProbeLegacyConfig"
+        ),
+        limitations=(),
+    )
     with pytest.raises(ValueError, match="must remain Beta"):
-        replace(BUILTIN_LEGACY_DESCRIPTORS[0], stability="alpha")
+        replace(descriptor, stability="alpha")
 
 
 def test_worker_bootstrap_delays_trainer_load_and_normalizes_result() -> None:

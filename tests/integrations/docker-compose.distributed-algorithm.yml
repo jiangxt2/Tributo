@@ -1,5 +1,13 @@
 services:
+  ray-head:
+    environment:
+      # This short-lived IT may share Docker Desktop's VM with unrelated
+      # services. Keep Ray OOM protection enabled while allowing its verified
+      # worker processes to start under that co-location pressure.
+      RAY_memory_usage_threshold: ${TRIBUTO_RAY_MEMORY_USAGE_THRESHOLD:-0.95}
   ray-worker:
+    environment:
+      RAY_memory_usage_threshold: ${TRIBUTO_RAY_MEMORY_USAGE_THRESHOLD:-0.95}
     command:
       - /bin/bash
       - -lc

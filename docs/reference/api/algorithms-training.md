@@ -56,6 +56,10 @@ documentation for every public stability tier.
 :no-members:
 ```
 
+```{autoclass} tributo.algorithms.api.distribution.DistributedExactness
+:no-members:
+```
+
 ```{autoclass} tributo.algorithms.api.distribution.DistributionSpec
 :no-members:
 ```
@@ -76,11 +80,23 @@ documentation for every public stability tier.
 :no-members:
 ```
 
+```{autoclass} tributo.algorithms.api.distribution.IterativeOptimizationPolicy
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.distribution.JoblibEstimatorPolicy
+:no-members:
+```
+
 ```{autoclass} tributo.algorithms.api.distribution.MapReducePolicy
 :no-members:
 ```
 
 ```{autoclass} tributo.algorithms.api.distribution.MetricReduction
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.distribution.ParallelEnsemblePolicy
 :no-members:
 ```
 
@@ -176,6 +192,14 @@ documentation for every public stability tier.
 :no-members:
 ```
 
+```{autoclass} tributo.algorithms.api.models.ContractBinding
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.models.ContractBindingSet
+:no-members:
+```
+
 ```{autoclass} tributo.algorithms.api.models.EnvironmentSpec
 :no-members:
 ```
@@ -196,6 +220,14 @@ documentation for every public stability tier.
 :no-members:
 ```
 
+```{autoclass} tributo.algorithms.api.models.InputBindingSet
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.models.InputCoverageContract
+:no-members:
+```
+
 ```{autoclass} tributo.algorithms.api.models.QualifiedReference
 :no-members:
 ```
@@ -205,6 +237,10 @@ documentation for every public stability tier.
 ```
 
 ```{autoclass} tributo.algorithms.api.models.ResolvedInputDescriptor
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.models.ResolvedInputDescriptorSet
 :no-members:
 ```
 
@@ -221,34 +257,21 @@ documentation for every public stability tier.
 ```
 
 
-## `tributo.algorithms.builtin.multinomial_nb`
+## `tributo.algorithms.api.support`
 
-```{autoclass} tributo.algorithms.builtin.multinomial_nb.DistributedMultinomialNB
+```{autoclass} tributo.algorithms.api.support.AlgorithmSupportEvidence
 :no-members:
 ```
 
-
-## `tributo.algorithms.builtin.torch_collective`
-
-```{autoclass} tributo.algorithms.builtin.torch_collective.DistributedDNN
+```{autoclass} tributo.algorithms.api.support.AlgorithmSupportEvidenceRegistry
 :no-members:
 ```
 
-```{autoclass} tributo.algorithms.builtin.torch_collective.DistributedPU
+```{autoclass} tributo.algorithms.api.support.DistributedSemantics
 :no-members:
 ```
 
-
-## `tributo.algorithms.builtin.x_learner`
-
-```{autoclass} tributo.algorithms.builtin.x_learner.DistributedXLearner
-:no-members:
-```
-
-
-## `tributo.algorithms.builtin.xgboost_native`
-
-```{autoclass} tributo.algorithms.builtin.xgboost_native.DistributedXGBoost
+```{autoclass} tributo.algorithms.api.support.SupportTier
 :no-members:
 ```
 
@@ -256,6 +279,19 @@ documentation for every public stability tier.
 ## `tributo.algorithms.composition`
 
 ```{autofunction} tributo.algorithms.composition.build_algorithm_dispatcher
+```
+
+
+## `tributo.algorithms.conformance`
+
+```{autoclass} tributo.algorithms.conformance.AlgorithmPackageConformanceReport
+:no-members:
+```
+
+```{autofunction} tributo.algorithms.conformance.validate_algorithm_descriptor_conformance
+```
+
+```{autofunction} tributo.algorithms.conformance.validate_installed_algorithm_package
 ```
 
 
@@ -277,6 +313,13 @@ documentation for every public stability tier.
 ```
 
 
+## `tributo.algorithms.spi.contracts`
+
+```{autoclass} tributo.algorithms.spi.contracts.AlgorithmContractValidator
+:no-members:
+```
+
+
 ## `tributo.algorithms.spi.execution`
 
 ```{autoclass} tributo.algorithms.spi.execution.AlgorithmExecutionContext
@@ -284,6 +327,10 @@ documentation for every public stability tier.
 ```
 
 ```{autoclass} tributo.algorithms.spi.execution.CollectiveAlgorithm
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.spi.execution.EnsembleUnitSpec
 :no-members:
 ```
 
@@ -303,7 +350,19 @@ documentation for every public stability tier.
 :no-members:
 ```
 
+```{autoclass} tributo.algorithms.spi.execution.IterativeOptimizationAlgorithm
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.spi.execution.JoblibEstimatorRecipe
+:no-members:
+```
+
 ```{autoclass} tributo.algorithms.spi.execution.MapReduceAlgorithm
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.spi.execution.ParallelEnsembleAlgorithm
 :no-members:
 ```
 
@@ -370,10 +429,30 @@ documentation for every public stability tier.
 :no-members:
 ```
 
+```{autoclass} tributo.algorithms.spi.input.WorkerInputPayloadSet
+:no-members:
+```
+
 
 ## `tributo.algorithms.spi.torch`
 
+```{autoclass} tributo.algorithms.spi.torch.MetricPlan
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.spi.torch.OptimizationPlan
+:no-members:
+```
+
 ```{autoclass} tributo.algorithms.spi.torch.TorchTrainingRecipe
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.spi.torch.TrainingRecipeV2
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.spi.torch.TrainingStepResult
 :no-members:
 ```
 
@@ -497,6 +576,12 @@ documentation for every public stability tier.
 ```{autofunction} tributo.training.checkpoint.load_initial_checkpoint
 ```
 
+```{autofunction} tributo.training.checkpoint.materialize_checkpoint_directory
+```
+
+```{autofunction} tributo.training.checkpoint.publish_checkpoint_directory
+```
+
 ```{autofunction} tributo.training.checkpoint.read_resume_manifest
 ```
 
@@ -504,19 +589,6 @@ documentation for every public stability tier.
 ```
 
 ```{autofunction} tributo.training.checkpoint.write_resume_manifest
-```
-
-
-## `tributo.training.dnn_trainer`
-
-```{autoclass} tributo.training.dnn_trainer.DNNTrainerImpl
-:no-members:
-```
-
-```{autofunction} tributo.training.dnn_trainer.run_dnn_training_from_json
-```
-
-```{autofunction} tributo.training.dnn_trainer.run_dnn_training_with_config
 ```
 
 
@@ -578,10 +650,6 @@ documentation for every public stability tier.
 :no-members:
 ```
 
-```{autoclass} tributo.training.flavor.XGBoostFlavor
-:no-members:
-```
-
 
 ## `tributo.training.graph_trainer`
 
@@ -619,28 +687,10 @@ documentation for every public stability tier.
 ```
 
 
-## `tributo.training.onnx_exporter`
+## `tributo.training.portable_tune`
 
-```{autofunction} tributo.training.onnx_exporter.export_to_onnx
-```
-
-
-## `tributo.training.priors`
-
-```{autofunction} tributo.training.priors.estimate_class_prior
-```
-
-
-## `tributo.training.pu_trainer`
-
-```{autoclass} tributo.training.pu_trainer.PUTrainerImpl
+```{autoclass} tributo.training.portable_tune.PortableTuneRunner
 :no-members:
-```
-
-```{autofunction} tributo.training.pu_trainer.run_pu_training_from_json
-```
-
-```{autofunction} tributo.training.pu_trainer.run_pu_training_with_config
 ```
 
 
@@ -715,16 +765,4 @@ documentation for every public stability tier.
 ```
 
 ```{autofunction} tributo.training.tune_space.warn_search_space_conflicts
-```
-
-
-## `tributo.training.xgboost_trainer`
-
-```{autofunction} tributo.training.xgboost_trainer.build_trainer
-```
-
-```{autofunction} tributo.training.xgboost_trainer.run_training_from_json
-```
-
-```{autofunction} tributo.training.xgboost_trainer.run_training_result_with_config
 ```

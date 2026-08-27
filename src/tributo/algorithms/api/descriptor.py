@@ -21,7 +21,7 @@ from tributo.util.annotations import PublicAPI
 @PublicAPI(stability="alpha")
 @dataclass(frozen=True)
 class DistributedAlgorithmDescriptor:
-    """Atomically expose one formal registration and support evidence."""
+    """Atomically expose one formal registration and package compatibility."""
 
     registration: AlgorithmRegistration
     package_name: str
@@ -40,10 +40,14 @@ class DistributedAlgorithmDescriptor:
         if (
             not isinstance(self.api_version, int)
             or isinstance(self.api_version, bool)
-            or self.api_version != 1
+            or self.api_version not in {1, 2}
         ):
             raise AlgorithmConfigurationError(
                 f"unsupported distributed descriptor api_version: {self.api_version}"
+            )
+        if self.api_version >= 2 and self.registration.contract_bindings is None:
+            raise AlgorithmConfigurationError(
+                "distributed descriptor api_version 2 requires ContractBindingSet"
             )
         if self.registration.distribution_spec is None:
             raise AlgorithmConfigurationError(

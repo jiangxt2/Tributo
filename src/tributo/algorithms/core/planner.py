@@ -11,9 +11,12 @@ from tributo.algorithms.api import (
     AlgorithmRequest,
     AlgorithmResolution,
     ExecutionRequest,
+    InputBinding,
+    InputBindingSet,
     InputDistribution,
-    MapReducePolicy,
     ResolvedAlgorithmPlan,
+    ResolvedInputDescriptor,
+    ResolvedInputDescriptorSet,
     RuntimeBinding,
     RuntimeTopology,
     WorkerResources,
@@ -23,6 +26,7 @@ from tributo.algorithms.api.models import (
     FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS,
     AlgorithmRegistration,
 )
+from tributo.algorithms.core.contracts import validate_contract_value
 from tributo.algorithms.core.registry import AlgorithmRegistrationRegistry
 from tributo.algorithms.spi import InputResolutionContext, InputResolverPort
 from tributo.util.annotations import DeveloperAPI
@@ -57,13 +61,10 @@ class AlgorithmPlanner:
         available_resources: Mapping[str, float] | None = None,
     ) -> ResolvedAlgorithmPlan:
         """Build an immutable deterministic plan for one bounded request."""
-        requested_algorithm_request = (
+        algorithm_request = (
             request.algorithm_request
             if isinstance(request, ExecutionRequest)
             else request
-        )
-        algorithm_request = self._canonicalize_compatibility_alias(
-            requested_algorithm_request
         )
         registration = self._registry.resolve(
             algorithm=algorithm_request.algorithm,
@@ -79,16 +80,110 @@ class AlgorithmPlanner:
             raise AlgorithmConfigurationError(
                 f"configuration contains undeclared key(s): {unknown}"
             )
+        if registration.contract_bindings is not None:
+            config = validate_contract_value(
+                registration.contract_bindings.config,
+                config,
+            )
+            normalized_unknown = sorted(
+                set(config) - set(registration.implementation.allowed_config_keys)
+            )
+            if normalized_unknown:
+                raise AlgorithmConfigurationError(
+                    "validated configuration contains undeclared key(s): "
+                    f"{normalized_unknown}"
+                )
         runtime = self._resolve_runtime(
             registration,
             request,
             available_resources=available_resources,
         )
-        resolver = self.resolver(algorithm_request.input_binding.resolver_id)
-        descriptor = resolver.describe(
-            algorithm_request.input_binding,
-            context or InputResolutionContext(),
+        binding_set = algorithm_request.input_bindings
+        resolution_context = context or InputResolutionContext()
+        descriptors: list[ResolvedInputDescriptor] = []
+        for binding in binding_set.bindings:
+            resolver = self.resolver(binding.resolver_id)
+            descriptor = resolver.describe(binding, resolution_context)
+            self._validate_input_descriptor(
+                registration,
+                runtime,
+                descriptor,
+            )
+            descriptors.append(descriptor)
+        descriptor_set = ResolvedInputDescriptorSet(
+            roles=tuple(binding.name for binding in binding_set.bindings),
+            descriptors=tuple(descriptors),
         )
+        selected_input_binding: InputBinding | InputBindingSet = (
+            algorithm_request.input_binding
+        )
+        selected_input_descriptor: (
+            ResolvedInputDescriptor | ResolvedInputDescriptorSet
+        ) = (
+            descriptor_set.descriptors[0]
+            if isinstance(selected_input_binding, InputBinding)
+            else descriptor_set
+        )
+        if registration.contract_bindings is not None:
+            validate_contract_value(
+                registration.contract_bindings.input,
+                {
+                    "primary_role": binding_set.primary_role,
+                    "bindings": binding_set.descriptor_payload()["bindings"],
+                    "descriptors": descriptor_set.to_dict(),
+                },
+            )
+        resolution = AlgorithmResolution(
+            algorithm=registration.spec.name,
+            algorithm_version=registration.spec.version,
+            implementation_id=registration.implementation.implementation_id,
+            implementation_version=registration.implementation.version,
+            execution_mode=registration.implementation.execution_mode,
+            environment_id=registration.environment.environment_id,
+            runtime_id=runtime.runtime_id,
+            requested_algorithm=algorithm_request.algorithm,
+        )
+        provisional = ResolvedAlgorithmPlan(
+            format_version=3
+            if isinstance(selected_input_binding, InputBindingSet)
+            else 2,
+            plan_id="0" * 64,
+            operation=algorithm_request.operation,
+            resolution=resolution,
+            implementation=registration.implementation,
+            environment=registration.environment,
+            runtime=runtime,
+            input_binding=selected_input_binding,
+            input_descriptor=selected_input_descriptor,
+            algorithm_config=config,
+            config_digest=canonical_digest(config),
+            distribution_spec=registration.distribution_spec,
+            contract_bindings=registration.contract_bindings,
+        )
+        plan_id = canonical_digest(provisional.to_dict(include_plan_id=False))
+        return ResolvedAlgorithmPlan(
+            format_version=provisional.format_version,
+            plan_id=plan_id,
+            operation=provisional.operation,
+            resolution=provisional.resolution,
+            implementation=provisional.implementation,
+            environment=provisional.environment,
+            runtime=provisional.runtime,
+            input_binding=provisional.input_binding,
+            input_descriptor=provisional.input_descriptor,
+            algorithm_config=provisional.algorithm_config,
+            config_digest=provisional.config_digest,
+            distribution_spec=provisional.distribution_spec,
+            contract_bindings=provisional.contract_bindings,
+        )
+
+    @staticmethod
+    def _validate_input_descriptor(
+        registration: AlgorithmRegistration,
+        runtime: RuntimeBinding,
+        descriptor: ResolvedInputDescriptor,
+    ) -> None:
+        """Validate one role without interpreting its domain semantics."""
         compatibility = registration.implementation.input_compatibility
         if descriptor.view_kind not in compatibility.accepted_input_views:
             raise AlgorithmConfigurationError(
@@ -140,86 +235,6 @@ class AlgorithmPlanner:
             raise AlgorithmConfigurationError(
                 "the declared distribution strategy requires shardable input"
             )
-        resolution = AlgorithmResolution(
-            algorithm=registration.spec.name,
-            algorithm_version=registration.spec.version,
-            implementation_id=registration.implementation.implementation_id,
-            implementation_version=registration.implementation.version,
-            execution_mode=registration.implementation.execution_mode,
-            environment_id=registration.environment.environment_id,
-            runtime_id=runtime.runtime_id,
-            requested_algorithm=requested_algorithm_request.algorithm,
-        )
-        provisional = ResolvedAlgorithmPlan(
-            format_version=2,
-            plan_id="0" * 64,
-            operation=algorithm_request.operation,
-            resolution=resolution,
-            implementation=registration.implementation,
-            environment=registration.environment,
-            runtime=runtime,
-            input_binding=algorithm_request.input_binding,
-            input_descriptor=descriptor,
-            algorithm_config=config,
-            config_digest=canonical_digest(config),
-            distribution_spec=registration.distribution_spec,
-        )
-        plan_id = canonical_digest(provisional.to_dict(include_plan_id=False))
-        return ResolvedAlgorithmPlan(
-            format_version=provisional.format_version,
-            plan_id=plan_id,
-            operation=provisional.operation,
-            resolution=provisional.resolution,
-            implementation=provisional.implementation,
-            environment=provisional.environment,
-            runtime=provisional.runtime,
-            input_binding=provisional.input_binding,
-            input_descriptor=provisional.input_descriptor,
-            algorithm_config=provisional.algorithm_config,
-            config_digest=provisional.config_digest,
-            distribution_spec=provisional.distribution_spec,
-        )
-
-    @staticmethod
-    def _canonicalize_compatibility_alias(
-        request: AlgorithmRequest,
-    ) -> AlgorithmRequest:
-        """Route the historical DNN nnPU shape to the canonical PU algorithm."""
-        if request.algorithm != "dnn" or request.operation.value != "fit":
-            return request
-        config = dict(deep_thaw(request.algorithm_config))
-        loss = config.get("loss", {})
-        if not isinstance(loss, Mapping) or loss.get("type") != "nnpu":
-            return request
-        pu_learning = config.get("pu_learning", {})
-        if not isinstance(pu_learning, Mapping) or not pu_learning.get(
-            "enabled", False
-        ):
-            return request
-        if request.implementation_id is not None:
-            raise AlgorithmConfigurationError(
-                "DNN nnPU compatibility alias cannot pin a DNN implementation; "
-                "select algorithm='pu' to choose a PU implementation explicitly"
-            )
-        if "pu" in config:
-            raise AlgorithmConfigurationError(
-                "DNN nnPU compatibility alias cannot combine pu and pu_learning config"
-            )
-        config.pop("loss", None)
-        config.pop("pu_learning", None)
-        config["pu"] = {
-            "loss_type": "nnpu",
-            "class_prior": pu_learning.get("class_prior"),
-            "class_prior_method": pu_learning.get("class_prior_method", "simple"),
-            "beta": pu_learning.get("beta", 0.0),
-            "gamma": pu_learning.get("gamma", 1.0),
-        }
-        return AlgorithmRequest(
-            algorithm="pu",
-            operation=request.operation,
-            input_binding=request.input_binding,
-            algorithm_config=config,
-        )
 
     @staticmethod
     def _resolve_runtime(
@@ -268,11 +283,8 @@ class AlgorithmPlanner:
                 "formal implementation is missing runtime adapter declarations"
             )
         topology = FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS[distribution.strategy].topology
-        max_retries = (
-            distribution.policy.max_retries
-            if isinstance(distribution.policy, MapReducePolicy)
-            else 0
-        )
+        policy_retries = getattr(distribution.policy, "max_retries", 0)
+        max_retries = policy_retries if isinstance(policy_retries, int) else 0
         return RuntimeBinding(
             runtime_id=implementation.runtime_id,
             worker_input_adapter_ref=implementation.worker_input_adapter_ref,

@@ -33,6 +33,23 @@ PLUGIN_CONTAINER_DIR="/workspace/tributo-work/distributed-plugin"
 PLUGIN_WHEEL=""
 TORCH_RECIPE_DIST_DIR="${LOG_DIR}/torch-recipe-dist"
 TORCH_RECIPE_WHEEL=""
+OFFICIAL_DIST_DIR="${LOG_DIR}/official-dist"
+OFFICIAL_ALGORITHMS_ROOT="${TRIBUTO_ALGORITHMS_ROOT:-${PROJECT_ROOT}/../tributo-algorithms}"
+OFFICIAL_CLASSICAL_WHEEL=""
+OFFICIAL_TIMESERIES_WHEEL=""
+OFFICIAL_REPRESENTATION_WHEEL=""
+OFFICIAL_GRAPH_PYG_WHEEL=""
+OFFICIAL_TABULAR_TORCH_WHEEL=""
+OFFICIAL_RECSYS_TORCH_WHEEL=""
+OFFICIAL_TRANSFORMERS_NLP_WHEEL=""
+OFFICIAL_CAUSAL_CORE_WHEEL=""
+OFFICIAL_CAUSAL_DISCOVERY_WHEEL=""
+OFFICIAL_MULTISTAGE_TORCH_WHEEL=""
+OFFICIAL_BOOSTING_WHEEL=""
+OFFICIAL_CAUSAL_XLEARNER_WHEEL=""
+OFFICIAL_CAUSAL_DR_WHEEL=""
+OFFICIAL_CAUSAL_DOWHY_WHEEL=""
+TRIBUTO_CORE_WHEEL=""
 OFFLINE_DIST_DIR="${LOG_DIR}/offline-dist"
 OFFLINE_BUNDLE_DIR="${LOG_DIR}/offline-bundle"
 OFFLINE_BUNDLE_ARCHIVE="${LOG_DIR}/offline-bundle.zip"
@@ -49,12 +66,35 @@ REQUIRED_RUNTIME_IMAGE=""
 REQUIRED_RUNTIME_IMAGE_ID=""
 
 cd "${PROJECT_ROOT}"
+if [[ -z "${TRIBUTO_ALGORITHMS_ROOT:-}" ]]; then
+  echo "TRIBUTO_ALGORITHMS_ROOT is required; refusing the ambiguous default path" >&2
+  exit 2
+fi
+if ! OFFICIAL_ALGORITHMS_COMMIT="$(git -C "${OFFICIAL_ALGORITHMS_ROOT}" rev-parse --verify HEAD^{commit} 2>/dev/null)"; then
+  echo "TRIBUTO_ALGORITHMS_ROOT must be a Git checkout with a committed HEAD: ${OFFICIAL_ALGORITHMS_ROOT}" >&2
+  exit 2
+fi
+if [[ -n "$(git -C "${OFFICIAL_ALGORITHMS_ROOT}" status --porcelain=v1)" ]]; then
+  echo "Official algorithm source has uncommitted changes; Wheels will be built from the worktree" >&2
+  OFFICIAL_ALGORITHMS_WORKTREE_STATE="dirty"
+else
+  OFFICIAL_ALGORITHMS_WORKTREE_STATE="clean"
+fi
+for required_package in \
+  boosting classical causal-core causal-dr causal-xlearner; do
+  if [[ ! -f "${OFFICIAL_ALGORITHMS_ROOT}/packages/${required_package}/pyproject.toml" ]]; then
+    echo "Official algorithm checkout is missing packages/${required_package}: ${OFFICIAL_ALGORITHMS_ROOT}" >&2
+    exit 2
+  fi
+done
+echo "Official algorithm source: ${OFFICIAL_ALGORITHMS_ROOT} (HEAD ${OFFICIAL_ALGORITHMS_COMMIT}, worktree ${OFFICIAL_ALGORITHMS_WORKTREE_STATE})"
 if [[ -e "${LOG_DIR}" ]]; then
   echo "Refusing to reuse existing IT log directory ${LOG_DIR}" >&2
   exit 2
 fi
 mkdir -p "${PLUGIN_DIST_DIR}"
 mkdir -p "${TORCH_RECIPE_DIST_DIR}"
+mkdir -p "${OFFICIAL_DIST_DIR}"
 mkdir -p "${OFFLINE_DIST_DIR}"
 
 compose() {
@@ -262,6 +302,66 @@ if [[ "${#torch_recipe_wheels[@]}" -ne 1 ]]; then
 fi
 TORCH_RECIPE_WHEEL="${torch_recipe_wheels[0]}"
 
+if [[ ! -r "${OFFICIAL_ALGORITHMS_ROOT}/pyproject.toml" ]]; then
+  echo "Official algorithm Monorepo is unavailable: ${OFFICIAL_ALGORITHMS_ROOT}" >&2
+  exit 1
+fi
+uv build --wheel --out-dir "${OFFICIAL_DIST_DIR}" --no-create-gitignore "${PROJECT_ROOT}" \
+  2>&1 | tee "${LOG_DIR}/core-wheel.log"
+(
+  cd "${OFFICIAL_ALGORITHMS_ROOT}"
+  uv build --package tributo-algorithms-classical --out-dir "${OFFICIAL_DIST_DIR}"
+  uv build --package tributo-algorithms-timeseries --out-dir "${OFFICIAL_DIST_DIR}"
+  uv build --package tributo-algorithms-representation --out-dir "${OFFICIAL_DIST_DIR}"
+  uv build --package tributo-algorithms-graph-pyg --out-dir "${OFFICIAL_DIST_DIR}"
+  uv build --package tributo-algorithms-tabular-torch --out-dir "${OFFICIAL_DIST_DIR}"
+  uv build --package tributo-algorithms-recsys-torch --out-dir "${OFFICIAL_DIST_DIR}"
+  uv build --package tributo-algorithms-transformers-nlp --out-dir "${OFFICIAL_DIST_DIR}"
+  uv build --package tributo-algorithms-causal-core --out-dir "${OFFICIAL_DIST_DIR}"
+  uv build --package tributo-algorithms-causal-discovery --out-dir "${OFFICIAL_DIST_DIR}"
+  uv build --package tributo-algorithms-multistage-torch --out-dir "${OFFICIAL_DIST_DIR}"
+  uv build --package tributo-algorithms-boosting --out-dir "${OFFICIAL_DIST_DIR}"
+  uv build --package tributo-algorithms-causal-xlearner --out-dir "${OFFICIAL_DIST_DIR}"
+  uv build --package tributo-algorithms-causal-dr --out-dir "${OFFICIAL_DIST_DIR}"
+  uv build --package tributo-algorithms-causal-dowhy --out-dir "${OFFICIAL_DIST_DIR}"
+) 2>&1 | tee "${LOG_DIR}/official-wheel.log"
+shopt -s nullglob
+official_classical_wheels=("${OFFICIAL_DIST_DIR}"/tributo_algorithms_classical-*.whl)
+official_timeseries_wheels=("${OFFICIAL_DIST_DIR}"/tributo_algorithms_timeseries-*.whl)
+official_representation_wheels=("${OFFICIAL_DIST_DIR}"/tributo_algorithms_representation-*.whl)
+official_graph_pyg_wheels=("${OFFICIAL_DIST_DIR}"/tributo_algorithms_graph_pyg-*.whl)
+official_tabular_torch_wheels=("${OFFICIAL_DIST_DIR}"/tributo_algorithms_tabular_torch-*.whl)
+official_recsys_torch_wheels=("${OFFICIAL_DIST_DIR}"/tributo_algorithms_recsys_torch-*.whl)
+official_transformers_nlp_wheels=("${OFFICIAL_DIST_DIR}"/tributo_algorithms_transformers_nlp-*.whl)
+official_causal_core_wheels=("${OFFICIAL_DIST_DIR}"/tributo_algorithms_causal_core-*.whl)
+official_causal_discovery_wheels=("${OFFICIAL_DIST_DIR}"/tributo_algorithms_causal_discovery-*.whl)
+official_multistage_torch_wheels=("${OFFICIAL_DIST_DIR}"/tributo_algorithms_multistage_torch-*.whl)
+official_boosting_wheels=("${OFFICIAL_DIST_DIR}"/tributo_algorithms_boosting-*.whl)
+official_causal_xlearner_wheels=("${OFFICIAL_DIST_DIR}"/tributo_algorithms_causal_xlearner-*.whl)
+official_causal_dr_wheels=("${OFFICIAL_DIST_DIR}"/tributo_algorithms_causal_dr-*.whl)
+official_causal_dowhy_wheels=("${OFFICIAL_DIST_DIR}"/tributo_algorithms_causal_dowhy-*.whl)
+core_wheels=("${OFFICIAL_DIST_DIR}"/tributo-*.whl)
+shopt -u nullglob
+if [[ "${#core_wheels[@]}" -ne 1 || "${#official_classical_wheels[@]}" -ne 1 || "${#official_timeseries_wheels[@]}" -ne 1 || "${#official_representation_wheels[@]}" -ne 1 || "${#official_graph_pyg_wheels[@]}" -ne 1 || "${#official_tabular_torch_wheels[@]}" -ne 1 || "${#official_recsys_torch_wheels[@]}" -ne 1 || "${#official_transformers_nlp_wheels[@]}" -ne 1 || "${#official_causal_core_wheels[@]}" -ne 1 || "${#official_causal_discovery_wheels[@]}" -ne 1 || "${#official_multistage_torch_wheels[@]}" -ne 1 || "${#official_boosting_wheels[@]}" -ne 1 || "${#official_causal_xlearner_wheels[@]}" -ne 1 || "${#official_causal_dr_wheels[@]}" -ne 1 || "${#official_causal_dowhy_wheels[@]}" -ne 1 ]]; then
+  echo "Expected all official algorithm Wheels" >&2
+  exit 1
+fi
+TRIBUTO_CORE_WHEEL="${core_wheels[0]}"
+OFFICIAL_CLASSICAL_WHEEL="${official_classical_wheels[0]}"
+OFFICIAL_TIMESERIES_WHEEL="${official_timeseries_wheels[0]}"
+OFFICIAL_REPRESENTATION_WHEEL="${official_representation_wheels[0]}"
+OFFICIAL_GRAPH_PYG_WHEEL="${official_graph_pyg_wheels[0]}"
+OFFICIAL_TABULAR_TORCH_WHEEL="${official_tabular_torch_wheels[0]}"
+OFFICIAL_RECSYS_TORCH_WHEEL="${official_recsys_torch_wheels[0]}"
+OFFICIAL_TRANSFORMERS_NLP_WHEEL="${official_transformers_nlp_wheels[0]}"
+OFFICIAL_CAUSAL_CORE_WHEEL="${official_causal_core_wheels[0]}"
+OFFICIAL_CAUSAL_DISCOVERY_WHEEL="${official_causal_discovery_wheels[0]}"
+OFFICIAL_MULTISTAGE_TORCH_WHEEL="${official_multistage_torch_wheels[0]}"
+OFFICIAL_BOOSTING_WHEEL="${official_boosting_wheels[0]}"
+OFFICIAL_CAUSAL_XLEARNER_WHEEL="${official_causal_xlearner_wheels[0]}"
+OFFICIAL_CAUSAL_DR_WHEEL="${official_causal_dr_wheels[0]}"
+OFFICIAL_CAUSAL_DOWHY_WHEEL="${official_causal_dowhy_wheels[0]}"
+
 uv build \
   --wheel \
   --out-dir "${OFFLINE_DIST_DIR}" \
@@ -343,6 +443,36 @@ compose cp "${PLUGIN_WHEEL}" "ray-head:${PLUGIN_CONTAINER_DIR}/"
 PLUGIN_CONTAINER_WHEEL="${PLUGIN_CONTAINER_DIR}/$(basename "${PLUGIN_WHEEL}")"
 compose cp "${TORCH_RECIPE_WHEEL}" "ray-head:${PLUGIN_CONTAINER_DIR}/"
 TORCH_RECIPE_CONTAINER_WHEEL="${PLUGIN_CONTAINER_DIR}/$(basename "${TORCH_RECIPE_WHEEL}")"
+compose cp "${OFFICIAL_CLASSICAL_WHEEL}" "ray-head:${PLUGIN_CONTAINER_DIR}/"
+OFFICIAL_CLASSICAL_CONTAINER_WHEEL="${PLUGIN_CONTAINER_DIR}/$(basename "${OFFICIAL_CLASSICAL_WHEEL}")"
+compose cp "${OFFICIAL_TIMESERIES_WHEEL}" "ray-head:${PLUGIN_CONTAINER_DIR}/"
+OFFICIAL_TIMESERIES_CONTAINER_WHEEL="${PLUGIN_CONTAINER_DIR}/$(basename "${OFFICIAL_TIMESERIES_WHEEL}")"
+compose cp "${OFFICIAL_REPRESENTATION_WHEEL}" "ray-head:${PLUGIN_CONTAINER_DIR}/"
+OFFICIAL_REPRESENTATION_CONTAINER_WHEEL="${PLUGIN_CONTAINER_DIR}/$(basename "${OFFICIAL_REPRESENTATION_WHEEL}")"
+compose cp "${OFFICIAL_GRAPH_PYG_WHEEL}" "ray-head:${PLUGIN_CONTAINER_DIR}/"
+OFFICIAL_GRAPH_PYG_CONTAINER_WHEEL="${PLUGIN_CONTAINER_DIR}/$(basename "${OFFICIAL_GRAPH_PYG_WHEEL}")"
+compose cp "${OFFICIAL_TABULAR_TORCH_WHEEL}" "ray-head:${PLUGIN_CONTAINER_DIR}/"
+OFFICIAL_TABULAR_TORCH_CONTAINER_WHEEL="${PLUGIN_CONTAINER_DIR}/$(basename "${OFFICIAL_TABULAR_TORCH_WHEEL}")"
+compose cp "${OFFICIAL_RECSYS_TORCH_WHEEL}" "ray-head:${PLUGIN_CONTAINER_DIR}/"
+OFFICIAL_RECSYS_TORCH_CONTAINER_WHEEL="${PLUGIN_CONTAINER_DIR}/$(basename "${OFFICIAL_RECSYS_TORCH_WHEEL}")"
+compose cp "${OFFICIAL_TRANSFORMERS_NLP_WHEEL}" "ray-head:${PLUGIN_CONTAINER_DIR}/"
+OFFICIAL_TRANSFORMERS_NLP_CONTAINER_WHEEL="${PLUGIN_CONTAINER_DIR}/$(basename "${OFFICIAL_TRANSFORMERS_NLP_WHEEL}")"
+compose cp "${OFFICIAL_CAUSAL_CORE_WHEEL}" "ray-head:${PLUGIN_CONTAINER_DIR}/"
+OFFICIAL_CAUSAL_CORE_CONTAINER_WHEEL="${PLUGIN_CONTAINER_DIR}/$(basename "${OFFICIAL_CAUSAL_CORE_WHEEL}")"
+compose cp "${OFFICIAL_CAUSAL_DISCOVERY_WHEEL}" "ray-head:${PLUGIN_CONTAINER_DIR}/"
+OFFICIAL_CAUSAL_DISCOVERY_CONTAINER_WHEEL="${PLUGIN_CONTAINER_DIR}/$(basename "${OFFICIAL_CAUSAL_DISCOVERY_WHEEL}")"
+compose cp "${OFFICIAL_MULTISTAGE_TORCH_WHEEL}" "ray-head:${PLUGIN_CONTAINER_DIR}/"
+OFFICIAL_MULTISTAGE_TORCH_CONTAINER_WHEEL="${PLUGIN_CONTAINER_DIR}/$(basename "${OFFICIAL_MULTISTAGE_TORCH_WHEEL}")"
+compose cp "${OFFICIAL_BOOSTING_WHEEL}" "ray-head:${PLUGIN_CONTAINER_DIR}/"
+OFFICIAL_BOOSTING_CONTAINER_WHEEL="${PLUGIN_CONTAINER_DIR}/$(basename "${OFFICIAL_BOOSTING_WHEEL}")"
+compose cp "${OFFICIAL_CAUSAL_XLEARNER_WHEEL}" "ray-head:${PLUGIN_CONTAINER_DIR}/"
+OFFICIAL_CAUSAL_XLEARNER_CONTAINER_WHEEL="${PLUGIN_CONTAINER_DIR}/$(basename "${OFFICIAL_CAUSAL_XLEARNER_WHEEL}")"
+compose cp "${OFFICIAL_CAUSAL_DR_WHEEL}" "ray-head:${PLUGIN_CONTAINER_DIR}/"
+OFFICIAL_CAUSAL_DR_CONTAINER_WHEEL="${PLUGIN_CONTAINER_DIR}/$(basename "${OFFICIAL_CAUSAL_DR_WHEEL}")"
+compose cp "${OFFICIAL_CAUSAL_DOWHY_WHEEL}" "ray-head:${PLUGIN_CONTAINER_DIR}/"
+OFFICIAL_CAUSAL_DOWHY_CONTAINER_WHEEL="${PLUGIN_CONTAINER_DIR}/$(basename "${OFFICIAL_CAUSAL_DOWHY_WHEEL}")"
+compose cp "${TRIBUTO_CORE_WHEEL}" "ray-head:${PLUGIN_CONTAINER_DIR}/"
+TRIBUTO_CORE_CONTAINER_WHEEL="${PLUGIN_CONTAINER_DIR}/$(basename "${TRIBUTO_CORE_WHEEL}")"
 compose exec -T ray-head mkdir -p \
   "${OFFLINE_BUNDLE_CONTAINER_DIR}/wheelhouse"
 compose cp "${OFFLINE_BUNDLE_DIR}/algorithm.whl" \
@@ -370,17 +500,28 @@ except ClientError: client.create_bucket(Bucket=bucket)
 client.upload_file(archive, bucket, key); print(f"uploaded s3://{bucket}/{key}")'
 
 test_targets=(
-  tests/training/test_dnn_pu_training.py::test_formal_distributed_algorithms_complete_on_ray_cluster
   tests/training/test_dnn_pu_training.py::test_out_of_tree_torch_recipe_completes_on_ray_cluster
+  tests/training/test_dnn_pu_training.py::test_official_algorithm_wheels_complete_on_ray_cluster
   tests/training/test_dnn_pu_training.py::test_offline_wheelhouse_installs_unique_dependency_on_driver_and_workers
   tests/training/test_dnn_pu_training.py::test_remote_offline_wheelhouse_archive_installs_on_driver_and_workers
 )
-if [[ "${TRIBUTO_DISTRIBUTED_ALGORITHM_RERUN_FAILED_ONLY:-0}" == "1" ]]; then
+if [[ "${TRIBUTO_DISTRIBUTED_ALGORITHM_SCOPE:-all}" == "priority" ]]; then
   test_targets=(
-    tests/training/test_dnn_pu_training.py::test_formal_distributed_algorithms_complete_on_ray_cluster
+    tests/training/test_dnn_pu_training.py::test_priority_algorithm_wheels_complete_on_ray_cluster
+  )
+elif [[ "${TRIBUTO_DISTRIBUTED_ALGORITHM_SCOPE:-all}" != "all" ]]; then
+  echo "TRIBUTO_DISTRIBUTED_ALGORITHM_SCOPE must be all or priority" >&2
+  exit 2
+elif [[ "${TRIBUTO_DISTRIBUTED_ALGORITHM_RERUN_FAILED_ONLY:-0}" == "1" ]]; then
+  test_targets=(
+    tests/training/test_dnn_pu_training.py::test_official_algorithm_wheels_complete_on_ray_cluster
+  )
+elif [[ "${TRIBUTO_DISTRIBUTED_ALGORITHM_RERUN_FAILED_ONLY:-0}" == "official" ]]; then
+  test_targets=(
+    tests/training/test_dnn_pu_training.py::test_official_algorithm_wheels_complete_on_ray_cluster
   )
 elif [[ "${TRIBUTO_DISTRIBUTED_ALGORITHM_RERUN_FAILED_ONLY:-0}" != "0" ]]; then
-  echo "TRIBUTO_DISTRIBUTED_ALGORITHM_RERUN_FAILED_ONLY must be 0 or 1" >&2
+  echo "TRIBUTO_DISTRIBUTED_ALGORITHM_RERUN_FAILED_ONLY must be 0, 1, or official" >&2
   exit 2
 fi
 
@@ -388,6 +529,21 @@ compose exec -T \
   --env TRIBUTO_DOCKER_DISTRIBUTED_ALGORITHM_IT=1 \
   --env "TRIBUTO_DISTRIBUTED_PLUGIN_WHEEL=${PLUGIN_CONTAINER_WHEEL}" \
   --env "TRIBUTO_TORCH_RECIPE_PLUGIN_WHEEL=${TORCH_RECIPE_CONTAINER_WHEEL}" \
+  --env "TRIBUTO_OFFICIAL_CLASSICAL_WHEEL=${OFFICIAL_CLASSICAL_CONTAINER_WHEEL}" \
+  --env "TRIBUTO_OFFICIAL_TIMESERIES_WHEEL=${OFFICIAL_TIMESERIES_CONTAINER_WHEEL}" \
+  --env "TRIBUTO_OFFICIAL_REPRESENTATION_WHEEL=${OFFICIAL_REPRESENTATION_CONTAINER_WHEEL}" \
+  --env "TRIBUTO_OFFICIAL_GRAPH_PYG_WHEEL=${OFFICIAL_GRAPH_PYG_CONTAINER_WHEEL}" \
+  --env "TRIBUTO_OFFICIAL_TABULAR_TORCH_WHEEL=${OFFICIAL_TABULAR_TORCH_CONTAINER_WHEEL}" \
+  --env "TRIBUTO_OFFICIAL_RECSYS_TORCH_WHEEL=${OFFICIAL_RECSYS_TORCH_CONTAINER_WHEEL}" \
+  --env "TRIBUTO_OFFICIAL_TRANSFORMERS_NLP_WHEEL=${OFFICIAL_TRANSFORMERS_NLP_CONTAINER_WHEEL}" \
+  --env "TRIBUTO_OFFICIAL_CAUSAL_CORE_WHEEL=${OFFICIAL_CAUSAL_CORE_CONTAINER_WHEEL}" \
+  --env "TRIBUTO_OFFICIAL_CAUSAL_DISCOVERY_WHEEL=${OFFICIAL_CAUSAL_DISCOVERY_CONTAINER_WHEEL}" \
+  --env "TRIBUTO_OFFICIAL_MULTISTAGE_TORCH_WHEEL=${OFFICIAL_MULTISTAGE_TORCH_CONTAINER_WHEEL}" \
+  --env "TRIBUTO_OFFICIAL_BOOSTING_WHEEL=${OFFICIAL_BOOSTING_CONTAINER_WHEEL}" \
+  --env "TRIBUTO_OFFICIAL_CAUSAL_XLEARNER_WHEEL=${OFFICIAL_CAUSAL_XLEARNER_CONTAINER_WHEEL}" \
+  --env "TRIBUTO_OFFICIAL_CAUSAL_DR_WHEEL=${OFFICIAL_CAUSAL_DR_CONTAINER_WHEEL}" \
+  --env "TRIBUTO_OFFICIAL_CAUSAL_DOWHY_WHEEL=${OFFICIAL_CAUSAL_DOWHY_CONTAINER_WHEEL}" \
+  --env "TRIBUTO_CORE_WHEEL=${TRIBUTO_CORE_CONTAINER_WHEEL}" \
   --env TRIBUTO_EXPECTED_ALGORITHM_MODE=image_py_modules \
   --env "TRIBUTO_ALGORITHM_IMAGE_DIGEST=${REQUIRED_RUNTIME_IMAGE_ID}" \
   --env "TRIBUTO_OFFLINE_ALGORITHM_BUNDLE=${OFFLINE_BUNDLE_CONTAINER_DIR}" \

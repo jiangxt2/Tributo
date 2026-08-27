@@ -12,7 +12,11 @@ from tributo.data.persistence import (
     RayCheckpointStore,
     default_checkpoint_store,
 )
-from tributo.training.checkpoint import checkpoint_directory
+from tributo.training.checkpoint import (
+    checkpoint_directory,
+    materialize_checkpoint_directory,
+    publish_checkpoint_directory,
+)
 
 
 def test_default_checkpoint_store_is_the_ray_adapter() -> None:
@@ -49,3 +53,18 @@ def test_checkpoint_store_rejects_missing_local_directory(tmp_path: Path) -> Non
     with pytest.raises(NotADirectoryError, match="not a directory"):
         with RayCheckpointStore().open_directory(tmp_path / "missing"):
             pass
+
+
+def test_core_checkpoint_transport_publishes_and_materializes_local_directory(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "state.bin").write_bytes(b"state")
+    (source / "manifest.json").write_text('{"state": "state.bin"}')
+    target = tmp_path / "published"
+
+    assert publish_checkpoint_directory(source, target) == str(target)
+    with materialize_checkpoint_directory(target) as materialized:
+        assert (materialized / "state.bin").read_bytes() == b"state"
+        assert (materialized / "manifest.json").is_file()

@@ -11,11 +11,9 @@ from unittest.mock import patch
 import pytest
 
 from tributo._common.dependencies import (
-    ONNXMLTOOLS,
     SAFETENSORS,
     TORCH,
     TRANSFORMERS,
-    XGBOOST,
     DependencySpec,
     DependencyState,
     DependencyStatus,
@@ -208,56 +206,6 @@ class TestRequire:
 
 class TestSupportsExactMissingSet:
     """supports() must report exactly the missing dependencies."""
-
-    def test_single_missing_reported_precisely(self) -> None:
-        from tributo.exporting.models import SupportRequest
-        from tributo.integrations.exporters.xgboost_onnx import XGBoostONNXExporter
-
-        request = SupportRequest(source_kind="xgboost_result", upstream_formats=())
-        with patch(
-            "tributo.integrations.exporters.xgboost_onnx.probe_dependency",
-            side_effect=[
-                DependencyStatus(ONNXMLTOOLS, DependencyState.MISSING),
-                DependencyStatus(XGBOOST, DependencyState.AVAILABLE),
-            ],
-        ):
-            result = XGBoostONNXExporter.supports(request)
-        assert result.code == "MISSING_DEPENDENCY"
-        assert result.missing_dependencies == ("onnxmltools",)
-
-    def test_too_old_reported_as_missing_dependency(self) -> None:
-        """A below-floor version follows the same supports() path and is
-        reported as MISSING_DEPENDENCY."""
-        from tributo.exporting.models import SupportRequest
-        from tributo.integrations.exporters.xgboost_onnx import XGBoostONNXExporter
-
-        request = SupportRequest(source_kind="xgboost_result", upstream_formats=())
-        with patch(
-            "tributo.integrations.exporters.xgboost_onnx.probe_dependency",
-            side_effect=[
-                DependencyStatus(ONNXMLTOOLS, DependencyState.TOO_OLD),
-                DependencyStatus(XGBOOST, DependencyState.AVAILABLE),
-            ],
-        ):
-            result = XGBoostONNXExporter.supports(request)
-        assert result.code == "MISSING_DEPENDENCY"
-        assert result.missing_dependencies == ("onnxmltools",)
-
-    def test_both_missing_reported_together(self) -> None:
-        from tributo.exporting.models import SupportRequest
-        from tributo.integrations.exporters.xgboost_onnx import XGBoostONNXExporter
-
-        request = SupportRequest(source_kind="xgboost_result", upstream_formats=())
-        with patch(
-            "tributo.integrations.exporters.xgboost_onnx.probe_dependency",
-            side_effect=[
-                DependencyStatus(ONNXMLTOOLS, DependencyState.MISSING),
-                DependencyStatus(XGBOOST, DependencyState.MISSING),
-            ],
-        ):
-            result = XGBoostONNXExporter.supports(request)
-        assert result.code == "MISSING_DEPENDENCY"
-        assert result.missing_dependencies == ("onnxmltools", "xgboost")
 
     def test_hf_reason_matches_exact_missing_set(self) -> None:
         from tributo.exporting.models import SupportRequest

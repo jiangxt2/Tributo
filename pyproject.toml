@@ -113,9 +113,6 @@ model-export-hf = [
 ]
 training = [
     "tributo[clickhouse,data,data-daft,model-export,mysql,postgresql,s3]",
-    "xgboost>=2.1.0",
-    "onnxmltools>=1.13.0",
-    "skl2onnx>=1.17.0",
 ]
 tune = [
     # Ray Tune's optional BayesOpt integration is validated against this exact version.
@@ -155,8 +152,14 @@ streaming-inference = [
 ]
 test-integration = [
     "tributo[registry,training]",
+    "causal-learn==0.1.4.8",
+    "dowhy==0.14",
+    "onnxmltools>=1.13.0",
     "pytest>=7.0.0",
     "requests>=2.25.0",
+    "scikit-learn>=1.4,<2",
+    "skl2onnx>=1.17.0",
+    "xgboost>=2.1,<4",
 ]
 
 [project.scripts]
@@ -165,45 +168,25 @@ tributo = "tributo.cli:main"
 [project.entry-points."tributo.write_bindings"]
 
 [project.entry-points."tributo.trainers"]
-dnn = "tributo.integrations.algorithm_runtimes.legacy_descriptors:DNN_DESCRIPTOR"
-pu = "tributo.integrations.algorithm_runtimes.legacy_descriptors:PU_DESCRIPTOR"
-xgboost = "tributo.integrations.algorithm_runtimes.legacy_descriptors:XGBOOST_DESCRIPTOR"
 
 [project.entry-points."tributo.algorithms"]
-dnn = "tributo.algorithms.builtin.torch_collective:DNN_DESCRIPTOR"
-multinomial_nb = "tributo.algorithms.builtin.multinomial_nb:MULTINOMIAL_NB_DESCRIPTOR"
-pu = "tributo.algorithms.builtin.torch_collective:PU_DESCRIPTOR"
-xgboost = "tributo.algorithms.builtin.xgboost_native:XGBOOST_DESCRIPTOR"
-x_learner = "tributo.algorithms.builtin.x_learner:X_LEARNER_DESCRIPTOR"
 
 [project.entry-points."tributo.exporters"]
-xgboost-onnx-v1 = "tributo.integrations.exporters.xgboost_onnx:XGBoostONNXExporter"
-xgboost-ubj-v1 = "tributo.integrations.exporters.xgboost_native:XGBoostUBJExporter"
-xgboost-json-v1 = "tributo.integrations.exporters.xgboost_native:XGBoostJSONExporter"
 torch-safetensors-v1 = "tributo.integrations.exporters.torch_safetensors:TorchSafetensorsExporter"
 torch-onnx-v1 = "tributo.integrations.exporters.torch_onnx:TorchONNXExporter"
 torch-export-v1 = "tributo.integrations.exporters.torch_export:TorchExportExporter"
 hf-onnx-v1 = "tributo.integrations.exporters.hf_onnx:HuggingFaceONNXExporter"
 onnx-quantizer-v1 = "tributo.integrations.exporters.onnx_quantizer:ONNXQuantizer"
-x-learner-v1 = "tributo.integrations.exporters.x_learner:XLearnerExporter"
-causal-report-v1 = "tributo.integrations.exporters.x_learner:XLearnerCausalReportExporter"
 
 [project.entry-points."tributo.source_providers"]
-ray-xgboost-v1 = "tributo.integrations.sources.ray_xgboost:RayXGBoostSourceProvider"
-ray-dnn-v1 = "tributo.integrations.sources.ray_dnn:RayDnnSourceProvider"
-ray-pu-v1 = "tributo.integrations.sources.ray_pu:RayPUSourceProvider"
 ray-torch-recipe-v1 = "tributo.integrations.sources.ray_torch_recipe:RayTorchRecipeSourceProvider"
-ray-x-learner-v1 = "tributo.integrations.sources.ray_x_learner:RayXLearnerSourceProvider"
 hf-v1 = "tributo.integrations.sources.huggingface:HuggingFaceSourceProvider"
 
 [project.entry-points."tributo.validators"]
 onnx-runtime-v1 = "tributo.integrations.validators.onnx_runtime:ONNXRuntimeValidator"
-xgboost-native-runtime-v1 = "tributo.integrations.validators.xgboost_native:XGBoostNativeRuntimeValidator"
 
 [project.entry-points."tributo.model_flavors"]
 onnx-runtime-v1 = "tributo.integrations.flavors.onnx_runtime:ONNXRuntimeFlavor"
-xgboost-native-v1 = "tributo.integrations.flavors.xgboost_native:XGBoostNativeFlavor"
-x-learner-v1 = "tributo.integrations.flavors.x_learner:XLearnerFlavor"
 
 [project.entry-points."tributo.model_factories"]
 
@@ -249,6 +232,9 @@ ignore = ["E501", "B008", "B905"]
 # The package root intentionally imports public symbols after defining
 # ``__version__`` so metadata fallback is initialized first.
 "src/tributo/__init__.py" = ["E402"]
+# Gate jobs intentionally import shared job helpers after adding their job
+# directory to ``sys.path`` so Ray Jobs can execute the files directly.
+"tests/training/jobs/priority_algorithm_gate_job.py" = ["E402"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["tributo"]
@@ -333,10 +319,6 @@ module = [
     "tributo.serving.grpc_deployment",
     "tributo.serving.identity_predictor",
     "tributo.serving.streaming_deployment",
-    "tributo.training.dnn_trainer",
-    "tributo.training.models.dnn",
-    "tributo.training.pu_metrics",
-    "tributo.training.pu_trainer",
 ]
 ignore_errors = true
 
@@ -346,7 +328,6 @@ module = [
     "tributo.inference.pipeline",
     "tributo.registry.mlflow_util",
     "tributo.training.local_runner",
-    "tributo.training.priors",
     "tributo.training.tune_runner",
 ]
 warn_return_any = false

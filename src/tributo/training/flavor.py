@@ -9,20 +9,17 @@ underlying framework (XGBoost, ONNX, PyTorch, etc.).
     from tributo.training.flavor import ModelFlavor
     from tributo.util.annotations import PublicAPI
 
-    class MyXGBoostFlavor(ModelFlavor):
+    class MyFlavor(ModelFlavor):
         @classmethod
         def save(cls, model, path: str) -> None:
             model.save_model(path)
 
         @classmethod
         def load(cls, path: str):
-            import xgboost as xgb
-            return xgb.Booster(model_file=path)
+            return load_model(path)
 
         def predict(self, input_data):
-            import xgboost as xgb
-            dmatrix = xgb.DMatrix(input_data)
-            return self._model.predict(dmatrix)
+            return self._model.predict(input_data)
 
 The flavor abstraction is inspired by MLflow's flavor system but kept
 minimal and framework-agnostic.
@@ -79,37 +76,6 @@ class ModelFlavor(ABC):
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}(model={type(self._model).__name__})"
-
-
-# ── XGBoost flavor ──────────────────────────────────────────────────────────
-
-
-@PublicAPI(stability="beta")
-class XGBoostFlavor(ModelFlavor):
-    """Model flavor for XGBoost Booster / sklearn XGBModel."""
-
-    _REQUIRED_PACKAGES: ClassVar[list[str]] = ["xgboost"]
-
-    @classmethod
-    def save(cls, model: Any, path: str) -> None:
-        """Save model to *path* (JSON or binary depending on extension)."""
-        model.save_model(path)
-
-    @classmethod
-    def load(cls, path: str) -> XGBoostFlavor:
-        """Load an XGBoost model from *path*."""
-        import xgboost as xgb
-
-        booster = xgb.Booster()
-        booster.load_model(path)
-        return cls(booster)
-
-    def predict(self, input_data: Any) -> Any:
-        """Run inference with XGBoost."""
-        import xgboost as xgb
-
-        dmatrix = xgb.DMatrix(input_data)
-        return self._model.predict(dmatrix)
 
 
 # ── ONNX flavor ─────────────────────────────────────────────────────────────

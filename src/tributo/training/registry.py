@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import importlib
 import threading
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
+
+from packaging.utils import canonicalize_name
 
 from tributo.algorithms.api import (
     AlgorithmRegistration,
     AlgorithmResolutionError,
+    AlgorithmSupportEvidence,
+    AlgorithmSupportEvidenceRegistry,
     DistributedAlgorithmDescriptor,
 )
 from tributo.algorithms.core import AlgorithmRegistrationRegistry
@@ -88,13 +93,27 @@ def _load_reference(module: str, qualname: str) -> object:
 class TrainingAlgorithmRegistry:
     """Own executable facts and derive all legacy compatibility projections."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        support_evidence: AlgorithmSupportEvidenceRegistry | None = None,
+        installed_wheel_digests: Mapping[str, str] | None = None,
+    ) -> None:
         self._execution_registry = AlgorithmRegistrationRegistry()
         self._descriptors: dict[str, LegacyTrainerDescriptor] = {}
         self._distributed_descriptors: dict[str, DistributedAlgorithmDescriptor] = {}
         self._compatibility_entry_points: dict[str, Any] = {}
         self._hydrated_specs: dict[str, AlgorithmSpec] = {}
         self._diagnostics: tuple[PluginLoadDiagnostic, ...] = ()
+        self._support_evidence = (
+            support_evidence
+            if support_evidence is not None
+            else AlgorithmSupportEvidenceRegistry()
+        )
+        self._installed_wheel_digests = {
+            canonicalize_name(name): digest
+            for name, digest in (installed_wheel_digests or {}).items()
+        }
         self._bootstrapped = False
         self._lock = threading.Lock()
 
@@ -104,13 +123,6 @@ class TrainingAlgorithmRegistry:
         with self._lock:
             if self._bootstrapped:
                 return
-            from tributo.algorithms.builtin import (
-                DNN_DESCRIPTOR,
-                MULTINOMIAL_NB_DESCRIPTOR,
-                PU_DESCRIPTOR,
-                X_LEARNER_DESCRIPTOR,
-                XGBOOST_DESCRIPTOR,
-            )
             from tributo.plugin import (
                 discover_algorithm_descriptors,
                 discover_trainer_descriptors,
@@ -137,16 +149,6 @@ class TrainingAlgorithmRegistry:
             compatibility: dict[str, Any] = {}
             for entry_point in compatibility_entry_points:
                 name = entry_point.name
-                previous_builtin_entry_points = {
-                    "dnn": "tributo.training.dnn_trainer",
-                    "pu": "tributo.training.pu_trainer",
-                    "xgboost": "tributo.training.xgboost_trainer",
-                }
-                if (
-                    name in descriptors
-                    and entry_point.value == previous_builtin_entry_points.get(name)
-                ):
-                    continue
                 if name in descriptors or name in compatibility:
                     raise AlgorithmResolutionError(
                         f"algorithm plugin identity is duplicated: {name!r}"
@@ -162,14 +164,7 @@ class TrainingAlgorithmRegistry:
                 )
 
             distributed_descriptors: dict[str, DistributedAlgorithmDescriptor] = {}
-            for descriptor in (
-                DNN_DESCRIPTOR,
-                PU_DESCRIPTOR,
-                MULTINOMIAL_NB_DESCRIPTOR,
-                X_LEARNER_DESCRIPTOR,
-                XGBOOST_DESCRIPTOR,
-                *discovered_algorithms,
-            ):
+            for descriptor in discovered_algorithms:
                 key = descriptor.registration.implementation.implementation_id
                 distributed_existing = distributed_descriptors.get(key)
                 if (
@@ -291,6 +286,14 @@ class TrainingAlgorithmRegistry:
         compatibility = self._execution_registry.compatibility_snapshot()
         with self._lock:
             descriptor = self._descriptors.get(key)
+            portable = next(
+                (
+                    item.registration.spec
+                    for item in self._distributed_descriptors.values()
+                    if item.name == key
+                ),
+                None,
+            )
             entry_point = self._compatibility_entry_points.get(key)
             hydrated = self._hydrated_specs.get(key)
             available = sorted(
@@ -307,6 +310,8 @@ class TrainingAlgorithmRegistry:
             return hydrated
         if descriptor is not None:
             hydrated = self._legacy_spec(descriptor)
+        elif portable is not None:
+            hydrated = portable
         elif entry_point is not None:
             hydrated = self._load_compatibility_plugin(key, entry_point)
         else:
@@ -353,37 +358,52 @@ class TrainingAlgorithmRegistry:
             distributed = tuple(self._distributed_descriptors.values())
             compatibility_names = tuple(self._compatibility_entry_points)
         entries: list[AlgorithmRegistryEntry] = []
-        distributed_by_name = {item.name: item for item in distributed}
+        distributed_by_name: dict[str, list[DistributedAlgorithmDescriptor]] = {}
+        for item in distributed:
+            distributed_by_name.setdefault(item.name, []).append(item)
+
+        def support(
+            descriptors: tuple[DistributedAlgorithmDescriptor, ...],
+        ) -> tuple[AlgorithmSupportEvidence, ...]:
+            return tuple(
+                evidence
+                for descriptor in descriptors
+                for evidence in self._support_evidence.resolve(
+                    descriptor,
+                    wheel_sha256=self._installed_wheel_digests.get(
+                        canonicalize_name(descriptor.package_name)
+                    ),
+                )
+            )
+
         for name, descriptor in descriptors.items():
-            native = distributed_by_name.get(name)
+            native = tuple(distributed_by_name.get(name, ()))
+            evidence = support(native)
             entries.append(
                 AlgorithmRegistryEntry(
                     name=name,
                     spec=descriptor.registration.spec,
                     registrations=tuple(registrations_by_name.get(name, ())),
-                    stability=native.stability if native else descriptor.stability,
+                    stability=native[0].stability if native else descriptor.stability,
                     available=True,
                     compatibility_only=False,
-                    tested=native.tested if native else descriptor.tested,
-                    supported=native.supported if native else descriptor.supported,
-                    validated_execution_profiles=(
-                        tuple(
-                            profile.value
-                            for profile in native.validated_execution_profiles
-                        )
-                        if native
-                        else ()
+                    tested=bool(evidence),
+                    supported=bool(evidence),
+                    validated_execution_profiles=tuple(
+                        sorted({item.execution_profile.value for item in evidence})
                     ),
-                    native_migration_complete=native is not None,
+                    native_migration_complete=bool(native),
                     limitations=(
-                        native.limitations if native else descriptor.limitations
+                        native[0].limitations if native else descriptor.limitations
                     ),
                 )
             )
         legacy_names = set(descriptors)
-        for distributed_descriptor in distributed:
-            if distributed_descriptor.name in legacy_names:
+        for name, grouped in sorted(distributed_by_name.items()):
+            if name in legacy_names:
                 continue
+            distributed_descriptor = grouped[0]
+            evidence = support(tuple(grouped))
             entries.append(
                 AlgorithmRegistryEntry(
                     name=distributed_descriptor.name,
@@ -394,11 +414,10 @@ class TrainingAlgorithmRegistry:
                     stability=distributed_descriptor.stability,
                     available=True,
                     compatibility_only=False,
-                    tested=distributed_descriptor.tested,
-                    supported=distributed_descriptor.supported,
+                    tested=bool(evidence),
+                    supported=bool(evidence),
                     validated_execution_profiles=tuple(
-                        profile.value
-                        for profile in distributed_descriptor.validated_execution_profiles
+                        sorted({item.execution_profile.value for item in evidence})
                     ),
                     native_migration_complete=True,
                     limitations=distributed_descriptor.limitations,

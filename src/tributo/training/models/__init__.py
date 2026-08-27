@@ -1,12 +1,5 @@
-"""Deep learning model module.
-
-Provides DNN, DeepFM and other model implementations.
-"""
+"""Namespace reserved for framework-level model protocols."""
 
 from __future__ import annotations
 
-from tributo.training.models.dnn import DNNModel
-
-__all__ = [
-    "DNNModel",
-]
+__all__: list[str] = []

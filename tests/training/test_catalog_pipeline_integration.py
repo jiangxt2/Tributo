@@ -1,16 +1,17 @@
-"""Integration tests — catalog integrity, pipeline E2E, snapshot freshness.
+"""Integration tests for the algorithm catalog and legacy config pipeline.
 
-These tests validate that the full integration stack works correctly:
-1. Integrity gate fires on bad replacement graphs at import time.
-2. AlgorithmCatalog sees live registrations (snapshot freshness).
-3. build_effective_config → validate_and_normalize → validate_execution
-   pipeline produces configs accepted by real trainers.
-4. DataLoadingMode correctly routes data-source resolution.
+The Core test suite owns the framework contract, not any concrete algorithm.
+Every executable algorithm fixture in this module is therefore registered by
+the test itself, exactly as a third-party compatibility Wheel would register it.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+
 import pytest
+from pydantic import BaseModel, ConfigDict, Field
 
 from tributo._common.registry import Registry
 from tributo.exceptions import JobConfigurationError
@@ -30,19 +31,57 @@ from tributo.training.registry import _registry
 
 
 class FakeTrainer:
-    pass
+    """Minimal compatibility Trainer identity used by contract fixtures."""
 
 
-# ---------------------------------------------------------------------------
-# Integrity gate — replacement graph validation
-# ---------------------------------------------------------------------------
+class _TrainingConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    num_rounds: int = 10
+    seed: int = 0
+
+
+class _DataConfig(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    source: dict[str, object] | None = None
+
+
+class _AlgorithmConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    data: _DataConfig = Field(default_factory=_DataConfig)
+    training: _TrainingConfig = Field(default_factory=_TrainingConfig)
+
+
+def _spec(
+    name: str = "test_pipeline_algorithm",
+    *,
+    data_loading: DataLoadingMode = DataLoadingMode.CANONICAL_DRIVER,
+) -> AlgorithmSpec:
+    return AlgorithmSpec(
+        name=name,
+        trainer_cls=FakeTrainer,
+        problem_types=(ProblemType.REGRESSION,),
+        data_modality=("tabular",),
+        config_model=_AlgorithmConfig,
+        data_loading=data_loading,
+    )
+
+
+@contextmanager
+def _registered(spec: AlgorithmSpec) -> Iterator[AlgorithmSpec]:
+    _registry.register(spec.name, spec)
+    try:
+        yield spec
+    finally:
+        _registry.unregister(spec.name)
 
 
 class TestIntegrityGate:
     def test_integrity_rejects_missing_replacement(self) -> None:
-        """A catalog with a DEPRECATED→missing chain should fail."""
-        r: Registry[str, AlgorithmSpec] = Registry("test")
-        r.register(
+        registry: Registry[str, AlgorithmSpec] = Registry("test")
+        registry.register(
             "old",
             AlgorithmSpec(
                 name="old",
@@ -52,13 +91,13 @@ class TestIntegrityGate:
                 replacement="nonexistent",
             ),
         )
-        cat = AlgorithmCatalog(r)
+        catalog = AlgorithmCatalog(registry)
         with pytest.raises(JobConfigurationError, match="not found in registry"):
-            cat.validate_integrity()
+            catalog.validate_integrity()
 
     def test_integrity_rejects_cycle(self) -> None:
-        r: Registry[str, AlgorithmSpec] = Registry("test")
-        r.register(
+        registry: Registry[str, AlgorithmSpec] = Registry("test")
+        registry.register(
             "a",
             AlgorithmSpec(
                 name="a",
@@ -68,7 +107,7 @@ class TestIntegrityGate:
                 replacement="b",
             ),
         )
-        r.register(
+        registry.register(
             "b",
             AlgorithmSpec(
                 name="b",
@@ -78,204 +117,117 @@ class TestIntegrityGate:
                 replacement="a",
             ),
         )
-        cat = AlgorithmCatalog(r)
+        catalog = AlgorithmCatalog(registry)
         with pytest.raises(JobConfigurationError, match="cycle"):
-            cat.validate_integrity()
+            catalog.validate_integrity()
 
     def test_shared_registry_is_valid_on_import(self) -> None:
-        """The lazily bootstrapped shared Registry passes integrity checks."""
-        cat = get_algorithm_catalog()
-        cat.validate_integrity()  # must not raise
-
-
-# ---------------------------------------------------------------------------
-# Snapshot freshness
-# ---------------------------------------------------------------------------
+        get_algorithm_catalog().validate_integrity()
 
 
 class TestSnapshotFreshness:
-    def test_new_registration_visible_to_catalog(self) -> None:
-        """Registering after catalog creation should be immediately visible."""
-        name = "_test_freshness"
-        spec = AlgorithmSpec(
-            name=name,
-            trainer_cls=FakeTrainer,
-            problem_types=(ProblemType.CLUSTERING,),
-        )
-        _registry.register(name, spec)
-        try:
-            cat = get_algorithm_catalog()
-            assert name in cat.list(problem_type=ProblemType.CLUSTERING)
-        finally:
-            _registry.unregister(name)
+    def test_new_registration_is_immediately_visible(self) -> None:
+        registry: Registry[str, AlgorithmSpec] = Registry("test")
+        catalog = AlgorithmCatalog(registry)
+        registry.register("fresh", _spec("fresh"))
 
-    def test_catalog_list_calls_snapshot_each_time(self) -> None:
-        """Each list() call gets a fresh snapshot."""
-        cat = get_algorithm_catalog()
-        names_before = cat.list()
-        assert "xgboost" in names_before
-        # Register a new one, then list again
-        name = "_test_snapshot"
-        _registry.register(name, AlgorithmSpec(name=name, trainer_cls=FakeTrainer))
-        try:
-            names_after = cat.list()
-            assert name in names_after
-        finally:
-            _registry.unregister(name)
+        assert catalog.list(problem_type=ProblemType.REGRESSION) == ["fresh"]
+
+    def test_shared_catalog_observes_programmatic_registration(self) -> None:
+        spec = _spec("_test_snapshot")
+        with _registered(spec):
+            assert spec.name in get_algorithm_catalog().list()
 
 
-# ---------------------------------------------------------------------------
-# Pipeline E2E — build_effective_config with real trainer specs
-# ---------------------------------------------------------------------------
+class TestPipeline:
+    def test_minimal_config_uses_declared_defaults(self) -> None:
+        config = build_effective_config(_spec(), {}, datasets_supplied=True)
 
+        assert config["training"] == {"num_rounds": 10, "seed": 0}
 
-class TestPipelineE2E:
-    def test_xgboost_pipeline_accepts_minimal_config(self) -> None:
-        """Minimal valid XGBoost config passes the full pipeline."""
-        spec = get_algorithm_catalog().get_spec("xgboost")
-        # All sections have defaults, empty config is valid
-        cfg = build_effective_config(spec, {}, datasets_supplied=True)
-        assert "model" in cfg
-        assert "training" in cfg
-
-    def test_xgboost_pipeline_rejects_typo_in_top_level(self) -> None:
-        spec = get_algorithm_catalog().get_spec("xgboost")
+    def test_unknown_top_level_field_is_rejected(self) -> None:
         with pytest.raises(JobConfigurationError, match="Config validation failed"):
-            build_effective_config(spec, {"typo_field": 123})
+            build_effective_config(_spec(), {"typo_field": 123})
 
-    def test_dnn_pipeline_accepts_minimal_config(self) -> None:
-        spec = get_algorithm_catalog().get_spec("dnn")
-        cfg = build_effective_config(spec, {}, datasets_supplied=True)
-        assert isinstance(cfg, dict)
-
-    def test_default_config_overridable(self) -> None:
-        """User config overrides defaults in the pipeline."""
-        spec = get_algorithm_catalog().get_spec("xgboost")
-        cfg = build_effective_config(
-            spec,
+    def test_user_config_overrides_defaults(self) -> None:
+        config = build_effective_config(
+            _spec(),
             {"training": {"num_rounds": 42, "seed": 7}},
             datasets_supplied=True,
         )
-        assert cfg["training"]["num_rounds"] == 42
-        assert cfg["training"]["seed"] == 7
 
-    def test_dot_overrides_applied(self) -> None:
-        spec = get_algorithm_catalog().get_spec("xgboost")
-        cfg = build_effective_config(
-            spec,
+        assert config["training"] == {"num_rounds": 42, "seed": 7}
+
+    def test_dot_overrides_are_applied(self) -> None:
+        config = build_effective_config(
+            _spec(),
             {},
             dot_overrides={"training.num_rounds": 77},
             datasets_supplied=True,
         )
-        assert cfg["training"]["num_rounds"] == 77
 
-    def test_execution_check_blocks_missing_source(self) -> None:
-        """When datasets_supplied=False, CANONICAL_DRIVER requires data.source."""
-        spec = get_algorithm_catalog().get_spec("xgboost")
+        assert config["training"]["num_rounds"] == 77
+
+    def test_canonical_driver_requires_source_without_supplied_dataset(self) -> None:
         with pytest.raises(JobConfigurationError, match="requires 'data.source'"):
-            build_effective_config(spec, {})
-
-
-# ---------------------------------------------------------------------------
-# DataLoadingMode routing
-# ---------------------------------------------------------------------------
+            build_effective_config(_spec(), {})
 
 
 class TestDataLoadingRouting:
-    def test_xgboost_is_canonical_driver(self) -> None:
-        spec = get_algorithm_catalog().get_spec("xgboost")
-        assert spec.data_loading == DataLoadingMode.CANONICAL_DRIVER
+    def test_canonical_driver_accepts_preloaded_dataset(self) -> None:
+        validate_execution_config(_spec(), {}, datasets_supplied=True)
 
-    def test_dnn_is_canonical_driver(self) -> None:
-        spec = get_algorithm_catalog().get_spec("dnn")
-        assert spec.data_loading == DataLoadingMode.CANONICAL_DRIVER
+    def test_canonical_trainer_always_requires_source(self) -> None:
+        spec = _spec(data_loading=DataLoadingMode.CANONICAL_TRAINER)
+        with pytest.raises(JobConfigurationError, match="source"):
+            validate_execution_config(spec, {}, datasets_supplied=True)
 
-    def test_pu_is_canonical_trainer(self) -> None:
-        spec = get_algorithm_catalog().get_spec("pu")
-        assert spec.data_loading == DataLoadingMode.CANONICAL_TRAINER
-
-    def test_validate_execution_respects_canonical_trainer(self) -> None:
-        """CANONICAL_TRAINER always requires data.source, even with datasets_supplied."""
-        spec = get_algorithm_catalog().get_spec("pu")
-        with pytest.raises(JobConfigurationError):
-            validate_execution_config(
-                spec, {"training": {"num_rounds": 10}}, datasets_supplied=True
-            )
-
-    def test_validate_execution_skips_for_legacy(self) -> None:
-        """LEGACY_DRIVER skips source checks entirely."""
-        from tributo.training.algorithm_spec import AlgorithmSpec
-
-        name = "_test_legacy"
-        spec = AlgorithmSpec(
-            name=name,
-            trainer_cls=FakeTrainer,
-            data_loading=DataLoadingMode.LEGACY_DRIVER,
+    def test_legacy_driver_skips_source_validation(self) -> None:
+        spec = _spec(data_loading=DataLoadingMode.LEGACY_DRIVER)
+        validate_execution_config(
+            spec,
+            {"anything": "goes"},
+            datasets_supplied=False,
         )
-        _registry.register(name, spec)
-        try:
-            # Should not raise even without data section
-            validate_execution_config(
-                spec, {"anything": "goes"}, datasets_supplied=False
-            )
-        finally:
-            _registry.unregister(name)
 
 
-# ---------------------------------------------------------------------------
-# Data source resolution integration
-# ---------------------------------------------------------------------------
-
-
-class TestResolveDataSourceIntegration:
-    def test_canonical_parquet_source(self) -> None:
-        spec = get_algorithm_catalog().get_spec("xgboost")
-        config = {
-            "data": {
-                "source": {
-                    "type": "parquet",
-                    "path": "/tmp/data.parquet",
-                }
-            }
-        }
-        result = resolve_data_source(spec, config)
-        assert result["type"] == "parquet"
-        assert result["path"] == "/tmp/data.parquet"
-
-    def test_canonical_csv_source(self) -> None:
-        spec = get_algorithm_catalog().get_spec("xgboost")
-        config = {"data": {"source": {"type": "csv", "path": "/tmp/data.csv"}}}
-        result = resolve_data_source(spec, config)
-        assert result["type"] == "csv"
-
-    def test_canonical_sql_source(self) -> None:
-        """Canonical SQL source: type='sql' with dialect='clickhouse'."""
-        spec = get_algorithm_catalog().get_spec("xgboost")
-        config = {
-            "data": {
-                "source": {
+class TestResolveDataSource:
+    @pytest.mark.parametrize(
+        ("source", "expected"),
+        [
+            (
+                {"type": "parquet", "path": "/tmp/data.parquet"},
+                {"type": "parquet", "path": "/tmp/data.parquet"},
+            ),
+            (
+                {"type": "csv", "path": "/tmp/data.csv"},
+                {"type": "csv", "path": "/tmp/data.csv"},
+            ),
+            (
+                {
                     "type": "sql",
                     "dialect": "clickhouse",
                     "host": "127.0.0.1",
                     "sql": "SELECT 1",
-                }
-            }
-        }
-        result = resolve_data_source(spec, config)
-        assert result["type"] == "sql"
-        assert result["sql"] == "SELECT 1"
-        assert result["dialect"] == "clickhouse"
+                },
+                {
+                    "type": "sql",
+                    "dialect": "clickhouse",
+                    "host": "127.0.0.1",
+                    "sql": "SELECT 1",
+                },
+            ),
+            (
+                {"type": "iceberg", "catalog": "default", "table": "db.tbl"},
+                {"type": "iceberg", "catalog": "default", "table": "db.tbl"},
+            ),
+        ],
+    )
+    def test_canonical_source_is_returned_without_algorithm_branching(
+        self,
+        source: dict[str, object],
+        expected: dict[str, object],
+    ) -> None:
+        result = resolve_data_source(_spec(), {"data": {"source": source}})
 
-    def test_canonical_iceberg_source(self) -> None:
-        spec = get_algorithm_catalog().get_spec("xgboost")
-        config = {
-            "data": {
-                "source": {
-                    "type": "iceberg",
-                    "catalog": "default",
-                    "table": "db.tbl",
-                }
-            }
-        }
-        result = resolve_data_source(spec, config)
-        assert result["type"] == "iceberg"
+        assert all(result[key] == value for key, value in expected.items())

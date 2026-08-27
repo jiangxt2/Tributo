@@ -427,7 +427,7 @@ def test_map_reduce_binding_counts_input_before_public_streaming_split() -> None
                 topology=RuntimeTopology.RAY_MAP_REDUCE,
                 worker_count=2,
             ),
-            input_binding=_binding(),
+            primary_input_binding=_binding(),
         ),
     )
 

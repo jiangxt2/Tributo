@@ -173,9 +173,9 @@ def test_exporter_discovery_reports_legacy_protocol_version(
 
 def test_legacy_options_module_reexports_plugin_owned_schema() -> None:
     from tributo.exporting import options as compatibility_options
-    from tributo.integrations.exporters.options import XGBoostONNXOptions
+    from tributo.integrations.exporters.options import TorchONNXOptions
 
     with pytest.warns(DeprecationWarning, match=r"integrations\.exporters\.options"):
-        resolved = compatibility_options.__getattr__("XGBoostONNXOptions")
+        resolved = compatibility_options.__getattr__("TorchONNXOptions")
 
-    assert resolved is XGBoostONNXOptions
+    assert resolved is TorchONNXOptions

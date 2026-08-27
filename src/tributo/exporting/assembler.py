@@ -92,30 +92,24 @@ class BundleAssembler:
         selected_backend: str | None = None
         selected_exactness: Literal["exact", "approximate", "conditional"] | None = None
         if explainability is not None and explainability.enabled:
+            native_name = effective_roles.get("explainability_model")
             native = next(
-                (
-                    artifact
-                    for artifact in artifacts
-                    if artifact.flavor_id == "xgboost-native-v1"
-                    and artifact.format in {"ubj", "xgboost-json"}
-                ),
+                (artifact for artifact in artifacts if artifact.name == native_name),
                 None,
             )
             if explainability.backend in {"auto", "tree"} and native is not None:
-                if "explainability_model" not in effective_roles:
-                    effective_roles["explainability_model"] = native.name
                 selected_backend = "tree"
                 selected_exactness = "exact"
             elif explainability.backend == "tree":
                 raise ValueError(
-                    "Tree SHAP requires a publishable xgboost-native-v1 UBJ/JSON "
-                    "artifact; enable the XGBoost companion target"
+                    "exact tree explainability requires an explicit, publishable "
+                    "explainability_model role supplied by the algorithm Wheel"
                 )
             elif explainability.backend in {"auto", "model_agnostic"}:
                 if not explainability.allow_approximate:
                     raise ValueError(
                         "Explainability requires explicit allow_approximate=true "
-                        "when no exact XGBoost artifact is available"
+                        "when no exact native artifact is available"
                     )
                 if explainability.reference is None:
                     raise ValueError(

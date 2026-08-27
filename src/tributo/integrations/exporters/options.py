@@ -16,34 +16,6 @@ class _NoOptions(BaseModel):
 
 
 @PublicAPI(stability="beta")
-class XGBoostUBJOptions(_NoOptions):
-    """Options for ``XGBoostUBJExporter``."""
-
-
-@PublicAPI(stability="beta")
-class XGBoostJSONOptions(_NoOptions):
-    """Options for ``XGBoostJSONExporter``."""
-
-
-@PublicAPI(stability="beta")
-class XGBoostNativeOptions(BaseModel):
-    """Deprecated compatibility options for ``XGBoostNativeExporter``."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    fmt: Literal["ubj", "json"] = "ubj"
-
-
-@PublicAPI(stability="beta")
-class XGBoostONNXOptions(BaseModel):
-    """Options for ``XGBoostONNXExporter``."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    opset: Literal[12] = 12
-
-
-@PublicAPI(stability="beta")
 class TorchONNXOptions(BaseModel):
     """Options for ``TorchONNXExporter``."""
 
@@ -88,8 +60,4 @@ __all__ = [
     "ONNXQuantizerOptions",
     "SafetensorsOptions",
     "TorchONNXOptions",
-    "XGBoostJSONOptions",
-    "XGBoostNativeOptions",
-    "XGBoostONNXOptions",
-    "XGBoostUBJOptions",
 ]

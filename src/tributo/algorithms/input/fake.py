@@ -22,6 +22,7 @@ from tributo.algorithms.spi.input import (
     ResolvedInputLease,
     RuntimeInputBinding,
     WorkerInputPayload,
+    WorkerInputPayloadSet,
 )
 from tributo.util.annotations import DeveloperAPI
 
@@ -133,6 +134,7 @@ class FakeInputResolver:
             )
         return ResolvedInputLease(
             handle=payload,
+            binding=binding,
             provenance={
                 "resolver_id": self.resolver_id,
                 "reference": binding.reference,
@@ -158,13 +160,14 @@ class FakeInputRuntimeAdapter:
             raise AlgorithmInputError(
                 "FakeInputRuntimeAdapter requires FakeTabularPayload"
             )
-        binding = plan.input_binding
+        binding = lease.binding or plan.input_bindings.primary
         partition_count = (
             plan.runtime.worker_count
             if plan.runtime.topology
             in {
                 RuntimeTopology.DATA_PARALLEL,
                 RuntimeTopology.RAY_MAP_REDUCE,
+                RuntimeTopology.RAY_ITERATIVE_OPTIMIZATION,
                 RuntimeTopology.RAY_TRAIN_COLLECTIVE,
             }
             else 1
@@ -204,8 +207,19 @@ def _partition_payload(
 
 
 @DeveloperAPI
-def prepare_input(payload: WorkerInputPayload) -> PreparedInput:
+def prepare_input(
+    payload: WorkerInputPayload | WorkerInputPayloadSet,
+) -> PreparedInput:
     """Create a Worker-owned materialized tabular view."""
+    if isinstance(payload, WorkerInputPayloadSet):
+        prepared = tuple(prepare_input(item) for item in payload.payloads)
+        views = {name: view for item in prepared for name, view in item.views.items()}
+
+        def close_all() -> None:
+            for item in reversed(prepared):
+                item.close()
+
+        return PreparedInput(views, close_callback=close_all)
     if not isinstance(payload.value, FakeTabularPayload):
         raise AlgorithmInputError(
             "fake Worker input adapter requires FakeTabularPayload"

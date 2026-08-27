@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import cast
 
+from tributo._common.immutable import deep_thaw
 from tributo.algorithms.api import (
     AlgorithmConfigurationError,
     AlgorithmExecutionError,
@@ -23,6 +24,7 @@ from tributo.algorithms.api import (
     WorkerExecutionResult,
     WorkerResources,
 )
+from tributo.algorithms.core.contracts import validate_contract_value
 from tributo.algorithms.core.planner import AlgorithmPlanner
 from tributo.algorithms.core.runtime import RayRuntimeManager
 from tributo.algorithms.spi import (
@@ -31,8 +33,11 @@ from tributo.algorithms.spi import (
     InputResolverPort,
     InputRuntimeAdapter,
     PortableRuntimeAdapter,
+    ResolvedInputLease,
     RuntimeExecutionEnvelope,
     RuntimeInputBinding,
+    WorkerInputPayload,
+    WorkerInputPayloadSet,
 )
 from tributo.util.annotations import DeveloperAPI
 
@@ -65,26 +70,36 @@ class AlgorithmRunCoordinator:
         plan.validate_integrity()
         run_id = uuid.uuid4().hex
         try:
-            resolver = self._resolvers[plan.input_descriptor.resolver_id]
-            input_adapter = self._input_adapters[plan.input_descriptor.resolver_id]
             runtime = self._runtimes[plan.runtime.runtime_id]
         except KeyError as exc:
             raise AlgorithmConfigurationError(
                 f"missing execution component for {exc.args[0]!r}"
             ) from exc
 
-        lease = resolver.open(
-            plan.input_binding,
-            plan.input_descriptor,
-            context,
-        )
+        leases: list[tuple[str, ResolvedInputLease]] = []
+        role_bindings: list[RuntimeInputBinding] = []
         runtime_binding: RuntimeInputBinding | None = None
         worker_result = None
         primary_error: BaseException | None = None
         cleanup_errors: list[Exception] = []
-        provenance = lease.provenance
         try:
-            runtime_binding = input_adapter.bind(lease, plan)
+            for binding, descriptor in zip(
+                plan.input_bindings.bindings,
+                plan.input_descriptors.descriptors,
+                strict=True,
+            ):
+                try:
+                    resolver = self._resolvers[descriptor.resolver_id]
+                    input_adapter = self._input_adapters[descriptor.resolver_id]
+                except KeyError as exc:
+                    raise AlgorithmConfigurationError(
+                        f"missing execution component for {exc.args[0]!r}"
+                    ) from exc
+                lease = resolver.open(binding, descriptor, context)
+                lease.attach_binding(binding)
+                leases.append((binding.name, lease))
+                role_bindings.append(input_adapter.bind(lease, plan))
+            runtime_binding = self._combine_role_bindings(plan, role_bindings)
             runtime_result = runtime.execute(
                 RuntimeExecutionEnvelope(
                     run_id=run_id,
@@ -101,6 +116,28 @@ class AlgorithmRunCoordinator:
                     "runtime returned an invalid WorkerExecutionResult"
                 )
             worker_result = runtime_result
+            if (
+                plan.contract_bindings is not None
+                and runtime_result.execution.status == "succeeded"
+            ):
+                validate_contract_value(
+                    plan.contract_bindings.output,
+                    {
+                        "status": runtime_result.execution.status,
+                        "metrics": deep_thaw(runtime_result.execution.metrics),
+                        "outputs": deep_thaw(runtime_result.execution.outputs),
+                        "artifacts": [
+                            {
+                                "name": artifact.name,
+                                "kind": artifact.kind,
+                                "format": artifact.format,
+                                "sha256": artifact.sha256,
+                                "trusted": artifact.trusted,
+                            }
+                            for artifact in runtime_result.execution.artifacts
+                        ],
+                    },
+                )
         except BaseException as exc:
             primary_error = exc
         finally:
@@ -109,17 +146,22 @@ class AlgorithmRunCoordinator:
                     runtime_binding.close()
                 except Exception as exc:
                     cleanup_errors.append(exc)
-            try:
-                worker_failed = (
-                    worker_result is not None
-                    and worker_result.execution.status == "failed"
-                )
-                if primary_error is not None or worker_failed or cancelled:
-                    lease.cancel()
-                else:
-                    lease.close()
-            except Exception as exc:
-                cleanup_errors.append(exc)
+            for role_binding in reversed(role_bindings):
+                try:
+                    role_binding.close()
+                except Exception as exc:
+                    cleanup_errors.append(exc)
+            worker_failed = (
+                worker_result is not None and worker_result.execution.status == "failed"
+            )
+            for _, lease in reversed(leases):
+                try:
+                    if primary_error is not None or worker_failed or cancelled:
+                        lease.cancel()
+                    else:
+                        lease.close()
+                except Exception as exc:
+                    cleanup_errors.append(exc)
 
         if primary_error is not None:
             for cleanup_error in cleanup_errors:
@@ -145,6 +187,25 @@ class AlgorithmRunCoordinator:
                     f"algorithm execution cleanup failed: {type(first_error).__name__}"
                 ) from first_error
 
+        execution_receipt = self._execution_receipt(
+            run_id,
+            plan,
+            worker_result,
+        )
+        if (
+            plan.contract_bindings is not None
+            and plan.contract_bindings.coverage is not None
+            and execution_receipt is not None
+        ):
+            validate_contract_value(
+                plan.contract_bindings.coverage,
+                execution_receipt.to_dict(),
+            )
+        provenance: Mapping[str, object]
+        if len(leases) == 1:
+            provenance = leases[0][1].provenance
+        else:
+            provenance = {role: lease.provenance for role, lease in leases}
         return AlgorithmRunResult(
             run_id=run_id,
             plan_id=plan.plan_id,
@@ -152,12 +213,49 @@ class AlgorithmRunCoordinator:
             actual_versions=worker_result.actual_versions,
             input_provenance=provenance,
             worker_metadata=worker_result.worker_metadata,
-            execution_receipt=self._execution_receipt(
-                run_id,
-                plan,
-                worker_result,
-            ),
+            execution_receipt=execution_receipt,
         )
+
+    @staticmethod
+    def _combine_role_bindings(
+        plan: ResolvedAlgorithmPlan,
+        bindings: list[RuntimeInputBinding],
+    ) -> RuntimeInputBinding:
+        """Combine role payloads by rank without materializing their values."""
+        if not bindings:
+            raise AlgorithmConfigurationError(
+                "algorithm execution requires at least one input binding"
+            )
+        if len(bindings) == 1:
+            return RuntimeInputBinding(bindings[0].payloads)
+        counts = {len(binding.payloads) for binding in bindings}
+        if len(counts) != 1:
+            raise AlgorithmConfigurationError(
+                "input roles produced different Worker partition counts"
+            )
+        roles = tuple(item.name for item in plan.input_bindings.bindings)
+        combined_payloads: list[WorkerInputPayloadSet] = []
+        for rank in range(len(bindings[0].payloads)):
+            role_payloads = tuple(binding.payloads[rank] for binding in bindings)
+            if any(not isinstance(item, WorkerInputPayload) for item in role_payloads):
+                raise AlgorithmConfigurationError(
+                    "input role adapter returned an already-composed payload"
+                )
+            combined_payloads.append(
+                WorkerInputPayloadSet(
+                    payloads=cast(tuple[WorkerInputPayload, ...], role_payloads),
+                    primary_role=plan.input_bindings.primary_role,
+                )
+            )
+        combined = tuple(combined_payloads)
+        if any(
+            tuple(payload.input_name for payload in payload_set.payloads) != roles
+            for payload_set in combined
+        ):
+            raise AlgorithmConfigurationError(
+                "combined Worker input payload roles drifted from the plan"
+            )
+        return RuntimeInputBinding(combined)
 
     @staticmethod
     def _execution_receipt(
@@ -272,6 +370,23 @@ class AlgorithmDispatcher:
     ) -> AlgorithmRunResult:
         """Plan and execute one bounded request."""
         plan = self.plan(request, resolution_context)
+        return self.execute_plan(
+            plan,
+            context,
+            artifacts=artifacts,
+            cancelled=cancelled,
+        )
+
+    def execute_plan(
+        self,
+        plan: ResolvedAlgorithmPlan,
+        context: InputExecutionContext,
+        *,
+        artifacts: tuple[ArtifactDraft, ...] = (),
+        cancelled: bool = False,
+    ) -> AlgorithmRunResult:
+        """Execute one already validated plan through the normal lifecycle."""
+        plan.validate_integrity()
         if plan.runtime.execution_profile is None:
             return self._coordinator.execute(
                 plan,

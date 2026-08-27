@@ -61,8 +61,8 @@ def _map_reduce_spec() -> DistributionSpec:
                 StateField("feature_count", "float64", (None, None)),
             ),
             max_partial_state_bytes=8 * 1024 * 1024,
-            reducer_ref="tributo.algorithms.builtin.multinomial_nb:merge_states",
-            finalizer_ref="tributo.algorithms.builtin.multinomial_nb:finalize_model",
+            reducer_ref="tests.support.decomposition_algorithms:merge_states",
+            finalizer_ref="tests.support.decomposition_algorithms:finalize_model",
         ),
     )
 
@@ -110,8 +110,8 @@ def test_distribution_spec_rejects_strategy_policy_mismatch() -> None:
 
 def test_framework_native_requires_framework_owned_data_and_evidence() -> None:
     policy = FrameworkNativePolicy(
-        framework="xgboost-ray-train",
-        evidence_collector_ref="tributo.training.xgboost_trainer:collect_evidence",
+        framework="external-framework",
+        evidence_collector_ref="tests.example:collect_evidence",
     )
     with pytest.raises(AlgorithmConfigurationError, match="framework_owned"):
         DistributionSpec(
@@ -127,7 +127,7 @@ def test_framework_native_requires_framework_owned_data_and_evidence() -> None:
 
 def test_framework_native_component_stages_are_canonical_and_round_trip() -> None:
     policy = FrameworkNativePolicy(
-        framework="xgboost-x-learner",
+        framework="external-multistage",
         evidence_collector_ref="tests.example:collect",
         component_stages=("mu0", "mu1", "tau0", "tau1", "propensity"),
     )
@@ -156,7 +156,7 @@ def test_empty_framework_component_stages_preserve_legacy_canonical_payload() ->
         input_distribution=InputDistribution.FRAMEWORK_OWNED,
         state_coordination=StateCoordination.FRAMEWORK_NATIVE,
         policy=FrameworkNativePolicy(
-            framework="xgboost",
+            framework="external-framework",
             evidence_collector_ref="tests.example:collect",
         ),
     )

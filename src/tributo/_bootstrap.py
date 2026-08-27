@@ -28,65 +28,33 @@ def first_party_export_plugins() -> tuple[
     from tributo.integrations.exporters.torch_safetensors import (
         TorchSafetensorsExporter,
     )
-    from tributo.integrations.exporters.x_learner import (
-        XLearnerCausalReportExporter,
-        XLearnerExporter,
-    )
-    from tributo.integrations.exporters.xgboost_native import (
-        XGBoostJSONExporter,
-        XGBoostUBJExporter,
-    )
-    from tributo.integrations.exporters.xgboost_onnx import XGBoostONNXExporter
     from tributo.integrations.validators.onnx_runtime import ONNXRuntimeValidator
-    from tributo.integrations.validators.xgboost_native import (
-        XGBoostNativeRuntimeValidator,
-    )
 
     exporters: tuple[type[ModelExporter], ...] = (
-        XGBoostONNXExporter,
-        XGBoostUBJExporter,
-        XGBoostJSONExporter,
         TorchSafetensorsExporter,
         TorchONNXExporter,
         TorchExportExporter,
         HuggingFaceONNXExporter,
         ONNXQuantizer,
-        XLearnerExporter,
-        XLearnerCausalReportExporter,
     )
-    validators: tuple[type[ExportValidator], ...] = (
-        ONNXRuntimeValidator,
-        XGBoostNativeRuntimeValidator,
-    )
+    validators: tuple[type[ExportValidator], ...] = (ONNXRuntimeValidator,)
     return exporters, validators
 
 
 def first_party_source_providers() -> tuple[type[ExportSourceProvider], ...]:
     """Return built-in checkpoint providers without entry-point metadata."""
-    from tributo.integrations.sources.ray_dnn import RayDnnSourceProvider
-    from tributo.integrations.sources.ray_pu import RayPUSourceProvider
     from tributo.integrations.sources.ray_torch_recipe import (
         RayTorchRecipeSourceProvider,
     )
-    from tributo.integrations.sources.ray_x_learner import RayXLearnerSourceProvider
-    from tributo.integrations.sources.ray_xgboost import RayXGBoostSourceProvider
 
-    return (
-        RayXGBoostSourceProvider,
-        RayDnnSourceProvider,
-        RayPUSourceProvider,
-        RayTorchRecipeSourceProvider,
-        RayXLearnerSourceProvider,
-    )
+    return (RayTorchRecipeSourceProvider,)
 
 
 def first_party_model_flavors() -> tuple[type[BundleModelFlavor], ...]:
     """Return built-in executable flavors without entry-point metadata."""
     from tributo.integrations.flavors.onnx_runtime import ONNXRuntimeFlavor
-    from tributo.integrations.flavors.x_learner import XLearnerFlavor
-    from tributo.integrations.flavors.xgboost_native import XGBoostNativeFlavor
 
-    return (ONNXRuntimeFlavor, XGBoostNativeFlavor, XLearnerFlavor)
+    return (ONNXRuntimeFlavor,)
 
 
 def first_party_bundle_storage_adapters(

@@ -86,6 +86,35 @@ def test_check_detects_manual_drift_without_writing(tmp_path: Path) -> None:
     assert path.read_text(encoding="utf-8") == stale
 
 
+def test_load_snapshot_excludes_migrated_algorithm_records(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tributo.training import catalog, support_snapshot
+
+    class _Catalog:
+        def list_records(self):
+            migrated = AlgorithmSupportRecord(
+                **{
+                    **_record(name="migrated").__dict__,
+                    "native_migration_complete": True,
+                }
+            )
+            return (migrated, _record(name="owned"))
+
+    monkeypatch.setattr(
+        catalog,
+        "get_algorithm_catalog",
+        lambda: _Catalog(),
+    )
+    monkeypatch.setattr(
+        support_snapshot,
+        "build_algorithm_support_snapshot",
+        lambda records: tuple(records),
+    )
+    records = support_matrix_generator.load_support_snapshot()
+    assert tuple(item.name for item in records) == ("owned",)
+
+
 def test_check_rejects_missing_markers_before_loading_catalog(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

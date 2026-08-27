@@ -16,7 +16,6 @@ import pyarrow.parquet as pq
 
 import tributo.vector_index as vector_index
 from tributo.config import AlgorithmExecutionConfig
-from tributo.training.pu_trainer import PUTrainingConfig
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
@@ -57,12 +56,12 @@ def test_pu_execution_request_is_valid() -> None:
             REPOSITORY_ROOT / "docs" / "examples" / "doc_code" / "pu_execution.json"
         ).read_text(encoding="utf-8")
     )
-    training = PUTrainingConfig.model_validate(request.algorithm_config)
+    training = request.algorithm_config
 
     assert request.algorithm == "pu"
-    assert request.worker_count == training.ray.num_workers == 2
-    assert training.pu.class_prior == 0.3
-    assert training.output.bundle_uri == "/shared/models/pu-fraud"
+    assert request.worker_count == 2
+    assert training["loss"]["class_prior"] == 0.3
+    assert training["output"]["bundle_uri"] == "/shared/models/pu-fraud"
 
 
 def test_local_data_example_executes(tmp_path: Path) -> None:

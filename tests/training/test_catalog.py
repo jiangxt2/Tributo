@@ -300,12 +300,15 @@ class TestCatalogSupports:
 
 class TestCatalogGetConfigSchema:
     def test_returns_json_schema(self) -> None:
-        from tributo.training.xgboost_trainer import XGBoostTrainingConfig
+        from pydantic import BaseModel
+
+        class ExampleConfig(BaseModel):
+            data: dict[str, object]
 
         cat = _catalog(
-            xgb=_spec("xgb", config_model=XGBoostTrainingConfig),
+            example=_spec("example", config_model=ExampleConfig),
         )
-        schema = cat.get_config_schema("xgb")
+        schema = cat.get_config_schema("example")
         assert isinstance(schema, dict)
         assert "properties" in schema
         assert "data" in schema["properties"]
@@ -449,37 +452,13 @@ class TestGetAlgorithmCatalog:
         cat = get_algorithm_catalog()
         assert isinstance(cat, AlgorithmCatalog)
 
-    def test_includes_registered_trainers(self) -> None:
+    def test_catalog_has_no_core_builtin_fallback(self) -> None:
         cat = get_algorithm_catalog()
-        names = cat.list()
-        # First-party descriptors are published by the unified Registry bootstrap.
-        assert "xgboost" in names
-
-    def test_unified_records_expose_execution_and_support_state(self) -> None:
-        record = get_algorithm_catalog().get_record("xgboost")
-
-        assert record.available is True
-        assert record.compatibility_only is False
-        assert record.tested is True
-        assert record.supported is True
-        assert record.native_migration_complete is True
-        assert record.implementation_ids == (
-            "tributo.xgboost.framework_native",
-            "tributo.xgboost.legacy_trainer",
+        assert all(
+            not implementation.startswith("tributo.algorithms.builtin")
+            for name in cat.list()
+            for implementation in cat.get_record(name).implementation_ids
         )
-        assert record.runtime_topologies == (
-            "framework_managed",
-            "framework_native",
-        )
-        assert record.distribution_strategies == ("framework_native",)
-        assert record.execution_profiles == ("cluster", "local")
-        assert record.input_views == ("ray_data",)
-        assert record.stability == "alpha"
-
-    def test_explicit_compatibility_access_reuses_hydrated_spec(self) -> None:
-        catalog = get_algorithm_catalog()
-
-        assert catalog.get_spec("xgboost") is catalog.get_spec("xgboost")
 
     def test_programmatic_beta_registration_is_compatibility_only(self) -> None:
         from tributo.training.registry import _registry

@@ -11,7 +11,7 @@ the output of one runner feeds into the input of the next.
     encoder = ModelRunner("encoder", load_fn=load_model, predict_fn=predict)
     classifier = ModelRunner(
         "classifier",
-        load_fn=lambda: XGBoostFlavor.load("classifier.json"),
+        load_fn=load_classifier,
         predict_fn=lambda m, inp: m.predict(inp),
     )
 

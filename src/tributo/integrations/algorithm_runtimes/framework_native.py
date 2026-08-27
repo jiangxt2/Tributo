@@ -35,6 +35,7 @@ from tributo.algorithms.spi import (
     PreparedInput,
     RuntimeExecutionEnvelope,
 )
+from tributo.exceptions import BundleExportError
 from tributo.integrations.algorithm_runtimes.portable_metrics import (
     portable_fit_only_metrics,
 )
@@ -43,6 +44,32 @@ from tributo.util.annotations import DeveloperAPI
 FRAMEWORK_NATIVE_RUNTIME_ID = FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS[
     DistributionStrategy.FRAMEWORK_NATIVE
 ].runtime_id
+
+
+def _bundle_export_failure_message(error: BundleExportError) -> str:
+    """Keep required Bundle node failures visible across a Ray Job boundary."""
+    execution = error.execution_result
+    if execution is None:
+        return "framework-native Bundle export failed without an execution result"
+    failures: list[dict[str, object]] = []
+    for node in getattr(execution, "node_results", ()):
+        status = getattr(node, "status", None)
+        if status == "succeeded":
+            continue
+        failure = getattr(node, "failure", None)
+        failures.append(
+            {
+                "node_id": getattr(node, "node_id", None),
+                "status": status,
+                "exporter_id": getattr(node, "exporter_id", None),
+                "code": getattr(failure, "code", None),
+                "category": getattr(failure, "category", None),
+                "message": str(getattr(failure, "message", ""))[:4096],
+            }
+        )
+    return "framework-native Bundle export failed: " + json.dumps(
+        failures, sort_keys=True, separators=(",", ":")
+    )
 
 
 def _framework_execution_result(
@@ -206,6 +233,81 @@ def _validated_staged_framework_evidence(
             raise AlgorithmExecutionError(
                 f"framework stage {stage!r} evidence must be a mapping"
             )
+        cross_fit_folds = payload.get("cross_fit_folds")
+        if isinstance(cross_fit_folds, list):
+            if len(cross_fit_folds) < 2:
+                raise AlgorithmExecutionError(
+                    f"framework stage {stage!r} requires at least two cross-fit folds"
+                )
+            fold_records: list[
+                tuple[list[dict[str, Any]], dict[str, Any], int, int]
+            ] = []
+            heldout_total = 0
+            for fold in cross_fit_folds:
+                if not isinstance(fold, Mapping):
+                    raise AlgorithmExecutionError(
+                        f"framework stage {stage!r} cross-fit fold is malformed"
+                    )
+                fold_rows = fold.get("expected_training_rows")
+                heldout_rows = fold.get("heldout_rows")
+                if (
+                    not isinstance(fold_rows, int)
+                    or isinstance(fold_rows, bool)
+                    or fold_rows < 1
+                    or not isinstance(heldout_rows, int)
+                    or isinstance(heldout_rows, bool)
+                    or heldout_rows < 1
+                ):
+                    raise AlgorithmExecutionError(
+                        f"framework stage {stage!r} cross-fit coverage is malformed"
+                    )
+                fold_workers, fold_state = _validated_framework_evidence(
+                    fold,
+                    worker_count=worker_count,
+                    resources_per_worker=resources_per_worker,
+                    expected_training_rows=fold_rows,
+                )
+                fold_records.append((fold_workers, fold_state, fold_rows, heldout_rows))
+                heldout_total += heldout_rows
+            if heldout_total != expected_training_rows:
+                raise AlgorithmExecutionError(
+                    f"framework stage {stage!r} cross-fit heldout coverage does not "
+                    "partition the input"
+                )
+            rank_rows = [0] * worker_count
+            for workers, _, _, _ in fold_records:
+                for worker in workers:
+                    rank = int(worker["rank"])
+                    rank_rows[rank] += int(worker["rows_processed"])
+            digest = hashlib.sha256(
+                json.dumps(
+                    [state["global_model_digest"] for _, state, _, _ in fold_records],
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            workers = [dict(worker) for worker in fold_records[0][0]]
+            for worker in workers:
+                worker["rows_processed"] = rank_rows[int(worker["rank"])]
+                worker["model_state_digest"] = digest
+            validated[stage] = (
+                workers,
+                {
+                    "coordination": StateCoordination.FRAMEWORK_NATIVE.value,
+                    "synchronized": True,
+                    "bounded": True,
+                    "global_model_digest": digest,
+                    "details": {
+                        "framework": "staged_cross_fit",
+                        "cross_fit_folds": len(fold_records),
+                        "heldout_rows": heldout_total,
+                        "training_rows_per_fold": json.dumps(
+                            [item[2] for item in fold_records], separators=(",", ":")
+                        ),
+                    },
+                },
+                expected_training_rows,
+            )
+            continue
         stage_rows = payload.get("expected_training_rows")
         if (
             not isinstance(stage_rows, int)
@@ -299,7 +401,11 @@ def _algorithm(envelope: RuntimeExecutionEnvelope) -> FrameworkNativeAlgorithm:
         raise AlgorithmConfigurationError(
             "framework-native executable factory is not callable"
         )
-    value = factory(plan=plan, implementation=implementation, artifacts=())
+    value = factory(
+        plan=plan,
+        implementation=implementation,
+        artifacts=envelope.artifacts,
+    )
     if not isinstance(value, FrameworkNativeAlgorithm):
         raise AlgorithmConfigurationError(
             "framework-native factory must return FrameworkNativeAlgorithm"
@@ -408,12 +514,17 @@ class FrameworkNativeRuntime:
                     resources_per_worker=resources,
                     expected_training_rows=expected_training_rows,
                 )
-            execution = _framework_execution_result(
-                algorithm=algorithm,
-                result=result,
-                plan=envelope.plan,
-                run_id=envelope.run_id,
-            )
+            try:
+                execution = _framework_execution_result(
+                    algorithm=algorithm,
+                    result=result,
+                    plan=envelope.plan,
+                    run_id=envelope.run_id,
+                )
+            except BundleExportError as exc:
+                raise AlgorithmExecutionError(
+                    _bundle_export_failure_message(exc)
+                ) from exc
             versions = _actual_environment_versions(
                 envelope.plan.environment.python,
                 envelope.plan.environment.dependencies,

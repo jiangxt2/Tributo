@@ -319,6 +319,20 @@ class TestStopCommand:
 
 
 class TestExportCommand:
+    @staticmethod
+    def _provider(source: object):
+        class TestSourceProvider:
+            api_version = 1
+            provider_id = "test-source-v1"
+            trainer_type = "test"
+            priority = 100
+
+            def open_source(self, value):
+                del value
+                return source
+
+        return TestSourceProvider
+
     def test_parses_explicit_hook_binding(self, runner, tmp_path):
         bundle_result = MagicMock()
         bundle_result.canonical_uri = str(tmp_path / "bundle")
@@ -328,20 +342,24 @@ class TestExportCommand:
         bundle_result.alias_uri = None
         bundle_result.hook_receipts = ()
 
+        source = MagicMock()
+        source.__enter__.return_value = MagicMock()
         with (
             patch("tributo.exporting.service.BundleExportService") as service_cls,
             patch(
-                "tributo.integrations.sources.ray_xgboost.RayXGBoostSourceProvider"
-            ) as provider_cls,
+                "tributo.plugin.discover_source_provider_plugins",
+                return_value=[self._provider(source)],
+            ),
         ):
             service_cls.return_value.export_bundle.return_value = bundle_result
-            provider_cls.return_value.open_source.return_value.__enter__.return_value = MagicMock()
             result = runner.invoke(
                 main,
                 [
                     "export",
                     "--source",
                     str(tmp_path / "checkpoint"),
+                    "--source-provider",
+                    "test-source-v1",
                     "--targets",
                     "onnx",
                     "--output",
@@ -386,11 +404,14 @@ class TestExportCommand:
         receipt.hook_id = "mlflow-log-artifacts-v1"
         receipt.status.value = "retryable_failed"
 
+        source = MagicMock()
+        source.__enter__.return_value = MagicMock()
         with (
             patch("tributo.exporting.service.BundleExportService") as service_cls,
             patch(
-                "tributo.integrations.sources.ray_xgboost.RayXGBoostSourceProvider"
-            ) as provider_cls,
+                "tributo.plugin.discover_source_provider_plugins",
+                return_value=[self._provider(source)],
+            ),
         ):
             service_cls.return_value.export_bundle.side_effect = (
                 PostPublishCallbackError(
@@ -399,13 +420,14 @@ class TestExportCommand:
                     receipts=(receipt,),
                 )
             )
-            provider_cls.return_value.open_source.return_value.__enter__.return_value = MagicMock()
             result = runner.invoke(
                 main,
                 [
                     "export",
                     "--source",
                     str(tmp_path / "checkpoint"),
+                    "--source-provider",
+                    "test-source-v1",
                     "--targets",
                     "onnx",
                     "--output",

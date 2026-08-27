@@ -7,7 +7,7 @@ import json
 import math
 import re
 import sys
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
@@ -27,7 +27,10 @@ from tributo.algorithms.api.distribution import (
     ResultPolicy,
     StateCoordination,
 )
-from tributo.algorithms.api.errors import AlgorithmConfigurationError
+from tributo.algorithms.api.errors import (
+    AlgorithmConfigurationError,
+    AlgorithmExecutionError,
+)
 from tributo.training.algorithm_spec import AlgorithmSpec
 from tributo.util.annotations import DeveloperAPI, PublicAPI
 
@@ -140,6 +143,10 @@ class ExecutionMode(str, Enum):
     COLLECTIVE = "collective"
     MAP_REDUCE = "map_reduce"
     FRAMEWORK_NATIVE = "framework_native"
+    JOBLIB_ESTIMATOR = "joblib_estimator"
+    PARALLEL_ENSEMBLE = "parallel_ensemble"
+    ITERATIVE_OPTIMIZATION = "iterative_optimization"
+    TRAINING_RECIPE_V2 = "training_recipe_v2"
 
 
 @PublicAPI(stability="alpha")
@@ -152,6 +159,10 @@ class RuntimeTopology(str, Enum):
     RAY_TRAIN_COLLECTIVE = "ray_train_collective"
     FRAMEWORK_NATIVE = "framework_native"
     RAY_MAP_REDUCE = "ray_map_reduce"
+    RAY_JOBLIB_ESTIMATOR = "ray_joblib_estimator"
+    RAY_PARALLEL_ENSEMBLE = "ray_parallel_ensemble"
+    RAY_ITERATIVE_OPTIMIZATION = "ray_iterative_optimization"
+    RAY_TRAIN_RECIPE_V2 = "ray_train_recipe_v2"
 
 
 @dataclass(frozen=True)
@@ -198,6 +209,53 @@ FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS: Mapping[
             topology=RuntimeTopology.FRAMEWORK_NATIVE,
             input_distribution=InputDistribution.FRAMEWORK_OWNED,
             state_coordination=StateCoordination.FRAMEWORK_NATIVE,
+            worker_input_adapter_ref=(
+                "tributo.integrations.algorithm_inputs.ingestion:"
+                "prepare_ray_train_input"
+            ),
+        ),
+        DistributionStrategy.RAY_JOBLIB_ESTIMATOR: FormalDistributedStrategyContract(
+            execution_mode=ExecutionMode.JOBLIB_ESTIMATOR,
+            runtime_id="tributo.ray_joblib_estimator",
+            topology=RuntimeTopology.RAY_JOBLIB_ESTIMATOR,
+            input_distribution=InputDistribution.FULL_DATASET,
+            state_coordination=StateCoordination.ESTIMATOR_INTERNAL,
+            worker_input_adapter_ref=(
+                "tributo.integrations.algorithm_inputs.ingestion:prepare_ray_data_input"
+            ),
+        ),
+        DistributionStrategy.RAY_PARALLEL_ENSEMBLE: (
+            FormalDistributedStrategyContract(
+                execution_mode=ExecutionMode.PARALLEL_ENSEMBLE,
+                runtime_id="tributo.ray_parallel_ensemble",
+                topology=RuntimeTopology.RAY_PARALLEL_ENSEMBLE,
+                input_distribution=InputDistribution.FULL_DATASET,
+                state_coordination=StateCoordination.ORDERED_ENSEMBLE,
+                worker_input_adapter_ref=(
+                    "tributo.integrations.algorithm_inputs.ingestion:"
+                    "prepare_ray_data_input"
+                ),
+            )
+        ),
+        DistributionStrategy.RAY_ITERATIVE_OPTIMIZATION: (
+            FormalDistributedStrategyContract(
+                execution_mode=ExecutionMode.ITERATIVE_OPTIMIZATION,
+                runtime_id="tributo.ray_iterative_optimization",
+                topology=RuntimeTopology.RAY_ITERATIVE_OPTIMIZATION,
+                input_distribution=InputDistribution.SHARDED,
+                state_coordination=StateCoordination.ITERATIVE_GLOBAL,
+                worker_input_adapter_ref=(
+                    "tributo.integrations.algorithm_inputs.ingestion:"
+                    "prepare_ray_batch_input"
+                ),
+            )
+        ),
+        DistributionStrategy.RAY_TRAIN_RECIPE_V2: FormalDistributedStrategyContract(
+            execution_mode=ExecutionMode.TRAINING_RECIPE_V2,
+            runtime_id="tributo.ray_train_recipe_v2",
+            topology=RuntimeTopology.RAY_TRAIN_RECIPE_V2,
+            input_distribution=InputDistribution.SHARDED,
+            state_coordination=StateCoordination.ALL_REDUCE,
             worker_input_adapter_ref=(
                 "tributo.integrations.algorithm_inputs.ingestion:"
                 "prepare_ray_train_input"
@@ -258,6 +316,97 @@ class QualifiedReference:
 
     def __str__(self) -> str:
         return f"{self.module}:{self.qualname}"
+
+
+@PublicAPI(stability="alpha")
+@dataclass(frozen=True)
+class ContractBinding:
+    """Bind one stable contract identity to a lightweight validator."""
+
+    contract_id: str
+    schema_version: int
+    schema_digest: str
+    validator_ref: QualifiedReference
+    codec_ref: QualifiedReference | None = None
+
+    def __post_init__(self) -> None:
+        _require_namespaced_id(self.contract_id, "contract_id")
+        if (
+            not isinstance(self.schema_version, int)
+            or isinstance(self.schema_version, bool)
+            or self.schema_version < 1
+        ):
+            raise AlgorithmConfigurationError(
+                "contract schema_version must be a positive integer"
+            )
+        if (
+            not isinstance(self.schema_digest, str)
+            or _DIGEST.fullmatch(self.schema_digest) is None
+        ):
+            raise AlgorithmConfigurationError(
+                "contract schema_digest must be a lower-case SHA-256 digest"
+            )
+        if not isinstance(self.validator_ref, QualifiedReference):
+            raise AlgorithmConfigurationError(
+                "contract validator_ref must be a QualifiedReference"
+            )
+        if self.codec_ref is not None and not isinstance(
+            self.codec_ref, QualifiedReference
+        ):
+            raise AlgorithmConfigurationError(
+                "contract codec_ref must be a QualifiedReference when provided"
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the canonical credential-free contract binding."""
+        return {
+            "contract_id": self.contract_id,
+            "schema_version": self.schema_version,
+            "schema_digest": self.schema_digest,
+            "validator_ref": str(self.validator_ref),
+            "codec_ref": str(self.codec_ref) if self.codec_ref is not None else None,
+        }
+
+
+@PublicAPI(stability="alpha")
+@dataclass(frozen=True)
+class ContractBindingSet:
+    """Versioned config, input, output, and optional coverage contracts."""
+
+    config: ContractBinding
+    input: ContractBinding
+    output: ContractBinding
+    coverage: ContractBinding | None = None
+
+    def __post_init__(self) -> None:
+        bindings = (self.config, self.input, self.output)
+        if any(not isinstance(item, ContractBinding) for item in bindings):
+            raise AlgorithmConfigurationError(
+                "config, input, and output contracts must be ContractBinding values"
+            )
+        if self.coverage is not None and not isinstance(self.coverage, ContractBinding):
+            raise AlgorithmConfigurationError(
+                "coverage contract must be a ContractBinding when provided"
+            )
+        identities = tuple(
+            item.contract_id
+            for item in (*bindings, *((self.coverage,) if self.coverage else ()))
+        )
+        if len(set(identities)) != len(identities):
+            raise AlgorithmConfigurationError(
+                "contract bindings must use distinct contract identities"
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the canonical contract binding projection."""
+        return {
+            "config": self.config.to_dict(),
+            "input": self.input.to_dict(),
+            "output": self.output.to_dict(),
+            "coverage": (
+                self.coverage.to_dict() if self.coverage is not None else None
+            ),
+        }
 
 
 @PublicAPI(stability="alpha")
@@ -457,6 +606,10 @@ class ImplementationDescriptor:
             ExecutionMode.COLLECTIVE,
             ExecutionMode.MAP_REDUCE,
             ExecutionMode.FRAMEWORK_NATIVE,
+            ExecutionMode.JOBLIB_ESTIMATOR,
+            ExecutionMode.PARALLEL_ENSEMBLE,
+            ExecutionMode.ITERATIVE_OPTIMIZATION,
+            ExecutionMode.TRAINING_RECIPE_V2,
         }
         if formal_mode and (
             self.runtime_id is None or self.worker_input_adapter_ref is None
@@ -635,6 +788,10 @@ class RuntimeBinding:
             RuntimeTopology.RAY_TRAIN_COLLECTIVE,
             RuntimeTopology.FRAMEWORK_NATIVE,
             RuntimeTopology.RAY_MAP_REDUCE,
+            RuntimeTopology.RAY_JOBLIB_ESTIMATOR,
+            RuntimeTopology.RAY_PARALLEL_ENSEMBLE,
+            RuntimeTopology.RAY_ITERATIVE_OPTIMIZATION,
+            RuntimeTopology.RAY_TRAIN_RECIPE_V2,
         }
         if topology in formal_topologies and (
             self.framework_parallelism != 1 or self.result_reducer_ref is not None
@@ -695,6 +852,7 @@ class AlgorithmRegistration:
     environment: EnvironmentSpec
     runtime: RuntimeBinding | None = None
     distribution_spec: DistributionSpec | None = None
+    contract_bindings: ContractBindingSet | None = None
     is_default: bool = False
 
     def __post_init__(self) -> None:
@@ -733,6 +891,25 @@ class AlgorithmRegistration:
                 "portable AlgorithmSpec is missing target contract field(s): "
                 f"{sorted(missing_contracts)}"
             )
+        if self.contract_bindings is not None:
+            if not isinstance(self.contract_bindings, ContractBindingSet):
+                raise AlgorithmConfigurationError(
+                    "contract_bindings must be a ContractBindingSet"
+                )
+            expected_contract_ids = (
+                self.spec.config_contract_ref,
+                self.spec.input_contract_ref,
+                self.spec.output_contract_ref,
+            )
+            actual_contract_ids = (
+                self.contract_bindings.config.contract_id,
+                self.contract_bindings.input.contract_id,
+                self.contract_bindings.output.contract_id,
+            )
+            if actual_contract_ids != expected_contract_ids:
+                raise AlgorithmConfigurationError(
+                    "contract binding identities must match AlgorithmSpec contract refs"
+                )
         try:
             spec_operations = tuple(
                 AlgorithmOperation(operation) for operation in self.spec.operations
@@ -939,6 +1116,143 @@ class InputBinding:
 
 @PublicAPI(stability="alpha")
 @dataclass(frozen=True)
+class InputBindingSet:
+    """Bind multiple named algorithm input roles without domain-specific enums."""
+
+    bindings: tuple[InputBinding, ...]
+    primary_role: str = "train"
+
+    def __post_init__(self) -> None:
+        bindings = tuple(self.bindings)
+        if not bindings or any(not isinstance(item, InputBinding) for item in bindings):
+            raise AlgorithmConfigurationError(
+                "input binding sets require at least one InputBinding"
+            )
+        roles = tuple(item.name for item in bindings)
+        if len(set(roles)) != len(roles):
+            raise AlgorithmConfigurationError("input binding roles must be unique")
+        _require_namespaced_id(self.primary_role, "primary_role")
+        if self.primary_role not in roles:
+            raise AlgorithmConfigurationError(
+                "input binding primary_role must reference an existing binding"
+            )
+        object.__setattr__(self, "bindings", bindings)
+
+    @classmethod
+    def from_binding(cls, binding: InputBinding) -> InputBindingSet:
+        """Wrap the historical single binding without changing its role."""
+        return cls(bindings=(binding,), primary_role=binding.name)
+
+    @property
+    def primary(self) -> InputBinding:
+        """Return the primary compatibility binding."""
+        return self.get(self.primary_role)
+
+    def get(self, role: str) -> InputBinding:
+        """Return one binding by role or fail with a contract error."""
+        for binding in self.bindings:
+            if binding.name == role:
+                return binding
+        raise AlgorithmConfigurationError(f"unknown input binding role: {role!r}")
+
+    def descriptor_payload(self) -> dict[str, Any]:
+        """Return the canonical multi-role binding declaration."""
+        return {
+            "primary_role": self.primary_role,
+            "bindings": [binding.descriptor_payload() for binding in self.bindings],
+        }
+
+
+@PublicAPI(stability="alpha")
+@dataclass(frozen=True)
+class InputCoverageContract:
+    """Generic proof contract for complete, non-overlapping training input.
+
+    Runtime adapters supply worker evidence rather than materializing the data
+    on the Driver.  ``dimensions`` names orthogonal counters emitted as
+    ``coverage.<name>`` in each worker's ``input_rows`` map (for example,
+    ``treated``/``control`` or ``fold.0``/``fold.1``).  The ordinary row count
+    is always checked through ``rows_processed``.
+    """
+
+    dimensions: tuple[str, ...] = ()
+    require_exact_partition: bool = True
+    require_non_empty: bool = True
+
+    def __post_init__(self) -> None:
+        dimensions = tuple(self.dimensions)
+        if len(set(dimensions)) != len(dimensions) or any(
+            not isinstance(name, str) or not name for name in dimensions
+        ):
+            raise AlgorithmConfigurationError(
+                "coverage dimensions must be unique non-empty strings"
+            )
+        if not isinstance(self.require_exact_partition, bool) or not isinstance(
+            self.require_non_empty, bool
+        ):
+            raise AlgorithmConfigurationError("coverage contract flags must be bool")
+        object.__setattr__(self, "dimensions", dimensions)
+
+    def validate(
+        self,
+        workers: Iterable[Mapping[str, Any]],
+        *,
+        expected_rows: int | None = None,
+    ) -> None:
+        """Validate worker/shard identity and the declared coverage counters."""
+        records = tuple(
+            item.to_dict() if hasattr(item, "to_dict") else item for item in workers
+        )
+        if not records:
+            raise AlgorithmExecutionError("coverage contract requires worker evidence")
+        if any(not isinstance(record, Mapping) for record in records):
+            raise AlgorithmExecutionError("coverage worker evidence is malformed")
+        shard_ids = [record.get("shard_id") for record in records]
+        if any(not isinstance(value, str) or not value for value in shard_ids):
+            raise AlgorithmExecutionError("coverage evidence requires shard identities")
+        if len(set(shard_ids)) != len(shard_ids):
+            raise AlgorithmExecutionError("coverage contract detected duplicate shards")
+        total_rows = 0
+        totals = dict.fromkeys(self.dimensions, 0)
+        for record in records:
+            rows = record.get("rows_processed")
+            if not isinstance(rows, int) or isinstance(rows, bool) or rows < 0:
+                raise AlgorithmExecutionError("coverage rows_processed is malformed")
+            total_rows += rows
+            input_rows = record.get("input_rows")
+            if not isinstance(input_rows, Mapping):
+                raise AlgorithmExecutionError("coverage input_rows is missing")
+            for name in self.dimensions:
+                count = input_rows.get(f"coverage.{name}")
+                if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+                    raise AlgorithmExecutionError(
+                        f"coverage dimension {name!r} is malformed"
+                    )
+                totals[name] += count
+        if expected_rows is not None and (
+            not isinstance(expected_rows, int)
+            or isinstance(expected_rows, bool)
+            or expected_rows < 0
+        ):
+            raise AlgorithmConfigurationError(
+                "expected_rows must be a non-negative int"
+            )
+        if (
+            self.require_exact_partition
+            and expected_rows is not None
+            and total_rows != expected_rows
+        ):
+            raise AlgorithmExecutionError(
+                f"coverage rows do not partition input: expected={expected_rows}, observed={total_rows}"
+            )
+        if self.require_non_empty and any(value <= 0 for value in totals.values()):
+            raise AlgorithmExecutionError(
+                "coverage contract requires non-empty dimensions"
+            )
+
+
+@PublicAPI(stability="alpha")
+@dataclass(frozen=True)
 class ResolvedInputDescriptor:
     """Credential-free planning result returned by an InputResolverPort."""
 
@@ -1037,12 +1351,80 @@ class ResolvedInputDescriptor:
 
 @PublicAPI(stability="alpha")
 @dataclass(frozen=True)
+class ResolvedInputDescriptorSet:
+    """Resolved descriptors keyed by the corresponding input role."""
+
+    roles: tuple[str, ...]
+    descriptors: tuple[ResolvedInputDescriptor, ...]
+
+    def __post_init__(self) -> None:
+        roles = tuple(self.roles)
+        descriptors = tuple(self.descriptors)
+        if (
+            not roles
+            or len(roles) != len(descriptors)
+            or len(set(roles)) != len(roles)
+            or any(
+                not isinstance(item, ResolvedInputDescriptor) for item in descriptors
+            )
+        ):
+            raise AlgorithmConfigurationError(
+                "resolved input descriptor sets require unique role/descriptor pairs"
+            )
+        for role in roles:
+            _require_namespaced_id(role, "input_role")
+        object.__setattr__(self, "roles", roles)
+        object.__setattr__(self, "descriptors", descriptors)
+
+    @classmethod
+    def from_descriptor(
+        cls,
+        role: str,
+        descriptor: ResolvedInputDescriptor,
+    ) -> ResolvedInputDescriptorSet:
+        """Wrap one historical descriptor with its input role."""
+        return cls(roles=(role,), descriptors=(descriptor,))
+
+    def get(self, role: str) -> ResolvedInputDescriptor:
+        """Return one resolved descriptor by role."""
+        for current_role, descriptor in zip(
+            self.roles,
+            self.descriptors,
+            strict=True,
+        ):
+            if current_role == role:
+                return descriptor
+        raise AlgorithmConfigurationError(f"unknown resolved input role: {role!r}")
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a deterministic role-keyed descriptor projection."""
+        return {
+            role: {
+                "resolver_id": descriptor.resolver_id,
+                "reference": descriptor.reference,
+                "descriptor_version": descriptor.descriptor_version,
+                "binding_digest": descriptor.binding_digest,
+                "engine_id": descriptor.engine_id,
+                "view_kind": descriptor.view_kind,
+                "input_capabilities": list(descriptor.input_capabilities),
+                "deferred_validations": list(descriptor.deferred_validations),
+                "resolver_payload": deep_thaw(descriptor.resolver_payload),
+                "compatible_worker_input_adapter_refs": list(
+                    descriptor.compatible_worker_input_adapter_refs
+                ),
+            }
+            for role, descriptor in zip(self.roles, self.descriptors, strict=True)
+        }
+
+
+@PublicAPI(stability="alpha")
+@dataclass(frozen=True)
 class AlgorithmRequest:
     """A bounded algorithm request with framework-free configuration."""
 
     algorithm: str
     operation: AlgorithmOperation
-    input_binding: InputBinding
+    input_binding: InputBinding | InputBindingSet
     algorithm_config: Mapping[str, Any] = field(default_factory=dict)
     implementation_id: str | None = None
 
@@ -1072,6 +1454,17 @@ class AlgorithmRequest:
             ) from exc
         _canonical_json(deep_thaw(frozen))
         object.__setattr__(self, "algorithm_config", frozen)
+
+    @property
+    def input_bindings(self) -> InputBindingSet:
+        """Return the normalized multi-role input contract."""
+        if isinstance(self.input_binding, InputBindingSet):
+            return self.input_binding
+        if isinstance(self.input_binding, InputBinding):
+            return InputBindingSet.from_binding(self.input_binding)
+        raise AlgorithmConfigurationError(
+            "algorithm request input_binding must be InputBinding or InputBindingSet"
+        )
 
 
 @PublicAPI(stability="alpha")
@@ -1136,11 +1529,12 @@ class ResolvedAlgorithmPlan:
     implementation: ImplementationDescriptor
     environment: EnvironmentSpec
     runtime: RuntimeBinding
-    input_binding: InputBinding
-    input_descriptor: ResolvedInputDescriptor
+    input_binding: InputBinding | InputBindingSet
+    input_descriptor: ResolvedInputDescriptor | ResolvedInputDescriptorSet
     algorithm_config: Mapping[str, Any]
     config_digest: str
     distribution_spec: DistributionSpec | None = None
+    contract_bindings: ContractBindingSet | None = None
 
     def __post_init__(self) -> None:
         if self.format_version < 1:
@@ -1187,6 +1581,12 @@ class ResolvedAlgorithmPlan:
                 raise AlgorithmConfigurationError(
                     "resolved runtime DistributionSpec digest is inconsistent"
                 )
+        if self.contract_bindings is not None and not isinstance(
+            self.contract_bindings, ContractBindingSet
+        ):
+            raise AlgorithmConfigurationError(
+                "resolved contract_bindings must be a ContractBindingSet"
+            )
         expected_resolution = (
             self.implementation.implementation_id,
             self.implementation.version,
@@ -1205,15 +1605,26 @@ class ResolvedAlgorithmPlan:
             raise AlgorithmConfigurationError(
                 "plan resolution conflicts with implementation, environment, or runtime"
             )
-        if (
-            self.input_descriptor.resolver_id != self.input_binding.resolver_id
-            or self.input_descriptor.reference != self.input_binding.reference
-            or self.input_descriptor.binding_digest
-            != canonical_digest(self.input_binding.descriptor_payload())
-        ):
+        binding_set = self.input_bindings
+        descriptor_set = self.input_descriptors
+        if tuple(item.name for item in binding_set.bindings) != descriptor_set.roles:
             raise AlgorithmConfigurationError(
-                "plan input descriptor conflicts with its input binding"
+                "plan input descriptor roles conflict with input bindings"
             )
+        for binding, descriptor in zip(
+            binding_set.bindings,
+            descriptor_set.descriptors,
+            strict=True,
+        ):
+            if (
+                descriptor.resolver_id != binding.resolver_id
+                or descriptor.reference != binding.reference
+                or descriptor.binding_digest
+                != canonical_digest(binding.descriptor_payload())
+            ):
+                raise AlgorithmConfigurationError(
+                    "plan input descriptor conflicts with its input binding"
+                )
         unknown = sorted(
             set(self.algorithm_config) - set(self.implementation.allowed_config_keys)
         )
@@ -1229,6 +1640,33 @@ class ResolvedAlgorithmPlan:
             raise AlgorithmConfigurationError(
                 "resolved algorithm plan digest does not match its contents"
             )
+
+    @property
+    def input_bindings(self) -> InputBindingSet:
+        """Return the normalized multi-role binding set."""
+        if isinstance(self.input_binding, InputBindingSet):
+            return self.input_binding
+        return InputBindingSet.from_binding(self.input_binding)
+
+    @property
+    def input_descriptors(self) -> ResolvedInputDescriptorSet:
+        """Return normalized role-keyed resolved descriptors."""
+        if isinstance(self.input_descriptor, ResolvedInputDescriptorSet):
+            return self.input_descriptor
+        return ResolvedInputDescriptorSet.from_descriptor(
+            self.input_bindings.primary_role,
+            self.input_descriptor,
+        )
+
+    @property
+    def primary_input_binding(self) -> InputBinding:
+        """Return the primary role for single-input compatibility code."""
+        return self.input_bindings.primary
+
+    @property
+    def primary_input_descriptor(self) -> ResolvedInputDescriptor:
+        """Return the resolved descriptor for the primary input role."""
+        return self.input_descriptors.get(self.input_bindings.primary_role)
 
     def to_dict(self, *, include_plan_id: bool = True) -> dict[str, Any]:
         """Return the canonical public plan projection."""
@@ -1332,26 +1770,18 @@ class ResolvedAlgorithmPlan:
                 if self.distribution_spec is not None
                 else None
             ),
-            "input_descriptor": {
-                "resolver_id": self.input_descriptor.resolver_id,
-                "reference": self.input_descriptor.reference,
-                "descriptor_version": self.input_descriptor.descriptor_version,
-                "binding_digest": self.input_descriptor.binding_digest,
-                "engine_id": self.input_descriptor.engine_id,
-                "view_kind": self.input_descriptor.view_kind,
-                "input_capabilities": list(self.input_descriptor.input_capabilities),
-                "deferred_validations": list(
-                    self.input_descriptor.deferred_validations
-                ),
-                "resolver_payload": deep_thaw(self.input_descriptor.resolver_payload),
-                "compatible_worker_input_adapter_refs": list(
-                    self.input_descriptor.compatible_worker_input_adapter_refs
-                ),
-            },
-            "input_binding": self.input_binding.descriptor_payload(),
+            "input_descriptor": (
+                self.input_descriptors.to_dict()[self.input_bindings.primary_role]
+            ),
+            "input_binding": self.input_bindings.primary.descriptor_payload(),
             "algorithm_config": deep_thaw(self.algorithm_config),
             "config_digest": self.config_digest,
         }
+        if self.contract_bindings is not None:
+            payload["contract_bindings"] = self.contract_bindings.to_dict()
+        if self.format_version >= 3:
+            payload["input_descriptors"] = self.input_descriptors.to_dict()
+            payload["input_bindings"] = self.input_bindings.descriptor_payload()
         if include_plan_id:
             payload["plan_id"] = self.plan_id
         return payload
