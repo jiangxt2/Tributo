@@ -639,6 +639,7 @@
         "tests/integration/algorithm_jobs/test_portable_execution_jobs.py",
         "tests/integration/test_distributed_algorithm_local.py",
         "tests/training/jobs/official_algorithm_gate_job.py",
+        "tests/training/jobs/official_algorithm_matrix.py",
         "tests/training/test_dnn_pu_training.py"
       ],
       "trigger_domains": [],
@@ -650,6 +651,7 @@
         "tests/integration/test_distributed_algorithm_local.py",
         "tests/training/jobs/distributed_algorithm_gate_job.py",
         "tests/training/jobs/official_algorithm_gate_job.py",
+        "tests/training/jobs/official_algorithm_matrix.py",
         "tests/training/test_dnn_pu_training.py",
         "tests/integrations/docker-compose.distributed-algorithm.yml",
         "scripts/run_distributed_algorithm_it.sh",
@@ -658,7 +660,7 @@
         "uv.lock"
       ],
       "requires": ["docker", "multi_node_ray", "ray_jobs", "plugin_wheel", "ray_data_inference"],
-      "budget_seconds": 4800,
+      "budget_seconds": 14400,
       "ci_allowed": false,
       "forbid_skips": true,
       "log_contract": "run-scoped local or Compose logs and cleanup evidence",

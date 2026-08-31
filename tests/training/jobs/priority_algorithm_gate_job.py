@@ -43,6 +43,8 @@ def main() -> None:
         kwargs["require_onnx"] = True
         try:
             result = _execute(**kwargs)
+            if result is None:
+                raise AssertionError(f"priority Gate unexpectedly skipped {algorithm}")
         except Exception as exc:
             print(
                 "CASE_FAILURE: "
@@ -71,7 +73,7 @@ def main() -> None:
             ),
             flush=True,
         )
-        return result
+        return cast(dict[str, object], result)
 
     ray.init(address="auto")
     try:

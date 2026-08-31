@@ -2,10 +2,21 @@
 
 from __future__ import annotations
 
+import ast
 import shlex
 import subprocess
 import tomllib
 from pathlib import Path
+
+import pytest
+
+from tests.training.jobs.official_algorithm_matrix import (
+    ALL_ENTRY_POINTS,
+    CATEGORY_ENTRY_POINTS,
+    entry_point_for,
+    entry_points_for_gate,
+    parse_entry_point_selection,
+)
 
 _ROOT = Path(__file__).resolve().parents[2]
 _LOCAL = _ROOT / "scripts" / "run_distributed_algorithm_local_it.sh"
@@ -105,6 +116,11 @@ def test_distributed_gate_uses_cached_images_and_scoped_compose_cleanup() -> Non
     assert "test_official_algorithm_wheels_complete_on_ray_cluster" in runner
     assert "test_out_of_tree_torch_recipe_completes_on_ray_cluster" in runner
     assert "TRIBUTO_DISTRIBUTED_ALGORITHM_RERUN_FAILED_ONLY" in runner
+    assert "TRIBUTO_OFFICIAL_CATBOOST_WHEEL" in runner
+    assert "TRIBUTO_OFFICIAL_GATE_CATEGORIES" in runner
+    assert "TRIBUTO_OFFICIAL_GATE_ENTRY_POINTS" in runner
+    assert 'TRIBUTO_DISTRIBUTED_ALGORITHM_SCOPE:-all}" == "official"' in runner
+    assert "--timeout=14400" in runner
     assert "CASE_RESULT: " in (
         _ROOT / "tests" / "training" / "jobs" / "priority_algorithm_gate_job.py"
     ).read_text(encoding="utf-8")
@@ -119,6 +135,97 @@ def test_distributed_gate_uses_cached_images_and_scoped_compose_cleanup() -> Non
     assert "docker image prune" not in runner
     assert "docker volume prune" not in runner
     assert "rm -rf" not in runner
+
+
+def test_official_gate_matrix_covers_current_37_entry_points_once() -> None:
+    assert set(CATEGORY_ENTRY_POINTS) == {
+        "boosting",
+        "causal",
+        "classical",
+        "graph",
+        "recsys_multistage_nlp",
+        "torch",
+    }
+    assert sum(len(values) for values in CATEGORY_ENTRY_POINTS.values()) == 37
+    assert len(ALL_ENTRY_POINTS) == 37
+    assert len(ALL_ENTRY_POINTS) == sum(
+        len(set(values)) for values in CATEGORY_ENTRY_POINTS.values()
+    )
+
+    gate = (
+        _ROOT / "tests" / "training" / "jobs" / "official_algorithm_gate_job.py"
+    ).read_text(encoding="utf-8")
+    test = (_ROOT / "tests" / "training" / "test_dnn_pu_training.py").read_text(
+        encoding="utf-8"
+    )
+    assert "_validate_installed_official_entry_points" in gate
+    assert "_execute_bundle_inference" in gate
+    assert "run_inference(" in gate
+    assert "ray.data.read_parquet" in gate
+    assert "_MemoryResultSink" not in gate
+    assert "sink=sink" not in gate
+    assert "RayExecutionPolicy(" in gate
+    assert "TRIBUTO_OFFICIAL_EXTENDED_CONTROLS" in gate
+    assert '"inference_history_width": 8' in gate
+    assert "for category in categories" in test
+    assert "expected_selected = selected_entry_points or frozenset(" in test
+
+    tree = ast.parse(gate)
+    exercised: set[str] = set()
+    for call in (node for node in ast.walk(tree) if isinstance(node, ast.Call)):
+        if not isinstance(call.func, ast.Name):
+            continue
+        keywords = {item.arg: item.value for item in call.keywords if item.arg}
+        if call.func.id == "_execute":
+            algorithm_node = keywords.get("algorithm")
+            implementation_node = keywords.get("implementation_id")
+            if not isinstance(algorithm_node, ast.Constant) or not isinstance(
+                algorithm_node.value, str
+            ):
+                continue
+            implementation = (
+                implementation_node.value
+                if isinstance(implementation_node, ast.Constant)
+                and isinstance(implementation_node.value, str)
+                else None
+            )
+            exercised.add(entry_point_for(algorithm_node.value, implementation))
+        elif call.func.id == "_execute_graph":
+            algorithm_node = keywords.get("algorithm")
+            algorithm = (
+                algorithm_node.value
+                if isinstance(algorithm_node, ast.Constant)
+                and isinstance(algorithm_node.value, str)
+                else "graphsage_node_classifier"
+            )
+            exercised.add(entry_point_for(algorithm, None))
+        elif call.func.id == "_execute_gcm":
+            exercised.add(entry_point_for("gcm_root_cause", None))
+    assert exercised == ALL_ENTRY_POINTS
+
+
+def test_official_gate_entry_point_selection_is_exact_and_fail_closed() -> None:
+    assert parse_entry_point_selection("") is None
+    assert parse_entry_point_selection(
+        "teacher_student_distillation,graphsage_node_classifier"
+    ) == {
+        "teacher_student_distillation",
+        "graphsage_node_classifier",
+    }
+    with pytest.raises(ValueError, match="unique names"):
+        parse_entry_point_selection(
+            "graphsage_node_classifier,graphsage_node_classifier"
+        )
+    with pytest.raises(ValueError, match="unknown"):
+        parse_entry_point_selection("not-an-official-algorithm")
+    assert entry_points_for_gate(
+        "recsys_multistage_nlp",
+        ("teacher_student_distillation,graphsage_node_classifier,rgcn_node_classifier"),
+    ) == {"teacher_student_distillation"}
+    assert entry_points_for_gate(
+        "graph",
+        ("teacher_student_distillation,graphsage_node_classifier,rgcn_node_classifier"),
+    ) == {"graphsage_node_classifier", "rgcn_node_classifier"}
 
 
 def test_distributed_fixture_is_a_code_only_wheel() -> None:

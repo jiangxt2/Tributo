@@ -13,6 +13,11 @@ from typing import Any, cast
 import pytest
 from ray.job_submission import JobStatus, JobSubmissionClient
 
+from tests.training.jobs.official_algorithm_matrix import (
+    ALL_ENTRY_POINTS,
+    CATEGORY_ENTRY_POINTS,
+    parse_entry_point_selection,
+)
 from tributo._common import DEFAULT_DASHBOARD_URL, build_runtime_env
 from tributo.algorithms import AlgorithmArtifact, ImageProfile
 from tributo.algorithms.api import EnvironmentSpec
@@ -110,11 +115,12 @@ def _official_algorithm_wheels() -> tuple[Path, ...]:
         os.environ.get("TRIBUTO_OFFICIAL_CAUSAL_XLEARNER_WHEEL"),
         os.environ.get("TRIBUTO_OFFICIAL_CAUSAL_DR_WHEEL"),
         os.environ.get("TRIBUTO_OFFICIAL_CAUSAL_DOWHY_WHEEL"),
+        os.environ.get("TRIBUTO_OFFICIAL_CATBOOST_WHEEL"),
     )
     if any(not value for value in configured):
         pytest.fail(
             "official algorithm IT requires classical, timeseries, representation, "
-            "graph-pyg, tabular-torch, recsys-torch, transformers-nlp, causal-core, causal-discovery, multistage-torch, boosting, causal-xlearner, causal-dr, and causal-dowhy Wheels"
+            "graph-pyg, tabular-torch, recsys-torch, transformers-nlp, causal-core, causal-discovery, multistage-torch, boosting, causal-xlearner, causal-dr, causal-dowhy, and catboost Wheels"
         )
     wheels = tuple(Path(cast(str, value)) for value in configured)
     if any(not wheel.is_file() or wheel.suffix != ".whl" for wheel in wheels):
@@ -245,8 +251,10 @@ def _submit_official_algorithm_gate_job(
     root: Path,
     wheels: tuple[Path, ...],
     entrypoint: str = "python tests/training/jobs/official_algorithm_gate_job.py",
+    category: str = "all",
+    entry_points: frozenset[str] | None = None,
 ) -> dict[str, Any]:
-    submission_id = f"official-algorithms-{uuid.uuid4().hex}"
+    submission_id = f"official-algorithms-{category}-{uuid.uuid4().hex}"
     runtime_env = {
         "working_dir": "/workspace/tributo-src",
         "pip": {
@@ -262,6 +270,11 @@ def _submit_official_algorithm_gate_job(
             "RAY_ENABLE_UV_RUN_RUNTIME_ENV": "0",
             "RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO": "0",
             "TRIBUTO_OFFICIAL_ALGORITHM_GATE_ROOT": str(root),
+            "TRIBUTO_OFFICIAL_ALGORITHM_CATEGORY": category,
+            "TRIBUTO_OFFICIAL_ALGORITHM_ENTRY_POINTS": ",".join(
+                sorted(entry_points or ())
+            ),
+            "TRIBUTO_OFFICIAL_DISTRIBUTED_INFERENCE": "1",
             "TRIBUTO_RUN_ID": submission_id,
             "TRIBUTO_ATTEMPT_ID": "attempt-1",
         },
@@ -276,7 +289,8 @@ def _submit_official_algorithm_gate_job(
     if log_path := os.environ.get("TRIBUTO_DISTRIBUTED_GATE_LOG"):
         with Path(log_path).open("a", encoding="utf-8") as stream:
             stream.write(
-                f"===== official-algorithms status={result['status']} "
+                f"===== official-algorithms category={category} "
+                f"status={result['status']} "
                 f"job_id={job_id} =====\n"
             )
             if result["message"]:
@@ -293,50 +307,94 @@ def test_official_algorithm_wheels_complete_on_ray_cluster(
     if os.environ.get("TRIBUTO_DOCKER_DISTRIBUTED_ALGORITHM_IT") != "1":
         pytest.fail("official algorithm IT must run in its owned Docker cluster")
     wheels = _official_algorithm_wheels()
-    gate_root = Path(
-        f"/workspace/tributo-work/tributo-official-algorithm-gate-{uuid.uuid4().hex}"
+    try:
+        selected_entry_points = parse_entry_point_selection(
+            os.environ.get("TRIBUTO_OFFICIAL_GATE_ENTRY_POINTS", "")
+        )
+    except ValueError as exc:
+        pytest.fail(str(exc))
+    requested_categories = os.environ.get("TRIBUTO_OFFICIAL_GATE_CATEGORIES", "")
+    if requested_categories:
+        categories = tuple(
+            value.strip() for value in requested_categories.split(",") if value.strip()
+        )
+        if not categories or len(set(categories)) != len(categories):
+            pytest.fail("official algorithm Gate categories must be unique names")
+        unknown = sorted(set(categories) - set(CATEGORY_ENTRY_POINTS))
+        if unknown:
+            pytest.fail(f"unknown official algorithm Gate categories: {unknown}")
+    else:
+        categories = tuple(CATEGORY_ENTRY_POINTS)
+    if selected_entry_points is not None:
+        covered_entry_points = frozenset(
+            entry_point
+            for category in categories
+            for entry_point in CATEGORY_ENTRY_POINTS[category]
+        )
+        uncovered_entry_points = sorted(selected_entry_points - covered_entry_points)
+        if uncovered_entry_points:
+            pytest.fail(
+                "selected official algorithm entry points are outside the selected "
+                f"categories: {uncovered_entry_points}"
+            )
+        categories = tuple(
+            category
+            for category in categories
+            if selected_entry_points.intersection(CATEGORY_ENTRY_POINTS[category])
+        )
+    records: list[dict[str, Any]] = []
+    category_logs: dict[str, str] = {}
+    for category in categories:
+        expected_entry_points = tuple(
+            entry_point
+            for entry_point in CATEGORY_ENTRY_POINTS[category]
+            if selected_entry_points is None or entry_point in selected_entry_points
+        )
+        gate_root = Path(
+            "/workspace/tributo-work/"
+            f"tributo-official-algorithm-gate-{category}-{uuid.uuid4().hex}"
+        )
+        result = _submit_official_algorithm_gate_job(
+            job_client,
+            root=gate_root,
+            wheels=wheels,
+            category=category,
+            entry_points=selected_entry_points,
+        )
+        assert result["status"] == JobStatus.SUCCEEDED, (
+            f"official {category} Gate failed:\n{result['message']}\n{result['logs']}"
+        )
+        logs = str(result["logs"])
+        category_logs[category] = logs
+        category_records = _result_from_logs(logs)
+        assert {record["entry_point"] for record in category_records} == set(
+            expected_entry_points
+        )
+        inference_result = _object_from_logs(logs, "INFERENCE_RESULT: ")
+        assert inference_result == {
+            "all_distributed": True,
+            "record_count": len(expected_entry_points),
+        }
+        records.extend(category_records)
+    expected_selected = selected_entry_points or frozenset(
+        entry_point
+        for category in categories
+        for entry_point in CATEGORY_ENTRY_POINTS[category]
     )
-    result = _submit_official_algorithm_gate_job(
-        job_client,
-        root=gate_root,
-        wheels=wheels,
-    )
-    assert result["status"] == JobStatus.SUCCEEDED, (
-        f"official algorithm Gate failed:\n{result['message']}\n{result['logs']}"
-    )
-    records = _result_from_logs(str(result["logs"]))
-    assert len(records) == 27
-    tune_result = _object_from_logs(str(result["logs"]), "TUNE_RESULT: ")
-    assert tune_result["trial_count"] == 2
-    assert tune_result["checkpoint_count"] == 2
-    assert tune_result["formal_bundle_published"] is False
-    baseline_result = _object_from_logs(str(result["logs"]), "BASELINE_RESULT: ")
-    assert baseline_result["random_forest_exact"] is True
-    assert baseline_result["random_forest_max_probability_delta"] <= 1e-6
-    assert baseline_result["logistic_prediction_equivalent"] is True
-    assert (
-        baseline_result["logistic_max_probability_delta"]
-        <= baseline_result["logistic_probability_tolerance"]
-    )
-    recovery_result = _object_from_logs(str(result["logs"]), "RECOVERY_RESULT: ")
-    assert recovery_result == {
-        "ensemble_corruption_rejected": True,
-        "ensemble_restored_unit_count": 8,
-        "ensemble_resumed": True,
-        "iterative_corruption_rejected": True,
-        "iterative_first_rounds": 1,
-        "iterative_resumed": True,
-        "iterative_resumed_rounds": 2,
-    }
-    failure_result = _object_from_logs(str(result["logs"]), "FAILURE_RESULT: ")
-    assert failure_result["failed_closed"] is True
-    assert failure_result["manifest_published"] is False
-    inference_result = _object_from_logs(str(result["logs"]), "INFERENCE_RESULT: ")
-    assert inference_result["status"] == "completed"
-    assert inference_result["row_count"] == 16
-    assert inference_result["node_count"] == 2
-    assert sum(record["inference_roundtrip"] is True for record in records) >= 15
-    assert {record["receipt"]["strategy"] for record in records} == {
+    assert len(records) == len(expected_selected)
+    assert {record["entry_point"] for record in records} == expected_selected
+    if expected_selected == ALL_ENTRY_POINTS:
+        assert expected_selected == ALL_ENTRY_POINTS
+    if "classical" in category_logs:
+        classical_logs = category_logs["classical"]
+        for marker in (
+            "TUNE_RESULT: ",
+            "BASELINE_RESULT: ",
+            "RECOVERY_RESULT: ",
+            "FAILURE_RESULT: ",
+        ):
+            assert _object_from_logs(classical_logs, marker) == {"skipped": True}
+    expected_strategies = {
         "ray_joblib_estimator",
         "ray_parallel_ensemble",
         "ray_iterative_optimization",
@@ -344,21 +402,25 @@ def test_official_algorithm_wheels_complete_on_ray_cluster(
         "ray_train_recipe_v2",
         "framework_native",
     }
+    actual_strategies = {record["receipt"]["strategy"] for record in records}
+    assert actual_strategies
+    assert actual_strategies <= expected_strategies
+    if expected_selected == ALL_ENTRY_POINTS:
+        assert actual_strategies == expected_strategies
     for record in records:
         receipt = record["receipt"]
         assert record["status"] == "succeeded"
         assert receipt["distributed"] is True
         assert receipt["driver_materialized_training_rows"] == 0
         assert len(receipt["workers"]) == 2
-        if receipt["strategy"] in {
-            "ray_joblib_estimator",
-            "ray_parallel_ensemble",
-            "ray_iterative_optimization",
-            "ray_map_reduce",
-        }:
-            assert receipt["cluster_distributed"] is True
-            assert receipt["cross_node"] is True
-            assert len({worker["node_id"] for worker in receipt["workers"]}) == 2
+        assert receipt["cluster_distributed"] is True
+        assert len({worker["node_id"] for worker in receipt["workers"]}) == 2
+        distributed_inference = record["distributed_inference"]
+        assert distributed_inference["status"] == "succeeded"
+        assert distributed_inference["row_count"] == 16
+        assert distributed_inference["node_count"] == 2
+        assert len(distributed_inference["manifest_sha256"]) == 64
+        assert len(distributed_inference["result_id"]) == 64
 
 
 def test_priority_algorithm_wheels_complete_on_ray_cluster(

@@ -49,6 +49,7 @@ OFFICIAL_BOOSTING_WHEEL=""
 OFFICIAL_CAUSAL_XLEARNER_WHEEL=""
 OFFICIAL_CAUSAL_DR_WHEEL=""
 OFFICIAL_CAUSAL_DOWHY_WHEEL=""
+OFFICIAL_CATBOOST_WHEEL=""
 TRIBUTO_CORE_WHEEL=""
 OFFLINE_DIST_DIR="${LOG_DIR}/offline-dist"
 OFFLINE_BUNDLE_DIR="${LOG_DIR}/offline-bundle"
@@ -81,7 +82,9 @@ else
   OFFICIAL_ALGORITHMS_WORKTREE_STATE="clean"
 fi
 for required_package in \
-  boosting classical causal-core causal-dr causal-xlearner; do
+  boosting catboost causal-core causal-discovery causal-dowhy causal-dr \
+  causal-xlearner classical graph-pyg multistage-torch recsys-torch \
+  representation tabular-torch timeseries transformers-nlp; do
   if [[ ! -f "${OFFICIAL_ALGORITHMS_ROOT}/packages/${required_package}/pyproject.toml" ]]; then
     echo "Official algorithm checkout is missing packages/${required_package}: ${OFFICIAL_ALGORITHMS_ROOT}" >&2
     exit 2
@@ -324,6 +327,7 @@ uv build --wheel --out-dir "${OFFICIAL_DIST_DIR}" --no-create-gitignore "${PROJE
   uv build --package tributo-algorithms-causal-xlearner --out-dir "${OFFICIAL_DIST_DIR}"
   uv build --package tributo-algorithms-causal-dr --out-dir "${OFFICIAL_DIST_DIR}"
   uv build --package tributo-algorithms-causal-dowhy --out-dir "${OFFICIAL_DIST_DIR}"
+  uv build --package tributo-algorithms-catboost --out-dir "${OFFICIAL_DIST_DIR}"
 ) 2>&1 | tee "${LOG_DIR}/official-wheel.log"
 shopt -s nullglob
 official_classical_wheels=("${OFFICIAL_DIST_DIR}"/tributo_algorithms_classical-*.whl)
@@ -340,9 +344,10 @@ official_boosting_wheels=("${OFFICIAL_DIST_DIR}"/tributo_algorithms_boosting-*.w
 official_causal_xlearner_wheels=("${OFFICIAL_DIST_DIR}"/tributo_algorithms_causal_xlearner-*.whl)
 official_causal_dr_wheels=("${OFFICIAL_DIST_DIR}"/tributo_algorithms_causal_dr-*.whl)
 official_causal_dowhy_wheels=("${OFFICIAL_DIST_DIR}"/tributo_algorithms_causal_dowhy-*.whl)
+official_catboost_wheels=("${OFFICIAL_DIST_DIR}"/tributo_algorithms_catboost-*.whl)
 core_wheels=("${OFFICIAL_DIST_DIR}"/tributo-*.whl)
 shopt -u nullglob
-if [[ "${#core_wheels[@]}" -ne 1 || "${#official_classical_wheels[@]}" -ne 1 || "${#official_timeseries_wheels[@]}" -ne 1 || "${#official_representation_wheels[@]}" -ne 1 || "${#official_graph_pyg_wheels[@]}" -ne 1 || "${#official_tabular_torch_wheels[@]}" -ne 1 || "${#official_recsys_torch_wheels[@]}" -ne 1 || "${#official_transformers_nlp_wheels[@]}" -ne 1 || "${#official_causal_core_wheels[@]}" -ne 1 || "${#official_causal_discovery_wheels[@]}" -ne 1 || "${#official_multistage_torch_wheels[@]}" -ne 1 || "${#official_boosting_wheels[@]}" -ne 1 || "${#official_causal_xlearner_wheels[@]}" -ne 1 || "${#official_causal_dr_wheels[@]}" -ne 1 || "${#official_causal_dowhy_wheels[@]}" -ne 1 ]]; then
+if [[ "${#core_wheels[@]}" -ne 1 || "${#official_classical_wheels[@]}" -ne 1 || "${#official_timeseries_wheels[@]}" -ne 1 || "${#official_representation_wheels[@]}" -ne 1 || "${#official_graph_pyg_wheels[@]}" -ne 1 || "${#official_tabular_torch_wheels[@]}" -ne 1 || "${#official_recsys_torch_wheels[@]}" -ne 1 || "${#official_transformers_nlp_wheels[@]}" -ne 1 || "${#official_causal_core_wheels[@]}" -ne 1 || "${#official_causal_discovery_wheels[@]}" -ne 1 || "${#official_multistage_torch_wheels[@]}" -ne 1 || "${#official_boosting_wheels[@]}" -ne 1 || "${#official_causal_xlearner_wheels[@]}" -ne 1 || "${#official_causal_dr_wheels[@]}" -ne 1 || "${#official_causal_dowhy_wheels[@]}" -ne 1 || "${#official_catboost_wheels[@]}" -ne 1 ]]; then
   echo "Expected all official algorithm Wheels" >&2
   exit 1
 fi
@@ -361,6 +366,7 @@ OFFICIAL_BOOSTING_WHEEL="${official_boosting_wheels[0]}"
 OFFICIAL_CAUSAL_XLEARNER_WHEEL="${official_causal_xlearner_wheels[0]}"
 OFFICIAL_CAUSAL_DR_WHEEL="${official_causal_dr_wheels[0]}"
 OFFICIAL_CAUSAL_DOWHY_WHEEL="${official_causal_dowhy_wheels[0]}"
+OFFICIAL_CATBOOST_WHEEL="${official_catboost_wheels[0]}"
 
 uv build \
   --wheel \
@@ -471,6 +477,8 @@ compose cp "${OFFICIAL_CAUSAL_DR_WHEEL}" "ray-head:${PLUGIN_CONTAINER_DIR}/"
 OFFICIAL_CAUSAL_DR_CONTAINER_WHEEL="${PLUGIN_CONTAINER_DIR}/$(basename "${OFFICIAL_CAUSAL_DR_WHEEL}")"
 compose cp "${OFFICIAL_CAUSAL_DOWHY_WHEEL}" "ray-head:${PLUGIN_CONTAINER_DIR}/"
 OFFICIAL_CAUSAL_DOWHY_CONTAINER_WHEEL="${PLUGIN_CONTAINER_DIR}/$(basename "${OFFICIAL_CAUSAL_DOWHY_WHEEL}")"
+compose cp "${OFFICIAL_CATBOOST_WHEEL}" "ray-head:${PLUGIN_CONTAINER_DIR}/"
+OFFICIAL_CATBOOST_CONTAINER_WHEEL="${PLUGIN_CONTAINER_DIR}/$(basename "${OFFICIAL_CATBOOST_WHEEL}")"
 compose cp "${TRIBUTO_CORE_WHEEL}" "ray-head:${PLUGIN_CONTAINER_DIR}/"
 TRIBUTO_CORE_CONTAINER_WHEEL="${PLUGIN_CONTAINER_DIR}/$(basename "${TRIBUTO_CORE_WHEEL}")"
 compose exec -T ray-head mkdir -p \
@@ -509,8 +517,12 @@ if [[ "${TRIBUTO_DISTRIBUTED_ALGORITHM_SCOPE:-all}" == "priority" ]]; then
   test_targets=(
     tests/training/test_dnn_pu_training.py::test_priority_algorithm_wheels_complete_on_ray_cluster
   )
+elif [[ "${TRIBUTO_DISTRIBUTED_ALGORITHM_SCOPE:-all}" == "official" ]]; then
+  test_targets=(
+    tests/training/test_dnn_pu_training.py::test_official_algorithm_wheels_complete_on_ray_cluster
+  )
 elif [[ "${TRIBUTO_DISTRIBUTED_ALGORITHM_SCOPE:-all}" != "all" ]]; then
-  echo "TRIBUTO_DISTRIBUTED_ALGORITHM_SCOPE must be all or priority" >&2
+  echo "TRIBUTO_DISTRIBUTED_ALGORITHM_SCOPE must be all, official, or priority" >&2
   exit 2
 elif [[ "${TRIBUTO_DISTRIBUTED_ALGORITHM_RERUN_FAILED_ONLY:-0}" == "1" ]]; then
   test_targets=(
@@ -543,6 +555,9 @@ compose exec -T \
   --env "TRIBUTO_OFFICIAL_CAUSAL_XLEARNER_WHEEL=${OFFICIAL_CAUSAL_XLEARNER_CONTAINER_WHEEL}" \
   --env "TRIBUTO_OFFICIAL_CAUSAL_DR_WHEEL=${OFFICIAL_CAUSAL_DR_CONTAINER_WHEEL}" \
   --env "TRIBUTO_OFFICIAL_CAUSAL_DOWHY_WHEEL=${OFFICIAL_CAUSAL_DOWHY_CONTAINER_WHEEL}" \
+  --env "TRIBUTO_OFFICIAL_CATBOOST_WHEEL=${OFFICIAL_CATBOOST_CONTAINER_WHEEL}" \
+  --env "TRIBUTO_OFFICIAL_GATE_CATEGORIES=${TRIBUTO_OFFICIAL_GATE_CATEGORIES:-}" \
+  --env "TRIBUTO_OFFICIAL_GATE_ENTRY_POINTS=${TRIBUTO_OFFICIAL_GATE_ENTRY_POINTS:-}" \
   --env "TRIBUTO_CORE_WHEEL=${TRIBUTO_CORE_CONTAINER_WHEEL}" \
   --env TRIBUTO_EXPECTED_ALGORITHM_MODE=image_py_modules \
   --env "TRIBUTO_ALGORITHM_IMAGE_DIGEST=${REQUIRED_RUNTIME_IMAGE_ID}" \
@@ -555,4 +570,4 @@ compose exec -T \
   "${test_targets[@]}" \
   -o addopts= \
   -o cache_dir=/workspace/tributo-work/cache/pytest-distributed-algorithm \
-  -m integration -vv -rP --tb=short --timeout=1200 2>&1 | tee "${TEST_LOG}"
+  -m integration -vv -rP --tb=short --timeout=14400 2>&1 | tee "${TEST_LOG}"
