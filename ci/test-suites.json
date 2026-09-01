@@ -640,7 +640,8 @@
         "tests/integration/test_distributed_algorithm_local.py",
         "tests/training/jobs/official_algorithm_gate_job.py",
         "tests/training/jobs/official_algorithm_matrix.py",
-        "tests/training/test_dnn_pu_training.py"
+        "tests/training/test_dnn_pu_training.py",
+        "tools/algorithm_gate_provenance.py"
       ],
       "trigger_domains": [],
       "trigger_paths": [
@@ -656,6 +657,7 @@
         "tests/integrations/docker-compose.distributed-algorithm.yml",
         "scripts/run_distributed_algorithm_it.sh",
         "scripts/run_distributed_algorithm_local_it.sh",
+        "tools/algorithm_gate_provenance.py",
         "pyproject.toml",
         "uv.lock"
       ],

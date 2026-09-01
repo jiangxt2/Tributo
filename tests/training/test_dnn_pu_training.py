@@ -16,6 +16,7 @@ from ray.job_submission import JobStatus, JobSubmissionClient
 from tests.training.jobs.official_algorithm_matrix import (
     ALL_ENTRY_POINTS,
     CATEGORY_ENTRY_POINTS,
+    OFFICIAL_ALGORITHM_IDENTITIES,
     parse_entry_point_selection,
 )
 from tributo._common import DEFAULT_DASHBOARD_URL, build_runtime_env
@@ -374,6 +375,25 @@ def test_official_algorithm_wheels_complete_on_ray_cluster(
         assert inference_result == {
             "all_distributed": True,
             "record_count": len(expected_entry_points),
+        }
+        installation_result = _object_from_logs(logs, "INSTALLATION_RESULT: ")
+        assert installation_result["record_count"] == len(ALL_ENTRY_POINTS)
+        assert {
+            (
+                record["entry_point"],
+                record["distribution"],
+                record["algorithm_id"],
+                record["implementation_id"],
+            )
+            for record in installation_result["records"]
+        } == {
+            (
+                entry_point,
+                identity.distribution,
+                identity.algorithm_id,
+                identity.implementation_id,
+            )
+            for entry_point, identity in OFFICIAL_ALGORITHM_IDENTITIES.items()
         }
         records.extend(category_records)
     expected_selected = selected_entry_points or frozenset(

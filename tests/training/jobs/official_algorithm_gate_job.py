@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.metadata
 import json
 import math
 import os
@@ -16,11 +17,15 @@ import ray
 from official_algorithm_matrix import (
     ALL_ENTRY_POINTS,
     CATEGORY_ENTRY_POINTS,
+    ENTRY_POINT_DISTRIBUTIONS,
+    OFFICIAL_ALGORITHM_IDENTITIES,
     category_for_entry_point,
     entry_point_for,
     entry_points_for_gate,
 )
+from packaging.utils import canonicalize_name
 
+from tributo.algorithms.conformance import validate_installed_algorithm_package
 from tributo.inference.batch_predictor import XGBoostONNXPredictor
 from tributo.inference.contracts import (
     InputBindingSpec,
@@ -1183,21 +1188,67 @@ def _execute_gcm(
     }
 
 
-def _validate_installed_official_entry_points() -> None:
-    import importlib.metadata
-
-    installed = {
-        entry_point.name
+def _validate_installed_official_entry_points() -> tuple[dict[str, object], ...]:
+    entry_points = tuple(
+        entry_point
         for entry_point in importlib.metadata.entry_points(group="tributo.algorithms")
         if (distribution := getattr(entry_point, "dist", None)) is not None
-        and distribution.metadata["Name"].startswith("tributo-algorithms-")
-    }
-    if installed != ALL_ENTRY_POINTS:
-        raise AssertionError(
-            "installed official algorithm Entry Points drifted: "
-            f"missing={sorted(ALL_ENTRY_POINTS - installed)} "
-            f"unexpected={sorted(installed - ALL_ENTRY_POINTS)}"
+        and canonicalize_name(str(distribution.metadata["Name"])).startswith(
+            "tributo-algorithms-"
         )
+    )
+    by_name: dict[str, list[object]] = {}
+    installed_pairs: set[tuple[str, str]] = set()
+    for entry_point in entry_points:
+        distribution = entry_point.dist
+        if distribution is None:
+            raise AssertionError(
+                f"official Entry Point {entry_point.name!r} has no distribution owner"
+            )
+        distribution_name = canonicalize_name(str(distribution.metadata["Name"]))
+        by_name.setdefault(str(entry_point.name), []).append(entry_point)
+        installed_pairs.add((str(entry_point.name), distribution_name))
+
+    duplicates = sorted(name for name, values in by_name.items() if len(values) != 1)
+    expected_pairs = {
+        (entry_point, canonicalize_name(distribution))
+        for entry_point, distribution in ENTRY_POINT_DISTRIBUTIONS.items()
+    }
+    if duplicates or installed_pairs != expected_pairs:
+        raise AssertionError(
+            "installed official algorithm Entry Point ownership drifted: "
+            f"duplicates={duplicates} "
+            f"missing={sorted(expected_pairs - installed_pairs)} "
+            f"unexpected={sorted(installed_pairs - expected_pairs)}"
+        )
+    identities: list[dict[str, object]] = []
+    for entry_point_name in sorted(ALL_ENTRY_POINTS):
+        entry_point = cast(Any, by_name[entry_point_name][0])
+        expected_identity = OFFICIAL_ALGORITHM_IDENTITIES[entry_point_name]
+        expected_distribution = canonicalize_name(expected_identity.distribution)
+        report = validate_installed_algorithm_package(
+            entry_point.load(),
+            entry_point_name=entry_point_name,
+        )
+        if (
+            canonicalize_name(report.distribution) != expected_distribution
+            or report.algorithm_id != expected_identity.algorithm_id
+            or report.implementation_id != expected_identity.implementation_id
+            or report.implementation_loaded
+        ):
+            raise AssertionError(
+                f"installed official descriptor identity drifted for {entry_point_name!r}"
+            )
+        identities.append(
+            {
+                "entry_point": entry_point_name,
+                "distribution": expected_distribution,
+                "algorithm_id": report.algorithm_id,
+                "implementation_id": report.implementation_id,
+                "package_version": report.package_version,
+            }
+        )
+    return tuple(identities)
 
 
 def main() -> None:
@@ -1209,7 +1260,18 @@ def main() -> None:
     if root.exists():
         raise FileExistsError(f"refusing to reuse Gate root: {root}")
     root.mkdir(parents=True)
-    _validate_installed_official_entry_points()
+    installed_identities = _validate_installed_official_entry_points()
+    print(
+        "INSTALLATION_RESULT: "
+        + json.dumps(
+            {
+                "record_count": len(installed_identities),
+                "records": installed_identities,
+            },
+            sort_keys=True,
+        ),
+        flush=True,
+    )
     ray.init(address="auto")
     try:
         data_path = _stage_data(root)
