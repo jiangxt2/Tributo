@@ -155,8 +155,10 @@ streaming-inference = [
 ]
 test-integration = [
     "tributo[registry,training]",
+    "catboost>=1.2,<2",
     "causal-learn==0.1.4.8",
     "dowhy==0.14",
+    "lightgbm>=4.5,<5",
     "onnxmltools>=1.13.0",
     "pytest>=7.0.0",
     "requests>=2.25.0",

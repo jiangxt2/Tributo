@@ -12,6 +12,27 @@ if [[ $# -ne 0 ]]; then
   exit 2
 fi
 
+DISTRIBUTED_ALGORITHM_SCOPE="${TRIBUTO_DISTRIBUTED_ALGORITHM_SCOPE:-all}"
+if [[ "${DISTRIBUTED_ALGORITHM_SCOPE}" != "all" && "${DISTRIBUTED_ALGORITHM_SCOPE}" != "official" && "${DISTRIBUTED_ALGORITHM_SCOPE}" != "priority" ]]; then
+  echo "TRIBUTO_DISTRIBUTED_ALGORITHM_SCOPE must be all, official, or priority" >&2
+  exit 2
+fi
+if [[ -n "${TRIBUTO_DISTRIBUTED_ALGORITHM_EVIDENCE_MODE:-}" ]]; then
+  EVIDENCE_MODE="${TRIBUTO_DISTRIBUTED_ALGORITHM_EVIDENCE_MODE}"
+elif [[ "${DISTRIBUTED_ALGORITHM_SCOPE}" == "official" ]]; then
+  EVIDENCE_MODE="certification"
+else
+  EVIDENCE_MODE="diagnostic"
+fi
+if [[ "${EVIDENCE_MODE}" != "certification" && "${EVIDENCE_MODE}" != "diagnostic" ]]; then
+  echo "TRIBUTO_DISTRIBUTED_ALGORITHM_EVIDENCE_MODE must be certification or diagnostic" >&2
+  exit 2
+fi
+if [[ "${EVIDENCE_MODE}" == "certification" && ( "${DISTRIBUTED_ALGORITHM_SCOPE}" != "official" || -n "${TRIBUTO_OFFICIAL_GATE_CATEGORIES:-}" || -n "${TRIBUTO_OFFICIAL_GATE_ENTRY_POINTS:-}" ) ]]; then
+  echo "Certification requires the unfiltered official algorithm scope" >&2
+  exit 2
+fi
+
 PROJECT_NAME="${COMPOSE_PROJECT_NAME:-tributo-distributed-algorithm-it-$(date +%Y%m%d%H%M%S)-$$}"
 if [[ ! "${PROJECT_NAME}" =~ ^tributo-distributed-algorithm-it-[a-zA-Z0-9][a-zA-Z0-9_-]*$ ]]; then
   echo "COMPOSE_PROJECT_NAME must be a unique tributo-distributed-algorithm-it-* identifier" >&2
@@ -28,6 +49,8 @@ FINAL_IMAGES="${LOG_DIR}/final-dangling-images.txt"
 TEST_LOG="${LOG_DIR}/tests.log"
 SERVICE_LOG="${LOG_DIR}/services.log"
 RAY_JOB_LOG="${LOG_DIR}/ray-jobs.log"
+PREFLIGHT_PROVENANCE_LOG="${LOG_DIR}/preflight-provenance.json"
+PROVENANCE_LOG="${LOG_DIR}/provenance.json"
 PLUGIN_DIST_DIR="${LOG_DIR}/plugin-dist"
 PLUGIN_CONTAINER_DIR="/workspace/tributo-work/distributed-plugin"
 PLUGIN_WHEEL=""
@@ -49,6 +72,7 @@ OFFICIAL_BOOSTING_WHEEL=""
 OFFICIAL_CAUSAL_XLEARNER_WHEEL=""
 OFFICIAL_CAUSAL_DR_WHEEL=""
 OFFICIAL_CAUSAL_DOWHY_WHEEL=""
+OFFICIAL_CATBOOST_WHEEL=""
 TRIBUTO_CORE_WHEEL=""
 OFFLINE_DIST_DIR="${LOG_DIR}/offline-dist"
 OFFLINE_BUNDLE_DIR="${LOG_DIR}/offline-bundle"
@@ -70,24 +94,40 @@ if [[ -z "${TRIBUTO_ALGORITHMS_ROOT:-}" ]]; then
   echo "TRIBUTO_ALGORITHMS_ROOT is required; refusing the ambiguous default path" >&2
   exit 2
 fi
+if ! CORE_COMMIT="$(git -C "${PROJECT_ROOT}" rev-parse --verify HEAD^{commit} 2>/dev/null)"; then
+  echo "Tributo Core source must be a Git checkout with a committed HEAD: ${PROJECT_ROOT}" >&2
+  exit 2
+fi
+if [[ -n "$(git -C "${PROJECT_ROOT}" status --porcelain=v1 --untracked-files=all)" ]]; then
+  CORE_WORKTREE_STATE="dirty"
+else
+  CORE_WORKTREE_STATE="clean"
+fi
 if ! OFFICIAL_ALGORITHMS_COMMIT="$(git -C "${OFFICIAL_ALGORITHMS_ROOT}" rev-parse --verify HEAD^{commit} 2>/dev/null)"; then
   echo "TRIBUTO_ALGORITHMS_ROOT must be a Git checkout with a committed HEAD: ${OFFICIAL_ALGORITHMS_ROOT}" >&2
   exit 2
 fi
-if [[ -n "$(git -C "${OFFICIAL_ALGORITHMS_ROOT}" status --porcelain=v1)" ]]; then
-  echo "Official algorithm source has uncommitted changes; Wheels will be built from the worktree" >&2
+if [[ -n "$(git -C "${OFFICIAL_ALGORITHMS_ROOT}" status --porcelain=v1 --untracked-files=all)" ]]; then
   OFFICIAL_ALGORITHMS_WORKTREE_STATE="dirty"
 else
   OFFICIAL_ALGORITHMS_WORKTREE_STATE="clean"
 fi
+if [[ "${EVIDENCE_MODE}" == "certification" && ( "${CORE_WORKTREE_STATE}" != "clean" || "${OFFICIAL_ALGORITHMS_WORKTREE_STATE}" != "clean" ) ]]; then
+  echo "Certification requires clean Core and algorithm worktrees" >&2
+  exit 2
+fi
 for required_package in \
-  boosting classical causal-core causal-dr causal-xlearner; do
+  boosting catboost causal-core causal-discovery causal-dowhy causal-dr \
+  causal-xlearner classical graph-pyg multistage-torch recsys-torch \
+  representation tabular-torch timeseries transformers-nlp; do
   if [[ ! -f "${OFFICIAL_ALGORITHMS_ROOT}/packages/${required_package}/pyproject.toml" ]]; then
     echo "Official algorithm checkout is missing packages/${required_package}: ${OFFICIAL_ALGORITHMS_ROOT}" >&2
     exit 2
   fi
 done
+echo "Tributo Core source: ${PROJECT_ROOT} (HEAD ${CORE_COMMIT}, worktree ${CORE_WORKTREE_STATE})"
 echo "Official algorithm source: ${OFFICIAL_ALGORITHMS_ROOT} (HEAD ${OFFICIAL_ALGORITHMS_COMMIT}, worktree ${OFFICIAL_ALGORITHMS_WORKTREE_STATE})"
+echo "Evidence mode: ${EVIDENCE_MODE} (scope ${DISTRIBUTED_ALGORITHM_SCOPE})"
 if [[ -e "${LOG_DIR}" ]]; then
   echo "Refusing to reuse existing IT log directory ${LOG_DIR}" >&2
   exit 2
@@ -96,6 +136,18 @@ mkdir -p "${PLUGIN_DIST_DIR}"
 mkdir -p "${TORCH_RECIPE_DIST_DIR}"
 mkdir -p "${OFFICIAL_DIST_DIR}"
 mkdir -p "${OFFLINE_DIST_DIR}"
+command -v python3 >/dev/null
+python3 "${PROJECT_ROOT}/tools/algorithm_gate_provenance.py" \
+  preflight \
+  --output "${PREFLIGHT_PROVENANCE_LOG}" \
+  --project-name "${PROJECT_NAME}" \
+  --scope "${DISTRIBUTED_ALGORITHM_SCOPE}" \
+  --evidence-mode "${EVIDENCE_MODE}" \
+  --core-root "${PROJECT_ROOT}" \
+  --algorithms-root "${OFFICIAL_ALGORITHMS_ROOT}" \
+  --categories "${TRIBUTO_OFFICIAL_GATE_CATEGORIES:-}" \
+  --entry-points "${TRIBUTO_OFFICIAL_GATE_ENTRY_POINTS:-}" \
+  2>&1 | tee "${LOG_DIR}/preflight-provenance.log"
 
 compose() {
   docker compose \
@@ -245,6 +297,22 @@ cleanup() {
   echo "Test log: ${TEST_LOG}"
   echo "Ray Job log: ${RAY_JOB_LOG}"
   echo "Service log: ${SERVICE_LOG}"
+  if [[ -f "${PREFLIGHT_PROVENANCE_LOG}" ]]; then
+    echo "Preflight provenance: ${PREFLIGHT_PROVENANCE_LOG} (present)"
+  else
+    echo "Preflight provenance: ${PREFLIGHT_PROVENANCE_LOG} (missing)" >&2
+    if [[ "${BASELINE_CAPTURED}" -eq 1 ]]; then
+      cleanup_status=1
+    fi
+  fi
+  if [[ -f "${PROVENANCE_LOG}" ]]; then
+    echo "Final provenance: ${PROVENANCE_LOG} (present)"
+  else
+    echo "Final provenance: ${PROVENANCE_LOG} (not generated)"
+    if [[ "${test_status}" -eq 0 ]]; then
+      cleanup_status=1
+    fi
+  fi
   if [[ "${test_status}" -eq 0 && "${cleanup_status}" -eq 0 ]]; then
     echo "Result: PASS (owned containers, network, and volumes removed)"
     exit 0
@@ -324,6 +392,7 @@ uv build --wheel --out-dir "${OFFICIAL_DIST_DIR}" --no-create-gitignore "${PROJE
   uv build --package tributo-algorithms-causal-xlearner --out-dir "${OFFICIAL_DIST_DIR}"
   uv build --package tributo-algorithms-causal-dr --out-dir "${OFFICIAL_DIST_DIR}"
   uv build --package tributo-algorithms-causal-dowhy --out-dir "${OFFICIAL_DIST_DIR}"
+  uv build --package tributo-algorithms-catboost --out-dir "${OFFICIAL_DIST_DIR}"
 ) 2>&1 | tee "${LOG_DIR}/official-wheel.log"
 shopt -s nullglob
 official_classical_wheels=("${OFFICIAL_DIST_DIR}"/tributo_algorithms_classical-*.whl)
@@ -340,9 +409,10 @@ official_boosting_wheels=("${OFFICIAL_DIST_DIR}"/tributo_algorithms_boosting-*.w
 official_causal_xlearner_wheels=("${OFFICIAL_DIST_DIR}"/tributo_algorithms_causal_xlearner-*.whl)
 official_causal_dr_wheels=("${OFFICIAL_DIST_DIR}"/tributo_algorithms_causal_dr-*.whl)
 official_causal_dowhy_wheels=("${OFFICIAL_DIST_DIR}"/tributo_algorithms_causal_dowhy-*.whl)
+official_catboost_wheels=("${OFFICIAL_DIST_DIR}"/tributo_algorithms_catboost-*.whl)
 core_wheels=("${OFFICIAL_DIST_DIR}"/tributo-*.whl)
 shopt -u nullglob
-if [[ "${#core_wheels[@]}" -ne 1 || "${#official_classical_wheels[@]}" -ne 1 || "${#official_timeseries_wheels[@]}" -ne 1 || "${#official_representation_wheels[@]}" -ne 1 || "${#official_graph_pyg_wheels[@]}" -ne 1 || "${#official_tabular_torch_wheels[@]}" -ne 1 || "${#official_recsys_torch_wheels[@]}" -ne 1 || "${#official_transformers_nlp_wheels[@]}" -ne 1 || "${#official_causal_core_wheels[@]}" -ne 1 || "${#official_causal_discovery_wheels[@]}" -ne 1 || "${#official_multistage_torch_wheels[@]}" -ne 1 || "${#official_boosting_wheels[@]}" -ne 1 || "${#official_causal_xlearner_wheels[@]}" -ne 1 || "${#official_causal_dr_wheels[@]}" -ne 1 || "${#official_causal_dowhy_wheels[@]}" -ne 1 ]]; then
+if [[ "${#core_wheels[@]}" -ne 1 || "${#official_classical_wheels[@]}" -ne 1 || "${#official_timeseries_wheels[@]}" -ne 1 || "${#official_representation_wheels[@]}" -ne 1 || "${#official_graph_pyg_wheels[@]}" -ne 1 || "${#official_tabular_torch_wheels[@]}" -ne 1 || "${#official_recsys_torch_wheels[@]}" -ne 1 || "${#official_transformers_nlp_wheels[@]}" -ne 1 || "${#official_causal_core_wheels[@]}" -ne 1 || "${#official_causal_discovery_wheels[@]}" -ne 1 || "${#official_multistage_torch_wheels[@]}" -ne 1 || "${#official_boosting_wheels[@]}" -ne 1 || "${#official_causal_xlearner_wheels[@]}" -ne 1 || "${#official_causal_dr_wheels[@]}" -ne 1 || "${#official_causal_dowhy_wheels[@]}" -ne 1 || "${#official_catboost_wheels[@]}" -ne 1 ]]; then
   echo "Expected all official algorithm Wheels" >&2
   exit 1
 fi
@@ -361,6 +431,7 @@ OFFICIAL_BOOSTING_WHEEL="${official_boosting_wheels[0]}"
 OFFICIAL_CAUSAL_XLEARNER_WHEEL="${official_causal_xlearner_wheels[0]}"
 OFFICIAL_CAUSAL_DR_WHEEL="${official_causal_dr_wheels[0]}"
 OFFICIAL_CAUSAL_DOWHY_WHEEL="${official_causal_dowhy_wheels[0]}"
+OFFICIAL_CATBOOST_WHEEL="${official_catboost_wheels[0]}"
 
 uv build \
   --wheel \
@@ -382,7 +453,7 @@ if [[ "${#offline_dependency_wheels[@]}" -ne 1 || "${#offline_algorithm_wheels[@
   echo "Expected one offline algorithm Wheel and one dependency Wheel" >&2
   exit 1
 fi
-uv run --locked --no-sync python "${PROJECT_ROOT}/tools/build_algorithm_bundle.py" \
+uv run --locked python "${PROJECT_ROOT}/tools/build_algorithm_bundle.py" \
   --algorithm-wheel "${offline_algorithm_wheels[0]}" \
   --dependency-wheel "${offline_dependency_wheels[0]}" \
   --output "${OFFLINE_BUNDLE_DIR}" \
@@ -390,7 +461,7 @@ uv run --locked --no-sync python "${PROJECT_ROOT}/tools/build_algorithm_bundle.p
   --profile-id "data-ingestion.cpu.v1" \
   2>&1 | tee "${LOG_DIR}/offline-bundle.log"
 
-uv run --locked --no-sync python -c \
+uv run --no-project --python 3.12 python -c \
   'import pathlib, sys, zipfile; root = pathlib.Path(sys.argv[1]); output = pathlib.Path(sys.argv[2]); archive = zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED); [archive.write(path, path.relative_to(root).as_posix()) for path in root.rglob("*") if path.is_file()]; archive.close()' \
   "${OFFLINE_BUNDLE_DIR}" "${OFFLINE_BUNDLE_ARCHIVE}"
 OFFLINE_BUNDLE_ARCHIVE_SHA256="$(shasum -a 256 "${OFFLINE_BUNDLE_ARCHIVE}" | awk '{print $1}')"
@@ -438,6 +509,48 @@ compose up \
   --scale ray-worker=2
 wait_for_stable_ray_nodes 3
 
+RUNTIME_PYTHON_VERSION="$(compose exec -T ray-head python -c 'import platform; print(platform.python_version())')"
+RUNTIME_RAY_VERSION="$(compose exec -T ray-head python -c 'import ray; print(ray.__version__)')"
+provenance_args=(
+  --output "${PROVENANCE_LOG}"
+  --project-name "${PROJECT_NAME}"
+  --scope "${DISTRIBUTED_ALGORITHM_SCOPE}"
+  --evidence-mode "${EVIDENCE_MODE}"
+  --core-root "${PROJECT_ROOT}"
+  --algorithms-root "${OFFICIAL_ALGORITHMS_ROOT}"
+  --runtime-image "${REQUIRED_RUNTIME_IMAGE}"
+  --runtime-image-id "${REQUIRED_RUNTIME_IMAGE_ID}"
+  --runtime-python-version "${RUNTIME_PYTHON_VERSION}"
+  --runtime-ray-version "${RUNTIME_RAY_VERSION}"
+  --categories "${TRIBUTO_OFFICIAL_GATE_CATEGORIES:-}"
+  --entry-points "${TRIBUTO_OFFICIAL_GATE_ENTRY_POINTS:-}"
+)
+for provenance_wheel in \
+  "${TRIBUTO_CORE_WHEEL}" \
+  "${OFFICIAL_CLASSICAL_WHEEL}" \
+  "${OFFICIAL_TIMESERIES_WHEEL}" \
+  "${OFFICIAL_REPRESENTATION_WHEEL}" \
+  "${OFFICIAL_GRAPH_PYG_WHEEL}" \
+  "${OFFICIAL_TABULAR_TORCH_WHEEL}" \
+  "${OFFICIAL_RECSYS_TORCH_WHEEL}" \
+  "${OFFICIAL_TRANSFORMERS_NLP_WHEEL}" \
+  "${OFFICIAL_CAUSAL_CORE_WHEEL}" \
+  "${OFFICIAL_CAUSAL_DISCOVERY_WHEEL}" \
+  "${OFFICIAL_MULTISTAGE_TORCH_WHEEL}" \
+  "${OFFICIAL_BOOSTING_WHEEL}" \
+  "${OFFICIAL_CAUSAL_XLEARNER_WHEEL}" \
+  "${OFFICIAL_CAUSAL_DR_WHEEL}" \
+  "${OFFICIAL_CAUSAL_DOWHY_WHEEL}" \
+  "${OFFICIAL_CATBOOST_WHEEL}"; do
+  provenance_args+=(--wheel "${provenance_wheel}")
+done
+uv run --no-project --python 3.12 python \
+  "${PROJECT_ROOT}/tools/algorithm_gate_provenance.py" \
+  final \
+  --preflight "${PREFLIGHT_PROVENANCE_LOG}" \
+  "${provenance_args[@]}" \
+  2>&1 | tee "${LOG_DIR}/provenance.log"
+
 compose exec -T ray-head mkdir -p "${PLUGIN_CONTAINER_DIR}"
 compose cp "${PLUGIN_WHEEL}" "ray-head:${PLUGIN_CONTAINER_DIR}/"
 PLUGIN_CONTAINER_WHEEL="${PLUGIN_CONTAINER_DIR}/$(basename "${PLUGIN_WHEEL}")"
@@ -471,6 +584,8 @@ compose cp "${OFFICIAL_CAUSAL_DR_WHEEL}" "ray-head:${PLUGIN_CONTAINER_DIR}/"
 OFFICIAL_CAUSAL_DR_CONTAINER_WHEEL="${PLUGIN_CONTAINER_DIR}/$(basename "${OFFICIAL_CAUSAL_DR_WHEEL}")"
 compose cp "${OFFICIAL_CAUSAL_DOWHY_WHEEL}" "ray-head:${PLUGIN_CONTAINER_DIR}/"
 OFFICIAL_CAUSAL_DOWHY_CONTAINER_WHEEL="${PLUGIN_CONTAINER_DIR}/$(basename "${OFFICIAL_CAUSAL_DOWHY_WHEEL}")"
+compose cp "${OFFICIAL_CATBOOST_WHEEL}" "ray-head:${PLUGIN_CONTAINER_DIR}/"
+OFFICIAL_CATBOOST_CONTAINER_WHEEL="${PLUGIN_CONTAINER_DIR}/$(basename "${OFFICIAL_CATBOOST_WHEEL}")"
 compose cp "${TRIBUTO_CORE_WHEEL}" "ray-head:${PLUGIN_CONTAINER_DIR}/"
 TRIBUTO_CORE_CONTAINER_WHEEL="${PLUGIN_CONTAINER_DIR}/$(basename "${TRIBUTO_CORE_WHEEL}")"
 compose exec -T ray-head mkdir -p \
@@ -505,13 +620,14 @@ test_targets=(
   tests/training/test_dnn_pu_training.py::test_offline_wheelhouse_installs_unique_dependency_on_driver_and_workers
   tests/training/test_dnn_pu_training.py::test_remote_offline_wheelhouse_archive_installs_on_driver_and_workers
 )
-if [[ "${TRIBUTO_DISTRIBUTED_ALGORITHM_SCOPE:-all}" == "priority" ]]; then
+if [[ "${DISTRIBUTED_ALGORITHM_SCOPE}" == "priority" ]]; then
   test_targets=(
     tests/training/test_dnn_pu_training.py::test_priority_algorithm_wheels_complete_on_ray_cluster
   )
-elif [[ "${TRIBUTO_DISTRIBUTED_ALGORITHM_SCOPE:-all}" != "all" ]]; then
-  echo "TRIBUTO_DISTRIBUTED_ALGORITHM_SCOPE must be all or priority" >&2
-  exit 2
+elif [[ "${DISTRIBUTED_ALGORITHM_SCOPE}" == "official" ]]; then
+  test_targets=(
+    tests/training/test_dnn_pu_training.py::test_official_algorithm_wheels_complete_on_ray_cluster
+  )
 elif [[ "${TRIBUTO_DISTRIBUTED_ALGORITHM_RERUN_FAILED_ONLY:-0}" == "1" ]]; then
   test_targets=(
     tests/training/test_dnn_pu_training.py::test_official_algorithm_wheels_complete_on_ray_cluster
@@ -543,6 +659,9 @@ compose exec -T \
   --env "TRIBUTO_OFFICIAL_CAUSAL_XLEARNER_WHEEL=${OFFICIAL_CAUSAL_XLEARNER_CONTAINER_WHEEL}" \
   --env "TRIBUTO_OFFICIAL_CAUSAL_DR_WHEEL=${OFFICIAL_CAUSAL_DR_CONTAINER_WHEEL}" \
   --env "TRIBUTO_OFFICIAL_CAUSAL_DOWHY_WHEEL=${OFFICIAL_CAUSAL_DOWHY_CONTAINER_WHEEL}" \
+  --env "TRIBUTO_OFFICIAL_CATBOOST_WHEEL=${OFFICIAL_CATBOOST_CONTAINER_WHEEL}" \
+  --env "TRIBUTO_OFFICIAL_GATE_CATEGORIES=${TRIBUTO_OFFICIAL_GATE_CATEGORIES:-}" \
+  --env "TRIBUTO_OFFICIAL_GATE_ENTRY_POINTS=${TRIBUTO_OFFICIAL_GATE_ENTRY_POINTS:-}" \
   --env "TRIBUTO_CORE_WHEEL=${TRIBUTO_CORE_CONTAINER_WHEEL}" \
   --env TRIBUTO_EXPECTED_ALGORITHM_MODE=image_py_modules \
   --env "TRIBUTO_ALGORITHM_IMAGE_DIGEST=${REQUIRED_RUNTIME_IMAGE_ID}" \
@@ -555,4 +674,4 @@ compose exec -T \
   "${test_targets[@]}" \
   -o addopts= \
   -o cache_dir=/workspace/tributo-work/cache/pytest-distributed-algorithm \
-  -m integration -vv -rP --tb=short --timeout=1200 2>&1 | tee "${TEST_LOG}"
+  -m integration -vv -rP --tb=short --timeout=14400 2>&1 | tee "${TEST_LOG}"

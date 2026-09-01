@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import importlib.metadata
 import json
+import math
 import os
 import shutil
 from collections.abc import Mapping
@@ -12,8 +14,292 @@ from typing import Any, cast
 import numpy as np
 import pandas as pd
 import ray
+from official_algorithm_matrix import (
+    ALL_ENTRY_POINTS,
+    CATEGORY_ENTRY_POINTS,
+    ENTRY_POINT_DISTRIBUTIONS,
+    OFFICIAL_ALGORITHM_IDENTITIES,
+    category_for_entry_point,
+    entry_point_for,
+    entry_points_for_gate,
+)
+from official_algorithm_output_contract import (
+    OutputExpectation,
+    build_output_expectation,
+    validate_output_dtype,
+    validate_output_value,
+)
+from packaging.utils import canonicalize_name
 
+from tributo.algorithms.conformance import validate_installed_algorithm_package
 from tributo.inference.batch_predictor import XGBoostONNXPredictor
+from tributo.inference.contracts import (
+    InputBindingSpec,
+    OutputBindingSpec,
+    TensorInputBinding,
+    TensorOutputBinding,
+)
+
+
+def _gate_category() -> str:
+    category = os.environ.get("TRIBUTO_OFFICIAL_ALGORITHM_CATEGORY", "all")
+    if category != "all" and category not in CATEGORY_ENTRY_POINTS:
+        raise ValueError(f"unknown official algorithm Gate category: {category!r}")
+    return category
+
+
+def _entry_point_enabled(entry_point: str) -> bool:
+    category = _gate_category()
+    expected_entry_points = entry_points_for_gate(
+        category,
+        os.environ.get("TRIBUTO_OFFICIAL_ALGORITHM_ENTRY_POINTS", ""),
+    )
+    return entry_point in expected_entry_points
+
+
+def _tensor_columns(
+    *,
+    name: str,
+    shape: tuple[int | str, ...],
+) -> tuple[str, ...]:
+    if not shape or shape[0] != "batch":
+        raise AssertionError(f"model input {name!r} must declare dynamic batch first")
+    trailing = shape[1:]
+    if any(not isinstance(value, int) or value < 1 for value in trailing):
+        raise AssertionError(
+            f"model input {name!r} has unsupported dynamic trailing shape {shape}"
+        )
+    width = math.prod(cast(tuple[int, ...], trailing)) if trailing else 1
+    return tuple(f"{name}__{index}" for index in range(width))
+
+
+def _inference_value(
+    dtype: str,
+    *,
+    row: int,
+    column: int,
+    entry_point: str,
+) -> object:
+    normalized = dtype.lower()
+    if entry_point == "token_transformer_classifier":
+        token = (row + column) % 8 + 1
+        if normalized.startswith("float"):
+            return float(token)
+        if normalized.startswith("int") or normalized.startswith("uint"):
+            return token
+        raise AssertionError(
+            f"token Transformer probe requires a numeric dtype, got {dtype!r}"
+        )
+    if normalized.startswith("float") or normalized in {"double", "half"}:
+        return float(((row + column) % 7) - 3) / 4.0
+    if normalized.startswith("int") or normalized.startswith("uint"):
+        return int((row + column) % 2)
+    if normalized in {"bool", "boolean"}:
+        return bool((row + column) % 2)
+    if normalized in {"str", "string"}:
+        return str((row + column) % 2)
+    raise AssertionError(f"unsupported inference probe dtype: {dtype!r}")
+
+
+def _stage_bundle_inference_input(
+    *,
+    bundle_uri: str,
+    root: Path,
+    entry_point: str,
+) -> tuple[
+    Path,
+    InputBindingSpec,
+    OutputBindingSpec,
+    tuple[OutputExpectation, ...],
+]:
+    from tributo.exporting.bundle_reader import BundleReader
+
+    manifest = BundleReader().read_manifest(bundle_uri)
+    if "inference" not in manifest.roles:
+        raise AssertionError(f"{entry_point} Bundle omitted the inference role")
+    if not manifest.input_signature.input_fields:
+        raise AssertionError(f"{entry_point} Bundle omitted its input signature")
+    if not manifest.output_signature.output_fields:
+        raise AssertionError(f"{entry_point} Bundle omitted its output signature")
+
+    bindings = []
+    values: dict[str, list[object]] = {}
+    projected: list[str] = []
+    for field_index, field in enumerate(manifest.input_signature.input_fields):
+        columns = _tensor_columns(name=field.name, shape=field.shape)
+        projected.extend(columns)
+        for column_index, column in enumerate(columns):
+            values[column] = [
+                _inference_value(
+                    field.dtype,
+                    row=row,
+                    column=field_index + column_index,
+                    entry_point=entry_point,
+                )
+                for row in range(16)
+            ]
+        bindings.append(
+            TensorInputBinding(
+                tensor_name=field.name,
+                columns=columns,
+                dtype=field.dtype,
+                single_column_mode=(
+                    "scalar" if field.shape == ("batch",) else "vector"
+                ),
+            )
+        )
+
+    output_expectations = tuple(
+        build_output_expectation(
+            tensor_name=field.name,
+            column=f"result__{field.name}",
+            dtype=field.dtype,
+            shape=field.shape,
+        )
+        for field in manifest.output_signature.output_fields
+    )
+    output_bindings = tuple(
+        TensorOutputBinding(
+            tensor_name=expectation.tensor_name,
+            column=expectation.column,
+            semantic="tensor",
+            dtype=expectation.dtype,
+            squeeze_singleton=False,
+        )
+        for expectation in output_expectations
+    )
+    input_root = root / "inference" / entry_point.replace(".", "-") / "input"
+    input_root.mkdir(parents=True)
+    frame = pd.DataFrame(values)
+    for part in range(4):
+        frame.iloc[part * 4 : (part + 1) * 4].to_parquet(
+            input_root / f"part-{part}.parquet",
+            index=False,
+        )
+    return (
+        input_root,
+        InputBindingSpec(tensors=tuple(bindings)),
+        OutputBindingSpec(tensors=output_bindings),
+        output_expectations,
+    )
+
+
+def _actor_snapshot() -> dict[str, Any]:
+    from ray.util.state import list_actors
+
+    job_id = str(ray.get_runtime_context().get_job_id())
+    return {
+        str(actor.actor_id): actor
+        for actor in list_actors(
+            filters=[("job_id", "=", job_id)],
+            limit=10_000,
+            detail=True,
+        )
+    }
+
+
+def _execute_bundle_inference(
+    *,
+    bundle_uri: str,
+    root: Path,
+    entry_point: str,
+) -> dict[str, object]:
+    from tributo.data import IngestionRequest, ParquetSourceConfig
+    from tributo.inference.api import run_inference
+    from tributo.inference.contracts import (
+        BundleModelReference,
+        InferenceRequest,
+        ParquetResultSinkRequest,
+        RayExecutionPolicy,
+    )
+
+    input_root, input_binding, output_binding, output_expectations = (
+        _stage_bundle_inference_input(
+            bundle_uri=bundle_uri,
+            root=root,
+            entry_point=entry_point,
+        )
+    )
+    sink_root = root / "inference" / entry_point.replace(".", "-") / "sink"
+    before = _actor_snapshot()
+    result = run_inference(
+        InferenceRequest(
+            model=BundleModelReference(uri=bundle_uri, role="inference"),
+            input=IngestionRequest(
+                source=ParquetSourceConfig(
+                    path=str(input_root),
+                    columns=list(input_binding.projected_columns()),
+                ),
+                engine="ray",
+            ),
+            input_binding=input_binding,
+            output_binding=output_binding,
+            result_sink=ParquetResultSinkRequest(uri=str(sink_root)),
+            execution=RayExecutionPolicy(
+                batch_size=2,
+                concurrency=2,
+                num_cpus_per_actor=2,
+            ),
+            run_id=f"inference-{entry_point.replace('.', '-')}",
+        )
+    )
+    if result.status != "succeeded" or result.sink_receipt is None:
+        raise AssertionError(
+            f"{entry_point} formal distributed inference failed: {result}"
+        )
+    receipt = result.sink_receipt
+    if (
+        receipt.sink_id != "parquet-v1"
+        or receipt.uri != str(sink_root)
+        or receipt.metadata.get("format") != "parquet"
+    ):
+        raise AssertionError(f"{entry_point} returned an invalid Parquet receipt")
+    materialized = ray.data.read_parquet(str(sink_root)).materialize()
+    schema = materialized.schema()
+    if schema is None:
+        raise AssertionError(f"{entry_point} inference result omitted its schema")
+    persisted_types = dict(zip(schema.names, schema.types, strict=True))
+    for expectation in output_expectations:
+        if expectation.column not in persisted_types:
+            raise AssertionError(
+                f"{entry_point} inference schema omitted output column "
+                f"{expectation.column!r}"
+            )
+        validate_output_dtype(expectation, persisted_types[expectation.column])
+    rows = cast(list[dict[str, object]], materialized.take_all())
+    if len(rows) != 16:
+        raise AssertionError(f"{entry_point} inference returned {len(rows)} rows")
+    for row in rows:
+        for expectation in output_expectations:
+            if expectation.column not in row:
+                raise AssertionError(
+                    f"{entry_point} inference omitted output column "
+                    f"{expectation.column!r}"
+                )
+            validate_output_value(expectation, row[expectation.column])
+    after = _actor_snapshot()
+    actors = [
+        actor
+        for actor_id, actor in after.items()
+        if actor_id not in before
+        and "KernelBatchPredictor" in str(actor.class_name)
+        and actor.node_id is not None
+    ]
+    node_ids = sorted({str(actor.node_id) for actor in actors})
+    if len(node_ids) != 2:
+        raise AssertionError(
+            f"{entry_point} inference did not create actors on two nodes: {node_ids}"
+        )
+    return {
+        "status": result.status,
+        "row_count": len(rows),
+        "node_count": len(node_ids),
+        "node_ids": node_ids,
+        "output_columns": [expectation.column for expectation in output_expectations],
+        "flavor_id": result.flavor_id,
+        "manifest_sha256": result.manifest_sha256,
+        "result_id": receipt.result_id,
+    }
 
 
 class _NodeProofONNXPredictor(XGBoostONNXPredictor):
@@ -176,7 +462,10 @@ def _execute(
     label_name: str | None = "label",
     resume_from: str | None = None,
     require_onnx: bool = False,
-) -> dict[str, object]:
+) -> dict[str, object] | None:
+    entry_point = entry_point_for(algorithm, implementation_id)
+    if not _entry_point_enabled(entry_point):
+        return None
     from tributo.algorithms import build_algorithm_dispatcher
     from tributo.algorithms.api import (
         AlgorithmOperation,
@@ -279,13 +568,23 @@ def _execute(
             inference_roundtrip = True
         finally:
             runtime.close()
+    distributed_inference = None
+    if os.environ.get("TRIBUTO_OFFICIAL_DISTRIBUTED_INFERENCE") == "1":
+        distributed_inference = _execute_bundle_inference(
+            bundle_uri=bundle_uri,
+            root=root,
+            entry_point=entry_point,
+        )
     return {
+        "entry_point": entry_point,
+        "category": category_for_entry_point(entry_point),
         "algorithm": algorithm,
         "implementation_id": implementation_id,
         "status": result.execution.status,
         "bundle_uri": bundle_uri,
         "onnx_exported": onnx_exported,
         "inference_roundtrip": inference_roundtrip,
+        "distributed_inference": distributed_inference,
         "receipt": receipt.to_dict(),
     }
 
@@ -530,6 +829,8 @@ def _execute_checkpoint_recovery(
     if (root / "lr-corrupt-must-not-publish").exists():
         raise AssertionError("corrupted Iterative checkpoint published a Bundle")
 
+    if ensemble_resumed is None or first_iterative is None or iterative_resumed is None:
+        raise AssertionError("classical recovery Gate unexpectedly skipped a record")
     ensemble_details = _receipt_details(ensemble_resumed)
     first_iterative_details = _receipt_details(first_iterative)
     iterative_details = _receipt_details(iterative_resumed)
@@ -688,7 +989,10 @@ def _execute_graph(
     root: Path,
     algorithm: str = "graphsage_node_classifier",
     relational: bool = False,
-) -> dict[str, object]:
+) -> dict[str, object] | None:
+    entry_point = entry_point_for(algorithm, None)
+    if not _entry_point_enabled(entry_point):
+        return None
     from tributo.algorithms import build_algorithm_dispatcher
     from tributo.algorithms.api import (
         AlgorithmOperation,
@@ -783,12 +1087,22 @@ def _execute_graph(
     bundle_uri = result.execution.outputs.get("bundle_uri")
     if not isinstance(bundle_uri, str) or not Path(bundle_uri).is_dir():
         raise AssertionError(f"{algorithm} did not publish a readable Bundle")
+    distributed_inference = None
+    if os.environ.get("TRIBUTO_OFFICIAL_DISTRIBUTED_INFERENCE") == "1":
+        distributed_inference = _execute_bundle_inference(
+            bundle_uri=bundle_uri,
+            root=root,
+            entry_point=entry_point,
+        )
     return {
+        "entry_point": entry_point,
+        "category": category_for_entry_point(entry_point),
         "algorithm": algorithm,
         "implementation_id": receipt.to_dict()["strategy"],
         "status": result.execution.status,
         "bundle_uri": bundle_uri,
         "receipt": receipt.to_dict(),
+        "distributed_inference": distributed_inference,
     }
 
 
@@ -797,7 +1111,10 @@ def _execute_gcm(
     train_path: Path,
     anomaly_path: Path,
     root: Path,
-) -> dict[str, object]:
+) -> dict[str, object] | None:
+    entry_point = entry_point_for("gcm_root_cause", None)
+    if not _entry_point_enabled(entry_point):
+        return None
     from tributo.algorithms import build_algorithm_dispatcher
     from tributo.algorithms.api import (
         AlgorithmOperation,
@@ -880,13 +1197,86 @@ def _execute_gcm(
         raise AssertionError("gcm_root_cause did not publish a readable Bundle")
     if float(result.execution.metrics["counterfactual_target_absolute_delta"]) <= 0:
         raise AssertionError("gcm_root_cause did not produce counterfactual evidence")
+    distributed_inference = None
+    if os.environ.get("TRIBUTO_OFFICIAL_DISTRIBUTED_INFERENCE") == "1":
+        distributed_inference = _execute_bundle_inference(
+            bundle_uri=bundle_uri,
+            root=root,
+            entry_point=entry_point,
+        )
     return {
+        "entry_point": entry_point,
+        "category": category_for_entry_point(entry_point),
         "algorithm": "gcm_root_cause",
         "implementation_id": receipt.to_dict()["strategy"],
         "status": result.execution.status,
         "bundle_uri": bundle_uri,
         "receipt": receipt.to_dict(),
+        "distributed_inference": distributed_inference,
     }
+
+
+def _validate_installed_official_entry_points() -> tuple[dict[str, object], ...]:
+    entry_points = tuple(
+        entry_point
+        for entry_point in importlib.metadata.entry_points(group="tributo.algorithms")
+        if (distribution := getattr(entry_point, "dist", None)) is not None
+        and canonicalize_name(str(distribution.metadata["Name"])).startswith(
+            "tributo-algorithms-"
+        )
+    )
+    by_name: dict[str, list[object]] = {}
+    installed_pairs: set[tuple[str, str]] = set()
+    for entry_point in entry_points:
+        distribution = entry_point.dist
+        if distribution is None:
+            raise AssertionError(
+                f"official Entry Point {entry_point.name!r} has no distribution owner"
+            )
+        distribution_name = canonicalize_name(str(distribution.metadata["Name"]))
+        by_name.setdefault(str(entry_point.name), []).append(entry_point)
+        installed_pairs.add((str(entry_point.name), distribution_name))
+
+    duplicates = sorted(name for name, values in by_name.items() if len(values) != 1)
+    expected_pairs = {
+        (entry_point, canonicalize_name(distribution))
+        for entry_point, distribution in ENTRY_POINT_DISTRIBUTIONS.items()
+    }
+    if duplicates or installed_pairs != expected_pairs:
+        raise AssertionError(
+            "installed official algorithm Entry Point ownership drifted: "
+            f"duplicates={duplicates} "
+            f"missing={sorted(expected_pairs - installed_pairs)} "
+            f"unexpected={sorted(installed_pairs - expected_pairs)}"
+        )
+    identities: list[dict[str, object]] = []
+    for entry_point_name in sorted(ALL_ENTRY_POINTS):
+        entry_point = cast(Any, by_name[entry_point_name][0])
+        expected_identity = OFFICIAL_ALGORITHM_IDENTITIES[entry_point_name]
+        expected_distribution = canonicalize_name(expected_identity.distribution)
+        report = validate_installed_algorithm_package(
+            entry_point.load(),
+            entry_point_name=entry_point_name,
+        )
+        if (
+            canonicalize_name(report.distribution) != expected_distribution
+            or report.algorithm_id != expected_identity.algorithm_id
+            or report.implementation_id != expected_identity.implementation_id
+            or report.implementation_loaded
+        ):
+            raise AssertionError(
+                f"installed official descriptor identity drifted for {entry_point_name!r}"
+            )
+        identities.append(
+            {
+                "entry_point": entry_point_name,
+                "distribution": expected_distribution,
+                "algorithm_id": report.algorithm_id,
+                "implementation_id": report.implementation_id,
+                "package_version": report.package_version,
+            }
+        )
+    return tuple(identities)
 
 
 def main() -> None:
@@ -898,13 +1288,24 @@ def main() -> None:
     if root.exists():
         raise FileExistsError(f"refusing to reuse Gate root: {root}")
     root.mkdir(parents=True)
+    installed_identities = _validate_installed_official_entry_points()
+    print(
+        "INSTALLATION_RESULT: "
+        + json.dumps(
+            {
+                "record_count": len(installed_identities),
+                "records": installed_identities,
+            },
+            sort_keys=True,
+        ),
+        flush=True,
+    )
     ray.init(address="auto")
     try:
         data_path = _stage_data(root)
         graph_nodes, graph_edges, graph_seeds = _stage_graph_data(root)
         gcm_anomalies = _stage_gcm_anomalies(root)
-        inference_data = _stage_inference_data(root)
-        results = [
+        records = [
             _execute(
                 algorithm="random_forest",
                 implementation_id="tributo.official.random_forest.joblib",
@@ -1001,6 +1402,104 @@ def main() -> None:
                 },
             ),
             _execute(
+                algorithm="pca",
+                implementation_id=None,
+                feature_names=("x0", "x1"),
+                label_name=None,
+                data_path=data_path,
+                root=root,
+                config={
+                    "feature_count": 2,
+                    "n_components": 2,
+                    "output": {"bundle_uri": str(root / "pca-bundle")},
+                },
+            ),
+            _execute(
+                algorithm="kmeans",
+                implementation_id=None,
+                feature_names=("x0", "x1"),
+                label_name=None,
+                data_path=data_path,
+                root=root,
+                config={
+                    "feature_count": 2,
+                    "n_clusters": 2,
+                    "max_iter": 3,
+                    "seed": 7,
+                    "runtime": {"checkpoint_dir": str(root / "kmeans-checkpoint")},
+                    "output": {"bundle_uri": str(root / "kmeans-bundle")},
+                },
+            ),
+            _execute(
+                algorithm="kmeans_minibatch",
+                implementation_id=None,
+                feature_names=("x0", "x1"),
+                label_name=None,
+                data_path=data_path,
+                root=root,
+                config={
+                    "batch_size": 8,
+                    "feature_count": 2,
+                    "learning_rate": 0.5,
+                    "n_clusters": 2,
+                    "max_iter": 3,
+                    "seed": 7,
+                    "runtime": {
+                        "checkpoint_dir": str(root / "minibatch-kmeans-checkpoint")
+                    },
+                    "output": {"bundle_uri": str(root / "minibatch-kmeans-bundle")},
+                },
+            ),
+            _execute(
+                algorithm="sgd_classifier",
+                implementation_id=None,
+                feature_names=("x0", "x1"),
+                data_path=data_path,
+                root=root,
+                config={
+                    "learning_rate": 0.2,
+                    "max_iter": 3,
+                    "seed": 7,
+                    "runtime": {
+                        "checkpoint_dir": str(root / "sgd-classifier-checkpoint")
+                    },
+                    "output": {"bundle_uri": str(root / "sgd-classifier-bundle")},
+                },
+            ),
+            _execute(
+                algorithm="sgd_regressor",
+                implementation_id=None,
+                feature_names=("x0", "x1"),
+                label_name="outcome",
+                data_path=data_path,
+                root=root,
+                config={
+                    "learning_rate": 0.1,
+                    "max_iter": 3,
+                    "seed": 7,
+                    "runtime": {
+                        "checkpoint_dir": str(root / "sgd-regressor-checkpoint")
+                    },
+                    "output": {"bundle_uri": str(root / "sgd-regressor-bundle")},
+                },
+            ),
+            _execute(
+                algorithm="isolation_forest",
+                implementation_id=None,
+                feature_names=("x0", "x1"),
+                label_name=None,
+                data_path=data_path,
+                root=root,
+                config={
+                    "contamination": "auto",
+                    "max_samples": 16,
+                    "n_estimators": 4,
+                    "unit_count": 4,
+                    "seed": 7,
+                    "output": {"bundle_uri": str(root / "isolation-forest-bundle")},
+                },
+            ),
+            _execute(
                 algorithm="tabular_autoencoder",
                 implementation_id=None,
                 feature_names=("x0", "x1"),
@@ -1051,6 +1550,62 @@ def main() -> None:
                         "resume": {"checkpoint_interval": 1},
                     },
                     "output": {"bundle_uri": str(root / "timeseries-bundle")},
+                },
+            ),
+            _execute(
+                algorithm="lstm_classifier",
+                implementation_id=None,
+                feature_names=("lag_3", "lag_2", "lag_1", "lag_0"),
+                data_path=data_path,
+                root=root,
+                config={
+                    "model": {
+                        "input_features": 4,
+                        "hidden_size": 4,
+                        "num_layers": 1,
+                    },
+                    "optimizer": {"learning_rate": 0.01},
+                    "metrics": {},
+                    "training": {
+                        "epochs": 1,
+                        "batch_size": 4,
+                        "prefetch_batches": 0,
+                        "seed": 7,
+                    },
+                    "ray": {
+                        "max_failures": 0,
+                        "storage_path": str(root / "lstm-ray-results"),
+                        "resume": {"checkpoint_interval": 1},
+                    },
+                    "output": {"bundle_uri": str(root / "lstm-bundle")},
+                },
+            ),
+            _execute(
+                algorithm="gru_classifier",
+                implementation_id=None,
+                feature_names=("lag_3", "lag_2", "lag_1", "lag_0"),
+                data_path=data_path,
+                root=root,
+                config={
+                    "model": {
+                        "input_features": 4,
+                        "hidden_size": 4,
+                        "num_layers": 1,
+                    },
+                    "optimizer": {"learning_rate": 0.01},
+                    "metrics": {},
+                    "training": {
+                        "epochs": 1,
+                        "batch_size": 4,
+                        "prefetch_batches": 0,
+                        "seed": 7,
+                    },
+                    "ray": {
+                        "max_failures": 0,
+                        "storage_path": str(root / "gru-ray-results"),
+                        "resume": {"checkpoint_interval": 1},
+                    },
+                    "output": {"bundle_uri": str(root / "gru-bundle")},
                 },
             ),
             _execute(
@@ -1142,6 +1697,7 @@ def main() -> None:
                         "history_col": "item_history",
                         "candidate_col": "item_id",
                         "label_col": "label",
+                        "inference_history_width": 8,
                     },
                     "model": {
                         "user_count": 4,
@@ -1303,6 +1859,49 @@ def main() -> None:
                 },
             ),
             _execute(
+                algorithm="lightgbm",
+                implementation_id="tributo.official.boosting.lightgbm",
+                feature_names=("x0", "x1"),
+                data_path=data_path,
+                root=root,
+                config={
+                    "data": {
+                        "label_col": "label",
+                        "feature_columns": ["x0", "x1"],
+                    },
+                    "model": {
+                        "task": "classification",
+                        "objective": "binary",
+                        "num_leaves": 3,
+                        "min_data_in_leaf": 1,
+                        "num_threads": 1,
+                        "verbosity": -1,
+                    },
+                    "training": {"num_rounds": 3},
+                    "ray": {"storage_path": str(root / "lightgbm-ray-results")},
+                    "output": {"bundle_uri": str(root / "lightgbm-bundle")},
+                },
+            ),
+            _execute(
+                algorithm="catboost",
+                implementation_id="tributo.official.catboost.parallel_ensemble",
+                feature_names=("x0", "x1"),
+                data_path=data_path,
+                root=root,
+                config={
+                    "task": "classification",
+                    "n_estimators": 2,
+                    "unit_count": 2,
+                    "seed": 7,
+                    "model": {
+                        "iterations": 5,
+                        "depth": 2,
+                        "learning_rate": 0.2,
+                    },
+                    "output": {"bundle_uri": str(root / "catboost-bundle")},
+                },
+            ),
+            _execute(
                 algorithm="x_learner",
                 implementation_id="tributo.official.causal_xlearner.xgboost",
                 feature_names=("x0", "x1", "treatment", "identity"),
@@ -1379,28 +1978,52 @@ def main() -> None:
                 relational=True,
             ),
         ]
-        baseline_result = _execute_baseline_equivalence(
-            data_path=data_path,
-            records=results,
+        results = [record for record in records if record is not None]
+        category = _gate_category()
+        expected_entry_points = entry_points_for_gate(
+            category,
+            os.environ.get("TRIBUTO_OFFICIAL_ALGORITHM_ENTRY_POINTS", ""),
         )
-        tune_result = _execute_portable_tune(data_path=data_path, root=root)
-        recovery_result = _execute_checkpoint_recovery(
-            data_path=data_path,
-            root=root,
+        actual_entry_points = {str(record["entry_point"]) for record in results}
+        if actual_entry_points != expected_entry_points:
+            raise AssertionError(
+                f"{category} Gate record drift: "
+                f"missing={sorted(expected_entry_points - actual_entry_points)} "
+                f"unexpected={sorted(actual_entry_points - expected_entry_points)}"
+            )
+        run_classical_controls = os.environ.get(
+            "TRIBUTO_OFFICIAL_EXTENDED_CONTROLS"
+        ) == "1" and category in {"all", "classical"}
+        baseline_result = (
+            _execute_baseline_equivalence(data_path=data_path, records=results)
+            if run_classical_controls
+            else {"skipped": True}
         )
-        xgboost_bundle = next(
-            str(record["bundle_uri"])
-            for record in results
-            if record["algorithm"] == "xgboost"
+        tune_result = (
+            _execute_portable_tune(data_path=data_path, root=root)
+            if run_classical_controls
+            else {"skipped": True}
         )
-        inference_result = _execute_distributed_inference(
-            bundle_uri=xgboost_bundle,
-            input_path=inference_data,
-            root=root,
+        recovery_result = (
+            _execute_checkpoint_recovery(data_path=data_path, root=root)
+            if run_classical_controls
+            else {"skipped": True}
         )
-        failure_result = _execute_required_bundle_failure(
-            data_path=data_path,
-            root=root,
+        inference_result = {
+            "record_count": len(results),
+            "all_distributed": all(
+                isinstance(record.get("distributed_inference"), Mapping)
+                and cast(Mapping[str, object], record["distributed_inference"]).get(
+                    "node_count"
+                )
+                == 2
+                for record in results
+            ),
+        }
+        failure_result = (
+            _execute_required_bundle_failure(data_path=data_path, root=root)
+            if run_classical_controls
+            else {"skipped": True}
         )
         print("TUNE_RESULT: " + json.dumps(tune_result, sort_keys=True), flush=True)
         print(
