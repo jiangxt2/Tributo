@@ -19,6 +19,7 @@ from tributo.inference.contracts import (
     ResolvedInputSelection,
     ResolvedModelBinding,
     ResolvedModelSelection,
+    TensorInputBinding,
 )
 from tributo.inference.input_resolver import (
     IngestionGatewayInputResolver,
@@ -114,14 +115,16 @@ def _validate_bindings(
     output_signature: ManifestSignature,
     unsafe: bool,
 ) -> None:
+    input_bindings = tuple(request.input_binding.tensors)
     _validate_side(
         side="input",
-        bindings=(
-            (binding.tensor_name, binding.dtype)
-            for binding in request.input_binding.tensors
-        ),
+        bindings=((binding.tensor_name, binding.dtype) for binding in input_bindings),
         fields=input_signature.input_fields,
         unsafe=unsafe,
+    )
+    _validate_input_layouts(
+        bindings=input_bindings,
+        fields=input_signature.input_fields,
     )
     _validate_side(
         side="output",
@@ -160,6 +163,29 @@ def _validate_side(
                 f"{side} binding {name!r} declares dtype {dtype!r}, but the "
                 f"manifest declares {field_map[name].dtype!r}"
             )
+
+
+def _validate_input_layouts(
+    *,
+    bindings: tuple[TensorInputBinding, ...],
+    fields: tuple[SignatureField, ...],
+) -> None:
+    """Reject table layouts that cannot produce the declared tensor ranks."""
+    if not fields:
+        return
+    field_map = {field.name: field for field in fields}
+    for binding in bindings:
+        field = field_map[binding.tensor_name]
+        signature_is_scalar = len(field.shape) == 1
+        binding_is_scalar = binding.single_column_mode == "scalar"
+        if signature_is_scalar == binding_is_scalar:
+            continue
+        expected_mode = "scalar" if signature_is_scalar else "vector"
+        raise JobConfigurationError(
+            f"input binding {binding.tensor_name!r} uses single_column_mode="
+            f"{binding.single_column_mode!r}, but manifest shape {field.shape!r} "
+            f"requires {expected_mode!r}"
+        )
 
 
 def _plan_digest(

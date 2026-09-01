@@ -238,6 +238,38 @@ class TestBindings:
                 tensor_name="y", column="result", semantic="tensor", dtype=dtype
             )
 
+    def test_single_column_mode_is_explicit_and_json_stable(self) -> None:
+        vector = TensorInputBinding(tensor_name="x", columns=("a",))
+        scalar = TensorInputBinding(
+            tensor_name="y",
+            columns=("b",),
+            single_column_mode="scalar",
+        )
+
+        assert vector.single_column_mode == "vector"
+        assert scalar.single_column_mode == "scalar"
+        assert (
+            TensorInputBinding.model_validate_json(scalar.model_dump_json()) == scalar
+        )
+
+    def test_scalar_single_column_mode_rejects_invalid_contracts(self) -> None:
+        with pytest.raises(ValidationError, match="requires exactly one column"):
+            TensorInputBinding(
+                tensor_name="x",
+                columns=("a", "b"),
+                single_column_mode="scalar",
+            )
+        with pytest.raises(
+            ValidationError, match="Input should be 'vector' or 'scalar'"
+        ):
+            TensorInputBinding.model_validate(
+                {
+                    "tensor_name": "x",
+                    "columns": ["a"],
+                    "single_column_mode": "matrix",
+                }
+            )
+
     def test_nan_policy_is_explicit_and_fail_closed_by_default(self) -> None:
         assert _request().input_binding.nan_policy == "error"
         assert (

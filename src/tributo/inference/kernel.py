@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import ClassVar, Protocol, runtime_checkable
+from typing import ClassVar, Literal, Protocol, runtime_checkable
 
 import numpy as np
 
@@ -77,6 +77,7 @@ class KernelBatchPredictor:
                 batch,
                 columns=binding.columns,
                 dtype=binding.dtype,
+                single_column_mode=binding.single_column_mode,
                 null_policy=self._input_binding.null_policy,
                 nan_policy=self._input_binding.nan_policy,
             )
@@ -134,6 +135,7 @@ def _build_input_tensor(
     *,
     columns: tuple[str, ...],
     dtype: str | None,
+    single_column_mode: Literal["vector", "scalar"],
     null_policy: str,
     nan_policy: str,
 ) -> np.ndarray:
@@ -145,7 +147,13 @@ def _build_input_tensor(
     )
 
     arrays = [np.asarray(batch[column]) for column in columns]
-    if len(arrays) == 1 and arrays[0].ndim > 1:
+    if single_column_mode == "scalar":
+        if len(arrays) != 1 or arrays[0].ndim != 1:
+            raise ValueError(
+                "scalar single-column input must be a one-dimensional batch column"
+            )
+        tensor = arrays[0]
+    elif len(arrays) == 1 and arrays[0].ndim > 1:
         tensor = arrays[0]
     else:
         tensor = np.column_stack(arrays)

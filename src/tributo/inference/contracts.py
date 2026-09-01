@@ -157,6 +157,7 @@ class TensorInputBinding(_FrozenContract):
     tensor_name: str = Field(min_length=1)
     columns: tuple[str, ...] = Field(min_length=1)
     dtype: str | None = Field(default=None, min_length=1)
+    single_column_mode: Literal["vector", "scalar"] = "vector"
 
     @field_validator("columns")
     @classmethod
@@ -171,6 +172,12 @@ class TensorInputBinding(_FrozenContract):
     @classmethod
     def _canonical_dtype(cls, value: str | None) -> str | None:
         return _validate_binding_dtype(value)
+
+    @model_validator(mode="after")
+    def _scalar_mode_requires_one_column(self) -> "TensorInputBinding":
+        if self.single_column_mode == "scalar" and len(self.columns) != 1:
+            raise ValueError("scalar single-column mode requires exactly one column")
+        return self
 
 
 @PublicAPI(stability="alpha")

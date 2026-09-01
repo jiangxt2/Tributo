@@ -341,6 +341,57 @@ def test_single_vector_column_is_not_restacked() -> None:
     assert runtime.inputs[0]["float_input"].shape == (2, 2)
 
 
+def test_single_scalar_column_preserves_batch_rank() -> None:
+    runtime = _Runtime()
+    inputs = InputBindingSpec(
+        tensors=(
+            TensorInputBinding(
+                tensor_name="float_input",
+                columns=("feature",),
+                dtype="float32",
+                single_column_mode="scalar",
+            ),
+        )
+    )
+    outputs = OutputBindingSpec(
+        tensors=(
+            TensorOutputBinding(tensor_name="label", column="label", semantic="label"),
+        )
+    )
+    predictor = BundleBatchPredictor(
+        _selection(), inputs, outputs, kernel_provider=_Provider(runtime)
+    )
+
+    predictor({"feature": np.array([1.0, 2.0])})
+
+    assert runtime.inputs[0]["float_input"].shape == (2,)
+
+
+def test_single_scalar_column_rejects_vector_valued_rows() -> None:
+    runtime = _Runtime()
+    inputs = InputBindingSpec(
+        tensors=(
+            TensorInputBinding(
+                tensor_name="float_input",
+                columns=("feature",),
+                dtype="float32",
+                single_column_mode="scalar",
+            ),
+        )
+    )
+    outputs = OutputBindingSpec(
+        tensors=(
+            TensorOutputBinding(tensor_name="label", column="label", semantic="label"),
+        )
+    )
+    predictor = BundleBatchPredictor(
+        _selection(), inputs, outputs, kernel_provider=_Provider(runtime)
+    )
+
+    with pytest.raises(ValueError, match="must be a one-dimensional batch column"):
+        predictor({"feature": np.array([[1.0], [2.0]])})
+
+
 def test_plugin_kernel_cannot_change_batch_row_count_without_passthrough() -> None:
     class WrongRowRuntime(_Runtime):
         def predict(self, inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
