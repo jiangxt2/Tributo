@@ -9,6 +9,7 @@ import tomllib
 from pathlib import Path
 
 import numpy as np
+import pyarrow as pa
 import pytest
 
 from tests.training.jobs.official_algorithm_matrix import (
@@ -23,6 +24,7 @@ from tests.training.jobs.official_algorithm_matrix import (
 )
 from tests.training.jobs.official_algorithm_output_contract import (
     build_output_expectation,
+    validate_output_dtype,
     validate_output_value,
 )
 from tools.algorithm_gate_provenance import (
@@ -431,6 +433,8 @@ def test_official_gate_validates_materialized_output_dtype_and_shape() -> None:
     validate_output_value(scalar, np.int64(1))
     validate_output_value(vector, np.asarray([0.25, 0.75], dtype=np.float32))
     validate_output_value(dynamic, np.asarray([0.5, 0.25, 0.125], dtype=np.float32))
+    validate_output_dtype(scalar, pa.int64())
+    validate_output_dtype(vector, pa.fixed_shape_tensor(pa.float32(), (2,)))
 
 
 @pytest.mark.parametrize(
@@ -444,7 +448,6 @@ def test_official_gate_validates_materialized_output_dtype_and_shape() -> None:
             np.asarray([1.0], dtype=np.float32),
             "requires 2",
         ),
-        (("batch",), "float32", np.float64(1.0), "dtype"),
         (("batch",), "float32", np.float32(np.nan), "non-finite"),
     ],
 )
@@ -463,6 +466,18 @@ def test_official_gate_rejects_materialized_output_contract_drift(
 
     with pytest.raises(AssertionError, match=message):
         validate_output_value(expectation, value)
+
+
+def test_official_gate_rejects_persisted_output_dtype_drift() -> None:
+    expectation = build_output_expectation(
+        tensor_name="prediction",
+        column="result__prediction",
+        dtype="float32",
+        shape=("batch",),
+    )
+
+    with pytest.raises(AssertionError, match="persisted dtype"):
+        validate_output_dtype(expectation, pa.float64())
 
 
 def test_official_gate_requires_dynamic_batch_output_axis() -> None:

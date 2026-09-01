@@ -44,7 +44,7 @@ def build_output_expectation(
 
 
 def validate_output_value(expectation: OutputExpectation, value: object) -> None:
-    """Validate one materialized result value against its manifest field."""
+    """Validate one materialized result value's shape and finite-value contract."""
     array = np.asarray(value)
     actual_shape = tuple(int(dimension) for dimension in array.shape)
     expected_shape = expectation.trailing_shape
@@ -61,20 +61,52 @@ def validate_output_value(expectation: OutputExpectation, value: object) -> None
                 f"model output {expectation.tensor_name!r} has row shape "
                 f"{actual_shape}, but manifest axis {axis + 1} requires {expected}"
             )
-    if array.dtype.name != expectation.dtype:
-        raise AssertionError(
-            f"model output {expectation.tensor_name!r} has dtype "
-            f"{array.dtype.name!r}, but its manifest declares "
-            f"{expectation.dtype!r}"
-        )
     if array.dtype.kind in {"f", "c"} and not np.isfinite(array).all():
         raise AssertionError(
             f"model output {expectation.tensor_name!r} contains non-finite values"
         )
 
 
+def validate_output_dtype(
+    expectation: OutputExpectation, persisted_type: object
+) -> None:
+    """Validate the persisted Arrow element dtype against the manifest field."""
+    import pyarrow as pa
+
+    if not isinstance(persisted_type, pa.DataType):
+        raise AssertionError(
+            f"model output {expectation.tensor_name!r} has unsupported persisted "
+            f"type {persisted_type!r}"
+        )
+    element_type = persisted_type
+    value_type = getattr(element_type, "value_type", None)
+    if isinstance(value_type, pa.DataType):
+        element_type = value_type
+    elif isinstance(element_type, pa.ExtensionType):
+        element_type = element_type.storage_type
+    while (
+        pa.types.is_list(element_type)
+        or pa.types.is_large_list(element_type)
+        or pa.types.is_fixed_size_list(element_type)
+    ):
+        element_type = element_type.value_type
+    try:
+        actual_dtype = np.dtype(element_type.to_pandas_dtype()).name
+    except (NotImplementedError, TypeError) as exc:
+        raise AssertionError(
+            f"model output {expectation.tensor_name!r} has unsupported persisted "
+            f"type {persisted_type!r}"
+        ) from exc
+    if actual_dtype != expectation.dtype:
+        raise AssertionError(
+            f"model output {expectation.tensor_name!r} has persisted dtype "
+            f"{actual_dtype!r}, but its manifest declares {expectation.dtype!r}"
+        )
+
+
 __all__ = [
     "OutputExpectation",
     "build_output_expectation",
+    "validate_output_dtype",
     "validate_output_value",
 ]

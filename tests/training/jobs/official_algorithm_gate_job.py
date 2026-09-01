@@ -26,6 +26,7 @@ from official_algorithm_matrix import (
 from official_algorithm_output_contract import (
     OutputExpectation,
     build_output_expectation,
+    validate_output_dtype,
     validate_output_value,
 )
 from packaging.utils import canonicalize_name
@@ -254,6 +255,17 @@ def _execute_bundle_inference(
     ):
         raise AssertionError(f"{entry_point} returned an invalid Parquet receipt")
     materialized = ray.data.read_parquet(str(sink_root)).materialize()
+    schema = materialized.schema()
+    if schema is None:
+        raise AssertionError(f"{entry_point} inference result omitted its schema")
+    persisted_types = dict(zip(schema.names, schema.types, strict=True))
+    for expectation in output_expectations:
+        if expectation.column not in persisted_types:
+            raise AssertionError(
+                f"{entry_point} inference schema omitted output column "
+                f"{expectation.column!r}"
+            )
+        validate_output_dtype(expectation, persisted_types[expectation.column])
     rows = cast(list[dict[str, object]], materialized.take_all())
     if len(rows) != 16:
         raise AssertionError(f"{entry_point} inference returned {len(rows)} rows")
