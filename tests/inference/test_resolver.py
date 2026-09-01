@@ -227,6 +227,58 @@ class TestInferenceResolver:
                 request.model_copy(update={"input_binding": bad_binding})
             )
 
+    def test_scalar_binding_must_match_rank_one_manifest(self, tmp_path: Path) -> None:
+        bundle = build_test_bundle(tmp_path, input_field_shape=("batch",))
+        request = _request(bundle)
+        scalar_binding = InputBindingSpec(
+            tensors=(
+                TensorInputBinding(
+                    tensor_name="float_input",
+                    columns=("feature_a",),
+                    dtype="float32",
+                    single_column_mode="scalar",
+                ),
+            ),
+            passthrough_columns=("entity_id",),
+        )
+
+        plan = InferenceResolver().resolve(
+            request.model_copy(update={"input_binding": scalar_binding})
+        )
+
+        assert plan.input_binding == scalar_binding
+
+    def test_vector_binding_rejects_rank_one_manifest(self, tmp_path: Path) -> None:
+        bundle = build_test_bundle(tmp_path, input_field_shape=("batch",))
+
+        with pytest.raises(
+            JobConfigurationError,
+            match="single_column_mode='vector'.*requires 'scalar'",
+        ):
+            InferenceResolver().resolve(_request(bundle))
+
+    def test_scalar_binding_rejects_rank_two_manifest(self, tmp_path: Path) -> None:
+        bundle = build_test_bundle(tmp_path, input_field_shape=("batch", 1))
+        request = _request(bundle)
+        scalar_binding = InputBindingSpec(
+            tensors=(
+                TensorInputBinding(
+                    tensor_name="float_input",
+                    columns=("feature_a",),
+                    dtype="float32",
+                    single_column_mode="scalar",
+                ),
+            )
+        )
+
+        with pytest.raises(
+            JobConfigurationError,
+            match="single_column_mode='scalar'.*requires 'vector'",
+        ):
+            InferenceResolver().resolve(
+                request.model_copy(update={"input_binding": scalar_binding})
+            )
+
     def test_each_storage_profile_stays_in_its_domain(self, tmp_path: Path) -> None:
         bundle = build_test_bundle(tmp_path)
 
