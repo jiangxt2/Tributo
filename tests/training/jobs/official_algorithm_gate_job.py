@@ -23,6 +23,11 @@ from official_algorithm_matrix import (
     entry_point_for,
     entry_points_for_gate,
 )
+from official_algorithm_output_contract import (
+    OutputExpectation,
+    build_output_expectation,
+    validate_output_value,
+)
 from packaging.utils import canonicalize_name
 
 from tributo.algorithms.conformance import validate_installed_algorithm_package
@@ -100,7 +105,12 @@ def _stage_bundle_inference_input(
     bundle_uri: str,
     root: Path,
     entry_point: str,
-) -> tuple[Path, InputBindingSpec, OutputBindingSpec, tuple[str, ...]]:
+) -> tuple[
+    Path,
+    InputBindingSpec,
+    OutputBindingSpec,
+    tuple[OutputExpectation, ...],
+]:
     from tributo.exporting.bundle_reader import BundleReader
 
     manifest = BundleReader().read_manifest(bundle_uri)
@@ -138,15 +148,24 @@ def _stage_bundle_inference_input(
             )
         )
 
-    output_bindings = tuple(
-        TensorOutputBinding(
+    output_expectations = tuple(
+        build_output_expectation(
             tensor_name=field.name,
             column=f"result__{field.name}",
-            semantic="tensor",
             dtype=field.dtype,
-            squeeze_singleton=False,
+            shape=field.shape,
         )
         for field in manifest.output_signature.output_fields
+    )
+    output_bindings = tuple(
+        TensorOutputBinding(
+            tensor_name=expectation.tensor_name,
+            column=expectation.column,
+            semantic="tensor",
+            dtype=expectation.dtype,
+            squeeze_singleton=False,
+        )
+        for expectation in output_expectations
     )
     input_root = root / "inference" / entry_point.replace(".", "-") / "input"
     input_root.mkdir(parents=True)
@@ -160,7 +179,7 @@ def _stage_bundle_inference_input(
         input_root,
         InputBindingSpec(tensors=tuple(bindings)),
         OutputBindingSpec(tensors=output_bindings),
-        tuple(binding.column for binding in output_bindings),
+        output_expectations,
     )
 
 
@@ -193,7 +212,7 @@ def _execute_bundle_inference(
         RayExecutionPolicy,
     )
 
-    input_root, input_binding, output_binding, output_columns = (
+    input_root, input_binding, output_binding, output_expectations = (
         _stage_bundle_inference_input(
             bundle_uri=bundle_uri,
             root=root,
@@ -239,16 +258,13 @@ def _execute_bundle_inference(
     if len(rows) != 16:
         raise AssertionError(f"{entry_point} inference returned {len(rows)} rows")
     for row in rows:
-        for column in output_columns:
-            if column not in row:
+        for expectation in output_expectations:
+            if expectation.column not in row:
                 raise AssertionError(
-                    f"{entry_point} inference omitted output column {column!r}"
+                    f"{entry_point} inference omitted output column "
+                    f"{expectation.column!r}"
                 )
-            value = np.asarray(row[column])
-            if value.dtype.kind in {"f", "c"} and not np.isfinite(value).all():
-                raise AssertionError(
-                    f"{entry_point} inference produced non-finite output"
-                )
+            validate_output_value(expectation, row[expectation.column])
     after = _actor_snapshot()
     actors = [
         actor
@@ -267,7 +283,7 @@ def _execute_bundle_inference(
         "row_count": len(rows),
         "node_count": len(node_ids),
         "node_ids": node_ids,
-        "output_columns": list(output_columns),
+        "output_columns": [expectation.column for expectation in output_expectations],
         "flavor_id": result.flavor_id,
         "manifest_sha256": result.manifest_sha256,
         "result_id": receipt.result_id,

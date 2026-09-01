@@ -434,6 +434,7 @@ def test_official_algorithm_wheels_complete_on_ray_cluster(
         assert receipt["driver_materialized_training_rows"] == 0
         assert len(receipt["workers"]) == 2
         assert receipt["cluster_distributed"] is True
+        assert receipt["cross_node"] is True
         assert len({worker["node_id"] for worker in receipt["workers"]}) == 2
         distributed_inference = record["distributed_inference"]
         assert distributed_inference["status"] == "succeeded"

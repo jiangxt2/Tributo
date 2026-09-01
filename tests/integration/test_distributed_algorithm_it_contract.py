@@ -8,6 +8,7 @@ import subprocess
 import tomllib
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from tests.training.jobs.official_algorithm_matrix import (
@@ -19,6 +20,10 @@ from tests.training.jobs.official_algorithm_matrix import (
     entry_point_for,
     entry_points_for_gate,
     parse_entry_point_selection,
+)
+from tests.training.jobs.official_algorithm_output_contract import (
+    build_output_expectation,
+    validate_output_value,
 )
 from tools.algorithm_gate_provenance import (
     SourceRevision,
@@ -401,6 +406,73 @@ def test_official_gate_matrix_covers_current_37_entry_points_once() -> None:
         elif call.func.id == "_execute_gcm":
             exercised.add(entry_point_for("gcm_root_cause", None))
     assert exercised == ALL_ENTRY_POINTS
+
+
+def test_official_gate_validates_materialized_output_dtype_and_shape() -> None:
+    scalar = build_output_expectation(
+        tensor_name="label",
+        column="result__label",
+        dtype="int64",
+        shape=("batch",),
+    )
+    vector = build_output_expectation(
+        tensor_name="probabilities",
+        column="result__probabilities",
+        dtype="float32",
+        shape=("batch", 2),
+    )
+    dynamic = build_output_expectation(
+        tensor_name="embedding",
+        column="result__embedding",
+        dtype="float32",
+        shape=("batch", "embedding"),
+    )
+
+    validate_output_value(scalar, np.int64(1))
+    validate_output_value(vector, np.asarray([0.25, 0.75], dtype=np.float32))
+    validate_output_value(dynamic, np.asarray([0.5, 0.25, 0.125], dtype=np.float32))
+
+
+@pytest.mark.parametrize(
+    ("shape", "dtype", "value", "message"),
+    [
+        (("batch",), "float32", np.asarray([1.0], dtype=np.float32), "row shape"),
+        (("batch", 1), "float32", np.float32(1.0), "row shape"),
+        (
+            ("batch", 2),
+            "float32",
+            np.asarray([1.0], dtype=np.float32),
+            "requires 2",
+        ),
+        (("batch",), "float32", np.float64(1.0), "dtype"),
+        (("batch",), "float32", np.float32(np.nan), "non-finite"),
+    ],
+)
+def test_official_gate_rejects_materialized_output_contract_drift(
+    shape: tuple[int | str, ...],
+    dtype: str,
+    value: object,
+    message: str,
+) -> None:
+    expectation = build_output_expectation(
+        tensor_name="prediction",
+        column="result__prediction",
+        dtype=dtype,
+        shape=shape,
+    )
+
+    with pytest.raises(AssertionError, match=message):
+        validate_output_value(expectation, value)
+
+
+def test_official_gate_requires_dynamic_batch_output_axis() -> None:
+    with pytest.raises(AssertionError, match="dynamic batch first"):
+        build_output_expectation(
+            tensor_name="prediction",
+            column="result__prediction",
+            dtype="float32",
+            shape=(1,),
+        )
 
 
 def test_official_gate_entry_point_selection_is_exact_and_fail_closed() -> None:
