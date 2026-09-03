@@ -10,12 +10,73 @@ import pytest
 import ray
 import ray.train
 
-from tests.support.torch_recipe import BinaryLinearRecipe
-from tributo.integrations.algorithm_runtimes.torch_recipe import (
+from tributo.algorithms import (
+    TorchBatch,
+    TorchLossContribution,
+    TorchMetricPlan,
+    TorchModuleSet,
+    TorchOptimizationPlan,
+    TorchRecipe,
+    TorchRuntimeContext,
+    TorchStageContext,
+    TorchStageRunIdentity,
+    TorchStepResult,
+)
+from tributo.integrations.algorithm_runtimes.ray_train_torch import (
     torch_recipe_train_loop_per_worker,
 )
 
 torch = pytest.importorskip("torch")
+
+
+class BinaryLinearRecipe(TorchRecipe):
+    def build_modules(self, context: object) -> TorchModuleSet:
+        return TorchModuleSet(
+            {"model": torch.nn.Linear(2, 1), "loss": torch.nn.MSELoss()}
+        )
+
+    def adapt_batch(self, batch: object, context: object) -> TorchBatch:
+        del context
+        features = torch.stack((batch["x1"], batch["x2"]), dim=1)
+        return TorchBatch(
+            positional=(features,),
+            targets=batch["label"].reshape(-1, 1),
+            local_rows=len(batch["label"]),
+        )
+
+    def training_step(
+        self, modules: TorchModuleSet, batch: TorchBatch, context: object
+    ) -> TorchStepResult:
+        del context
+        predictions = modules["model"](batch.positional[0])
+        numerator = torch.nn.functional.mse_loss(
+            predictions, batch.targets, reduction="sum"
+        )
+        return TorchStepResult(
+            outputs={"prediction": predictions},
+            loss=TorchLossContribution(numerator, batch.local_rows),
+        )
+
+    def validation_step(
+        self, modules: TorchModuleSet, batch: TorchBatch, context: object
+    ) -> TorchStepResult:
+        return self.training_step(modules, batch, context)
+
+    def configure_optimizers(
+        self, modules: TorchModuleSet, context: object
+    ) -> TorchOptimizationPlan:
+        del context
+        return TorchOptimizationPlan(
+            torch.optim.SGD(modules["model"].parameters(), lr=0.1)
+        )
+
+    def metric_plan(self, context: TorchRuntimeContext) -> TorchMetricPlan:
+        del context
+        return TorchMetricPlan({"train_loss": "sum_count"})
+
+    def artifact_plan(self, context: object) -> dict[str, object]:
+        del context
+        return {"source_kind": "torch_module"}
 
 
 class _Iterator:
@@ -47,159 +108,127 @@ class _RuntimeContext:
         return {"CPU": 1.0}
 
 
-def test_default_recipe_streams_torch_batches_and_reports_resumable_checkpoint(
+def test_recipe_worker_reports_typed_checkpoint_and_exact_coverage(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    batches = [
-        {
-            "x1": torch.tensor([0.0, 1.0, 0.0]),
-            "x2": torch.tensor([0.0, 0.0, 1.0]),
-            "label": torch.tensor([0.0, 1.0, 1.0]),
-        },
-        {
-            "x1": torch.tensor([1.0, 1.0]),
-            "x2": torch.tensor([0.0, 1.0]),
-            "label": torch.tensor([1.0, 1.0]),
-        },
-    ]
-    data = _Iterator(batches)
-    validation = _Iterator(
+    data = _Iterator(
         [
             {
                 "x1": torch.tensor([0.0, 1.0]),
                 "x2": torch.tensor([0.0, 1.0]),
                 "label": torch.tensor([0.0, 1.0]),
-            }
+            },
+            {
+                "x1": torch.tensor([1.0]),
+                "x2": torch.tensor([0.0]),
+                "label": torch.tensor([1.0]),
+            },
         ]
     )
     reports: list[tuple[dict[str, Any], set[str]]] = []
 
     def report(metrics: dict[str, Any], checkpoint: Any | None = None) -> None:
-        files: set[str] = set()
-        if checkpoint is not None:
-            with checkpoint.as_directory() as raw_directory:
-                files = {
-                    path.name
-                    for path in Path(raw_directory).iterdir()
-                    if path.is_file()
-                }
-        reports.append((dict(metrics), files))
+        assert checkpoint is not None
+        with checkpoint.as_directory() as directory:
+            reports.append(
+                (dict(metrics), {path.name for path in Path(directory).iterdir()})
+            )
 
-    def get_dataset_shard(name: str) -> _Iterator:
-        if name == "train":
-            return data
-        if name == "val":
-            return validation
-        raise KeyError(name)
-
+    monkeypatch.setattr(ray.train.torch, "prepare_model", lambda model: model)
     monkeypatch.setattr(ray.train, "get_context", lambda: _TrainContext())
-    monkeypatch.setattr(ray.train, "get_dataset_shard", get_dataset_shard)
+    monkeypatch.setattr(
+        ray.train,
+        "get_dataset_shard",
+        lambda name: data if name == "train" else (_ for _ in ()).throw(KeyError(name)),
+    )
     monkeypatch.setattr(ray.train, "get_checkpoint", lambda: None)
     monkeypatch.setattr(ray.train, "report", report)
     monkeypatch.setattr(ray, "get_runtime_context", lambda: _RuntimeContext())
-
+    identity = TorchStageRunIdentity(
+        "aabbccdd",
+        "11223344",
+        "train",
+        1,
+        "example",
+        "example.binary",
+        "0" * 64,
+        "1" * 64,
+        "2" * 64,
+    )
+    runtime = TorchRuntimeContext(
+        {},
+        "example.binary",
+        1,
+        "1" * 64,
+        "2" * 64,
+        identity,
+        input_binding_digest="3" * 64,
+    )
+    stage = TorchStageContext(runtime, "train", 0, True, ("train",))
     torch_recipe_train_loop_per_worker(
         {
-            "model": {"input_features": 2},
-            "optimizer": {"learning_rate": 0.1},
-            "training": {
-                "epochs": 1,
-                "batch_size": 3,
-                "prefetch_batches": 2,
-                "seed": 7,
-            },
-            "ray": {"resume": {"checkpoint_interval": 1}},
-            "_tributo_recipe_ref": ("tests.support.torch_recipe:BinaryLinearRecipe"),
-            "_tributo_recipe_code_digest": None,
-            "_tributo_implementation_id": "example.binary_linear",
-            "_tributo_algorithm": "binary_linear",
-            "_tributo_feature_names": ["x1", "x2"],
-            "_tributo_label_name": "label",
-            "_tributo_weight_name": None,
-            "_tributo_input_binding_digest": "a" * 64,
-            "_tributo_distribution_spec_digest": "b" * 64,
-            "_tributo_metric_reducers": {
-                "accuracy": "sum_count",
-                "train_loss": "sum_count",
-            },
-        },
-        BinaryLinearRecipe(),
+            "training": {"epochs": 1, "batch_size": 2},
+            "_core_implementation_ref": "tests.algorithms.test_torch_recipe_worker:BinaryLinearRecipe",
+            "_core_implementation_code_digest": "0" * 64,
+            "_core_input_binding_digest": "3" * 64,
+            "_core_stage_context": stage.to_dict(),
+        }
     )
-
-    assert data.calls == [
-        {
-            "batch_size": 3,
-            "prefetch_batches": 2,
-            "dtypes": torch.float32,
-            "drop_last": False,
-            "local_shuffle_buffer_size": None,
-            "local_shuffle_seed": 7,
-        }
-    ]
-    assert len(reports) == 1
-    metrics, files = reports[0]
-    assert metrics["epoch"] == 1
-    assert 0.0 <= metrics["val_accuracy"] <= 1.0
-    assert metrics["val_loss"] >= 0.0
-    assert metrics["metric_reducers"] == {
-        "accuracy": "sum_count",
-        "train_loss": "sum_count",
-    }
-    assert metrics["execution_workers"][0]["input_rows"] == {
-        "train": 5,
-        "val": 2,
-    }
-    assert metrics["execution_workers"][0]["batch_count"] == 2
-    assert files == {
-        "metrics.json",
+    assert reports and reports[0][0]["checkpoint_descriptor"]["completed_step"] == 2
+    assert {
         "model.pt",
-        "model_config.json",
         "optimizer.pt",
-        "resume.json",
-        "rng_state.json",
         "scaler.pt",
-        "training_state.json",
-    }
-    assert validation.calls == [
-        {
-            "batch_size": 3,
-            "prefetch_batches": 2,
-            "dtypes": torch.float32,
-            "drop_last": False,
-        }
-    ]
+        "rng_state.pt",
+        "torch_checkpoint_descriptor.json",
+    } <= reports[0][1]
 
 
-def test_default_recipe_resumes_from_explicit_worker_visible_checkpoint(
+def test_recipe_worker_rejects_stale_retry_checkpoint(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from tributo.training.checkpoint import (
-        capture_rng_state,
-        write_resume_manifest,
-    )
+    from tributo.algorithms import TorchCheckpointDescriptor
 
     recipe = BinaryLinearRecipe()
-    model = recipe.model_factory({"input_features": 2})
-    assert isinstance(model, torch.nn.Module)
-    optimizer = recipe.optimizer_factory(model, {"learning_rate": 0.1})
+    modules = recipe.build_modules(None)
+    model = modules["model"]
+    optimizer = recipe.configure_optimizers(modules, None).optimizer
     torch.save(model.state_dict(), tmp_path / "model.pt")
     torch.save(optimizer.state_dict(), tmp_path / "optimizer.pt")
-    (tmp_path / "rng_state.json").write_text(
-        json.dumps({"rank_states": [capture_rng_state()]}),
-        encoding="utf-8",
+    torch.save({}, tmp_path / "scaler.pt")
+    (tmp_path / "rng_state.pt").write_bytes(torch.get_rng_state().numpy().tobytes())
+    identity = TorchStageRunIdentity(
+        "aabbccdd",
+        "11223344",
+        "train",
+        1,
+        "example",
+        "example.binary",
+        "0" * 64,
+        "1" * 64,
+        "2" * 64,
     )
-    write_resume_manifest(
-        tmp_path,
-        trainer_type="torch_recipe",
-        completed_step=1,
-        framework="pytorch",
-        framework_version=torch.__version__,
-        payload_files=("model.pt", "optimizer.pt", "rng_state.json"),
-        payload_metadata={
-            "world_size": 1,
-            "distribution_spec_digest": "b" * 64,
-        },
+    payload_files = {
+        name: __import__("hashlib").sha256((tmp_path / name).read_bytes()).hexdigest()
+        for name in ("model.pt", "optimizer.pt", "scaler.pt", "rng_state.pt")
+    }
+    descriptor = TorchCheckpointDescriptor(
+        1,
+        identity,
+        identity.run_config_name,
+        "replicated",
+        1,
+        1,
+        "1" * 64,
+        "2" * 64,
+        "3" * 64,
+        "0" * 64,
+        payload_files,
+    )
+    (tmp_path / "torch_checkpoint_descriptor.json").write_text(
+        json.dumps(descriptor.to_dict()), encoding="utf-8"
     )
     data = _Iterator(
         [
@@ -219,7 +248,19 @@ def test_default_recipe_resumes_from_explicit_worker_visible_checkpoint(
 
     monkeypatch.setattr(ray.train, "get_context", lambda: _TrainContext())
     monkeypatch.setattr(ray.train, "get_dataset_shard", get_dataset_shard)
-    monkeypatch.setattr(ray.train, "get_checkpoint", lambda: None)
+    monkeypatch.setattr(ray.train.torch, "prepare_model", lambda model: model)
+
+    class _Checkpoint:
+        def as_directory(self):
+            from contextlib import contextmanager
+
+            @contextmanager
+            def opened():
+                yield tmp_path
+
+            return opened()
+
+    monkeypatch.setattr(ray.train, "get_checkpoint", lambda: _Checkpoint())
     monkeypatch.setattr(
         ray.train,
         "report",
@@ -247,8 +288,35 @@ def test_default_recipe_resumes_from_explicit_worker_visible_checkpoint(
                 "accuracy": "sum_count",
                 "train_loss": "sum_count",
             },
+            "_core_implementation_ref": "tests.support.torch_recipe:BinaryLinearRecipe",
+            "_core_implementation_code_digest": "0" * 64,
+            "_core_input_binding_digest": "a" * 64,
+            "_core_stage_context": TorchStageContext(
+                TorchRuntimeContext(
+                    {},
+                    "example.binary_linear",
+                    1,
+                    "1" * 64,
+                    "2" * 64,
+                    TorchStageRunIdentity(
+                        "aabbccdd",
+                        "11223344",
+                        "train",
+                        1,
+                        "binary",
+                        "example.binary_linear",
+                        "0" * 64,
+                        "1" * 64,
+                        "2" * 64,
+                    ),
+                    input_binding_digest="a" * 64,
+                ),
+                "train",
+                0,
+                True,
+                ("train",),
+            ).to_dict(),
         },
-        recipe,
     )
 
-    assert [report["epoch"] for report in reports] == [2]
+    assert reports and reports[0]["checkpoint_descriptor"]["completed_step"] == 3

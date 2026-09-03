@@ -28,7 +28,6 @@ def build_algorithm_dispatcher(
     )
     from tributo.integrations.algorithm_runtimes.collective import (
         RayTrainCollectiveRuntime,
-        RayTrainRecipeV2Runtime,
     )
     from tributo.integrations.algorithm_runtimes.framework_native import (
         FrameworkNativeRuntime,
@@ -46,6 +45,9 @@ def build_algorithm_dispatcher(
         RayParallelUnitRuntime,
     )
     from tributo.integrations.algorithm_runtimes.ray_task import RayTaskRuntime
+    from tributo.integrations.algorithm_runtimes.ray_train_torch import (
+        RayTrainTorchRuntime,
+    )
     from tributo.training.registry import get_execution_registry
 
     resolver = IngestionInputResolver(
@@ -53,10 +55,10 @@ def build_algorithm_dispatcher(
         accepted_handle_kinds=("ray_data",),
     )
     input_adapter = IngestionInputRuntimeAdapter()
-    runtimes = (
+    runtimes: tuple[Any, ...] = (
         RayTaskRuntime(),
         RayTrainCollectiveRuntime(),
-        RayTrainRecipeV2Runtime(),
+        RayTrainTorchRuntime(),
         RayMapReduceRuntime(),
         FrameworkNativeRuntime(),
         RayJoblibEstimatorRuntime(),

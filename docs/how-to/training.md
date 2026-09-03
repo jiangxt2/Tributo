@@ -1,9 +1,9 @@
 # Training on Ray
 
 Run XGBoost, X-Learner, DNN, and PU through real distributed state coordination.
-XGBoost and X-Learner use framework-native coordination; formal DNN lowers a first-party
-`TorchTrainingRecipe` to the common Ray-owned worker loop, while PU retains its
-specialized Ray Train/PyTorch DDP kernel. A one-worker local run is supported
+XGBoost and X-Learner use framework-native coordination; PyTorch algorithms use
+the unified `TorchRecipe` or `RayTorchAdapter` contract and one Core-owned Ray
+Train Torch Runtime. A one-worker local run is supported
 but is not reported as distributed training.
 
 Formal algorithms choose an explicit `local` or `cluster` execution profile.
@@ -18,7 +18,8 @@ the Ray Jobs API on an isolated Docker cluster with two worker nodes. It proves
 deployment-independent sharding, state coordination, receipt, and Bundle
 semantics without making Docker, Kubernetes, or VM providers execution profiles.
 
-Ordinary third-party PyTorch models should implement `TorchTrainingRecipe`.
+Ordinary third-party PyTorch models should implement `TorchRecipe`; framework-
+owned loops should implement `RayTorchAdapter`.
 Advanced packages may implement `CollectiveAlgorithm`, `MapReduceAlgorithm`,
 or `FrameworkNativeAlgorithm` and publish a
 `DistributedAlgorithmDescriptor` through the `tributo.algorithms` entry-point

@@ -97,6 +97,7 @@ from the legacy setup-only propagation rule.
 | `tributo.algorithms.api.context` — `UserExecutionContext` | `alpha` | Restricted context for trusted module-qualified Worker functions |
 | `tributo.algorithms.api.errors` | `alpha` | Portable execution error taxonomy |
 | `tributo.algorithms.api.support` | `alpha` | Trusted Wheel support evidence, execution semantics, expiry, and revocation |
+| `tributo.algorithms.api.torch_runtime` | `alpha` | Versioned Torch Runtime helpers, Stage identity, checkpoint and reducer contracts |
 | `tributo.algorithms.conformance` | `alpha` | Descriptor-only and installed algorithm Wheel Conformance Testkit |
 | `tributo.algorithms.builtin.*` | `deprecated` | Production algorithms moved to the official `tributo-algorithms` Wheels; Core retains only public SPI and Ray runtimes |
 | `tributo.algorithms.core.builder` — `AlgorithmBuilder` | `alpha` | Provisional sklearn and Custom Ray Function registration builders |
@@ -105,7 +106,7 @@ from the legacy setup-only propagation rule.
 | `tributo.algorithms.spi.execution` | `alpha` | Provisional operation and Runtime execution protocols |
 | `tributo.algorithms.spi.contracts` | `alpha` | Executable algorithm contract validator protocol |
 | `tributo.algorithms.spi.input` | `alpha` | Two-stage input resolution and Driver/Worker ownership contracts |
-| `tributo.algorithms.spi.torch` | `alpha` | Narrow model/loss/optimizer/metric recipe contract lowered to Ray Train |
+| `tributo.algorithms.spi.torch` | `alpha` | Versioned TorchRecipe and RayTorchAdapter contracts |
 
 ### Data (tributo.data.*)
 
@@ -202,7 +203,7 @@ from the legacy setup-only propagation rule.
 | `tributo.integrations.validators.*` | `beta` | Built-in validator implementations |
 | `tributo.integrations.sources` | `beta` | Built-in source provider package |
 | `tributo.integrations.sources.*` | `beta` | Built-in source providers |
-| `tributo.integrations.sources.ray_torch_recipe` | `alpha` | Generic trusted Torch recipe checkpoint provider |
+| `tributo.integrations.sources.ray_torch` | `alpha` | Generic trusted Torch checkpoint provider |
 | `tributo.integrations.storage` | `beta` | Built-in storage adapter package |
 | `tributo.integrations.storage.*` | `beta` | Built-in storage backends |
 | `tributo.integrations.hooks` | `beta` | Built-in Hook package |

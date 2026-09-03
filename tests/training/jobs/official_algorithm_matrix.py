@@ -29,7 +29,7 @@ OFFICIAL_ALGORITHM_IDENTITIES: Mapping[str, OfficialAlgorithmIdentity] = (
                 "difference_in_means_ate",
                 "tributo.official.causal.difference_in_means",
             ),
-            "dnn.recipe_v2": OfficialAlgorithmIdentity(
+            "dnn": OfficialAlgorithmIdentity(
                 "tributo-algorithms-tabular-torch",
                 "dnn",
                 "tributo.official.tabular_torch.dnn",
@@ -64,10 +64,10 @@ OFFICIAL_ALGORITHM_IDENTITIES: Mapping[str, OfficialAlgorithmIdentity] = (
                 "graphsage_node_classifier",
                 "tributo.official.graph_pyg.graphsage",
             ),
-            "gru_classifier.recipe_v2": OfficialAlgorithmIdentity(
+            "gru_classifier": OfficialAlgorithmIdentity(
                 "tributo-algorithms-timeseries",
                 "gru_classifier",
-                "tributo.official.timeseries.gru.recipe_v2",
+                "tributo.official.timeseries.gru",
             ),
             "isolation_forest.parallel_ensemble": OfficialAlgorithmIdentity(
                 "tributo-algorithms-classical",
@@ -114,10 +114,10 @@ OFFICIAL_ALGORITHM_IDENTITIES: Mapping[str, OfficialAlgorithmIdentity] = (
                 "logistic_regression",
                 "tributo.official.logistic_regression.binary_l2",
             ),
-            "lstm_classifier.recipe_v2": OfficialAlgorithmIdentity(
+            "lstm_classifier": OfficialAlgorithmIdentity(
                 "tributo-algorithms-timeseries",
                 "lstm_classifier",
-                "tributo.official.timeseries.lstm.recipe_v2",
+                "tributo.official.timeseries.lstm",
             ),
             "multinomial_nb": OfficialAlgorithmIdentity(
                 "tributo-algorithms-classical",
@@ -139,7 +139,7 @@ OFFICIAL_ALGORITHM_IDENTITIES: Mapping[str, OfficialAlgorithmIdentity] = (
                 "pretrain_finetune_classifier",
                 "tributo.official.multistage_torch.pretrain_finetune",
             ),
-            "pu.recipe_v2": OfficialAlgorithmIdentity(
+            "pu": OfficialAlgorithmIdentity(
                 "tributo-algorithms-tabular-torch",
                 "pu",
                 "tributo.official.tabular_torch.pu",
@@ -252,10 +252,10 @@ CATEGORY_ENTRY_POINTS: Mapping[str, tuple[str, ...]] = MappingProxyType(
             "xgboost.framework_native",
         ),
         "torch": (
-            "dnn.recipe_v2",
-            "gru_classifier.recipe_v2",
-            "lstm_classifier.recipe_v2",
-            "pu.recipe_v2",
+            "dnn",
+            "gru_classifier",
+            "lstm_classifier",
+            "pu",
             "tabular_autoencoder",
             "temporal_conv_classifier",
         ),

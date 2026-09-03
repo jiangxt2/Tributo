@@ -1,11 +1,10 @@
 # Ray-first torch recipes
 
-`TorchTrainingRecipe` is the low-code path for scalar-column dense tabular
-PyTorch models.
-An algorithm package defines model, loss, optimizer, and metric factories.
-Tributo lowers that recipe to the existing formal collective runtime and keeps
-deployment, data movement, distributed coordination, checkpoint upload, and
-Bundle publication out of user code.
+Tributo exposes one versioned `TorchRecipe` for Core-owned training loops and
+one `RayTorchAdapter` for framework-owned loops. Both are selected by the
+`RAY_TRAIN_TORCH` strategy and executed by `tributo.ray_train_torch`.
+`TorchPolicy.execution_plan` is the single source of truth for routing, Stage
+order, checkpoint dependencies, state layout and final export Stage.
 
 ## Ray reuse audit
 
@@ -21,8 +20,8 @@ implementation and its public annotations, not unversioned latest docs.
 | Torch batches | Public `DataIterator.iter_torch_batches()` | Validate feature/label roles and pass bounded batch options |
 | Device and DDP | Stable `ray.train.torch.prepare_model()` | Reject unvalidated BatchNorm and GPU claims |
 | Metrics | PyTorch tensors and `torch.distributed` collectives | Apply the descriptor's existing `MetricReduction`; do not infer reducers from names |
-| Checkpoint transfer | Ray `Checkpoint`, `train.report()`, `RunConfig`, and retention | Write bounded model/optimizer/RNG metadata and validate epoch-boundary resume identity |
-| Run identity | V2 `RunConfig.name` and storage context | Derive a unique Ray run name from the existing Tributo `run_id` so independent runs cannot inherit each other's checkpoints |
+| Checkpoint transfer | Ray `Checkpoint`, `train.report()`, `RunConfig`, and retention | Write bounded model, optimizer, scheduler, gradient scaling, and RNG metadata at complete optimizer-window boundaries and validate Stage identity |
+| Run identity | V2 `RunConfig.name` and storage context | Derive a unique Ray run name from `run_id`, `invocation_id`, `stage_id`, and the Policy/execution-plan identity digest so retries reuse only the matching Stage directory |
 | Export and serving | Existing Torch ONNX exporter, ONNX Runtime validator, Bundle publisher, reader, batch inference, and Serve flavor | Reconstruct the trusted recipe model and create one `ExportSource` |
 | Local execution | `ray.init(address="local")` | Own and close only the runtime created by Tributo |
 | Existing or provisioned cluster | `ray.init(address="auto")`, Ray Jobs, KubeRay RayJob, or Cluster Launcher | Attach or expose the same entrypoint; workload code never provisions or deletes the cluster |
@@ -34,12 +33,18 @@ changes only the `equal` argument while preserving Ray execution options,
 training-resource exclusion, and locality hints. A future Ray public option
 should replace this adapter.
 
-V2 rejects a non-null `resume_from_checkpoint` argument as deprecated. Worker
-recovery within one Ray run still uses `train.get_checkpoint()`. For an
-explicit new-run resume, Tributo passes the validated, worker-visible epoch
-checkpoint path to the recipe and restores model, optimizer, and RNG state in
-the worker. This does not replace Ray's checkpoint upload, retention, or
-failure-recovery controller.
+Ray Train V2 rejects a non-null `resume_from_checkpoint` argument as deprecated.
+The Core Runtime never supplies it: failure retry uses `train.get_checkpoint()`;
+cross-Stage and cross-Run recovery use a credential-free Core Worker control
+envelope. A full `TorchRecoveryEnvelope` records completed Stage locators and an
+optional active Stage; completed Stage evidence is persisted in the validated
+checkpoint sidecar so a recovery-only invocation can produce the same Receipt.
+A typed progress manifest preserves per-rank coverage/metric prefixes, reducer
+observation, Dataset cursor and whether the current epoch's Scheduler step has
+already run.  Remote Stage payloads remain unavailable under a deterministic
+staging prefix until a matching commit marker is written.
+A Torch-only preflight and invocation-local one-shot lease complete before Ray
+or input resources are opened.
 
 ## Uneven input decision
 
@@ -54,11 +59,19 @@ The first implementation therefore uses a narrow dynamic alignment protocol:
 - all ranks exchange only the active row count before each step;
 - exhausted ranks run a zero-row DDP forward/backward and contribute zero
   gradient while active ranks retain every observed row;
-- loss scaling uses the global active row count, so uneven final batches are
-  sample weighted;
+- loss scaling uses the algorithm-declared global normalizer for the complete
+  accumulation window, so uneven final batches remain mathematically weighted
+  by the declared unit (rows, sample weights, or valid tokens);
 - no row is dropped or replayed;
-- all ranks report once per epoch and only rank zero attaches the replicated
-  checkpoint.
+- all ranks report at the declared `checkpoint_interval_windows` cadence (one
+  complete optimizer window by default), and only the checkpoint-owner rank
+  attaches the replicated checkpoint.
+
+Optional validation and test roles use the same rank-alignment rule.  When a
+present role has fewer rows than Workers, exhausted ranks execute a typed
+zero-row validation step and contribute zero metrics; all ranks still perform
+the same metric collectives.  A role that is absent remains explicitly absent,
+while an explicitly empty role is rejected by the route contract.
 
 This protocol supplements domain correctness. It does not replace Ray Dataset
 sharding, PyTorch DDP, process-group setup, or Ray checkpoint transport. Empty
@@ -77,10 +90,17 @@ original column names as separate ONNX inputs so Bundle inference does not lose
 the declared `InputBinding` contract. Vector, sequence, jagged, and graph inputs
 remain later profiles rather than implicit shape inference.
 
-Advanced models may override the bounded `forward()` and `compute_loss()`
-methods. Models that need custom training steps, multiple optimizers, framework
-callbacks, graph sampling, sharded embeddings, or framework-owned checkpoints
-use a framework adapter or the existing full worker-loop SPI.
+Advanced models implement the typed `TorchRecipe` hooks. Models that need
+custom training steps, framework callbacks, graph sampling, sharded embeddings,
+or framework-owned checkpoints use `RayTorchAdapter`; the Adapter still cannot
+create a nested Trainer or declare a second execution plan.
+
+An Adapter declares its `TorchArtifactPlan` through the Core Provider.  The
+Provider attaches that plan to the Adapter's `ExportSource` before invoking the
+single Core Bundle exporter, and rejects conflicting plan metadata.  Adapter
+worker configuration receives algorithm-owned values plus credential-free input
+binding metadata; Core Ray paths, recovery locators, and output publication
+URIs are never accepted in that JSON payload.
 
 Capabilities not described by this contract are not implied by the recipe,
 dependency set, or framework installation.

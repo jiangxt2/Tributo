@@ -146,7 +146,7 @@ class ExecutionMode(str, Enum):
     JOBLIB_ESTIMATOR = "joblib_estimator"
     PARALLEL_ENSEMBLE = "parallel_ensemble"
     ITERATIVE_OPTIMIZATION = "iterative_optimization"
-    TRAINING_RECIPE_V2 = "training_recipe_v2"
+    RAY_TRAIN_TORCH = "ray_train_torch"
 
 
 @PublicAPI(stability="alpha")
@@ -162,7 +162,7 @@ class RuntimeTopology(str, Enum):
     RAY_JOBLIB_ESTIMATOR = "ray_joblib_estimator"
     RAY_PARALLEL_ENSEMBLE = "ray_parallel_ensemble"
     RAY_ITERATIVE_OPTIMIZATION = "ray_iterative_optimization"
-    RAY_TRAIN_RECIPE_V2 = "ray_train_recipe_v2"
+    RAY_TRAIN_TORCH = "ray_train_torch"
 
 
 @dataclass(frozen=True)
@@ -250,12 +250,12 @@ FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS: Mapping[
                 ),
             )
         ),
-        DistributionStrategy.RAY_TRAIN_RECIPE_V2: FormalDistributedStrategyContract(
-            execution_mode=ExecutionMode.TRAINING_RECIPE_V2,
-            runtime_id="tributo.ray_train_recipe_v2",
-            topology=RuntimeTopology.RAY_TRAIN_RECIPE_V2,
-            input_distribution=InputDistribution.SHARDED,
-            state_coordination=StateCoordination.ALL_REDUCE,
+        DistributionStrategy.RAY_TRAIN_TORCH: FormalDistributedStrategyContract(
+            execution_mode=ExecutionMode.RAY_TRAIN_TORCH,
+            runtime_id="tributo.ray_train_torch",
+            topology=RuntimeTopology.RAY_TRAIN_TORCH,
+            input_distribution=InputDistribution.ROLE_ROUTED,
+            state_coordination=StateCoordination.TORCH_MANAGED,
             worker_input_adapter_ref=(
                 "tributo.integrations.algorithm_inputs.ingestion:"
                 "prepare_ray_train_input"
@@ -609,7 +609,7 @@ class ImplementationDescriptor:
             ExecutionMode.JOBLIB_ESTIMATOR,
             ExecutionMode.PARALLEL_ENSEMBLE,
             ExecutionMode.ITERATIVE_OPTIMIZATION,
-            ExecutionMode.TRAINING_RECIPE_V2,
+            ExecutionMode.RAY_TRAIN_TORCH,
         }
         if formal_mode and (
             self.runtime_id is None or self.worker_input_adapter_ref is None
@@ -689,6 +689,7 @@ class RuntimeBinding:
     strategy: DistributionStrategy | None = None
     distribution_digest: str | None = None
     resume_from: str | None = None
+    torch_recovery: Mapping[str, Any] | None = None
     memory_bytes: int | None = None
 
     def __post_init__(self) -> None:
@@ -800,7 +801,7 @@ class RuntimeBinding:
             RuntimeTopology.RAY_JOBLIB_ESTIMATOR,
             RuntimeTopology.RAY_PARALLEL_ENSEMBLE,
             RuntimeTopology.RAY_ITERATIVE_OPTIMIZATION,
-            RuntimeTopology.RAY_TRAIN_RECIPE_V2,
+            RuntimeTopology.RAY_TRAIN_TORCH,
         }
         if topology in formal_topologies and (
             self.framework_parallelism != 1 or self.result_reducer_ref is not None
@@ -848,6 +849,24 @@ class RuntimeBinding:
         if self.execution_profile is None and self.resume_from is not None:
             raise AlgorithmConfigurationError(
                 "legacy RuntimeBinding must not carry formal resume state"
+            )
+        if self.torch_recovery is not None:
+            if self.strategy is not DistributionStrategy.RAY_TRAIN_TORCH:
+                raise AlgorithmConfigurationError(
+                    "torch_recovery requires the Ray Train Torch runtime"
+                )
+            from tributo.algorithms.api.torch_runtime import TorchRecoveryEnvelope
+
+            try:
+                recovery = TorchRecoveryEnvelope.from_dict(self.torch_recovery)
+            except (TypeError, ValueError) as exc:
+                raise AlgorithmConfigurationError(
+                    "runtime torch_recovery is malformed"
+                ) from exc
+            object.__setattr__(self, "torch_recovery", deep_freeze(recovery.to_dict()))
+        if self.resume_from is not None and self.torch_recovery is not None:
+            raise AlgorithmConfigurationError(
+                "runtime resume_from and torch_recovery are mutually exclusive"
             )
 
 
@@ -1706,6 +1725,9 @@ class ResolvedAlgorithmPlan:
             ),
             "distribution_digest": self.runtime.distribution_digest,
             "resume_from": self.runtime.resume_from,
+            "torch_recovery": deep_thaw(self.runtime.torch_recovery)
+            if self.runtime.torch_recovery is not None
+            else None,
         }
         if self.runtime.memory_bytes is not None:
             runtime_payload["memory_bytes"] = self.runtime.memory_bytes

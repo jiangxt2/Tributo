@@ -217,63 +217,74 @@ not restrict the algorithm family.
 
 ## Use a low-code PyTorch recipe
 
-For scalar-column dense tabular models, subclass `TorchTrainingRecipe` and implement only
-the four factories. The runtime stacks the feature columns declared by
-`InputBinding` into one float32 tensor and supplies the declared label and
-optional sample-weight roles.
-
-For multi-worker exact coverage, an exhausted rank can invoke `forward()` with
-a zero-row tensor while another rank consumes its final batch. The model must
-accept an empty leading batch dimension and return the corresponding empty
-output shape; no observed row is replayed as padding.
+For Core-owned training, subclass `TorchRecipe` and implement the typed
+`build_modules`, `adapt_batch`, `training_step`, `validation_step`,
+`configure_optimizers`, `metric_plan`, and `artifact_plan` hooks. Framework-
+owned training instead subclasses `RayTorchAdapter`; the Adapter validates its
+environment, binds role datasets, receives a Core-selected checkpoint context,
+and cannot create a nested Trainer or declare a second execution plan.
 
 ```python
-from collections.abc import Mapping
-from typing import Any
+from tributo.algorithms import (
+    TorchBatch,
+    TorchLossContribution,
+    TorchMetricPlan,
+    TorchOptimizationPlan,
+    TorchRecipe,
+    TorchStepResult,
+)
 
-from tributo.algorithms import TorchTrainingRecipe
 
-
-class BinaryLinearRecipe(TorchTrainingRecipe):
-    def model_factory(self, config: Mapping[str, Any]) -> object:
+class BinaryLinearRecipe(TorchRecipe):
+    def build_modules(self, context):
         import torch
 
-        return torch.nn.Linear(int(config["input_features"]), 1)
+        return {"model": torch.nn.Linear(2, 1), "loss": torch.nn.BCEWithLogitsLoss()}
 
-    def loss_factory(self, config: Mapping[str, Any]) -> object:
+    def adapt_batch(self, batch, context):
         import torch
 
-        return torch.nn.BCEWithLogitsLoss()
+        features = torch.as_tensor(batch["features"])
+        targets = torch.as_tensor(batch["label"])
+        return TorchBatch(positional=(features,), targets=targets, local_rows=len(targets))
 
-    def optimizer_factory(self, model: object, config: Mapping[str, Any]) -> object:
+    def training_step(self, modules, batch, context):
         import torch
 
-        return torch.optim.Adam(model.parameters(), lr=float(config["lr"]))
+        predictions = modules["model"](batch.positional[0])
+        numerator = torch.nn.functional.binary_cross_entropy_with_logits(
+            predictions, batch.targets.float(), reduction="sum"
+        )
+        return TorchStepResult(
+            outputs={"prediction": predictions},
+            loss=TorchLossContribution(numerator, batch.local_rows),
+        )
 
-    def metric_factories(self, config: Mapping[str, Any]):
+    def validation_step(self, modules, batch, context):
+        return self.training_step(modules, batch, context)
+
+    def configure_optimizers(self, modules, context):
         import torch
 
-        return {
-            "accuracy": lambda prediction, target: (
-                (torch.sigmoid(prediction) >= 0.5) == target.bool()
-            )
-        }
+        return TorchOptimizationPlan(torch.optim.Adam(modules["model"].parameters(), lr=1e-3))
+
+    def metric_plan(self, context):
+        return TorchMetricPlan({"train_loss": "sum_count"})
+
+    def artifact_plan(self, context):
+        return {"source_kind": "torch_module", "roles": {"inference": "onnx-model"}}
 ```
 
-Declare the reducer and use `AlgorithmBuilder.from_torch_recipe()` to lower the
-class to the existing Ray Train collective runtime. `train_loss` is added with
-the fixed `sum_count` reducer. The supported reducer set is `sum_count`,
-`weighted_mean`, `min`, and `max`; a weighted metric requires
-`InputBinding.sample_weight_name`.
+Use `AlgorithmBuilder.from_torch()` to lower a Recipe, or
+`AlgorithmBuilder.from_torch_adapter()` for a framework Adapter. Losses always
+submit explicit numerator/normalizer pairs; model-specific composite reducers
+remain owned by the algorithm Wheel while Core owns collectives and scaling.
 
 The complete independent package used by conformance lives under
-`tests/fixtures/torch_recipe_algorithm_plugin`. It contains no Tributo builtin,
+the installed algorithm Wheel. It contains no Tributo private Runtime import,
 Ray worker loop, checkpoint upload, Bundle publisher, or deployment code.
-Default recipes receive a pre-bound training Dataset and do not own train/test
-splitting. Use the advanced recipe hooks only for a custom model invocation or
-loss call. Choose a framework adapter or `CollectiveAlgorithm` when the model
-needs a custom training step, multiple optimizers, framework callbacks, or
-special collectives.
+Default Recipes receive role-routed datasets; the Core Runtime owns sharding,
+checkpoint handling, evidence and Bundle publication.
 
 ## Choose the state coordination strategy
 

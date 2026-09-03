@@ -56,6 +56,10 @@ documentation for every public stability tier.
 :no-members:
 ```
 
+```{autoclass} tributo.algorithms.api.distribution.ComponentStageTorchPlan
+:no-members:
+```
+
 ```{autoclass} tributo.algorithms.api.distribution.DistributedExactness
 :no-members:
 ```
@@ -104,11 +108,31 @@ documentation for every public stability tier.
 :no-members:
 ```
 
+```{autoclass} tributo.algorithms.api.distribution.SingleStageTorchPlan
+:no-members:
+```
+
 ```{autoclass} tributo.algorithms.api.distribution.StateCoordination
 :no-members:
 ```
 
 ```{autoclass} tributo.algorithms.api.distribution.StateField
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.distribution.TorchDatasetRoute
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.distribution.TorchExecutionPlan
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.distribution.TorchPolicy
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.distribution.TorchStageSpec
 :no-members:
 ```
 
@@ -141,6 +165,10 @@ documentation for every public stability tier.
 
 ## `tributo.algorithms.api.execution`
 
+```{autoclass} tributo.algorithms.api.execution.ComponentStageEvidence
+:no-members:
+```
+
 ```{autoclass} tributo.algorithms.api.execution.ExecutionReceipt
 :no-members:
 ```
@@ -149,7 +177,19 @@ documentation for every public stability tier.
 :no-members:
 ```
 
+```{autoclass} tributo.algorithms.api.execution.ReplicatedTorchStateEvidence
+:no-members:
+```
+
 ```{autoclass} tributo.algorithms.api.execution.StateCoordinationEvidence
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.execution.TorchExecutionEvidence
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.execution.TorchRoleExecutionEvidence
 :no-members:
 ```
 
@@ -276,6 +316,133 @@ documentation for every public stability tier.
 ```
 
 
+## `tributo.algorithms.api.torch_runtime`
+
+```{autoclass} tributo.algorithms.api.torch_runtime.TorchAccumulationWindow
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.torch_runtime.TorchBackwardContext
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.torch_runtime.TorchBackwardResult
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.torch_runtime.TorchCheckpointDescriptor
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.torch_runtime.TorchCheckpointLocator
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.torch_runtime.TorchCheckpointPayloadDraft
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.torch_runtime.TorchCheckpointProgress
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.torch_runtime.TorchCheckpointRef
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.torch_runtime.TorchCompositeGlobalState
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.torch_runtime.TorchCompositeLossContribution
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.torch_runtime.TorchGlobalLossContext
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.torch_runtime.TorchGlobalLossReducer
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.torch_runtime.TorchGlobalLossReduction
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.torch_runtime.TorchLossContribution
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.torch_runtime.TorchMetricContribution
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.torch_runtime.TorchMetricPolicy
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.torch_runtime.TorchMetricReductionContext
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.torch_runtime.TorchMetricReductionResult
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.torch_runtime.TorchPreflightLease
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.torch_runtime.TorchPreflightTokenData
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.torch_runtime.TorchRankProgressStatistics
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.torch_runtime.TorchRecoveryEnvelope
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.torch_runtime.TorchRuntimeExecutionEnvelope
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.torch_runtime.TorchStageRunIdentity
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.torch_runtime.TorchWorkerControlEnvelope
+:no-members:
+```
+
+```{autofunction} tributo.algorithms.api.torch_runtime.apply_torch_loss_backward
+```
+
+```{autofunction} tributo.algorithms.api.torch_runtime.claim_torch_run_directory
+```
+
+```{autofunction} tributo.algorithms.api.torch_runtime.describe_torch_checkpoint
+```
+
+```{autofunction} tributo.algorithms.api.torch_runtime.invoke_torch_global_loss_reducer
+```
+
+```{autofunction} tributo.algorithms.api.torch_runtime.reduce_torch_metrics
+```
+
+```{autofunction} tributo.algorithms.api.torch_runtime.report_torch_checkpoint
+```
+
+```{autofunction} tributo.algorithms.api.torch_runtime.torch_run_config_name
+```
+
+```{autofunction} tributo.algorithms.api.torch_runtime.validate_torch_retry_identity
+```
+
+
 ## `tributo.algorithms.composition`
 
 ```{autofunction} tributo.algorithms.composition.build_algorithm_dispatcher
@@ -378,6 +545,10 @@ documentation for every public stability tier.
 :no-members:
 ```
 
+```{autoclass} tributo.algorithms.spi.execution.TorchRuntimePreflight
+:no-members:
+```
+
 ```{autoclass} tributo.algorithms.spi.execution.Transformable
 :no-members:
 ```
@@ -436,23 +607,67 @@ documentation for every public stability tier.
 
 ## `tributo.algorithms.spi.torch`
 
-```{autoclass} tributo.algorithms.spi.torch.MetricPlan
+```{autoclass} tributo.algorithms.spi.torch.RayTorchAdapter
 :no-members:
 ```
 
-```{autoclass} tributo.algorithms.spi.torch.OptimizationPlan
+```{autoclass} tributo.algorithms.spi.torch.TorchArtifactContext
 :no-members:
 ```
 
-```{autoclass} tributo.algorithms.spi.torch.TorchTrainingRecipe
+```{autoclass} tributo.algorithms.spi.torch.TorchArtifactPlan
 :no-members:
 ```
 
-```{autoclass} tributo.algorithms.spi.torch.TrainingRecipeV2
+```{autoclass} tributo.algorithms.spi.torch.TorchBatch
 :no-members:
 ```
 
-```{autoclass} tributo.algorithms.spi.torch.TrainingStepResult
+```{autoclass} tributo.algorithms.spi.torch.TorchBatchContext
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.spi.torch.TorchBuildContext
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.spi.torch.TorchCheckpointContext
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.spi.torch.TorchMetricPlan
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.spi.torch.TorchModuleSet
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.spi.torch.TorchOptimizationPlan
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.spi.torch.TorchRecipe
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.spi.torch.TorchRuntimeContext
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.spi.torch.TorchStageContext
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.spi.torch.TorchStepContext
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.spi.torch.TorchStepResult
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.spi.torch.TorchWorkerCheckpointContext
 :no-members:
 ```
 

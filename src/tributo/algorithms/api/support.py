@@ -17,6 +17,7 @@ from tributo.algorithms.api.descriptor import DistributedAlgorithmDescriptor
 from tributo.algorithms.api.distribution import (
     DistributionStrategy,
     ExecutionProfile,
+    TorchPolicy,
 )
 from tributo.algorithms.api.errors import AlgorithmConfigurationError
 from tributo.util.annotations import PublicAPI
@@ -118,6 +119,8 @@ class AlgorithmSupportEvidence:
     expires_at: datetime | None = None
     revoked_at: datetime | None = None
     revocation_reason: str | None = None
+    torch_runtime_api_version: int | None = None
+    torch_policy_digest: str | None = None
 
     def __post_init__(self) -> None:
         for name in (
@@ -167,6 +170,23 @@ class AlgorithmSupportEvidence:
         _digest(self.wheel_sha256, "wheel_sha256")
         for contract_digest in contract_digests:
             _digest(contract_digest, "contract_digest")
+        if self.torch_runtime_api_version is not None:
+            if (
+                not isinstance(self.torch_runtime_api_version, int)
+                or isinstance(self.torch_runtime_api_version, bool)
+                or self.torch_runtime_api_version != 1
+            ):
+                raise AlgorithmConfigurationError(
+                    "torch_runtime_api_version must be exactly 1 when provided"
+                )
+        if self.torch_policy_digest is not None:
+            _digest(self.torch_policy_digest, "torch_policy_digest")
+        if (self.torch_runtime_api_version is None) != (
+            self.torch_policy_digest is None
+        ):
+            raise AlgorithmConfigurationError(
+                "Torch support fields must be supplied together"
+            )
         for name in ("issued_at", "expires_at", "revoked_at"):
             timestamp = getattr(self, name)
             if timestamp is not None and (
@@ -207,6 +227,8 @@ class AlgorithmSupportEvidence:
             "issued_at": self.issued_at.isoformat(),
             "gate": self.gate,
             "result_reference": self.result_reference,
+            "torch_runtime_api_version": self.torch_runtime_api_version,
+            "torch_policy_digest": self.torch_policy_digest,
         }
         return hashlib.sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
@@ -230,6 +252,7 @@ class AlgorithmSupportEvidence:
         """Match every immutable package, contract, profile, and semantic key."""
         distribution = descriptor.registration.distribution_spec
         environment = descriptor.registration.environment
+        policy = distribution.policy if distribution is not None else None
         ray_requirements = [
             requirement
             for requirement in environment.dependencies
@@ -260,6 +283,19 @@ class AlgorithmSupportEvidence:
             in SpecifierSet(descriptor.tributo_version_spec)
             and Version(self.python_version) in SpecifierSet(environment.python)
             and ray_matches
+            and (
+                (
+                    not isinstance(policy, TorchPolicy)
+                    and self.torch_runtime_api_version is None
+                    and self.torch_policy_digest is None
+                )
+                or (
+                    isinstance(policy, TorchPolicy)
+                    and self.torch_runtime_api_version
+                    == policy.torch_runtime_api_version
+                    and self.torch_policy_digest == policy.digest
+                )
+            )
         )
 
 

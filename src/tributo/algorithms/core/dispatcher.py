@@ -6,7 +6,7 @@ import logging
 import uuid
 from collections.abc import Mapping
 from dataclasses import replace
-from typing import cast
+from typing import Any, cast
 
 from tributo._common.immutable import deep_thaw
 from tributo.algorithms.api import (
@@ -16,10 +16,14 @@ from tributo.algorithms.api import (
     AlgorithmRequest,
     AlgorithmRunResult,
     ArtifactDraft,
+    DistributionStrategy,
     ExecutionReceipt,
     ExecutionRequest,
     ResolvedAlgorithmPlan,
     StateCoordinationEvidence,
+    TorchExecutionEvidence,
+    TorchPreflightLease,
+    TorchRuntimeExecutionEnvelope,
     WorkerExecutionEvidence,
     WorkerExecutionResult,
     WorkerResources,
@@ -36,6 +40,7 @@ from tributo.algorithms.spi import (
     ResolvedInputLease,
     RuntimeExecutionEnvelope,
     RuntimeInputBinding,
+    TorchRuntimePreflight,
     WorkerInputPayload,
     WorkerInputPayloadSet,
 )
@@ -65,10 +70,20 @@ class AlgorithmRunCoordinator:
         context: InputExecutionContext,
         artifacts: tuple[ArtifactDraft, ...] = (),
         cancelled: bool = False,
+        run_id: str | None = None,
+        torch_preflight_lease: TorchPreflightLease | None = None,
     ) -> AlgorithmRunResult:
         """Open input, invoke the selected Runtime, and close in reverse order."""
         plan.validate_integrity()
-        run_id = uuid.uuid4().hex
+        run_id = run_id or uuid.uuid4().hex
+        is_torch = (
+            plan.distribution_spec is not None
+            and plan.distribution_spec.strategy is DistributionStrategy.RAY_TRAIN_TORCH
+        )
+        if is_torch and torch_preflight_lease is None:
+            raise AlgorithmConfigurationError(
+                "Torch execution requires a preflight lease"
+            )
         try:
             runtime = self._runtimes[plan.runtime.runtime_id]
         except KeyError as exc:
@@ -100,14 +115,20 @@ class AlgorithmRunCoordinator:
                 leases.append((binding.name, lease))
                 role_bindings.append(input_adapter.bind(lease, plan))
             runtime_binding = self._combine_role_bindings(plan, role_bindings)
-            runtime_result = runtime.execute(
-                RuntimeExecutionEnvelope(
-                    run_id=run_id,
-                    plan=plan,
-                    input_payloads=runtime_binding.payloads,
-                    artifacts=artifacts,
-                    cancelled=cancelled,
+            base_envelope = RuntimeExecutionEnvelope(
+                run_id=run_id,
+                plan=plan,
+                input_payloads=runtime_binding.payloads,
+                artifacts=artifacts,
+                cancelled=cancelled,
+            )
+            runtime_result = cast(Any, runtime).execute(
+                TorchRuntimeExecutionEnvelope(
+                    base=base_envelope,
+                    preflight_lease=cast(TorchPreflightLease, torch_preflight_lease),
                 )
+                if is_torch
+                else base_envelope
             )
             if not isinstance(runtime_result, WorkerExecutionResult) or not isinstance(
                 runtime_result.execution, AlgorithmExecutionResult
@@ -162,6 +183,12 @@ class AlgorithmRunCoordinator:
                         lease.close()
                 except Exception as exc:
                     cleanup_errors.append(exc)
+            if is_torch and torch_preflight_lease is not None:
+                try:
+                    if torch_preflight_lease.state != "consumed":
+                        torch_preflight_lease.close()
+                except Exception as exc:
+                    cleanup_errors.append(exc)
 
         if primary_error is not None:
             for cleanup_error in cleanup_errors:
@@ -214,6 +241,48 @@ class AlgorithmRunCoordinator:
             input_provenance=provenance,
             worker_metadata=worker_result.worker_metadata,
             execution_receipt=execution_receipt,
+        )
+
+    def torch_preflight(
+        self,
+        plan: ResolvedAlgorithmPlan,
+        *,
+        run_id: str,
+        invocation_id: str,
+    ) -> TorchPreflightLease:
+        """Run the Torch-only environment check before any input or Ray lease."""
+        if (
+            plan.distribution_spec is None
+            or plan.distribution_spec.strategy
+            is not DistributionStrategy.RAY_TRAIN_TORCH
+        ):
+            raise AlgorithmConfigurationError(
+                "Torch preflight requires RAY_TRAIN_TORCH"
+            )
+        try:
+            runtime = self._runtimes[plan.runtime.runtime_id]
+        except KeyError as exc:
+            raise AlgorithmConfigurationError(
+                f"missing execution component for {exc.args[0]!r}"
+            ) from exc
+        if not isinstance(runtime, TorchRuntimePreflight):
+            raise AlgorithmConfigurationError("selected Torch runtime has no preflight")
+        return runtime.preflight(plan, run_id, invocation_id)
+
+    @staticmethod
+    def claim_torch_preflight(
+        plan: ResolvedAlgorithmPlan,
+        *,
+        run_id: str,
+        invocation_id: str,
+        lease: TorchPreflightLease,
+    ) -> None:
+        """Claim a preflight lease before opening Runtime or inputs."""
+        lease.claim(
+            run_id=run_id,
+            invocation_id=invocation_id,
+            plan_digest=plan.plan_id,
+            runtime_id=plan.runtime.runtime_id,
         )
 
     @staticmethod
@@ -286,6 +355,111 @@ class AlgorithmRunCoordinator:
                     "worker evidence entries must be mappings"
                 )
             state = StateCoordinationEvidence.from_dict(state_value)
+            torch_evidence = None
+            if plan.distribution_spec.strategy is DistributionStrategy.RAY_TRAIN_TORCH:
+                raw_torch_evidence = metadata.get("torch_evidence")
+                if not isinstance(raw_torch_evidence, Mapping):
+                    raise AlgorithmConfigurationError(
+                        "Torch runtime did not return TorchExecutionEvidence"
+                    )
+                torch_evidence = TorchExecutionEvidence.from_dict(raw_torch_evidence)
+                if torch_evidence.identity.run_id != run_id:
+                    raise AlgorithmConfigurationError(
+                        "Torch execution evidence run identity does not match invocation"
+                    )
+                policy = cast(Any, plan.distribution_spec.policy)
+                if (
+                    not hasattr(policy, "digest")
+                    or torch_evidence.policy_digest != policy.digest
+                ):
+                    raise AlgorithmConfigurationError(
+                        "Torch execution evidence policy digest does not match plan"
+                    )
+                if (
+                    torch_evidence.identity.execution_plan_digest
+                    != policy.execution_plan.digest
+                ):
+                    raise AlgorithmConfigurationError(
+                        "Torch execution evidence execution plan digest does not match plan"
+                    )
+                if (
+                    torch_evidence.state_layout != policy.state_layout
+                    or torch_evidence.parallelism_id != policy.parallelism_id
+                ):
+                    raise AlgorithmConfigurationError(
+                        "Torch execution evidence state layout/topology does not match policy"
+                    )
+                if torch_evidence.replicated_state is not None and (
+                    state_value.get("global_model_digest")
+                    != torch_evidence.replicated_state.global_model_digest
+                ):
+                    raise AlgorithmConfigurationError(
+                        "Torch state and evidence global model digests differ"
+                    )
+                if torch_evidence.stages and torch_evidence.final_stage_id is not None:
+                    final_state = next(
+                        stage.state_digest
+                        for stage in torch_evidence.stages
+                        if stage.stage_id == torch_evidence.final_stage_id
+                    )
+                    if state_value.get("global_model_digest") != final_state:
+                        raise AlgorithmConfigurationError(
+                            "Torch component state digest does not match final Stage"
+                        )
+                expected_stages = tuple(
+                    stage.stage_id for stage in policy.execution_plan.stages
+                )
+                observed_stages = tuple(
+                    stage.stage_id for stage in torch_evidence.stages
+                )
+                if torch_evidence.state_layout == "component":
+                    if observed_stages != expected_stages:
+                        raise AlgorithmConfigurationError(
+                            "Torch execution evidence Stage set/order does not match plan"
+                        )
+                    if (
+                        torch_evidence.final_stage_id
+                        != policy.execution_plan.final_stage_id
+                    ):
+                        raise AlgorithmConfigurationError(
+                            "Torch execution evidence final Stage does not match plan"
+                        )
+                final_stage = next(
+                    stage
+                    for stage in policy.execution_plan.stages
+                    if stage.stage_id == policy.execution_plan.final_stage_id
+                )
+                if {role.role for role in torch_evidence.roles} != set(
+                    final_stage.input_roles
+                ):
+                    raise AlgorithmConfigurationError(
+                        "Torch execution evidence roles do not match final Stage"
+                    )
+                if policy.global_loss_reducer_ref is None:
+                    if any(
+                        value is not None
+                        for value in (
+                            torch_evidence.reducer_id,
+                            torch_evidence.reducer_api_version,
+                            torch_evidence.reducer_schema_id,
+                            torch_evidence.reducer_code_digest,
+                        )
+                    ):
+                        raise AlgorithmConfigurationError(
+                            "Torch execution evidence declares an unexpected reducer"
+                        )
+                elif (
+                    torch_evidence.reducer_id is None
+                    or torch_evidence.reducer_api_version
+                    != policy.global_loss_reducer_api_version
+                    or torch_evidence.reducer_schema_id
+                    != policy.composite_loss_schema_id
+                    or torch_evidence.reducer_code_digest
+                    != policy.global_loss_reducer_code_digest
+                ):
+                    raise AlgorithmConfigurationError(
+                        "Torch execution evidence reducer does not match policy"
+                    )
             input_complete = metadata.get("input_complete")
             driver_rows = metadata.get("driver_materialized_training_rows")
             if not isinstance(input_complete, bool):
@@ -327,6 +501,7 @@ class AlgorithmRunCoordinator:
             driver_materialized_training_rows=driver_rows,
             artifact_ids=tuple(artifact_ids),
             cluster_resources={},
+            torch_evidence=torch_evidence,
         )
 
 
@@ -388,13 +563,46 @@ class AlgorithmDispatcher:
     ) -> AlgorithmRunResult:
         """Execute one already validated plan through the normal lifecycle."""
         plan.validate_integrity()
-        if plan.runtime.execution_profile is None:
-            return self._coordinator.execute(
+        is_torch = (
+            plan.distribution_spec is not None
+            and plan.distribution_spec.strategy is DistributionStrategy.RAY_TRAIN_TORCH
+        )
+        if is_torch and cancelled:
+            raise AlgorithmExecutionError("Torch execution was cancelled")
+        run_id = uuid.uuid4().hex if is_torch else None
+        torch_lease: TorchPreflightLease | None = None
+        if is_torch:
+            torch_run_id = cast(str, run_id)
+            invocation_id = uuid.uuid4().hex
+            torch_lease = self._coordinator.torch_preflight(
                 plan,
-                context,
-                artifacts,
-                cancelled=cancelled,
+                run_id=torch_run_id,
+                invocation_id=invocation_id,
             )
+            try:
+                self._coordinator.claim_torch_preflight(
+                    plan,
+                    run_id=torch_run_id,
+                    invocation_id=invocation_id,
+                    lease=torch_lease,
+                )
+            except BaseException:
+                torch_lease.close()
+                raise
+        if plan.runtime.execution_profile is None:
+            try:
+                return self._coordinator.execute(
+                    plan,
+                    context,
+                    artifacts,
+                    cancelled=cancelled,
+                    run_id=run_id,
+                    torch_preflight_lease=torch_lease,
+                )
+            except BaseException:
+                if torch_lease is not None and torch_lease.state != "consumed":
+                    torch_lease.close()
+                raise
         if plan.distribution_spec is None:
             raise AlgorithmConfigurationError(
                 "formal execution profile requires a DistributionSpec"
@@ -405,27 +613,34 @@ class AlgorithmDispatcher:
             memory_bytes=getattr(plan.runtime, "memory_bytes", None),
             custom=plan.runtime.custom_resources,
         )
-        with self._runtime_manager.open(
-            plan.runtime.execution_profile,
-            resources_per_worker=resources,
-            worker_count=plan.runtime.worker_count,
-        ) as runtime_session:
-            result = self._coordinator.execute(
-                plan,
-                context,
-                artifacts,
-                cancelled=cancelled,
-            )
-            receipt = result.execution_receipt
-            if receipt is None:
-                return result
-            updated_receipt = replace(
-                cast(ExecutionReceipt, receipt),
-                cluster_resources=dict(runtime_session.cluster_resources),
-                runtime_owned=runtime_session.runtime_owned,
-                resource_preflight=runtime_session.resource_preflight,
-            )
-            return replace(result, execution_receipt=updated_receipt)
+        try:
+            with self._runtime_manager.open(
+                plan.runtime.execution_profile,
+                resources_per_worker=resources,
+                worker_count=plan.runtime.worker_count,
+            ) as runtime_session:
+                result = self._coordinator.execute(
+                    plan,
+                    context,
+                    artifacts,
+                    cancelled=cancelled,
+                    run_id=run_id,
+                    torch_preflight_lease=torch_lease,
+                )
+                receipt = result.execution_receipt
+                if receipt is None:
+                    return result
+                updated_receipt = replace(
+                    cast(ExecutionReceipt, receipt),
+                    cluster_resources=dict(runtime_session.cluster_resources),
+                    runtime_owned=runtime_session.runtime_owned,
+                    resource_preflight=runtime_session.resource_preflight,
+                )
+                return replace(result, execution_receipt=updated_receipt)
+        except BaseException:
+            if torch_lease is not None and torch_lease.state != "consumed":
+                torch_lease.close()
+            raise
 
 
 __all__ = ["AlgorithmDispatcher", "AlgorithmRunCoordinator"]

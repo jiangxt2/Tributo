@@ -38,9 +38,6 @@ from tributo.util.annotations import DeveloperAPI
 RAY_TRAIN_COLLECTIVE_RUNTIME_ID = FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS[
     DistributionStrategy.RAY_TRAIN_COLLECTIVE
 ].runtime_id
-RAY_TRAIN_RECIPE_V2_RUNTIME_ID = FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS[
-    DistributionStrategy.RAY_TRAIN_RECIPE_V2
-].runtime_id
 
 
 def _ray_run_name(algorithm: str, run_id: str) -> str:
@@ -90,12 +87,9 @@ def _collective_execution_result(
 def _load_algorithm(envelope: RuntimeExecutionEnvelope) -> CollectiveAlgorithm:
     plan = envelope.plan
     spec = plan.distribution_spec
-    if spec is None or spec.strategy not in {
-        DistributionStrategy.RAY_TRAIN_COLLECTIVE,
-        DistributionStrategy.RAY_TRAIN_RECIPE_V2,
-    }:
+    if spec is None or spec.strategy is not DistributionStrategy.RAY_TRAIN_COLLECTIVE:
         raise AlgorithmConfigurationError(
-            "collective runtime requires a collective or RecipeV2 DistributionSpec"
+            "collective runtime requires a RAY_TRAIN_COLLECTIVE DistributionSpec"
         )
     _validate_module_digest(
         plan.implementation.implementation_ref,
@@ -424,14 +418,4 @@ class RayTrainCollectiveRuntime:
             prepared.close()
 
 
-@DeveloperAPI
-class RayTrainRecipeV2Runtime(RayTrainCollectiveRuntime):
-    """Execute TrainingRecipeV2 through the same Core-owned Ray Train loop."""
-
-    @property
-    def runtime_id(self) -> str:
-        """Return the dedicated RecipeV2 runtime identity."""
-        return RAY_TRAIN_RECIPE_V2_RUNTIME_ID
-
-
-__all__ = ["RayTrainCollectiveRuntime", "RayTrainRecipeV2Runtime"]
+__all__ = ["RayTrainCollectiveRuntime"]

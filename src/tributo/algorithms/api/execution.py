@@ -8,6 +8,7 @@ import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any, cast
 
 from tributo._common.immutable import FrozenDict
@@ -22,6 +23,10 @@ from tributo.algorithms.api.errors import AlgorithmConfigurationError
 from tributo.algorithms.api.models import (
     FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS,
     AlgorithmRequest,
+)
+from tributo.algorithms.api.torch_runtime import (
+    TorchRecoveryEnvelope,
+    TorchStageRunIdentity,
 )
 from tributo.util.annotations import PublicAPI
 
@@ -80,6 +85,7 @@ class ExecutionRequest:
     worker_count: int
     resources_per_worker: WorkerResources | None = None
     resume_from: str | None = None
+    torch_recovery: TorchRecoveryEnvelope | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.algorithm_request, AlgorithmRequest):
@@ -107,6 +113,16 @@ class ExecutionRequest:
             )
         if self.resume_from is not None:
             _non_empty(self.resume_from, "resume_from")
+        if self.torch_recovery is not None and not isinstance(
+            self.torch_recovery, TorchRecoveryEnvelope
+        ):
+            raise AlgorithmConfigurationError(
+                "torch_recovery must be a TorchRecoveryEnvelope"
+            )
+        if self.torch_recovery is not None and self.resume_from is not None:
+            raise AlgorithmConfigurationError(
+                "resume_from and torch_recovery are mutually exclusive"
+            )
 
 
 @PublicAPI(stability="alpha")
@@ -354,6 +370,475 @@ class StateCoordinationEvidence:
 
 @PublicAPI(stability="alpha")
 @dataclass(frozen=True)
+class TorchRoleExecutionEvidence:
+    """Per-role coverage evidence for a Torch Stage."""
+
+    role: str
+    mode: str
+    required: bool
+    present: bool
+    empty_rank_policy: str
+    expected_rows: int | None
+    observed_rows: int
+    rows_per_rank: tuple[int, ...]
+    replicated_bytes_per_worker: int | None = None
+    binding_digest: str | None = None
+
+    def __post_init__(self) -> None:
+        _non_empty(self.role, "Torch role")
+        if self.mode not in {"split_exact", "replicate", "split_framework"}:
+            raise AlgorithmConfigurationError("invalid Torch role evidence mode")
+        if not isinstance(self.required, bool) or not isinstance(self.present, bool):
+            raise AlgorithmConfigurationError(
+                "Torch role evidence flags must be boolean"
+            )
+        if self.empty_rank_policy not in {"reject", "zero_contribution"}:
+            raise AlgorithmConfigurationError("invalid Torch role empty-rank policy")
+        for name, value in (
+            ("expected_rows", self.expected_rows),
+            ("observed_rows", self.observed_rows),
+            ("replicated_bytes_per_worker", self.replicated_bytes_per_worker),
+        ):
+            if value is not None and (
+                not isinstance(value, int) or isinstance(value, bool) or value < 0
+            ):
+                raise AlgorithmConfigurationError(
+                    f"Torch role evidence {name} must be non-negative"
+                )
+        rows = tuple(self.rows_per_rank)
+        if any(
+            not isinstance(value, int) or isinstance(value, bool) or value < 0
+            for value in rows
+        ):
+            raise AlgorithmConfigurationError("Torch rows_per_rank is malformed")
+        if self.present:
+            if self.mode == "replicate":
+                if not rows or len(set(rows)) != 1 or rows[0] != self.observed_rows:
+                    raise AlgorithmConfigurationError(
+                        "Torch replicated role evidence is not identical"
+                    )
+            elif sum(rows) != self.observed_rows:
+                raise AlgorithmConfigurationError("Torch role evidence rows do not sum")
+        if not self.present and (self.observed_rows != 0 or any(rows)):
+            raise AlgorithmConfigurationError(
+                "absent Torch role must have zero evidence"
+            )
+        if (
+            self.binding_digest is not None
+            and _DIGEST.fullmatch(self.binding_digest) is None
+        ):
+            raise AlgorithmConfigurationError("Torch role binding_digest is invalid")
+        object.__setattr__(self, "rows_per_rank", rows)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "role": self.role,
+            "mode": self.mode,
+            "required": self.required,
+            "present": self.present,
+            "empty_rank_policy": self.empty_rank_policy,
+            "expected_rows": self.expected_rows,
+            "observed_rows": self.observed_rows,
+            "rows_per_rank": list(self.rows_per_rank),
+            "replicated_bytes_per_worker": self.replicated_bytes_per_worker,
+            "binding_digest": self.binding_digest,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]) -> "TorchRoleExecutionEvidence":
+        try:
+            return cls(
+                role=cast(str, value["role"]),
+                mode=cast(str, value["mode"]),
+                required=cast(bool, value["required"]),
+                present=cast(bool, value["present"]),
+                empty_rank_policy=cast(str, value["empty_rank_policy"]),
+                expected_rows=cast(int | None, value.get("expected_rows")),
+                observed_rows=cast(int, value["observed_rows"]),
+                rows_per_rank=tuple(
+                    cast(tuple[int, ...], value.get("rows_per_rank", ()))
+                ),
+                replicated_bytes_per_worker=cast(
+                    int | None, value.get("replicated_bytes_per_worker")
+                ),
+                binding_digest=cast(str | None, value.get("binding_digest")),
+            )
+        except KeyError as exc:
+            raise AlgorithmConfigurationError(
+                "Torch role evidence is missing fields"
+            ) from exc
+
+
+@PublicAPI(stability="alpha")
+@dataclass(frozen=True)
+class ReplicatedTorchStateEvidence:
+    """Evidence that all workers expose one synchronized model."""
+
+    model_digests_by_rank: Mapping[int, str]
+    global_model_digest: str
+
+    def __post_init__(self) -> None:
+        records = dict(self.model_digests_by_rank)
+        if not records or any(
+            not isinstance(rank, int) or rank < 0 for rank in records
+        ):
+            raise AlgorithmConfigurationError(
+                "replicated Torch rank evidence is required"
+            )
+        if any(_DIGEST.fullmatch(value) is None for value in records.values()):
+            raise AlgorithmConfigurationError(
+                "replicated Torch model digest is invalid"
+            )
+        if _DIGEST.fullmatch(self.global_model_digest or "") is None:
+            raise AlgorithmConfigurationError(
+                "replicated Torch global digest is invalid"
+            )
+        if set(records.values()) != {self.global_model_digest}:
+            raise AlgorithmConfigurationError(
+                "replicated Torch ranks are not synchronized"
+            )
+        object.__setattr__(
+            self,
+            "model_digests_by_rank",
+            MappingProxyType(dict(sorted(records.items()))),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "model_digests_by_rank": {
+                str(k): v for k, v in self.model_digests_by_rank.items()
+            },
+            "global_model_digest": self.global_model_digest,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]) -> "ReplicatedTorchStateEvidence":
+        raw = _mapping(value.get("model_digests_by_rank", {}), "model_digests_by_rank")
+        return cls(
+            model_digests_by_rank={
+                int(rank): cast(str, digest) for rank, digest in raw.items()
+            },
+            global_model_digest=cast(str, value["global_model_digest"]),
+        )
+
+
+@PublicAPI(stability="alpha")
+@dataclass(frozen=True)
+class ComponentStageEvidence:
+    """Evidence for one Core-owned component Stage."""
+
+    stage_id: str
+    workers: tuple[WorkerExecutionEvidence, ...]
+    roles: tuple[TorchRoleExecutionEvidence, ...]
+    state_digest: str
+    checkpoint_descriptor_digest: str | None = None
+
+    def __post_init__(self) -> None:
+        _non_empty(self.stage_id, "Torch stage evidence stage_id")
+        workers = tuple(self.workers)
+        if not workers or any(
+            not isinstance(item, WorkerExecutionEvidence) for item in workers
+        ):
+            raise AlgorithmConfigurationError("Torch Stage evidence requires Workers")
+        roles = tuple(self.roles)
+        if any(not isinstance(item, TorchRoleExecutionEvidence) for item in roles):
+            raise AlgorithmConfigurationError(
+                "Torch Stage evidence roles are malformed"
+            )
+        for name, value in (("state_digest", self.state_digest),):
+            if _DIGEST.fullmatch(value or "") is None:
+                raise AlgorithmConfigurationError(
+                    f"Torch Stage evidence {name} is invalid"
+                )
+        if (
+            self.checkpoint_descriptor_digest is not None
+            and _DIGEST.fullmatch(self.checkpoint_descriptor_digest) is None
+        ):
+            raise AlgorithmConfigurationError(
+                "Torch Stage evidence checkpoint_descriptor_digest is invalid"
+            )
+        object.__setattr__(self, "workers", workers)
+        object.__setattr__(self, "roles", roles)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "stage_id": self.stage_id,
+            "workers": [item.to_dict() for item in self.workers],
+            "roles": [item.to_dict() for item in self.roles],
+            "state_digest": self.state_digest,
+            "checkpoint_descriptor_digest": self.checkpoint_descriptor_digest,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]) -> "ComponentStageEvidence":
+        workers_value = value.get("workers", ())
+        roles_value = value.get("roles", ())
+        if not isinstance(workers_value, (list, tuple)) or not isinstance(
+            roles_value, (list, tuple)
+        ):
+            raise AlgorithmConfigurationError(
+                "Torch Stage evidence worker/role fields are invalid"
+            )
+        return cls(
+            stage_id=cast(str, value["stage_id"]),
+            workers=tuple(
+                WorkerExecutionEvidence.from_dict(item) for item in workers_value
+            ),
+            roles=tuple(
+                TorchRoleExecutionEvidence.from_dict(item) for item in roles_value
+            ),
+            state_digest=cast(str, value["state_digest"]),
+            checkpoint_descriptor_digest=cast(
+                str | None, value.get("checkpoint_descriptor_digest")
+            ),
+        )
+
+
+@PublicAPI(stability="alpha")
+@dataclass(frozen=True)
+class TorchExecutionEvidence:
+    """Layout-aware execution evidence attached only to Torch receipts."""
+
+    identity: TorchStageRunIdentity
+    run_config_name: str
+    policy_digest: str
+    parallelism_id: str
+    state_layout: str
+    workers: tuple[WorkerExecutionEvidence, ...]
+    roles: tuple[TorchRoleExecutionEvidence, ...]
+    replicated_state: ReplicatedTorchStateEvidence | None = None
+    stages: tuple[ComponentStageEvidence, ...] = ()
+    composition_digest: str | None = None
+    final_stage_id: str | None = None
+    reducer_id: str | None = None
+    reducer_api_version: int | None = None
+    reducer_schema_id: str | None = None
+    reducer_code_digest: str | None = None
+    torch_runtime_api_version: int = 1
+    reducer_branch: str | None = None
+    reducer_evidence: Mapping[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.identity, TorchStageRunIdentity):
+            raise AlgorithmConfigurationError("Torch execution identity is required")
+        if not isinstance(self.run_config_name, str) or not self.run_config_name:
+            raise AlgorithmConfigurationError("Torch run_config_name is required")
+        if self.run_config_name != self.identity.run_config_name:
+            raise AlgorithmConfigurationError("Torch RunConfig name drifted")
+        if (
+            self.torch_runtime_api_version != 1
+            or self.identity.torch_runtime_api_version != 1
+        ):
+            raise AlgorithmConfigurationError(
+                "Torch runtime API version must be exactly 1"
+            )
+        if _DIGEST.fullmatch(self.policy_digest or "") is None:
+            raise AlgorithmConfigurationError("Torch policy digest is invalid")
+        if self.identity.policy_digest != self.policy_digest:
+            raise AlgorithmConfigurationError("Torch execution policy digest drifted")
+        if self.identity.execution_plan_digest == "":
+            raise AlgorithmConfigurationError("Torch execution plan digest is required")
+        if not isinstance(self.parallelism_id, str) or not self.parallelism_id:
+            raise AlgorithmConfigurationError("Torch parallelism_id is required")
+        if self.state_layout not in {"replicated", "component", "sharded"}:
+            raise AlgorithmConfigurationError("Torch state layout is invalid")
+        workers = tuple(self.workers)
+        roles = tuple(self.roles)
+        if not workers or any(
+            not isinstance(item, WorkerExecutionEvidence) for item in workers
+        ):
+            raise AlgorithmConfigurationError(
+                "Torch execution evidence requires workers"
+            )
+        if any(not isinstance(item, TorchRoleExecutionEvidence) for item in roles):
+            raise AlgorithmConfigurationError(
+                "Torch execution role evidence is malformed"
+            )
+        if self.state_layout == "replicated":
+            if self.replicated_state is None or self.stages:
+                raise AlgorithmConfigurationError(
+                    "replicated Torch evidence has invalid state payload"
+                )
+        elif self.state_layout == "component":
+            if not self.stages or self.replicated_state is not None:
+                raise AlgorithmConfigurationError(
+                    "component Torch evidence has invalid stage payload"
+                )
+            if _DIGEST.fullmatch(self.composition_digest or "") is None:
+                raise AlgorithmConfigurationError(
+                    "component Torch composition digest is required"
+                )
+            if len({stage.stage_id for stage in self.stages}) != len(self.stages):
+                raise AlgorithmConfigurationError(
+                    "component Torch Stage IDs must be unique"
+                )
+            expected_composition = hashlib.sha256(
+                json.dumps(
+                    [stage.to_dict() for stage in self.stages],
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+            if self.composition_digest != expected_composition:
+                raise AlgorithmConfigurationError(
+                    "component Torch composition digest drifted"
+                )
+            if self.final_stage_id not in {stage.stage_id for stage in self.stages}:
+                raise AlgorithmConfigurationError(
+                    "component Torch final_stage_id is invalid"
+                )
+        else:
+            if not self.stages and self.replicated_state is None:
+                raise AlgorithmConfigurationError(
+                    "sharded Torch evidence requires state payload"
+                )
+        if any(item.required and not item.present for item in roles):
+            raise AlgorithmConfigurationError("required Torch role evidence is absent")
+        for stage in self.stages:
+            stage_workers = tuple(stage.workers)
+            ranks = tuple(sorted(item.rank for item in stage_workers))
+            if ranks != tuple(range(len(stage_workers))) or any(
+                item.world_size != len(stage_workers) for item in stage_workers
+            ):
+                raise AlgorithmConfigurationError(
+                    "Torch Stage worker evidence is incomplete"
+                )
+        reducer_fields = (
+            self.reducer_id,
+            self.reducer_api_version,
+            self.reducer_schema_id,
+            self.reducer_code_digest,
+        )
+        if any(value is not None for value in reducer_fields) and not all(
+            value is not None for value in reducer_fields
+        ):
+            raise AlgorithmConfigurationError("Torch reducer evidence is incomplete")
+        if self.reducer_api_version is not None and self.reducer_api_version != 1:
+            raise AlgorithmConfigurationError(
+                "Torch reducer API version must be exactly 1"
+            )
+        if self.reducer_branch is not None and (
+            not isinstance(self.reducer_branch, str) or not self.reducer_branch
+        ):
+            raise AlgorithmConfigurationError("Torch reducer branch must be non-empty")
+        evidence = dict(self.reducer_evidence)
+        if any(not isinstance(name, str) or not name for name in evidence):
+            raise AlgorithmConfigurationError(
+                "Torch reducer evidence names are invalid"
+            )
+        if any(
+            not isinstance(value, (str, int, float, bool, type(None)))
+            for value in evidence.values()
+        ):
+            raise AlgorithmConfigurationError(
+                "Torch reducer evidence must be JSON scalar"
+            )
+        if any(
+            isinstance(value, float) and not math.isfinite(value)
+            for value in evidence.values()
+        ):
+            raise AlgorithmConfigurationError("Torch reducer evidence must be finite")
+        object.__setattr__(self, "reducer_evidence", MappingProxyType(evidence))
+        for name, value in (("reducer_code_digest", self.reducer_code_digest),):
+            if value is not None and _DIGEST.fullmatch(value) is None:
+                raise AlgorithmConfigurationError(f"Torch {name} is invalid")
+        object.__setattr__(self, "workers", workers)
+        object.__setattr__(self, "roles", roles)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "identity": self.identity.to_dict(),
+            "run_config_name": self.run_config_name,
+            "policy_digest": self.policy_digest,
+            "parallelism_id": self.parallelism_id,
+            "state_layout": self.state_layout,
+            "workers": [item.to_dict() for item in self.workers],
+            "roles": [item.to_dict() for item in self.roles],
+            "replicated_state": self.replicated_state.to_dict()
+            if self.replicated_state
+            else None,
+            "stages": [item.to_dict() for item in self.stages],
+            "composition_digest": self.composition_digest,
+            "final_stage_id": self.final_stage_id,
+            "reducer_id": self.reducer_id,
+            "reducer_api_version": self.reducer_api_version,
+            "reducer_schema_id": self.reducer_schema_id,
+            "reducer_code_digest": self.reducer_code_digest,
+            "torch_runtime_api_version": self.torch_runtime_api_version,
+            "reducer_branch": self.reducer_branch,
+            "reducer_evidence": dict(self.reducer_evidence),
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, object]) -> "TorchExecutionEvidence":
+        identity = TorchStageRunIdentity.from_dict(
+            _mapping(value.get("identity", {}), "Torch evidence identity")
+        )
+        workers_value = value.get("workers", ())
+        roles_value = value.get("roles", ())
+        if not isinstance(workers_value, (list, tuple)) or not isinstance(
+            roles_value, (list, tuple)
+        ):
+            raise AlgorithmConfigurationError(
+                "Torch execution evidence worker/role fields are invalid"
+            )
+        workers = tuple(
+            WorkerExecutionEvidence.from_dict(item)
+            for item in workers_value
+            if isinstance(item, Mapping)
+        )
+        if len(workers) != len(workers_value):
+            raise AlgorithmConfigurationError(
+                "Torch worker evidence entries are invalid"
+            )
+        roles = tuple(
+            TorchRoleExecutionEvidence.from_dict(item)
+            for item in roles_value
+            if isinstance(item, Mapping)
+        )
+        if len(roles) != len(roles_value):
+            raise AlgorithmConfigurationError("Torch role evidence entries are invalid")
+        stages_value = value.get("stages", ())
+        if not isinstance(stages_value, (list, tuple)):
+            raise AlgorithmConfigurationError(
+                "Torch Stage evidence entries are invalid"
+            )
+        replicated_value = value.get("replicated_state")
+        replicated = (
+            ReplicatedTorchStateEvidence.from_dict(replicated_value)
+            if isinstance(replicated_value, Mapping)
+            else None
+        )
+        return cls(
+            identity=identity,
+            run_config_name=cast(str, value["run_config_name"]),
+            policy_digest=cast(str, value["policy_digest"]),
+            parallelism_id=cast(str, value["parallelism_id"]),
+            state_layout=cast(str, value["state_layout"]),
+            workers=workers,
+            roles=roles,
+            replicated_state=replicated,
+            stages=tuple(
+                ComponentStageEvidence.from_dict(item) for item in stages_value
+            ),
+            composition_digest=cast(str | None, value.get("composition_digest")),
+            final_stage_id=cast(str | None, value.get("final_stage_id")),
+            reducer_id=cast(str | None, value.get("reducer_id")),
+            reducer_api_version=cast(int | None, value.get("reducer_api_version")),
+            reducer_schema_id=cast(str | None, value.get("reducer_schema_id")),
+            reducer_code_digest=cast(str | None, value.get("reducer_code_digest")),
+            torch_runtime_api_version=cast(
+                int, value.get("torch_runtime_api_version", 1)
+            ),
+            reducer_branch=cast(str | None, value.get("reducer_branch")),
+            reducer_evidence=cast(
+                Mapping[str, object], value.get("reducer_evidence", {})
+            ),
+        )
+
+
+@PublicAPI(stability="alpha")
+@dataclass(frozen=True)
 class ExecutionReceipt:
     """Immutable evidence used to classify a completed training execution."""
 
@@ -376,6 +861,7 @@ class ExecutionReceipt:
     runtime_owned: bool = False
     resource_preflight: str = "validated"
     api_version: int = 1
+    torch_evidence: TorchExecutionEvidence | None = None
 
     def __post_init__(self) -> None:
         _non_empty(self.run_id, "run_id")
@@ -396,6 +882,15 @@ class ExecutionReceipt:
         object.__setattr__(self, "profile", profile)
         object.__setattr__(self, "strategy", strategy)
         object.__setattr__(self, "result_policy", result_policy)
+        if strategy is DistributionStrategy.RAY_TRAIN_TORCH:
+            if not isinstance(self.torch_evidence, TorchExecutionEvidence):
+                raise AlgorithmConfigurationError(
+                    "RAY_TRAIN_TORCH receipts require TorchExecutionEvidence"
+                )
+        elif self.torch_evidence is not None:
+            raise AlgorithmConfigurationError(
+                "non-Torch receipts must not contain TorchExecutionEvidence"
+            )
         if (
             not isinstance(self.api_version, int)
             or isinstance(self.api_version, bool)
@@ -723,6 +1218,9 @@ class ExecutionReceipt:
             "cluster_resources": dict(sorted(self.cluster_resources.items())),
             "runtime_owned": self.runtime_owned,
             "resource_preflight": self.resource_preflight,
+            "torch_evidence": self.torch_evidence.to_dict()
+            if self.torch_evidence is not None
+            else None,
             "distributed": self.distributed,
             "cross_node": self.cross_node,
             "cluster_distributed": self.cluster_distributed,
@@ -731,8 +1229,12 @@ class ExecutionReceipt:
 
 
 __all__ = [
+    "ComponentStageEvidence",
     "ExecutionReceipt",
     "ExecutionRequest",
+    "ReplicatedTorchStateEvidence",
     "StateCoordinationEvidence",
+    "TorchExecutionEvidence",
+    "TorchRoleExecutionEvidence",
     "WorkerExecutionEvidence",
 ]

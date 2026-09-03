@@ -153,6 +153,14 @@ def _build_input_tensor(
                 "scalar single-column input must be a one-dimensional batch column"
             )
         tensor = arrays[0]
+    elif len(arrays) == 1 and arrays[0].dtype == object:
+        # Arrow/Parquet may decode a vector-valued column as either a one- or
+        # multi-dimensional object array whose rows contain nested arrays.
+        # Stack rows before dtype conversion so the declared tensor rank is
+        # preserved instead of treating the object dimension as a feature axis.
+        tensor = _stack_nested_object_array(arrays[0])
+        if tensor.dtype == object:
+            tensor = np.column_stack(arrays)
     elif len(arrays) == 1 and arrays[0].ndim > 1:
         tensor = arrays[0]
     else:
@@ -171,6 +179,20 @@ def _build_input_tensor(
             "nan_policy='allow' only when the model defines missing-value semantics"
         )
     return np.asarray(tensor)
+
+
+def _stack_nested_object_array(value: object) -> np.ndarray:
+    """Materialize homogeneous nested object arrays while preserving row rank."""
+    array = np.asarray(value)
+    if array.dtype != object:
+        return array
+    try:
+        nested = [_stack_nested_object_array(item) for item in array.tolist()]
+        if nested:
+            return np.stack(nested)
+    except (TypeError, ValueError):
+        pass
+    return array
 
 
 def _tensor_row_count(tensors: dict[str, np.ndarray], *, kind: str) -> int:

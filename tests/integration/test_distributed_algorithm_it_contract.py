@@ -561,8 +561,8 @@ def test_torch_recipe_fixture_is_a_code_only_low_code_wheel() -> None:
     assert set(pyproject["project"]["entry-points"]["tributo.algorithms"]) == {
         "third_party_binary_linear"
     }
-    assert "AlgorithmBuilder.from_torch_recipe" in fixture_source
-    assert "TorchTrainingRecipe" in fixture_source
+    assert "AlgorithmBuilder.from_torch" in fixture_source
+    assert "TorchRecipe" in fixture_source
     assert "train_loop_per_worker" not in fixture_source
     assert "tributo.algorithms.builtin" not in fixture_source
 

@@ -350,13 +350,13 @@ documentation for every public stability tier.
 ```
 
 
-## `tributo.integrations.sources.ray_torch_recipe`
+## `tributo.integrations.sources.ray_torch`
 
-```{autoclass} tributo.integrations.sources.ray_torch_recipe.RayTorchRecipeSourceProvider
+```{autoclass} tributo.integrations.sources.ray_torch.RayTorchSourceProvider
 :no-members:
 ```
 
-```{autoclass} tributo.integrations.sources.ray_torch_recipe.TorchRecipeSourceOptions
+```{autoclass} tributo.integrations.sources.ray_torch.TorchSourceOptions
 :no-members:
 ```
 
