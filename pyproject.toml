@@ -119,7 +119,7 @@ training = [
 ]
 tune = [
     # Ray Tune's optional BayesOpt integration is validated against this exact version.
-    "bayesian-optimization==1.4.3",
+    "bayesian-optimization==3.3.0",
 ]
 explainability = [
     "shap>=0.52.0,<0.53.0",
