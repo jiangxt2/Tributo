@@ -2,6 +2,6 @@
 
 from __future__ import annotations
 
-from tributo.integrations.sources.ray_torch_recipe import RayTorchRecipeSourceProvider
+from tributo.integrations.sources.ray_torch import RayTorchSourceProvider
 
-__all__ = ["RayTorchRecipeSourceProvider"]
+__all__ = ["RayTorchSourceProvider"]

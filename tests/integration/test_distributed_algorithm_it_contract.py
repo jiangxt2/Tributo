@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import shlex
 import subprocess
 import tomllib
@@ -27,6 +28,7 @@ from tests.training.jobs.official_algorithm_output_contract import (
     validate_output_dtype,
     validate_output_value,
 )
+from tools import algorithm_gate_provenance
 from tools.algorithm_gate_provenance import (
     SourceRevision,
     build_preflight_provenance,
@@ -34,6 +36,33 @@ from tools.algorithm_gate_provenance import (
     load_preflight_provenance,
     write_provenance,
 )
+
+
+def test_identity_manifest_export_is_an_exact_copy(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source = (
+        _ROOT / "tests" / "training" / "jobs" / "official_algorithm_identities.json"
+    )
+    output = tmp_path / "identities.json"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "algorithm_gate_provenance.py",
+            "export-identities",
+            "--manifest",
+            str(source),
+            "--output",
+            str(output),
+            "--expected-count",
+            "37",
+        ],
+    )
+
+    algorithm_gate_provenance.main()
+
+    assert output.read_bytes() == source.read_bytes()
+
 
 _ROOT = Path(__file__).resolve().parents[2]
 _LOCAL = _ROOT / "scripts" / "run_distributed_algorithm_local_it.sh"
@@ -354,6 +383,20 @@ def test_official_gate_matrix_covers_current_37_entry_points_once() -> None:
         for entry_point in entry_points
     } == set(ENTRY_POINT_DISTRIBUTIONS.items())
 
+    manifest_path = (
+        _ROOT / "tests" / "training" / "jobs" / "official_algorithm_identities.json"
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["schema_version"] == 1
+    assert manifest["entry_points"] == {
+        name: {
+            "algorithm_id": identity.algorithm_id,
+            "distribution": identity.distribution,
+            "implementation_id": identity.implementation_id,
+        }
+        for name, identity in sorted(OFFICIAL_ALGORITHM_IDENTITIES.items())
+    }
+
     gate = (
         _ROOT / "tests" / "training" / "jobs" / "official_algorithm_gate_job.py"
     ).read_text(encoding="utf-8")
@@ -561,8 +604,8 @@ def test_torch_recipe_fixture_is_a_code_only_low_code_wheel() -> None:
     assert set(pyproject["project"]["entry-points"]["tributo.algorithms"]) == {
         "third_party_binary_linear"
     }
-    assert "AlgorithmBuilder.from_torch_recipe" in fixture_source
-    assert "TorchTrainingRecipe" in fixture_source
+    assert "AlgorithmBuilder.from_torch" in fixture_source
+    assert "TorchRecipe" in fixture_source
     assert "train_loop_per_worker" not in fixture_source
     assert "tributo.algorithms.builtin" not in fixture_source
 

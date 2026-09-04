@@ -327,6 +327,10 @@ def _add_source_arguments(parser: argparse.ArgumentParser) -> None:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest="command", required=True)
+    identities = commands.add_parser("export-identities")
+    identities.add_argument("--manifest", type=Path, required=True)
+    identities.add_argument("--output", type=Path, required=True)
+    identities.add_argument("--expected-count", type=int, required=True)
     preflight = commands.add_parser("preflight")
     _add_source_arguments(preflight)
     final = commands.add_parser("final")
@@ -342,6 +346,32 @@ def _parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = _parser().parse_args()
+    if args.command == "export-identities":
+        if args.output.exists():
+            raise FileExistsError(
+                f"refusing to overwrite identity manifest: {args.output}"
+            )
+        payload = json.loads(args.manifest.read_text(encoding="utf-8"))
+        entries = payload.get("entry_points") if isinstance(payload, Mapping) else None
+        if (
+            not isinstance(payload, Mapping)
+            or payload.get("schema_version") != 1
+            or not isinstance(entries, Mapping)
+            or len(entries) != args.expected_count
+        ):
+            raise ValueError("official algorithm identity manifest is malformed")
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_bytes(args.manifest.read_bytes())
+        print(
+            json.dumps(
+                {
+                    "entry_point_count": len(entries),
+                    "sha256": _sha256_file(args.output),
+                },
+                sort_keys=True,
+            )
+        )
+        return
     core = inspect_source(args.core_root)
     algorithms = inspect_source(args.algorithms_root)
     if args.command == "preflight":

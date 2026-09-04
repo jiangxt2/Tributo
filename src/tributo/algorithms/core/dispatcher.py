@@ -6,7 +6,7 @@ import logging
 import uuid
 from collections.abc import Mapping
 from dataclasses import replace
-from typing import cast
+from typing import Any, cast
 
 from tributo._common.immutable import deep_thaw
 from tributo.algorithms.api import (
@@ -16,10 +16,12 @@ from tributo.algorithms.api import (
     AlgorithmRequest,
     AlgorithmRunResult,
     ArtifactDraft,
+    DistributionStrategy,
     ExecutionReceipt,
     ExecutionRequest,
     ResolvedAlgorithmPlan,
     StateCoordinationEvidence,
+    TorchExecutionEvidence,
     WorkerExecutionEvidence,
     WorkerExecutionResult,
     WorkerResources,
@@ -65,10 +67,11 @@ class AlgorithmRunCoordinator:
         context: InputExecutionContext,
         artifacts: tuple[ArtifactDraft, ...] = (),
         cancelled: bool = False,
+        run_id: str | None = None,
     ) -> AlgorithmRunResult:
         """Open input, invoke the selected Runtime, and close in reverse order."""
         plan.validate_integrity()
-        run_id = uuid.uuid4().hex
+        run_id = run_id or uuid.uuid4().hex
         try:
             runtime = self._runtimes[plan.runtime.runtime_id]
         except KeyError as exc:
@@ -100,15 +103,14 @@ class AlgorithmRunCoordinator:
                 leases.append((binding.name, lease))
                 role_bindings.append(input_adapter.bind(lease, plan))
             runtime_binding = self._combine_role_bindings(plan, role_bindings)
-            runtime_result = runtime.execute(
-                RuntimeExecutionEnvelope(
-                    run_id=run_id,
-                    plan=plan,
-                    input_payloads=runtime_binding.payloads,
-                    artifacts=artifacts,
-                    cancelled=cancelled,
-                )
+            base_envelope = RuntimeExecutionEnvelope(
+                run_id=run_id,
+                plan=plan,
+                input_payloads=runtime_binding.payloads,
+                artifacts=artifacts,
+                cancelled=cancelled,
             )
+            runtime_result = cast(Any, runtime).execute(base_envelope)
             if not isinstance(runtime_result, WorkerExecutionResult) or not isinstance(
                 runtime_result.execution, AlgorithmExecutionResult
             ):
@@ -162,7 +164,6 @@ class AlgorithmRunCoordinator:
                         lease.close()
                 except Exception as exc:
                     cleanup_errors.append(exc)
-
         if primary_error is not None:
             for cleanup_error in cleanup_errors:
                 primary_error.add_note(
@@ -215,6 +216,32 @@ class AlgorithmRunCoordinator:
             worker_metadata=worker_result.worker_metadata,
             execution_receipt=execution_receipt,
         )
+
+    def torch_preflight(
+        self,
+        plan: ResolvedAlgorithmPlan,
+        *,
+        run_id: str,
+    ) -> None:
+        """Run the Torch-only environment check before any input or Ray lease."""
+        if (
+            plan.distribution_spec is None
+            or plan.distribution_spec.strategy
+            is not DistributionStrategy.RAY_TRAIN_TORCH
+        ):
+            raise AlgorithmConfigurationError(
+                "Torch preflight requires RAY_TRAIN_TORCH"
+            )
+        try:
+            runtime = self._runtimes[plan.runtime.runtime_id]
+        except KeyError as exc:
+            raise AlgorithmConfigurationError(
+                f"missing execution component for {exc.args[0]!r}"
+            ) from exc
+        preflight = getattr(runtime, "preflight", None)
+        if not callable(preflight):
+            raise AlgorithmConfigurationError("selected Torch runtime has no preflight")
+        preflight(plan, run_id)
 
     @staticmethod
     def _combine_role_bindings(
@@ -286,6 +313,111 @@ class AlgorithmRunCoordinator:
                     "worker evidence entries must be mappings"
                 )
             state = StateCoordinationEvidence.from_dict(state_value)
+            torch_evidence = None
+            if plan.distribution_spec.strategy is DistributionStrategy.RAY_TRAIN_TORCH:
+                raw_torch_evidence = metadata.get("torch_evidence")
+                if not isinstance(raw_torch_evidence, Mapping):
+                    raise AlgorithmConfigurationError(
+                        "Torch runtime did not return TorchExecutionEvidence"
+                    )
+                torch_evidence = TorchExecutionEvidence.from_dict(raw_torch_evidence)
+                if torch_evidence.identity.run_id != run_id:
+                    raise AlgorithmConfigurationError(
+                        "Torch execution evidence run identity does not match invocation"
+                    )
+                policy = cast(Any, plan.distribution_spec.policy)
+                if (
+                    not hasattr(policy, "digest")
+                    or torch_evidence.policy_digest != policy.digest
+                ):
+                    raise AlgorithmConfigurationError(
+                        "Torch execution evidence policy digest does not match plan"
+                    )
+                if (
+                    torch_evidence.identity.execution_plan_digest
+                    != policy.execution_plan.digest
+                ):
+                    raise AlgorithmConfigurationError(
+                        "Torch execution evidence execution plan digest does not match plan"
+                    )
+                if (
+                    torch_evidence.state_layout != policy.state_layout
+                    or torch_evidence.parallelism_id != policy.parallelism_id
+                ):
+                    raise AlgorithmConfigurationError(
+                        "Torch execution evidence state layout/topology does not match policy"
+                    )
+                if torch_evidence.replicated_state is not None and (
+                    state_value.get("global_model_digest")
+                    != torch_evidence.replicated_state.global_model_digest
+                ):
+                    raise AlgorithmConfigurationError(
+                        "Torch state and evidence global model digests differ"
+                    )
+                if torch_evidence.stages and torch_evidence.final_stage_id is not None:
+                    final_state = next(
+                        stage.state_digest
+                        for stage in torch_evidence.stages
+                        if stage.stage_id == torch_evidence.final_stage_id
+                    )
+                    if state_value.get("global_model_digest") != final_state:
+                        raise AlgorithmConfigurationError(
+                            "Torch component state digest does not match final Stage"
+                        )
+                expected_stages = tuple(
+                    stage.stage_id for stage in policy.execution_plan.stages
+                )
+                observed_stages = tuple(
+                    stage.stage_id for stage in torch_evidence.stages
+                )
+                if torch_evidence.state_layout == "component":
+                    if observed_stages != expected_stages:
+                        raise AlgorithmConfigurationError(
+                            "Torch execution evidence Stage set/order does not match plan"
+                        )
+                    if (
+                        torch_evidence.final_stage_id
+                        != policy.execution_plan.final_stage_id
+                    ):
+                        raise AlgorithmConfigurationError(
+                            "Torch execution evidence final Stage does not match plan"
+                        )
+                final_stage = next(
+                    stage
+                    for stage in policy.execution_plan.stages
+                    if stage.stage_id == policy.execution_plan.final_stage_id
+                )
+                if {role.role for role in torch_evidence.roles} != set(
+                    final_stage.input_roles
+                ):
+                    raise AlgorithmConfigurationError(
+                        "Torch execution evidence roles do not match final Stage"
+                    )
+                if policy.global_loss_reducer_ref is None:
+                    if any(
+                        value is not None
+                        for value in (
+                            torch_evidence.reducer_id,
+                            torch_evidence.reducer_api_version,
+                            torch_evidence.reducer_schema_id,
+                            torch_evidence.reducer_code_digest,
+                        )
+                    ):
+                        raise AlgorithmConfigurationError(
+                            "Torch execution evidence declares an unexpected reducer"
+                        )
+                elif (
+                    torch_evidence.reducer_id is None
+                    or torch_evidence.reducer_api_version
+                    != policy.global_loss_reducer_api_version
+                    or torch_evidence.reducer_schema_id
+                    != policy.composite_loss_schema_id
+                    or torch_evidence.reducer_code_digest
+                    != policy.global_loss_reducer_code_digest
+                ):
+                    raise AlgorithmConfigurationError(
+                        "Torch execution evidence reducer does not match policy"
+                    )
             input_complete = metadata.get("input_complete")
             driver_rows = metadata.get("driver_materialized_training_rows")
             if not isinstance(input_complete, bool):
@@ -327,6 +459,7 @@ class AlgorithmRunCoordinator:
             driver_materialized_training_rows=driver_rows,
             artifact_ids=tuple(artifact_ids),
             cluster_resources={},
+            torch_evidence=torch_evidence,
         )
 
 
@@ -388,12 +521,23 @@ class AlgorithmDispatcher:
     ) -> AlgorithmRunResult:
         """Execute one already validated plan through the normal lifecycle."""
         plan.validate_integrity()
+        is_torch = (
+            plan.distribution_spec is not None
+            and plan.distribution_spec.strategy is DistributionStrategy.RAY_TRAIN_TORCH
+        )
+        if is_torch and cancelled:
+            raise AlgorithmExecutionError("Torch execution was cancelled")
+        run_id = uuid.uuid4().hex if is_torch else None
+        if is_torch:
+            torch_run_id = cast(str, run_id)
+            self._coordinator.torch_preflight(plan, run_id=torch_run_id)
         if plan.runtime.execution_profile is None:
             return self._coordinator.execute(
                 plan,
                 context,
                 artifacts,
                 cancelled=cancelled,
+                run_id=run_id,
             )
         if plan.distribution_spec is None:
             raise AlgorithmConfigurationError(
@@ -415,6 +559,7 @@ class AlgorithmDispatcher:
                 context,
                 artifacts,
                 cancelled=cancelled,
+                run_id=run_id,
             )
             receipt = result.execution_receipt
             if receipt is None:

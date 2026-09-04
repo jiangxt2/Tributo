@@ -242,6 +242,7 @@ def validate_distributed_algorithm_descriptor(
         DistributedAlgorithmDescriptor,
         DistributionStrategy,
         InputDistribution,
+        TorchPolicy,
     )
     from tributo.algorithms.api.models import FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS
     from tributo.algorithms.spi import (
@@ -251,8 +252,8 @@ def validate_distributed_algorithm_descriptor(
         JoblibEstimatorRecipe,
         MapReduceAlgorithm,
         ParallelEnsembleAlgorithm,
-        TorchTrainingRecipe,
-        TrainingRecipeV2,
+        RayTorchAdapter,
+        TorchRecipe,
     )
 
     if not isinstance(descriptor, DistributedAlgorithmDescriptor):
@@ -294,15 +295,13 @@ def validate_distributed_algorithm_descriptor(
         DistributionStrategy.RAY_ITERATIVE_OPTIMIZATION: (
             IterativeOptimizationAlgorithm
         ),
-        DistributionStrategy.RAY_TRAIN_RECIPE_V2: TrainingRecipeV2,
+        DistributionStrategy.RAY_TRAIN_TORCH: TorchRecipe,
     }[distribution_spec.strategy]
-    if distribution_spec.strategy is DistributionStrategy.RAY_TRAIN_COLLECTIVE and str(
-        implementation_descriptor.executable_factory_ref
-    ) == (
-        "tributo.integrations.algorithm_runtimes.torch_recipe:"
-        "create_torch_recipe_algorithm"
-    ):
-        expected_base = TorchTrainingRecipe
+    if distribution_spec.strategy is DistributionStrategy.RAY_TRAIN_TORCH:
+        torch_policy = cast(TorchPolicy, distribution_spec.policy)
+        expected_base = (
+            RayTorchAdapter if torch_policy.loop_owner == "adapter" else TorchRecipe
+        )
     contract = FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS[distribution_spec.strategy]
     if implementation_descriptor.execution_mode is not contract.execution_mode:
         raise ValueError("implementation execution mode conflicts with strategy")

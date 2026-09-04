@@ -35,7 +35,7 @@ def test_core_composition_root_contains_only_algorithm_neutral_plugins() -> None
     }
     assert {item.validator_id for item in validators} == {"onnx-runtime-v1"}
     assert {item.provider_id for item in first_party_source_providers()} == {
-        "ray-torch-recipe-v1"
+        "ray-torch-v1"
     }
     assert {item.flavor_id for item in first_party_model_flavors()} == {
         "onnx-runtime-v1"

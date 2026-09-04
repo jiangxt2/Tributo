@@ -436,6 +436,24 @@ class IngestionInputRuntimeAdapter:
                 "ingestion runtime adapter requires a typed Gateway handle"
             )
         binding = lease.binding or plan.primary_input_binding
+        if plan.runtime.topology is RuntimeTopology.RAY_TRAIN_TORCH:
+            if not isinstance(lease.handle, RayDataHandle):
+                raise AlgorithmInputError(
+                    "Ray Train Torch input requires RayDataHandle; no implicit "
+                    "Daft-to-Ray conversion is permitted"
+                )
+            return RuntimeInputBinding(
+                tuple(
+                    WorkerInputPayload(
+                        input_name=binding.name,
+                        binding=binding,
+                        value=lease.handle,
+                        partition_index=rank,
+                        partition_count=plan.runtime.worker_count,
+                    )
+                    for rank in range(plan.runtime.worker_count)
+                )
+            )
         if plan.runtime.topology in {
             RuntimeTopology.DATA_PARALLEL,
             RuntimeTopology.RAY_MAP_REDUCE,
