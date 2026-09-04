@@ -167,9 +167,6 @@ def _open_source(
             raise AlgorithmConfigurationError(
                 "Torch checkpoint implementation code digest drifted"
             )
-        implementation_ref = QualifiedReference.parse(qualified)
-        _validate_module_digest(implementation_ref, options.implementation_code_digest)
-        implementation = _load_reference(implementation_ref)
         if options.policy_digest != descriptor.policy_digest:
             raise AlgorithmConfigurationError(
                 "Torch export Policy digest does not match checkpoint"
@@ -178,6 +175,13 @@ def _open_source(
             raise AlgorithmConfigurationError(
                 "Torch export plan digest does not match checkpoint"
             )
+        if descriptor.input_binding_digest != options.input_binding_digest:
+            raise AlgorithmConfigurationError(
+                "Torch export input binding digest does not match checkpoint"
+            )
+        implementation_ref = QualifiedReference.parse(qualified)
+        _validate_module_digest(implementation_ref, options.implementation_code_digest)
+        implementation = _load_reference(implementation_ref)
         if not isinstance(implementation, type) or not issubclass(
             implementation, (TorchRecipe, RayTorchAdapter)
         ):
@@ -209,7 +213,6 @@ def _open_source(
                 state_layout=descriptor.state_layout,
                 adapter_identity=descriptor.adapter_identity,
                 resume_supported=descriptor.resume_supported,
-                same_world_size_resume=descriptor.same_world_size_resume,
             )
             from tributo.algorithms.spi import TorchStageContext
 
@@ -285,7 +288,6 @@ def _open_source(
             state_layout=descriptor.state_layout,
             adapter_identity=descriptor.adapter_identity,
             resume_supported=descriptor.resume_supported,
-            same_world_size_resume=descriptor.same_world_size_resume,
         )
         from tributo.algorithms.spi import TorchStageContext
 
@@ -321,25 +323,6 @@ def _read_descriptor(root: Path) -> TorchCheckpointDescriptor:
         payload = json.loads(path.read_text(encoding="utf-8"))
         descriptor = TorchCheckpointDescriptor.from_dict(payload)
         root_resolved = root.resolve()
-        commit_path = root / "torch_stage_commit.json"
-        if commit_path.exists() or commit_path.is_symlink():
-            if commit_path.is_symlink() or not commit_path.is_file():
-                raise AlgorithmConfigurationError(
-                    "Torch checkpoint commit marker is invalid"
-                )
-            try:
-                commit = json.loads(commit_path.read_text(encoding="utf-8"))
-            except (OSError, TypeError, ValueError) as exc:
-                raise AlgorithmConfigurationError(
-                    "Torch checkpoint commit marker is malformed"
-                ) from exc
-            if not isinstance(commit, Mapping) or (
-                commit.get("identity") != descriptor.identity.to_dict()
-                or commit.get("descriptor_digest") != descriptor.digest
-            ):
-                raise AlgorithmConfigurationError(
-                    "Torch checkpoint commit marker does not match descriptor"
-                )
         actual_files: dict[str, str] = {}
         for candidate in sorted(root.rglob("*")):
             if candidate.is_symlink() or not candidate.resolve().is_relative_to(
@@ -350,7 +333,6 @@ def _read_descriptor(root: Path) -> TorchCheckpointDescriptor:
                 )
             if candidate.is_file() and candidate.name not in {
                 "torch_checkpoint_descriptor.json",
-                "torch_stage_commit.json",
                 ".metadata.json",
             }:
                 actual_files[candidate.relative_to(root).as_posix()] = _sha256_file(
@@ -403,7 +385,6 @@ def _load_recipe_model(
         state_layout=descriptor.state_layout,
         adapter_identity=descriptor.adapter_identity,
         resume_supported=descriptor.resume_supported,
-        same_world_size_resume=descriptor.same_world_size_resume,
     )
     from tributo.algorithms.spi import (
         TorchBuildContext,

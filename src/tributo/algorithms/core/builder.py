@@ -305,22 +305,21 @@ class AlgorithmBuilder:
             execution_plan=SingleStageTorchPlan(
                 stage=TorchStageSpec(
                     stage_id="train",
-                    worker_loop_ref=(
-                        "tributo.integrations.algorithm_runtimes.ray_train_torch:"
-                        "torch_recipe_train_loop_per_worker"
-                    ),
                     input_roles=("train",),
                 )
             ),
             state_layout="replicated",
             metric_reducers=normalized_reducers,
             backend=backend,
-            resume_supported=True,
-            same_world_size_resume=True,
+            resume_supported=False,
         )
         if resolved_policy.backend != backend and policy is not None:
             raise AlgorithmConfigurationError(
                 "Torch Policy backend conflicts with the requested backend"
+            )
+        if dict(resolved_policy.metric_reducers) != normalized_reducers:
+            raise AlgorithmConfigurationError(
+                "Torch Policy metric reducers conflict with the Builder declaration"
             )
         return AlgorithmBuilder.from_distributed_algorithm(
             spec=spec,
@@ -401,10 +400,6 @@ class AlgorithmBuilder:
         if policy.loop_owner != "adapter":
             raise AlgorithmConfigurationError(
                 "Torch adapter registrations require policy.loop_owner='adapter'"
-            )
-        if not policy.resume_supported and policy.same_world_size_resume is not None:
-            raise AlgorithmConfigurationError(
-                "adapter registrations must omit same_world_size_resume when recovery is disabled"
             )
         return AlgorithmBuilder.from_torch(
             spec=spec,

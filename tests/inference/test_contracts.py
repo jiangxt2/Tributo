@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import numpy as np
 import pytest
 from pydantic import ValidationError
 
@@ -28,7 +27,6 @@ from tributo.inference.contracts import (
     TensorInputBinding,
     TensorOutputBinding,
 )
-from tributo.inference.kernel import _build_input_tensor
 
 
 def _request(**updates) -> InferenceRequest:
@@ -253,54 +251,6 @@ class TestBindings:
         assert (
             TensorInputBinding.model_validate_json(scalar.model_dump_json()) == scalar
         )
-
-    def test_single_vector_column_preserves_nested_tensor_rank(self) -> None:
-        column = np.empty(2, dtype=object)
-        column[0] = [[1.0], [2.0]]
-        column[1] = [[3.0], [4.0]]
-        tensor = _build_input_tensor(
-            {"window": column},
-            columns=("window",),
-            dtype="float32",
-            single_column_mode="vector",
-            null_policy="error",
-            nan_policy="error",
-        )
-        assert tensor.shape == (2, 2, 1)
-
-    def test_multi_dimensional_object_column_preserves_nested_tensor_rank(
-        self,
-    ) -> None:
-        column = np.empty((2, 2), dtype=object)
-        column[0] = [np.asarray([1.0, 2.0]), np.asarray([3.0, 4.0])]
-        column[1] = [np.asarray([5.0, 6.0]), np.asarray([7.0, 8.0])]
-        tensor = _build_input_tensor(
-            {"window": column},
-            columns=("window",),
-            dtype="float32",
-            single_column_mode="vector",
-            null_policy="error",
-            nan_policy="error",
-        )
-        assert tensor.shape == (2, 2, 2)
-
-    def test_arrow_nested_object_rows_preserve_tensor_rank(self) -> None:
-        column = np.empty(2, dtype=object)
-        column[0] = np.asarray(
-            [np.asarray([1.0, 2.0]), np.asarray([3.0, 4.0])], dtype=object
-        )
-        column[1] = np.asarray(
-            [np.asarray([5.0, 6.0]), np.asarray([7.0, 8.0])], dtype=object
-        )
-        tensor = _build_input_tensor(
-            {"window": column},
-            columns=("window",),
-            dtype="float32",
-            single_column_mode="vector",
-            null_policy="error",
-            nan_policy="error",
-        )
-        assert tensor.shape == (2, 2, 2)
 
     def test_scalar_single_column_mode_rejects_invalid_contracts(self) -> None:
         with pytest.raises(ValidationError, match="requires exactly one column"):

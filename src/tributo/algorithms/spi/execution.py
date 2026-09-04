@@ -16,7 +16,6 @@ from tributo.algorithms.api import (
     WorkerExecutionResult,
 )
 from tributo.algorithms.api.distribution import StateField
-from tributo.algorithms.api.torch_runtime import TorchPreflightLease
 from tributo.algorithms.spi.input import WorkerInputPayload, WorkerInputPayloadSet
 from tributo.util.annotations import PublicAPI
 
@@ -133,22 +132,6 @@ class PortableRuntimeAdapter(Protocol):
     def runtime_id(self) -> str: ...
 
     def execute(self, envelope: RuntimeExecutionEnvelope) -> WorkerExecutionResult: ...
-
-
-@PublicAPI(stability="alpha")
-@runtime_checkable
-class TorchRuntimePreflight(Protocol):
-    """Torch-only preflight surface kept out of the generic Runtime SPI."""
-
-    @property
-    def runtime_id(self) -> str: ...
-
-    def preflight(
-        self,
-        plan: ResolvedAlgorithmPlan,
-        run_id: str,
-        invocation_id: str,
-    ) -> TorchPreflightLease: ...
 
 
 @PublicAPI(stability="alpha")
@@ -439,6 +422,5 @@ __all__ = [
     "PortableRuntimeAdapter",
     "Predictable",
     "RuntimeExecutionEnvelope",
-    "TorchRuntimePreflight",
     "Transformable",
 ]

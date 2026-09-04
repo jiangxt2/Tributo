@@ -689,7 +689,6 @@ class RuntimeBinding:
     strategy: DistributionStrategy | None = None
     distribution_digest: str | None = None
     resume_from: str | None = None
-    torch_recovery: Mapping[str, Any] | None = None
     memory_bytes: int | None = None
 
     def __post_init__(self) -> None:
@@ -849,24 +848,6 @@ class RuntimeBinding:
         if self.execution_profile is None and self.resume_from is not None:
             raise AlgorithmConfigurationError(
                 "legacy RuntimeBinding must not carry formal resume state"
-            )
-        if self.torch_recovery is not None:
-            if self.strategy is not DistributionStrategy.RAY_TRAIN_TORCH:
-                raise AlgorithmConfigurationError(
-                    "torch_recovery requires the Ray Train Torch runtime"
-                )
-            from tributo.algorithms.api.torch_runtime import TorchRecoveryEnvelope
-
-            try:
-                recovery = TorchRecoveryEnvelope.from_dict(self.torch_recovery)
-            except (TypeError, ValueError) as exc:
-                raise AlgorithmConfigurationError(
-                    "runtime torch_recovery is malformed"
-                ) from exc
-            object.__setattr__(self, "torch_recovery", deep_freeze(recovery.to_dict()))
-        if self.resume_from is not None and self.torch_recovery is not None:
-            raise AlgorithmConfigurationError(
-                "runtime resume_from and torch_recovery are mutually exclusive"
             )
 
 
@@ -1725,9 +1706,6 @@ class ResolvedAlgorithmPlan:
             ),
             "distribution_digest": self.runtime.distribution_digest,
             "resume_from": self.runtime.resume_from,
-            "torch_recovery": deep_thaw(self.runtime.torch_recovery)
-            if self.runtime.torch_recovery is not None
-            else None,
         }
         if self.runtime.memory_bytes is not None:
             runtime_payload["memory_bytes"] = self.runtime.memory_bytes

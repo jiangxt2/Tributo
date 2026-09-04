@@ -25,7 +25,6 @@ from tributo.algorithms.api.models import (
     AlgorithmRequest,
 )
 from tributo.algorithms.api.torch_runtime import (
-    TorchRecoveryEnvelope,
     TorchStageRunIdentity,
 )
 from tributo.util.annotations import PublicAPI
@@ -85,7 +84,6 @@ class ExecutionRequest:
     worker_count: int
     resources_per_worker: WorkerResources | None = None
     resume_from: str | None = None
-    torch_recovery: TorchRecoveryEnvelope | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.algorithm_request, AlgorithmRequest):
@@ -113,16 +111,6 @@ class ExecutionRequest:
             )
         if self.resume_from is not None:
             _non_empty(self.resume_from, "resume_from")
-        if self.torch_recovery is not None and not isinstance(
-            self.torch_recovery, TorchRecoveryEnvelope
-        ):
-            raise AlgorithmConfigurationError(
-                "torch_recovery must be a TorchRecoveryEnvelope"
-            )
-        if self.torch_recovery is not None and self.resume_from is not None:
-            raise AlgorithmConfigurationError(
-                "resume_from and torch_recovery are mutually exclusive"
-            )
 
 
 @PublicAPI(stability="alpha")
@@ -417,6 +405,10 @@ class TorchRoleExecutionEvidence:
                     raise AlgorithmConfigurationError(
                         "Torch replicated role evidence is not identical"
                     )
+                if self.replicated_bytes_per_worker is None:
+                    raise AlgorithmConfigurationError(
+                        "Torch replicated role evidence requires actual bytes"
+                    )
             elif sum(rows) != self.observed_rows:
                 raise AlgorithmConfigurationError("Torch role evidence rows do not sum")
         if not self.present and (self.observed_rows != 0 or any(rows)):
@@ -550,6 +542,10 @@ class ComponentStageEvidence:
                 raise AlgorithmConfigurationError(
                     f"Torch Stage evidence {name} is invalid"
                 )
+        if {worker.model_state_digest for worker in workers} != {self.state_digest}:
+            raise AlgorithmConfigurationError(
+                "Torch Stage worker model digests do not match its state digest"
+            )
         if (
             self.checkpoint_descriptor_digest is not None
             and _DIGEST.fullmatch(self.checkpoint_descriptor_digest) is None
@@ -1190,7 +1186,7 @@ class ExecutionReceipt:
 
     def to_dict(self) -> dict[str, Any]:
         """Return portable receipt metadata."""
-        return {
+        payload = {
             "api_version": self.api_version,
             "run_id": self.run_id,
             "plan_id": self.plan_id,
@@ -1218,14 +1214,14 @@ class ExecutionReceipt:
             "cluster_resources": dict(sorted(self.cluster_resources.items())),
             "runtime_owned": self.runtime_owned,
             "resource_preflight": self.resource_preflight,
-            "torch_evidence": self.torch_evidence.to_dict()
-            if self.torch_evidence is not None
-            else None,
             "distributed": self.distributed,
             "cross_node": self.cross_node,
             "cluster_distributed": self.cluster_distributed,
             "execution_capability": self.execution_capability,
         }
+        if self.torch_evidence is not None:
+            payload["torch_evidence"] = self.torch_evidence.to_dict()
+        return payload
 
 
 __all__ = [

@@ -23,6 +23,7 @@ from tributo.algorithms import (
     TorchStageRunIdentity,
     TorchStepResult,
 )
+from tributo.algorithms.api import AlgorithmConfigurationError
 from tributo.algorithms.spi import (
     RayTorchAdapter,
     TorchArtifactContext,
@@ -168,6 +169,9 @@ def _checkpoint(path: Path) -> Path:
     model = BinaryLinearRecipe().build_modules(None)["model"]
     assert isinstance(model, torch.nn.Module)
     torch.save(model.state_dict(), path / "model.pt")
+    (path / "metrics.json").write_text(
+        json.dumps({"train_loss": 0.5}), encoding="utf-8"
+    )
     identity = TorchStageRunIdentity(
         "aabbccdd",
         "11223344",
@@ -192,14 +196,12 @@ def _checkpoint(path: Path) -> Path:
         input_binding_digest="3" * 64,
         implementation_code_digest=CODE_DIGEST,
         payload_files={
-            "model.pt": hashlib.sha256((path / "model.pt").read_bytes()).hexdigest()
+            name: hashlib.sha256((path / name).read_bytes()).hexdigest()
+            for name in ("model.pt", "metrics.json")
         },
     )
     (path / "torch_checkpoint_descriptor.json").write_text(
         json.dumps(descriptor.to_dict()), encoding="utf-8"
-    )
-    (path / "metrics.json").write_text(
-        json.dumps({"train_loss": 0.5}), encoding="utf-8"
     )
     return path
 
@@ -234,7 +236,6 @@ def _adapter_checkpoint(path: Path) -> Path:
         },
         adapter_identity=identity.implementation_id,
         resume_supported=False,
-        same_world_size_resume=None,
     )
     (path / "torch_checkpoint_descriptor.json").write_text(
         json.dumps(descriptor.to_dict()), encoding="utf-8"
@@ -271,6 +272,24 @@ def test_recipe_source_rejects_plan_identity_drift(tmp_path: Path) -> None:
     options = _options().model_copy(update={"implementation_id": "other.model"})
 
     with pytest.raises(Exception, match="identity"):
+        with provider.open_source(_checkpoint(tmp_path), options):
+            pass
+
+
+def test_recipe_source_rejects_input_binding_digest_drift(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    provider = RayTorchSourceProvider()
+    options = _options().model_copy(update={"input_binding_digest": "4" * 64})
+    monkeypatch.setattr(
+        "tributo.integrations.sources.ray_torch._load_reference",
+        lambda reference: (_ for _ in ()).throw(
+            AssertionError("implementation must not be loaded")
+        ),
+    )
+
+    with pytest.raises(AlgorithmConfigurationError, match="input binding digest"):
         with provider.open_source(_checkpoint(tmp_path), options):
             pass
 

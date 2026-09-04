@@ -12,12 +12,12 @@ import hashlib
 import json
 import logging
 import math
-import os
 import tempfile
 from collections.abc import Mapping
-from contextlib import contextmanager, nullcontext
+from contextlib import nullcontext
+from dataclasses import replace
 from pathlib import Path
-from typing import Any, Generator, cast
+from typing import Any, cast
 
 from tributo.algorithms.api import (
     AlgorithmConfigurationError,
@@ -31,8 +31,7 @@ from tributo.algorithms.api import (
     TorchAccumulationWindow,
     TorchBackwardContext,
     TorchCheckpointDescriptor,
-    TorchCheckpointLocator,
-    TorchCheckpointProgress,
+    TorchCheckpointPayloadDraft,
     TorchCheckpointRef,
     TorchCompositeGlobalState,
     TorchCompositeLossContribution,
@@ -42,25 +41,16 @@ from tributo.algorithms.api import (
     TorchGlobalLossReduction,
     TorchLossContribution,
     TorchMetricContribution,
-    TorchPreflightLease,
-    TorchPreflightTokenData,
-    TorchRankProgressStatistics,
-    TorchRecoveryEnvelope,
     TorchRoleExecutionEvidence,
-    TorchRuntimeExecutionEnvelope,
     TorchStageRunIdentity,
-    TorchWorkerControlEnvelope,
     WorkerExecutionEvidence,
     WorkerExecutionResult,
     apply_torch_loss_backward,
-    claim_torch_run_directory,
-    describe_torch_checkpoint,
     invoke_torch_global_loss_reducer,
     report_torch_checkpoint,
-    torch_run_config_name,
-    validate_torch_retry_identity,
 )
 from tributo.algorithms.api.models import FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS
+from tributo.algorithms.api.torch_runtime import _describe_torch_checkpoint
 from tributo.algorithms.core.worker import (
     _actual_environment_versions,
     _load_reference,
@@ -92,14 +82,6 @@ from tributo.util.annotations import DeveloperAPI
 RAY_TRAIN_TORCH_RUNTIME_ID = FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS[
     DistributionStrategy.RAY_TRAIN_TORCH
 ].runtime_id
-_CORE_RECIPE_LOOP_REF = (
-    "tributo.integrations.algorithm_runtimes.ray_train_torch:"
-    "torch_recipe_train_loop_per_worker"
-)
-_CORE_ADAPTER_LOOP_REF = (
-    "tributo.integrations.algorithm_runtimes.ray_train_torch:"
-    "ray_torch_adapter_train_loop_per_worker"
-)
 logger = logging.getLogger(__name__)
 
 
@@ -146,6 +128,29 @@ def _policy(plan: Any) -> Any:
     return policy
 
 
+def _validate_runtime_policy(policy: Any) -> None:
+    """Reject reserved Torch Policy features not implemented by Runtime v1."""
+    if policy.checkpoint_owner_rank != 0:
+        raise AlgorithmConfigurationError(
+            "Torch Runtime API v1 requires checkpoint_owner_rank=0"
+        )
+    if policy.state_layout == "sharded":
+        raise AlgorithmConfigurationError(
+            "Torch sharded state is reserved and not supported by Runtime v1"
+        )
+    if any(route.mode == "split_framework" for route in policy.dataset_routing):
+        raise AlgorithmConfigurationError(
+            "Torch split_framework routing is reserved and not supported by Runtime v1"
+        )
+    if (
+        policy.checkpoint_adapter_ref is not None
+        or policy.evidence_adapter_ref is not None
+    ):
+        raise AlgorithmConfigurationError(
+            "Torch checkpoint/evidence adapter references are reserved until their protocols are gated"
+        )
+
+
 def _torch_algorithm_context_config(plan: Any) -> dict[str, object]:
     """Return only algorithm-owned config for Torch implementation contexts."""
     config = plan.algorithm_config
@@ -173,6 +178,35 @@ def _torch_output_config(plan: Any) -> dict[str, object]:
     if not isinstance(output, Mapping):
         raise AlgorithmConfigurationError("Torch output config must be a mapping")
     return {str(key): value for key, value in output.items()}
+
+
+def _torch_ray_config(plan: Any) -> tuple[str | None, int]:
+    """Validate and return only Ray options consumed by Runtime API v1."""
+    value = plan.algorithm_config.get("ray", {})
+    if not isinstance(value, Mapping):
+        raise AlgorithmConfigurationError("Torch ray config must be a mapping")
+    unknown = sorted(set(value) - {"storage_path", "max_failures"})
+    if unknown:
+        raise AlgorithmConfigurationError(
+            f"Torch ray config contains unsupported key(s): {unknown}"
+        )
+    storage_path = value.get("storage_path")
+    if storage_path is not None and (
+        not isinstance(storage_path, str) or not storage_path
+    ):
+        raise AlgorithmConfigurationError(
+            "Torch ray.storage_path must be a non-empty string"
+        )
+    max_failures = value.get("max_failures", 0)
+    if (
+        not isinstance(max_failures, int)
+        or isinstance(max_failures, bool)
+        or max_failures < -1
+    ):
+        raise AlgorithmConfigurationError(
+            "ray.max_failures must be -1 or a non-negative integer"
+        )
+    return storage_path, max_failures
 
 
 _ADAPTER_CONFIG_BLOCKED_KEYS = frozenset(
@@ -252,6 +286,31 @@ def _accumulate_metric_totals(
         totals[1] += contribution.normalizer
 
 
+def _record_stage_metrics(
+    target: dict[str, float],
+    metrics: Mapping[str, object],
+    declared_names: set[str],
+    *,
+    is_final: bool,
+) -> None:
+    """Retain directly named Policy metrics across a component plan."""
+    for name in declared_names:
+        if name == "train_loss" and not is_final:
+            continue
+        value = metrics.get(name)
+        if value is None:
+            continue
+        if (
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or not math.isfinite(float(value))
+        ):
+            raise AlgorithmExecutionError(
+                f"Torch metric {name!r} must be a finite number"
+            )
+        target[name] = float(value)
+
+
 def _reduce_metric_totals(
     totals: Mapping[str, list[float]],
     reducers: Mapping[str, str],
@@ -273,10 +332,6 @@ def _reduce_metric_totals(
     for name in sorted(names):
         numerator, normalizer = totals[name]
         reducer_value = reducers.get(name)
-        if reducer_value is None and "_" in name:
-            reducer_value = reducers.get(name.split("_", 1)[1])
-        if reducer_value is None and name.endswith("_loss"):
-            reducer_value = reducers.get("train_loss")
         if reducer_value is None:
             raise AlgorithmConfigurationError(
                 f"Torch metric {name!r} has no declared reducer"
@@ -397,287 +452,15 @@ def _stage_context(
         input_roles=tuple(stage.input_roles),
         predecessor_stage_id=predecessor,
         predecessor_checkpoint_descriptor=predecessor_descriptor,
-        metric_mapping=dict(getattr(stage, "metric_mapping", {})),
-        checkpoint_required=bool(getattr(stage, "checkpoint_required", True)),
-        checkpoint_interval_windows=int(
-            getattr(stage, "checkpoint_interval_windows", 1)
-        ),
     )
 
 
-def _control_for_stage(
-    plan: Any,
-    policy: Any,
-    stage: Any,
-    *,
-    run_id: str,
-    invocation_id: str,
-    checkpoint: Mapping[str, Any] | None = None,
-    purpose: str | None = None,
-    source_stage_id: str | None = None,
-    predecessor: Mapping[str, Any] | None = None,
-) -> dict[str, Any] | None:
-    """Create credential-free initial recovery control for a Stage."""
-    if checkpoint is None:
-        checkpoint = predecessor
-        if checkpoint is not None and purpose is None:
-            purpose = "stage_dependency"
-        if checkpoint is not None and source_stage_id is None:
-            source_stage_id = getattr(stage, "checkpoint_from_stage", None)
-    if checkpoint is None:
-        return None
-    resume_uri = checkpoint.get("locator")
-    descriptor_digest = checkpoint.get("descriptor_digest")
-    if not isinstance(resume_uri, str) or not resume_uri:
-        raise AlgorithmConfigurationError(
-            "Torch recovery requires a credential-free locator"
-        )
-    if not isinstance(descriptor_digest, str):
-        raise AlgorithmConfigurationError(
-            "Torch recovery requires checkpoint_descriptor_digest"
-        )
-    locator = TorchCheckpointLocator(resume_uri, descriptor_digest)
-    control = TorchWorkerControlEnvelope(
-        schema_version=1,
-        run_id=run_id,
-        invocation_id=invocation_id,
-        source_stage_id=source_stage_id,
-        target_stage_id=stage.stage_id,
-        purpose=purpose or "cross_run_initial_recovery",
-        checkpoint_locator=locator,
-        checkpoint_descriptor_digest=descriptor_digest,
-        policy_digest=policy.digest,
-        execution_plan_digest=policy.execution_plan.digest,
+def _worker_stage_context(context: TorchStageContext) -> TorchStageContext:
+    """Remove Driver-only output paths before serializing a Worker context."""
+    return replace(
+        context,
+        runtime=replace(context.runtime, output_config={}),
     )
-    return control.to_dict()
-
-
-def _describe_recovery_locator(
-    locator: TorchCheckpointLocator,
-    *,
-    policy: Any,
-    plan: Any,
-    worker_count: int,
-) -> TorchCheckpointDescriptor:
-    """Open a recovery locator on the driver and validate its payload digest."""
-    checkpoint = open_torch_checkpoint_locator(locator)
-    try:
-        descriptor = describe_torch_checkpoint(TorchCheckpointRef(checkpoint), object())
-        _require_checkpoint_commit(checkpoint, descriptor)
-    finally:
-        closer = getattr(checkpoint, "close", None)
-        if callable(closer):
-            closer()
-    if descriptor.digest != locator.descriptor_digest:
-        raise AlgorithmExecutionError(
-            "Torch recovery locator descriptor digest drifted"
-        )
-    if (
-        descriptor.policy_digest != policy.digest
-        or descriptor.execution_plan_digest != policy.execution_plan.digest
-        or descriptor.world_size != worker_count
-        or descriptor.implementation_code_digest != plan.implementation.code_digest
-        or descriptor.identity.plan_digest != plan.plan_id
-        or descriptor.input_binding_digest != _input_binding_digest(plan)
-        or descriptor.state_layout != policy.state_layout
-    ):
-        raise AlgorithmExecutionError("Torch recovery descriptor identity mismatch")
-    return descriptor
-
-
-def _checkpoint_evidence_payload(checkpoint: object) -> dict[str, Any]:
-    """Read the Core-owned, credential-free evidence sidecar when present."""
-    opener = getattr(checkpoint, "as_directory", None)
-    if not callable(opener):
-        return {}
-    try:
-        with opener() as directory:
-            path = Path(directory) / "torch_execution_evidence.json"
-            if path.is_symlink() or not path.is_file():
-                return {}
-            payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, TypeError, ValueError) as exc:
-        raise AlgorithmExecutionError(
-            "Torch checkpoint execution evidence is malformed"
-        ) from exc
-    if not isinstance(payload, Mapping):
-        raise AlgorithmExecutionError(
-            "Torch checkpoint execution evidence is malformed"
-        )
-    return dict(payload)
-
-
-def _require_checkpoint_commit(
-    checkpoint: object, descriptor: TorchCheckpointDescriptor
-) -> None:
-    """Require the marker-last commit used by persistent Stage locators."""
-    with _opened_checkpoint(checkpoint) as root:
-        marker = root / "torch_stage_commit.json"
-        if marker.is_symlink() or not marker.is_file():
-            raise AlgorithmExecutionError(
-                "Torch Stage locator references an uncommitted checkpoint"
-            )
-        try:
-            payload = json.loads(marker.read_text(encoding="utf-8"))
-        except (OSError, TypeError, ValueError) as exc:
-            raise AlgorithmExecutionError(
-                "Torch Stage checkpoint commit marker is malformed"
-            ) from exc
-    if not isinstance(payload, Mapping) or (
-        payload.get("identity") != descriptor.identity.to_dict()
-        or payload.get("descriptor_digest") != descriptor.digest
-    ):
-        raise AlgorithmExecutionError(
-            "Torch Stage checkpoint commit marker does not match descriptor"
-        )
-
-
-def _recovery_record_for_locator(
-    locator: TorchCheckpointLocator,
-    *,
-    policy: Any,
-    plan: Any,
-    worker_count: int,
-) -> dict[str, Any]:
-    descriptor = _describe_recovery_locator(
-        locator, policy=policy, plan=plan, worker_count=worker_count
-    )
-    checkpoint = open_torch_checkpoint_locator(locator)
-    try:
-        evidence = _checkpoint_evidence_payload(checkpoint)
-    finally:
-        closer = getattr(checkpoint, "close", None)
-        if callable(closer):
-            closer()
-    return {
-        "locator": locator.uri,
-        "descriptor_digest": descriptor.digest,
-        "descriptor": descriptor.to_dict(),
-        "evidence": evidence,
-    }
-
-
-def _recovery_records(
-    plan: Any,
-    policy: Any,
-    *,
-    worker_count: int,
-) -> tuple[tuple[str, ...], str | None, dict[str, dict[str, Any]]]:
-    """Normalize the full Torch recovery envelope and legacy shorthand."""
-    stages = tuple(policy.execution_plan.stages)
-    stage_ids = tuple(stage.stage_id for stage in stages)
-    raw_envelope = plan.runtime.torch_recovery
-    if raw_envelope is not None:
-        envelope = TorchRecoveryEnvelope.from_dict(raw_envelope)
-        if not policy.resume_supported and (
-            envelope.stage_checkpoints or envelope.active_checkpoint is not None
-        ):
-            raise AlgorithmConfigurationError(
-                "Torch Policy does not support external recovery"
-            )
-        completed = tuple(envelope.completed_stage_ids)
-        if any(stage_id not in stage_ids for stage_id in completed):
-            raise AlgorithmExecutionError(
-                "Torch recovery contains an unknown completed Stage"
-            )
-        if tuple(stage_ids[: len(completed)]) != completed:
-            raise AlgorithmExecutionError(
-                "Torch recovery completed stages must follow execution plan order"
-            )
-        if (
-            envelope.active_stage_id is not None
-            and envelope.active_stage_id not in stage_ids
-        ):
-            raise AlgorithmExecutionError("Torch recovery active Stage is unknown")
-        if envelope.active_stage_id is not None:
-            active_index = stage_ids.index(envelope.active_stage_id)
-            if any(stage_id not in completed for stage_id in stage_ids[:active_index]):
-                raise AlgorithmExecutionError(
-                    "Torch recovery active Stage has an incomplete predecessor"
-                )
-            active_stage = stages[active_index]
-            if any(dep not in completed for dep in active_stage.depends_on):
-                raise AlgorithmExecutionError(
-                    "Torch recovery active Stage dependencies are incomplete"
-                )
-        records: dict[str, dict[str, Any]] = {}
-        for stage_id, locator in envelope.stage_checkpoints.items():
-            record = _recovery_record_for_locator(
-                locator, policy=policy, plan=plan, worker_count=worker_count
-            )
-            descriptor = TorchCheckpointDescriptor.from_dict(record["descriptor"])
-            if descriptor.identity.stage_id != stage_id:
-                raise AlgorithmExecutionError(
-                    "Torch recovery checkpoint Stage mismatch"
-                )
-            records[stage_id] = record
-        if (
-            envelope.active_stage_id is not None
-            and envelope.active_checkpoint is not None
-        ):
-            active_record = _recovery_record_for_locator(
-                envelope.active_checkpoint,
-                policy=policy,
-                plan=plan,
-                worker_count=worker_count,
-            )
-            active_descriptor = TorchCheckpointDescriptor.from_dict(
-                active_record["descriptor"]
-            )
-            if active_descriptor.identity.stage_id != envelope.active_stage_id:
-                raise AlgorithmExecutionError(
-                    "Torch recovery active checkpoint Stage mismatch"
-                )
-            if not policy.resume_supported:
-                raise AlgorithmConfigurationError(
-                    "Torch Policy does not support cross-Run active recovery"
-                )
-            if not active_descriptor.resume_supported:
-                raise AlgorithmExecutionError(
-                    "Torch active recovery checkpoint is not externally recoverable"
-                )
-            records[envelope.active_stage_id] = active_record
-        return completed, envelope.active_stage_id, records
-
-    resume_uri = plan.runtime.resume_from
-    ray_config = plan.algorithm_config.get("ray", {})
-    resume_config = (
-        ray_config.get("resume", {}) if isinstance(ray_config, Mapping) else {}
-    )
-    if resume_uri is None and isinstance(resume_config, Mapping):
-        for key in ("uri", "checkpoint_uri"):
-            if isinstance(resume_config.get(key), str):
-                resume_uri = resume_config[key]
-                break
-    if resume_uri is None:
-        return (), None, {}
-    if not policy.resume_supported:
-        raise AlgorithmConfigurationError(
-            "Torch Policy does not support external recovery"
-        )
-    descriptor_digest = (
-        resume_config.get("checkpoint_descriptor_digest")
-        if isinstance(resume_config, Mapping)
-        else None
-    )
-    if not isinstance(descriptor_digest, str):
-        raise AlgorithmConfigurationError(
-            "Torch resume shorthand requires ray.resume.checkpoint_descriptor_digest"
-        )
-    locator = TorchCheckpointLocator(resume_uri, descriptor_digest)
-    record = _recovery_record_for_locator(
-        locator, policy=policy, plan=plan, worker_count=worker_count
-    )
-    descriptor = TorchCheckpointDescriptor.from_dict(record["descriptor"])
-    if descriptor.identity.stage_id not in stage_ids:
-        raise AlgorithmExecutionError(
-            "Torch resume checkpoint Stage is not in execution plan"
-        )
-    if not descriptor.resume_supported:
-        raise AlgorithmExecutionError(
-            "Torch resume checkpoint is not externally recoverable"
-        )
-    return (), descriptor.identity.stage_id, {descriptor.identity.stage_id: record}
 
 
 def _payload_rows(value: object) -> int | None:
@@ -716,30 +499,16 @@ def _resource_map(plan: Any) -> dict[str, float]:
     return resources
 
 
-@contextmanager
-def _opened_checkpoint(checkpoint: object) -> Generator[Path, None, None]:
-    if isinstance(checkpoint, (str, Path)):
-        root = Path(checkpoint)
-        if not root.is_dir():
-            raise AlgorithmExecutionError("Torch checkpoint directory is missing")
-        yield root
-        return
-    opener = getattr(checkpoint, "as_directory", None)
-    if not callable(opener):
-        raise AlgorithmExecutionError("Torch checkpoint cannot be opened")
-    with opener() as directory:
-        yield Path(directory)
-
-
 def _validate_stage_routes(
     policy: Any,
     stage: Any,
-    datasets: Mapping[str, object],
+    datasets: dict[str, object],
     worker_count: int,
-) -> dict[str, int]:
+) -> tuple[dict[str, int], dict[str, int]]:
     """Validate role presence, exact coverage minimums and replication budgets."""
     routes = {route.role: route for route in policy.dataset_routing}
     rows: dict[str, int] = {}
+    replicated_bytes_by_role: dict[str, int] = {}
     replicated_bytes = 0
     for role in stage.input_roles:
         route = routes.get(role)
@@ -752,7 +521,30 @@ def _validate_stage_routes(
                     f"required Torch role {role!r} is absent"
                 )
             continue
-        count = _payload_rows(dataset)
+        bounded_dataset = dataset
+        if route.mode == "replicate":
+            if route.max_rows is None:
+                raise AlgorithmConfigurationError(
+                    f"Torch replicate role {role!r} has no max_rows"
+                )
+            limiter = getattr(dataset, "limit", None)
+            if not callable(limiter):
+                raise AlgorithmConfigurationError(
+                    f"Torch replicate role {role!r} cannot be bounded"
+                )
+            limited = limiter(route.max_rows + 1)
+            materialize = getattr(limited, "materialize", None)
+            if not callable(materialize):
+                raise AlgorithmConfigurationError(
+                    f"Torch replicate role {role!r} cannot be materialized"
+                )
+            try:
+                bounded_dataset = materialize()
+            except Exception as exc:
+                raise AlgorithmConfigurationError(
+                    f"Torch replicate role {role!r} materialization failed"
+                ) from exc
+        count = _payload_rows(bounded_dataset)
         if count is None:
             raise AlgorithmConfigurationError(
                 f"Torch role {role!r} row count is not verifiable"
@@ -773,25 +565,7 @@ def _validate_stage_routes(
                 raise AlgorithmConfigurationError(
                     f"Torch replicate role {role!r} exceeds max_rows"
                 )
-            limiter = getattr(dataset, "limit", None)
-            if not callable(limiter):
-                raise AlgorithmConfigurationError(
-                    f"Torch replicate role {role!r} cannot be bounded"
-                )
-            probe = limiter(route.max_rows + 1)
-            probe_count = getattr(probe, "count", None)
-            if not callable(probe_count):
-                raise AlgorithmConfigurationError(
-                    f"Torch replicate role {role!r} bounded size is not verifiable"
-                )
-            observed_probe = int(probe_count())
-            if observed_probe > route.max_rows:
-                raise AlgorithmConfigurationError(
-                    f"Torch replicate role {role!r} exceeds max_rows"
-                )
-            if isinstance(datasets, dict):
-                datasets[role] = limiter(route.max_rows)
-            size_bytes = getattr(dataset, "size_bytes", None)
+            size_bytes = getattr(bounded_dataset, "size_bytes", None)
             if callable(size_bytes):
                 size_bytes = size_bytes()
             if not isinstance(size_bytes, int) or size_bytes < 0:
@@ -805,7 +579,9 @@ def _validate_stage_routes(
                 raise AlgorithmConfigurationError(
                     f"Torch replicate role {role!r} exceeds max_bytes_per_worker"
                 )
+            replicated_bytes_by_role[role] = size_bytes
             replicated_bytes += size_bytes
+            datasets[role] = bounded_dataset
     if (
         policy.max_replicated_bytes_per_worker is not None
         and replicated_bytes > policy.max_replicated_bytes_per_worker
@@ -813,80 +589,11 @@ def _validate_stage_routes(
         raise AlgorithmConfigurationError(
             "Torch replicate roles exceed aggregate byte budget"
         )
-    return rows
-
-
-def _worker_rows(payload: object, role: str) -> int:
-    if hasattr(payload, "get") and callable(payload.get):
-        payload = payload.get(role)
-    value = getattr(payload, "value", payload)
-    rows = _payload_rows(value)
-    return rows if rows is not None else 0
-
-
-def _worker_evidence(
-    metrics: Mapping[str, Any],
-    plan: Any,
-    identity: TorchStageRunIdentity,
-    stage: Any,
-    expected_rows: Mapping[str, int],
-) -> tuple[dict[str, Any], ...]:
-    raw_workers = metrics.get("execution_workers")
-    if (
-        not isinstance(raw_workers, (list, tuple))
-        or len(raw_workers) != plan.runtime.worker_count
-    ):
-        raise AlgorithmExecutionError("Torch execution did not report every worker")
-    workers = tuple(
-        WorkerExecutionEvidence.from_dict(item)
-        for item in _normalize_worker_evidence(raw_workers, plan)
-    )
-    role_evidence: list[TorchRoleExecutionEvidence] = []
-    for role in stage.input_roles:
-        observed = sum(item.input_rows.get(role, 0) for item in workers)
-        role_evidence.append(
-            TorchRoleExecutionEvidence(
-                role=role,
-                mode="split_exact",
-                required=True,
-                present=True,
-                empty_rank_policy="reject",
-                expected_rows=expected_rows.get(role),
-                observed_rows=observed,
-                rows_per_rank=tuple(item.input_rows.get(role, 0) for item in workers),
-                binding_digest=_binding_digest_for_role(plan, role),
-            )
-        )
-    global_digest = metrics.get("model_state_digest")
-    if not isinstance(global_digest, str) or len(global_digest) != 64:
-        raise AlgorithmExecutionError("Torch execution did not report a model digest")
-    evidence = TorchExecutionEvidence(
-        identity=identity,
-        run_config_name=torch_run_config_name(identity),
-        policy_digest=_policy(plan).digest,
-        parallelism_id=_policy(plan).parallelism_id,
-        state_layout=_policy(plan).state_layout,
-        workers=workers,
-        roles=tuple(role_evidence),
-        replicated_state=(
-            __import__(
-                "tributo.algorithms.api.execution",
-                fromlist=["ReplicatedTorchStateEvidence"],
-            ).ReplicatedTorchStateEvidence(
-                model_digests_by_rank={
-                    item.rank: item.model_state_digest for item in workers
-                },
-                global_model_digest=global_digest,
-            )
-            if _policy(plan).state_layout == "replicated"
-            else None
-        ),
-    )
-    return (evidence.to_dict(),)
+    return rows, replicated_bytes_by_role
 
 
 def _binding_digest_for_role(plan: Any, role: str) -> str:
-    """Resolve a role digest, falling back to the primary binding for aliases."""
+    """Resolve the digest of one actually bound input role."""
     if hasattr(plan.input_descriptors, "get"):
         try:
             descriptor = plan.input_descriptors.get(role)
@@ -894,7 +601,9 @@ def _binding_digest_for_role(plan: Any, role: str) -> str:
             descriptor = None
         if descriptor is not None:
             return cast(str, descriptor.binding_digest)
-    return cast(str, plan.primary_input_descriptor.binding_digest)
+    raise AlgorithmConfigurationError(
+        f"Torch input role {role!r} has no binding digest"
+    )
 
 
 def _input_binding_digest(plan: Any) -> str:
@@ -947,6 +656,7 @@ def _component_stage_evidence(
     identity: TorchStageRunIdentity,
     metrics: Mapping[str, Any],
     expected_rows: Mapping[str, int],
+    replicated_bytes_by_role: Mapping[str, int],
 ) -> ComponentStageEvidence:
     raw_workers = metrics.get("execution_workers")
     if not isinstance(raw_workers, (list, tuple)):
@@ -963,14 +673,13 @@ def _component_stage_evidence(
         stage=stage,
         workers=workers,
         expected_rows=expected_rows,
+        replicated_bytes_by_role=replicated_bytes_by_role,
     )
     state_digest = metrics.get("model_state_digest")
     descriptor = metrics.get("checkpoint_descriptor")
     if not isinstance(state_digest, str) or len(state_digest) != 64:
         raise AlgorithmExecutionError("Torch Stage did not report a state digest")
-    if getattr(stage, "checkpoint_required", True) and not isinstance(
-        descriptor, Mapping
-    ):
+    if not isinstance(descriptor, Mapping):
         raise AlgorithmExecutionError(
             "Torch Stage did not report a checkpoint descriptor"
         )
@@ -988,60 +697,16 @@ def _component_stage_evidence(
     )
 
 
-def _recovered_stage_evidence(
-    *,
-    plan: Any,
-    policy: Any,
-    stage: Any,
-    descriptor: Mapping[str, Any],
-    evidence: Mapping[str, Any],
-) -> ComponentStageEvidence:
-    """Rebuild component evidence persisted beside a completed Stage checkpoint."""
-    workers_value = evidence.get("execution_workers")
-    state_digest = evidence.get("model_state_digest")
-    if not isinstance(workers_value, (list, tuple)) or not isinstance(
-        state_digest, str
-    ):
-        raise AlgorithmExecutionError(
-            f"Torch recovery checkpoint for Stage {stage.stage_id!r} has no evidence"
-        )
-    workers = tuple(
-        WorkerExecutionEvidence.from_dict(item)
-        for item in _normalize_worker_evidence(workers_value, plan)
-    )
-    if len(workers) != plan.runtime.worker_count:
-        raise AlgorithmExecutionError(
-            "Torch recovery Stage worker evidence is incomplete"
-        )
-    expected_rows: dict[str, int] = {}
-    routes = {route.role: route for route in policy.dataset_routing}
-    for role in stage.input_roles:
-        route = routes[role]
-        rows = tuple(worker.input_rows.get(role, 0) for worker in workers)
-        if route.mode == "replicate":
-            if rows and len(set(rows)) == 1:
-                expected_rows[role] = rows[0]
-        elif sum(rows) > 0:
-            expected_rows[role] = sum(rows)
-    metrics = dict(evidence)
-    metrics["checkpoint_descriptor"] = dict(descriptor)
-    identity = TorchStageRunIdentity.from_dict(descriptor["identity"])
-    return _component_stage_evidence(
-        plan=plan,
-        policy=policy,
-        stage=stage,
-        identity=identity,
-        metrics=metrics,
-        expected_rows=expected_rows,
-    )
-
-
 def _component_state_details(
     stages: tuple[ComponentStageEvidence, ...],
+    final_stage_id: str | None = None,
 ) -> dict[str, str | int]:
     """Project component evidence into the scalar Core state receipt details."""
     if not stages:
         raise AlgorithmExecutionError("Torch component state requires Stage evidence")
+    anchor_stage = final_stage_id or stages[-1].stage_id
+    if anchor_stage not in {stage.stage_id for stage in stages}:
+        raise AlgorithmExecutionError("Torch component final Stage evidence is missing")
     composition_digest = hashlib.sha256(
         json.dumps(
             [stage.to_dict() for stage in stages],
@@ -1053,7 +718,7 @@ def _component_state_details(
         "framework": "torch_component",
         "component_stage_count": len(stages),
         "component_stages": ",".join(stage.stage_id for stage in stages),
-        "anchor_stage": stages[-1].stage_id,
+        "anchor_stage": anchor_stage,
         "composition_digest": composition_digest,
     }
     for stage in stages:
@@ -1076,6 +741,7 @@ def _role_execution_evidence(
     stage: Any,
     workers: tuple[WorkerExecutionEvidence, ...],
     expected_rows: Mapping[str, int],
+    replicated_bytes_by_role: Mapping[str, int],
 ) -> tuple[TorchRoleExecutionEvidence, ...]:
     """Build role evidence from the Policy route instead of a default split."""
     routes = {route.role: route for route in policy.dataset_routing}
@@ -1092,7 +758,7 @@ def _role_execution_evidence(
                     f"Torch replicate role {role!r} is not identical across workers"
                 )
             observed_rows = rows_per_rank[0]
-            replicated_bytes = route.max_bytes_per_worker
+            replicated_bytes = replicated_bytes_by_role.get(role)
         else:
             observed_rows = sum(rows_per_rank)
             replicated_bytes = None
@@ -1115,7 +781,9 @@ def _role_execution_evidence(
                 observed_rows=observed_rows,
                 rows_per_rank=rows_per_rank,
                 replicated_bytes_per_worker=replicated_bytes,
-                binding_digest=_binding_digest_for_role(plan, role),
+                binding_digest=(
+                    _binding_digest_for_role(plan, role) if present else None
+                ),
             )
         )
     return tuple(evidence)
@@ -1129,7 +797,7 @@ def _reduce_composite_loss(
     device: object,
     dist: Any,
     observation: dict[str, object] | None = None,
-    expected_metrics: frozenset[str] = frozenset(),
+    expected_reducer_metrics: frozenset[str] = frozenset({"train_loss"}),
 ) -> TorchGlobalLossReduction:
     """AllReduce generic component state, then invoke the Wheel-owned reducer."""
     import torch
@@ -1232,9 +900,9 @@ def _reduce_composite_loss(
         raise AlgorithmExecutionError(
             f"Composite loss reducer rejected contribution: {reduction.failure_code}"
         )
-    if not expected_metrics.issubset(set(reduction.metrics)):
+    if set(reduction.metrics) != set(expected_reducer_metrics):
         raise AlgorithmExecutionError(
-            "Composite reducer did not return every declared metric"
+            "Composite reducer metrics do not match its declared metric surface"
         )
     if "train_loss" not in reduction.metrics:
         raise AlgorithmExecutionError(
@@ -1255,7 +923,7 @@ def _composite_backward(
     dist: Any,
     observation: dict[str, object] | None = None,
     metric_totals: dict[str, list[float]] | None = None,
-    expected_metrics: frozenset[str] = frozenset(),
+    expected_reducer_metrics: frozenset[str] = frozenset({"train_loss"}),
 ) -> object:
     """Reduce a Composite loss and return its Core-scaled backward scalar."""
     reduction = _reduce_composite_loss(
@@ -1265,7 +933,7 @@ def _composite_backward(
         device=device,
         dist=dist,
         observation=observation,
-        expected_metrics=expected_metrics,
+        expected_reducer_metrics=expected_reducer_metrics,
     )
     if metric_totals is not None:
         _accumulate_metric_totals(metric_totals, reduction.metrics)
@@ -1277,159 +945,6 @@ def _composite_backward(
         )
         * world_size
     )
-
-
-def _restore_torch_retry_checkpoint(
-    checkpoint: object,
-    *,
-    stage_context: TorchStageContext,
-    model: object,
-    optimizer: object,
-    scheduler: object | None,
-    scaler: object,
-    rank: int,
-    strict_identity: bool = True,
-    progress_sink: dict[str, object] | None = None,
-    expected_accumulation: int | None = None,
-) -> int:
-    """Validate a Ray-injected retry checkpoint before loading any state."""
-    if checkpoint is None:
-        return 0
-    identity = stage_context.runtime.run_identity
-    if identity is None:
-        raise AlgorithmExecutionError("Torch retry Stage context has no identity")
-    ref = TorchCheckpointRef(checkpoint)
-    descriptor = describe_torch_checkpoint(
-        ref,
-        object()
-        if not strict_identity
-        else TorchCheckpointContext(
-            stage=stage_context,
-            run_id=identity.run_id,
-            invocation_id=identity.invocation_id,
-            checkpoint_owner="core",
-        ),
-    )
-    if strict_identity:
-        validate_torch_retry_identity(
-            descriptor,
-            identity,
-            world_size=stage_context.runtime.world_size,
-        )
-    elif descriptor.world_size != stage_context.runtime.world_size:
-        raise AlgorithmExecutionError(
-            "Torch source checkpoint world size does not match current Stage"
-        )
-    with _opened_checkpoint(checkpoint) as root:
-        import torch
-
-        model_path = root / "model.pt"
-        optimizer_path = root / "optimizer.pt"
-        scaler_path = root / "scaler.pt"
-        rng_path = root / "rng_state.pt"
-        if any(
-            path.is_symlink() or not path.is_file()
-            for path in (model_path, optimizer_path, scaler_path, rng_path)
-        ):
-            raise AlgorithmExecutionError(
-                "Torch retry checkpoint is missing required model/optimizer/scaler/RNG state"
-            )
-        target_model = cast(Any, getattr(model, "module", model))
-        target_model.load_state_dict(
-            torch.load(model_path, map_location="cpu", weights_only=True)
-        )
-        cast(Any, optimizer).load_state_dict(
-            torch.load(optimizer_path, map_location="cpu", weights_only=True)
-        )
-        cast(Any, scaler).load_state_dict(
-            torch.load(scaler_path, map_location="cpu", weights_only=True)
-        )
-        scheduler_path = root / "scheduler.pt"
-        if scheduler is not None:
-            if scheduler_path.is_symlink() or not scheduler_path.is_file():
-                raise AlgorithmExecutionError(
-                    "Torch retry checkpoint is missing configured scheduler state"
-                )
-            cast(Any, scheduler).load_state_dict(
-                torch.load(scheduler_path, map_location="cpu", weights_only=True)
-            )
-        payload = torch.load(rng_path, map_location="cpu", weights_only=True)
-        if not isinstance(payload, Mapping) or not isinstance(
-            payload.get("states"), list
-        ):
-            raise AlgorithmExecutionError("Torch retry RNG state is malformed")
-        states = payload["states"]
-        if (
-            payload.get("world_size") != stage_context.runtime.world_size
-            or len(states) != stage_context.runtime.world_size
-            or rank >= len(states)
-            or not isinstance(states[rank], bytes)
-        ):
-            raise AlgorithmExecutionError(
-                "Torch retry checkpoint is missing the rank RNG state"
-            )
-        rng = torch.frombuffer(states[rank], dtype=torch.uint8).clone()
-        torch.set_rng_state(rng)
-        cuda_states = payload.get("cuda_states_by_rank")
-        if torch.cuda.is_available():
-            if (
-                not isinstance(cuda_states, list)
-                or len(cuda_states) != stage_context.runtime.world_size
-                or rank >= len(cuda_states)
-                or not isinstance(cuda_states[rank], list)
-                or any(not isinstance(state, bytes) for state in cuda_states[rank])
-            ):
-                raise AlgorithmExecutionError("Torch retry CUDA RNG state is malformed")
-            torch.cuda.set_rng_state_all(
-                [
-                    torch.frombuffer(state, dtype=torch.uint8).clone()
-                    for state in cuda_states[rank]
-                ]
-            )
-        progress_path = root / "torch_progress.json"
-        if progress_path.is_symlink() or not progress_path.is_file():
-            raise AlgorithmExecutionError(
-                "Torch checkpoint is missing deterministic progress state"
-            )
-        try:
-            progress = TorchCheckpointProgress.from_dict(
-                json.loads(progress_path.read_text(encoding="utf-8"))
-            )
-        except (OSError, TypeError, ValueError) as exc:
-            raise AlgorithmExecutionError(
-                "Torch checkpoint progress state is malformed"
-            ) from exc
-        if progress.optimizer_step != descriptor.completed_step:
-            raise AlgorithmExecutionError(
-                "Torch checkpoint progress and descriptor step differ"
-            )
-        if (
-            expected_accumulation is not None
-            and progress.accumulation_steps != expected_accumulation
-        ):
-            raise AlgorithmExecutionError(
-                "Torch checkpoint accumulation configuration differs"
-            )
-        if expected_accumulation is not None and (
-            len(progress.dataset_cursor_by_rank) != stage_context.runtime.world_size
-            or str(rank) not in progress.dataset_cursor_by_rank
-        ):
-            raise AlgorithmExecutionError(
-                "Torch checkpoint dataset cursor does not cover every rank"
-            )
-        if expected_accumulation is not None:
-            raw_rank_statistics = progress.rank_statistics
-            if (
-                len(raw_rank_statistics) != stage_context.runtime.world_size
-                or str(rank) not in raw_rank_statistics
-            ):
-                raise AlgorithmExecutionError(
-                    "Torch checkpoint statistics do not cover every rank"
-                )
-        if progress_sink is not None:
-            progress_sink.update(progress.to_dict())
-            progress_sink["_typed_progress"] = progress
-    return descriptor.completed_step
 
 
 def _finalize_torch_window(
@@ -1454,296 +969,40 @@ def _finalize_torch_window(
     optimizer.zero_grad()
 
 
-def _should_apply_epoch_scheduler(
-    *,
-    restore_same_stage: bool,
-    epoch: int,
-    restored_epoch: int,
-    restored_epoch_scheduler_applied: bool,
-) -> bool:
-    """Return whether the epoch boundary still owes one scheduler step."""
-    return not (
-        restore_same_stage
-        and epoch == restored_epoch
-        and restored_epoch_scheduler_applied
-    )
-
-
 def _select_worker_checkpoint(
     config: Mapping[str, Any],
     stage_context: TorchStageContext,
 ) -> TorchWorkerCheckpointContext:
-    """Select retry first, then Core control, never the reverse."""
-    import ray.train
-
-    retry = ray.train.get_checkpoint()
-    identity = stage_context.runtime.run_identity
-    if identity is None:
-        raise AlgorithmExecutionError("Torch Worker Stage context has no identity")
-    if retry is not None:
-        descriptor = describe_torch_checkpoint(
-            TorchCheckpointRef(retry),
-            TorchCheckpointContext(
-                stage=stage_context,
-                run_id=identity.run_id,
-                invocation_id=identity.invocation_id,
-                checkpoint_owner="core",
-            ),
-        )
-        validate_torch_retry_identity(
-            descriptor,
-            identity,
-            world_size=stage_context.runtime.world_size,
-        )
+    """Expose only an invocation-local Stage dependency to the algorithm."""
+    initial = config.get("_core_initial_checkpoint")
+    if initial is not None:
+        source = config.get("_core_checkpoint_source")
+        if source != "stage_dependency":
+            raise AlgorithmExecutionError("Torch initial checkpoint source is invalid")
+        descriptor = _describe_torch_checkpoint(TorchCheckpointRef(initial), object())
+        if (
+            descriptor.policy_digest != stage_context.runtime.policy_digest
+            or descriptor.execution_plan_digest
+            != stage_context.runtime.execution_plan_digest
+            or descriptor.world_size != stage_context.runtime.world_size
+            or descriptor.state_layout != stage_context.runtime.state_layout
+        ):
+            raise AlgorithmExecutionError("Torch initial checkpoint is incompatible")
+        if source == "stage_dependency" and (
+            descriptor.identity.stage_id != stage_context.predecessor_stage_id
+        ):
+            raise AlgorithmExecutionError("Torch predecessor checkpoint is invalid")
         return TorchWorkerCheckpointContext(
             stage=stage_context,
-            source="ray_failure_retry",
+            source=source,
             checkpoint=TorchCheckpointRef(
-                retry,
+                initial,
                 descriptor_digest=descriptor.digest,
                 source_stage_id=descriptor.identity.stage_id,
                 descriptor=descriptor,
             ),
         )
-    control_value = config.get("core_control")
-    if control_value is None:
-        return TorchWorkerCheckpointContext(stage=stage_context, source="none")
-    if not isinstance(control_value, Mapping):
-        raise AlgorithmExecutionError("Torch Core control envelope is malformed")
-    control = TorchWorkerControlEnvelope.from_dict(control_value)
-    if (
-        control.target_stage_id != stage_context.stage_id
-        or control.run_id != identity.run_id
-        or control.invocation_id != identity.invocation_id
-        or control.policy_digest != stage_context.runtime.policy_digest
-        or control.execution_plan_digest != stage_context.runtime.execution_plan_digest
-    ):
-        raise AlgorithmExecutionError("Torch Core control envelope identity mismatch")
-    opener = config.get("_core_checkpoint_opener")
-    if opener is None:
-        opener_ref = config.get("_core_checkpoint_opener_ref")
-        if isinstance(opener_ref, str):
-            opener = _load_reference(QualifiedReference.parse(opener_ref))
-    if not callable(opener):
-        raise AlgorithmExecutionError(
-            "Torch Core control envelope has no verified checkpoint opener"
-        )
-    checkpoint = opener(control.checkpoint_locator)
-    descriptor = describe_torch_checkpoint(
-        TorchCheckpointRef(checkpoint),
-        object(),
-    )
-    _require_checkpoint_commit(checkpoint, descriptor)
-    if descriptor.digest != control.checkpoint_descriptor_digest:
-        raise AlgorithmExecutionError("Torch Core control descriptor mismatch")
-    expected_binding = stage_context.runtime.input_binding_digest
-    if (
-        descriptor.policy_digest != stage_context.runtime.policy_digest
-        or descriptor.execution_plan_digest
-        != stage_context.runtime.execution_plan_digest
-        or (
-            expected_binding is not None
-            and descriptor.input_binding_digest != expected_binding
-        )
-        or descriptor.identity.implementation_id
-        != stage_context.runtime.implementation_id
-        or descriptor.implementation_code_digest != identity.implementation_code_digest
-        or descriptor.world_size != stage_context.runtime.world_size
-        or descriptor.state_layout != stage_context.runtime.state_layout
-    ):
-        raise AlgorithmExecutionError("Torch Core control descriptor identity mismatch")
-    if control.purpose == "stage_dependency" and (
-        descriptor.identity.stage_id != control.source_stage_id
-        or control.source_stage_id != stage_context.predecessor_stage_id
-        or descriptor.identity.run_id != identity.run_id
-        or descriptor.identity.invocation_id != identity.invocation_id
-    ):
-        raise AlgorithmExecutionError("Torch Core control source Stage mismatch")
-    if (
-        control.purpose == "cross_run_initial_recovery"
-        and not descriptor.resume_supported
-    ):
-        raise AlgorithmExecutionError("Torch checkpoint is not externally recoverable")
-    return TorchWorkerCheckpointContext(
-        stage=stage_context,
-        source=(
-            "stage_dependency"
-            if control.purpose == "stage_dependency"
-            else "cross_run_initial_recovery"
-        ),
-        checkpoint=TorchCheckpointRef(
-            checkpoint,
-            descriptor_digest=descriptor.digest,
-            source_stage_id=descriptor.identity.stage_id,
-            descriptor=descriptor,
-        ),
-    )
-
-
-def open_torch_checkpoint_locator(locator: TorchCheckpointLocator) -> object:
-    """Core-owned locator opener hook; credentials are resolved by the runtime."""
-    if not isinstance(locator, TorchCheckpointLocator):
-        raise AlgorithmExecutionError("Torch checkpoint locator is invalid")
-    if locator.uri.startswith("ray://"):
-        from ray.train import Checkpoint
-
-        path = Path(locator.uri.removeprefix("ray://"))
-        if path.is_dir():
-            try:
-                return Checkpoint.from_directory(str(path))
-            except (OSError, ValueError, TypeError) as exc:
-                raise AlgorithmExecutionError(
-                    "Torch checkpoint locator could not be opened"
-                ) from exc
-    if locator.uri.startswith(("s3://", "gs://", "gcs://", "hdfs://")):
-        from ray.train import Checkpoint
-
-        try:
-            return Checkpoint(locator.uri)
-        except (OSError, ValueError, TypeError) as exc:
-            raise AlgorithmExecutionError(
-                "Torch checkpoint locator could not be opened"
-            ) from exc
-    raise AlgorithmExecutionError(
-        "Torch checkpoint locator requires a configured Core storage opener"
-    )
-
-
-def _persist_stage_checkpoint(
-    checkpoint: object,
-    *,
-    identity: TorchStageRunIdentity,
-    storage_path: object,
-    descriptor_digest: str,
-) -> str | None:
-    """Persist a same-invocation Stage checkpoint without replacing prior data."""
-    if not isinstance(storage_path, (str, Path)):
-        return None
-    raw_storage = str(storage_path)
-    if "://" in raw_storage and not raw_storage.startswith("file://"):
-        from urllib.parse import urlsplit
-
-        opener = getattr(checkpoint, "as_directory", None)
-        if not callable(opener):
-            raise AlgorithmExecutionError(
-                "Torch remote Stage checkpoint cannot be opened for Core persistence"
-            )
-        try:
-            import pyarrow.fs as pafs
-
-            parsed = urlsplit(raw_storage)
-            filesystem, prefix = pafs.FileSystem.from_uri(raw_storage)
-            remote_staging = (
-                f"{prefix.rstrip('/')}/{identity.run_config_name}/"
-                f".stage_checkpoint.staging-{descriptor_digest}"
-            )
-            commit_path = f"{remote_staging}/torch_stage_commit.json"
-            commit_info = filesystem.get_file_info(commit_path)
-            commit_payload = {
-                "schema_version": 1,
-                "identity": identity.to_dict(),
-                "descriptor_digest": descriptor_digest,
-            }
-            if commit_info.type is pafs.FileType.File:
-                try:
-                    existing_commit = json.loads(
-                        filesystem.open_input_file(commit_path).read().decode("utf-8")
-                    )
-                except (OSError, TypeError, ValueError) as exc:
-                    raise AlgorithmExecutionError(
-                        "Torch remote Stage checkpoint commit marker is malformed"
-                    ) from exc
-                if existing_commit != commit_payload:
-                    raise AlgorithmExecutionError(
-                        "Torch remote Stage checkpoint identity collision"
-                    )
-                return f"{parsed.scheme}://{parsed.netloc}/{remote_staging.lstrip('/')}"
-            filesystem.create_dir(remote_staging, recursive=True)
-            with opener() as source:
-                source_path = Path(source)
-                for source_file in source_path.rglob("*"):
-                    if source_file.is_symlink():
-                        raise AlgorithmExecutionError(
-                            "Torch Stage checkpoint payload contains a symlink"
-                        )
-                    if not source_file.is_file():
-                        continue
-                    relative = source_file.relative_to(source_path).as_posix()
-                    destination = f"{remote_staging.rstrip('/')}/{relative}"
-                    with filesystem.open_output_stream(destination) as stream:
-                        stream.write(source_file.read_bytes())
-            with filesystem.open_output_stream(commit_path) as stream:
-                stream.write(
-                    (json.dumps(commit_payload, sort_keys=True) + "\n").encode()
-                )
-            if not parsed.scheme or not parsed.netloc:
-                raise AlgorithmExecutionError("Torch remote storage URI is invalid")
-            return f"{parsed.scheme}://{parsed.netloc}/{remote_staging.lstrip('/')}"
-        except AlgorithmExecutionError:
-            raise
-        except (ImportError, OSError, TypeError, ValueError) as exc:
-            raise AlgorithmExecutionError(
-                "failed to persist Torch Stage checkpoint in Core storage"
-            ) from exc
-    root = Path(storage_path)
-    if not root.is_absolute():
-        return None
-    target = root / identity.run_config_name / "stage_checkpoint"
-    commit_path_local = target / "torch_stage_commit.json"
-    commit_payload = {
-        "schema_version": 1,
-        "identity": identity.to_dict(),
-        "descriptor_digest": descriptor_digest,
-    }
-    if target.exists():
-        if target.is_symlink() or not target.is_dir():
-            raise AlgorithmExecutionError(
-                "Torch Stage checkpoint destination is not a directory"
-            )
-        if not commit_path_local.is_file() or commit_path_local.is_symlink():
-            raise AlgorithmExecutionError(
-                "Torch Stage checkpoint destination is a partial or uncommitted snapshot"
-            )
-        try:
-            if (
-                json.loads(commit_path_local.read_text(encoding="utf-8"))
-                != commit_payload
-            ):
-                raise AlgorithmExecutionError(
-                    "Torch Stage checkpoint identity collision"
-                )
-        except (OSError, TypeError, ValueError) as exc:
-            raise AlgorithmExecutionError(
-                "Torch Stage checkpoint commit marker is malformed"
-            ) from exc
-        return f"ray://{target}"
-    opener = getattr(checkpoint, "as_directory", None)
-    if not callable(opener):
-        return None
-    temporary_target = Path(
-        tempfile.mkdtemp(
-            prefix=f".{target.name}.staging-{descriptor_digest}-",
-            dir=target.parent,
-        )
-    )
-    with opener() as source:
-        source_path = Path(source)
-        for source_file in source_path.rglob("*"):
-            if source_file.is_symlink():
-                raise AlgorithmExecutionError(
-                    "Torch Stage checkpoint payload contains a symlink"
-                )
-            if not source_file.is_file():
-                continue
-            relative_local = source_file.relative_to(source_path)
-            destination_local = temporary_target / relative_local
-            destination_local.parent.mkdir(parents=True, exist_ok=True)
-            destination_local.write_bytes(source_file.read_bytes())
-        (temporary_target / "torch_stage_commit.json").write_text(
-            json.dumps(commit_payload, sort_keys=True) + "\n", encoding="utf-8"
-        )
-    os.replace(temporary_target, target)
-    return f"ray://{target}"
+    return TorchWorkerCheckpointContext(stage=stage_context, source="none")
 
 
 def _recipe_worker(config: Mapping[str, Any]) -> None:
@@ -1757,7 +1016,14 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
         raise AlgorithmConfigurationError(
             "Core Worker implementation reference is missing"
         )
-    recipe = _load_reference(QualifiedReference.parse(recipe_ref))
+    recipe_reference = QualifiedReference.parse(recipe_ref)
+    recipe_digest = config.get("_core_implementation_code_digest")
+    if not isinstance(recipe_digest, str):
+        raise AlgorithmConfigurationError(
+            "Core Worker implementation code digest is missing"
+        )
+    _validate_module_digest(recipe_reference, recipe_digest)
+    recipe = _load_reference(recipe_reference)
     if not isinstance(recipe, type) or not issubclass(recipe, TorchRecipe):
         raise AlgorithmConfigurationError("Core Worker did not receive a TorchRecipe")
     recipe_instance = recipe()
@@ -1766,6 +1032,13 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
         raise AlgorithmConfigurationError("Core Worker stage context is missing")
     stage_context = TorchStageContext.from_dict(stage_context_value)
     runtime_context = stage_context.runtime
+    training = config.get("training", {})
+    if not isinstance(training, Mapping):
+        raise AlgorithmConfigurationError("Torch training config must be a mapping")
+    seed = training.get("seed", 42)
+    if not isinstance(seed, int) or isinstance(seed, bool):
+        raise AlgorithmConfigurationError("Torch training seed must be an integer")
+    torch.manual_seed(seed)
     modules = recipe_instance.build_modules(
         TorchBuildContext(runtime=runtime_context, stage=stage_context)
     )
@@ -1812,9 +1085,6 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
     multi_role = len(training_roles) > 1
     rank = ray.train.get_context().get_world_rank()
     world_size = ray.train.get_context().get_world_size()
-    training = config.get("training", {})
-    if not isinstance(training, Mapping):
-        raise AlgorithmConfigurationError("Torch training config must be a mapping")
     epochs = training.get("epochs", 1)
     shuffle = training.get("shuffle", False)
     if not isinstance(shuffle, bool):
@@ -1836,87 +1106,28 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
     if amp and not torch.cuda.is_available():
         raise AlgorithmConfigurationError("Torch AMP requires CUDA")
     scaler = torch.amp.GradScaler("cuda", enabled=amp)
-    seed = training.get("seed", 42)
-    if not isinstance(seed, int) or isinstance(seed, bool):
-        raise AlgorithmConfigurationError("Torch training seed must be an integer")
     torch.manual_seed(seed + rank)
-    scheduler = optimization.scheduler
     accumulation = optimization.gradient_accumulation_steps
     checkpoint_context = _select_worker_checkpoint(config, stage_context)
-    restored_progress: dict[str, object] = {}
-    try:
-        loaded_step = _restore_torch_retry_checkpoint(
-            checkpoint_context.checkpoint.checkpoint
-            if checkpoint_context.checkpoint is not None
-            else None,
-            stage_context=stage_context,
-            model=model,
-            optimizer=optimization.optimizer,
-            scheduler=scheduler,
-            scaler=scaler,
-            rank=rank,
-            strict_identity=checkpoint_context.source == "ray_failure_retry",
-            progress_sink=restored_progress,
-            expected_accumulation=(
-                accumulation
-                if checkpoint_context.source
-                in {"ray_failure_retry", "cross_run_initial_recovery"}
-                else None
-            ),
+    if checkpoint_context.checkpoint is not None:
+        checkpoint_context.checkpoint.close()
+    if checkpoint_context.source != "none":
+        raise AlgorithmConfigurationError(
+            "TorchRecipe v1 accepts no external or predecessor checkpoint"
         )
-        restored_step = (
-            loaded_step
-            if checkpoint_context.source
-            in {"ray_failure_retry", "cross_run_initial_recovery"}
-            else 0
-        )
-    finally:
-        if checkpoint_context.checkpoint is not None:
-            checkpoint_context.checkpoint.close()
-    restore_same_stage = checkpoint_context.source in {
-        "ray_failure_retry",
-        "cross_run_initial_recovery",
-    }
-    typed_progress = restored_progress.get("_typed_progress")
-    if restore_same_stage and not isinstance(typed_progress, TorchCheckpointProgress):
-        raise AlgorithmExecutionError("Torch checkpoint progress is not typed")
-    restored_checkpoint_progress = (
-        cast(TorchCheckpointProgress, typed_progress) if restore_same_stage else None
-    )
-    rank_statistics = (
-        restored_checkpoint_progress.rank_statistics.get(str(rank))
-        if restored_checkpoint_progress is not None
-        else None
-    )
-    if restore_same_stage and not isinstance(
-        rank_statistics, TorchRankProgressStatistics
-    ):
-        raise AlgorithmExecutionError("Torch checkpoint rank statistics are missing")
-
-    rows = rank_statistics.rows_processed if rank_statistics is not None else 0
+    # Ray owns Worker retry. Recipe retries deliberately restart the Stage from
+    # its deterministic seed and Dataset beginning; only the completed Stage is
+    # checkpointed below for export.
+    rows = 0
     steps = 0
-    coverage_totals = (
-        dict(rank_statistics.coverage_totals) if rank_statistics is not None else {}
-    )
-    loss_numerator_total = (
-        rank_statistics.loss_numerator_total if rank_statistics is not None else 0.0
-    )
-    loss_normalizer_total = (
-        rank_statistics.loss_normalizer_total if rank_statistics is not None else 0.0
-    )
-    metric_totals = (
-        {name: list(pair) for name, pair in rank_statistics.metric_totals.items()}
-        if rank_statistics is not None
-        else {}
-    )
-    evaluation_totals = (
-        {name: list(pair) for name, pair in rank_statistics.evaluation_totals.items()}
-        if rank_statistics is not None
-        else {}
-    )
-    reducer_observation: dict[str, object] = (
-        dict(rank_statistics.reducer_observation) if rank_statistics is not None else {}
-    )
+    optimizer_steps = 0
+    coverage_totals: dict[str, int] = {}
+    loss_numerator_total = 0.0
+    loss_normalizer_total = 0.0
+    metric_totals: dict[str, list[float]] = {}
+    evaluation_totals: dict[str, list[float]] = {}
+    evaluation_rows: dict[str, int] = {}
+    reducer_observation: dict[str, object] = {}
     composite_loss_seen = False
     batch_context = TorchBatchContext(
         stage=stage_context,
@@ -1937,240 +1148,7 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
             else None
         ),
     )
-    checkpoint_interval = config.get("_core_checkpoint_interval_windows", 1)
-    if (
-        not isinstance(checkpoint_interval, int)
-        or isinstance(checkpoint_interval, bool)
-        or checkpoint_interval < 1
-    ):
-        raise AlgorithmConfigurationError(
-            "Torch checkpoint interval must be a positive integer"
-        )
     import torch.distributed as dist
-
-    def emit_checkpoint(
-        completed_step: int,
-        *,
-        epoch: int,
-        micro_batch_cursor: int,
-        scheduler_step: int,
-        rows_processed: int,
-        coverage_totals: Mapping[str, int],
-        loss_numerator_total: float,
-        loss_normalizer_total: float,
-        metric_totals: Mapping[str, list[float]],
-        evaluation_totals: Mapping[str, list[float]],
-        reducer_observation: Mapping[str, object],
-    ) -> None:
-        """Report an optimizer-boundary checkpoint for Ray failure retry."""
-        from ray.train import Checkpoint
-
-        identity = runtime_context.run_identity
-        if identity is None:
-            raise AlgorithmExecutionError("Torch Worker stage context has no identity")
-        checkpoint_dir = Path(tempfile.mkdtemp(prefix="tributo_torch_checkpoint_"))
-        try:
-            target_model = getattr(model, "module", model)
-            torch.save(target_model.state_dict(), checkpoint_dir / "model.pt")
-            torch.save(
-                cast(Any, optimizer).state_dict(), checkpoint_dir / "optimizer.pt"
-            )
-            torch.save(cast(Any, scaler).state_dict(), checkpoint_dir / "scaler.pt")
-            if scheduler is not None:
-                torch.save(
-                    cast(Any, scheduler).state_dict(), checkpoint_dir / "scheduler.pt"
-                )
-            cursor_by_rank: list[object] = [None] * world_size
-            if dist.is_available() and dist.is_initialized():
-                dist.all_gather_object(cursor_by_rank, micro_batch_cursor)
-            else:
-                cursor_by_rank = [micro_batch_cursor]
-            if any(
-                not isinstance(value, int) or isinstance(value, bool) or value < 0
-                for value in cursor_by_rank
-            ):
-                raise AlgorithmExecutionError(
-                    "Torch dataset cursor collective is incomplete"
-                )
-            local_statistics = TorchRankProgressStatistics(
-                rows_processed=rows_processed,
-                coverage_totals=coverage_totals,
-                loss_numerator_total=loss_numerator_total,
-                loss_normalizer_total=loss_normalizer_total,
-                metric_totals={
-                    name: (values[0], values[1])
-                    for name, values in metric_totals.items()
-                },
-                evaluation_totals={
-                    name: (values[0], values[1])
-                    for name, values in evaluation_totals.items()
-                },
-                reducer_observation=reducer_observation,
-            )
-            statistics_by_rank: list[object] = [None] * world_size
-            if dist.is_available() and dist.is_initialized():
-                dist.all_gather_object(statistics_by_rank, local_statistics.to_dict())
-            else:
-                statistics_by_rank = [local_statistics.to_dict()]
-            if any(not isinstance(value, Mapping) for value in statistics_by_rank):
-                raise AlgorithmExecutionError(
-                    "Torch checkpoint statistics collective is incomplete"
-                )
-            progress = TorchCheckpointProgress(
-                epoch=epoch,
-                micro_batch_cursor=micro_batch_cursor,
-                optimizer_step=completed_step,
-                scheduler_step=scheduler_step,
-                accumulation_steps=accumulation,
-                dataset_cursor_by_rank={
-                    str(rank_id): cast(int, cursor)
-                    for rank_id, cursor in enumerate(cursor_by_rank)
-                },
-                shuffle_seed=int(seed + epoch),
-                rows_processed=rows_processed,
-                coverage_totals=coverage_totals,
-                loss_numerator_total=loss_numerator_total,
-                loss_normalizer_total=loss_normalizer_total,
-                metric_totals={
-                    name: (values[0], values[1])
-                    for name, values in metric_totals.items()
-                },
-                evaluation_totals={
-                    name: (values[0], values[1])
-                    for name, values in evaluation_totals.items()
-                },
-                rank_statistics={
-                    str(rank_id): TorchRankProgressStatistics.from_dict(
-                        cast(Mapping[str, Any], stats)
-                    )
-                    for rank_id, stats in enumerate(statistics_by_rank)
-                },
-                epoch_scheduler_applied=False,
-            )
-            (checkpoint_dir / "torch_progress.json").write_text(
-                json.dumps(progress.to_dict(), sort_keys=True, separators=(",", ":")),
-                encoding="utf-8",
-            )
-            cpu_rng = torch.get_rng_state().cpu().numpy().tobytes()
-            cpu_states: list[bytes | None] = [None] * world_size
-            if dist.is_available() and dist.is_initialized():
-                dist.all_gather_object(cpu_states, cpu_rng)
-            else:
-                cpu_states = [cpu_rng]
-            if any(not isinstance(value, bytes) for value in cpu_states):
-                raise AlgorithmExecutionError(
-                    "Torch RNG state collective is incomplete"
-                )
-            cuda_states_by_rank: list[list[bytes]] = []
-            if torch.cuda.is_available():
-                local_cuda = [
-                    state.cpu().numpy().tobytes()
-                    for state in torch.cuda.get_rng_state_all()
-                ]
-                gathered_cuda: list[object] = [None] * world_size
-                if dist.is_available() and dist.is_initialized():
-                    dist.all_gather_object(gathered_cuda, local_cuda)
-                    if any(
-                        not isinstance(value, list)
-                        or any(not isinstance(state, bytes) for state in value)
-                        for value in gathered_cuda
-                    ):
-                        raise AlgorithmExecutionError(
-                            "Torch CUDA RNG state collective is incomplete"
-                        )
-                    cuda_states_by_rank = cast(list[list[bytes]], gathered_cuda)
-                else:
-                    cuda_states_by_rank = [local_cuda]
-            torch.save(
-                {
-                    "world_size": world_size,
-                    "states": cast(list[bytes], cpu_states),
-                    "cuda_states_by_rank": cuda_states_by_rank,
-                },
-                checkpoint_dir / "rng_state.pt",
-            )
-            payload_names = [
-                "model.pt",
-                "optimizer.pt",
-                "scaler.pt",
-                "rng_state.pt",
-                "torch_progress.json",
-            ]
-            if scheduler is not None:
-                payload_names.append("scheduler.pt")
-            descriptor = TorchCheckpointDescriptor(
-                schema_version=1,
-                identity=identity,
-                run_config_name=identity.run_config_name,
-                state_layout=str(config.get("_core_state_layout", "replicated")),
-                world_size=world_size,
-                completed_step=completed_step,
-                policy_digest=runtime_context.policy_digest,
-                execution_plan_digest=runtime_context.execution_plan_digest,
-                input_binding_digest=str(config.get("_core_input_binding_digest", "")),
-                implementation_code_digest=str(
-                    config.get("_core_implementation_code_digest", "")
-                ),
-                payload_files={
-                    name: hashlib.sha256(
-                        (checkpoint_dir / name).read_bytes()
-                    ).hexdigest()
-                    for name in payload_names
-                },
-                adapter_identity=config.get("_core_adapter_identity"),
-                resume_supported=runtime_context.resume_supported,
-                same_world_size_resume=runtime_context.same_world_size_resume,
-            )
-
-            class _IntervalDraft:
-                checkpoint_dir: str | os.PathLike[str]
-
-                def __init__(self) -> None:
-                    self.checkpoint_dir = str(checkpoint_dir)
-
-                def report(
-                    self,
-                    *,
-                    metrics: Mapping[str, object],
-                    stage_context: object,
-                    completed_step: int,
-                ) -> None:
-                    del stage_context, completed_step
-                    checkpoint = (
-                        Checkpoint.from_directory(str(checkpoint_dir))
-                        if rank == int(config.get("_core_checkpoint_owner_rank", 0))
-                        else None
-                    )
-                    ray.train.report(dict(metrics), checkpoint=checkpoint)
-
-            report_torch_checkpoint(
-                {
-                    "train_loss": (
-                        loss_numerator_total / loss_normalizer_total
-                        if loss_normalizer_total > 0
-                        else 0.0
-                    ),
-                    "model_state_digest": hashlib.sha256(
-                        json.dumps(
-                            {
-                                name: str(
-                                    cast(Any, value).detach().cpu().numpy().tobytes()
-                                )
-                                for name, value in target_model.state_dict().items()
-                            },
-                            sort_keys=True,
-                        ).encode()
-                    ).hexdigest(),
-                    "checkpoint_descriptor": descriptor.to_dict(),
-                },
-                _IntervalDraft(),
-                stage_context,
-                completed_step,
-            )
-        finally:
-            import shutil
-
-            shutil.rmtree(checkpoint_dir, ignore_errors=True)
 
     def reduce_window(value: float) -> float:
         tensor = torch.tensor(
@@ -2203,104 +1181,35 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
     def aligned_metric_contributions(
         contributions: Mapping[str, TorchMetricContribution],
     ) -> dict[str, TorchMetricContribution]:
-        """Make metric keys identical before any later rank-wise reduction."""
+        """Reject metric-key drift on every rank before later collectives."""
         for _name, contribution in contributions.items():
             if not isinstance(contribution, TorchMetricContribution):
                 raise AlgorithmConfigurationError(
                     "TorchStepResult metrics must be TorchMetricContribution values"
                 )
-        names = set(contributions)
+        observed = sorted(contributions)
+        expected = sorted(declared_metric_names)
         if dist.is_available() and dist.is_initialized():
             gathered: list[object] = [None] * world_size
-            dist.all_gather_object(gathered, sorted(names))
-            for value in gathered:
-                if not isinstance(value, list) or any(
-                    not isinstance(name, str) for name in value
-                ):
-                    raise AlgorithmExecutionError(
-                        "Torch metric key collective is incomplete"
-                    )
-                names.update(value)
-        return {
-            name: contributions.get(name, TorchMetricContribution(0.0, 0.0))
-            for name in sorted(names)
-        }
+            dist.all_gather_object(gathered, observed)
+            if any(value != expected for value in gathered):
+                raise AlgorithmExecutionError(
+                    "TorchStepResult.metrics do not match TorchMetricPlan"
+                )
+        elif observed != expected:
+            raise AlgorithmExecutionError(
+                "TorchStepResult.metrics do not match TorchMetricPlan"
+            )
+        return dict(contributions)
 
-    raw_metric_mapping = config.get("_core_metric_mapping", {})
-    metric_mapping = (
-        {str(key): str(value) for key, value in raw_metric_mapping.items()}
-        if isinstance(raw_metric_mapping, Mapping)
-        else {}
-    )
-    if len(set(metric_mapping.values())) != len(metric_mapping):
-        raise AlgorithmConfigurationError("Torch metric mapping targets must be unique")
     raw_metric_reducers = config.get("_core_metric_reducers", {})
     if not isinstance(raw_metric_reducers, Mapping):
         raise AlgorithmConfigurationError("Torch metric reducers must be a mapping")
     declared_metric_names = {str(name) for name in raw_metric_reducers} - {"train_loss"}
-    expected_metric_names = frozenset(
-        {
-            source
-            for source, target in metric_mapping.items()
-            if target in declared_metric_names
-        }
-        | {
-            name
-            for name in declared_metric_names
-            if name not in metric_mapping.values()
-        }
-    )
-    restored_epoch = (
-        restored_checkpoint_progress.epoch
-        if restored_checkpoint_progress is not None
-        else 0
-    )
-    remaining_skip_micro_batches = (
-        restored_checkpoint_progress.dataset_cursor_by_rank[str(rank)]
-        if restored_checkpoint_progress is not None
-        else 0
-    )
-    scheduler_steps = (
-        restored_checkpoint_progress.scheduler_step
-        if restored_checkpoint_progress is not None
-        else 0
-    )
-    restored_epoch_scheduler_applied = (
-        restored_checkpoint_progress.epoch_scheduler_applied
-        if restored_checkpoint_progress is not None
-        else False
-    )
-    if restore_same_stage and restored_epoch >= epochs:
-        raise AlgorithmExecutionError(
-            "Torch checkpoint progress points past the configured epoch range"
-        )
-    if (
-        checkpoint_context.source
-        in {
-            "ray_failure_retry",
-            "cross_run_initial_recovery",
-        }
-        and restored_progress.get("shuffle_seed") != seed + restored_epoch
-    ):
-        raise AlgorithmExecutionError(
-            "Torch checkpoint shuffle state does not match the current seed"
-        )
-
-    def map_metric_contributions(
-        contributions: Mapping[str, TorchMetricContribution],
-    ) -> dict[str, TorchMetricContribution]:
-        return {
-            metric_mapping.get(name, name): contribution
-            for name, contribution in contributions.items()
-        }
 
     epoch_micro_batch_cursor = 0
     for _epoch in range(epochs):
-        if _epoch < restored_epoch:
-            continue
-        epoch_micro_batch_cursor = (
-            remaining_skip_micro_batches if _epoch == restored_epoch else 0
-        )
+        epoch_micro_batch_cursor = 0
         next_payload: Any
         if multi_role:
             role_iterators = {
@@ -2350,7 +1259,7 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
             dist.all_reduce(first_active, op=dist.ReduceOp.SUM)
         if int(first_active.item()) == 0:
             continue
-        if remaining_skip_micro_batches == 0 and int(first_active.item()) != world_size:
+        if int(first_active.item()) != world_size:
             raise AlgorithmExecutionError(
                 "TorchRecipe requires at least one batch on every rank"
             )
@@ -2360,7 +1269,7 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
                 "TorchRecipe.adapt_batch must return TorchBatch"
             )
         window = TorchAccumulationWindow(
-            index=restored_step + steps // accumulation,
+            index=optimizer_steps,
             expected_micro_batches=accumulation,
         )
         while True:
@@ -2375,11 +1284,6 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
             if int(active_tensor.item()) == 0:
                 break
             next_raw = next_payload()
-            if remaining_skip_micro_batches > 0:
-                remaining_skip_micro_batches -= 1
-                epoch_micro_batch_cursor += 1
-                raw = next_raw
-                continue
             next_active = torch.tensor(
                 1 if next_raw is not None else 0,
                 dtype=torch.int64,
@@ -2428,8 +1332,8 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
                     batch,
                     TorchStepContext(
                         stage=stage_context,
-                        window_index=restored_step + steps // accumulation,
-                        micro_batch_index=steps % accumulation,
+                        window_index=optimizer_steps,
+                        micro_batch_index=window.observed_micro_batches,
                     ),
                 )
                 if not isinstance(step, TorchStepResult):
@@ -2464,19 +1368,11 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
                         "TorchRecipe loss contribution is invalid"
                     )
                 for metric_name, contribution in aligned_metric_contributions(
-                    map_metric_contributions(step.metrics)
+                    step.metrics
                 ).items():
                     totals = metric_totals.setdefault(metric_name, [0.0, 0.0])
                     totals[0] += contribution.numerator
                     totals[1] += contribution.normalizer
-                mapped_step_metrics = map_metric_contributions(step.metrics)
-                if (
-                    not isinstance(step.loss, TorchCompositeLossContribution)
-                    and set(mapped_step_metrics) != declared_metric_names
-                ):
-                    raise AlgorithmExecutionError(
-                        "TorchStepResult.metrics do not match TorchMetricPlan"
-                    )
                 backward_context = TorchBackwardContext(
                     world_size=world_size,
                     backward=lambda value: scaler.scale(value).backward(),
@@ -2491,7 +1387,6 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
                             dist=dist,
                             observation=reducer_observation,
                             metric_totals=metric_totals,
-                            expected_metrics=expected_metric_names,
                         )
                     ),
                     finalize_window=lambda scale: _finalize_torch_window(
@@ -2511,6 +1406,7 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
                     backward_context,
                 )
             if result.window_complete:
+                optimizer_steps += 1
                 window = TorchAccumulationWindow(
                     index=window.index + 1,
                     expected_micro_batches=accumulation,
@@ -2520,37 +1416,14 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
             rows += batch.local_rows
             steps += 1
             epoch_micro_batch_cursor += 1
-            if (
-                result.window_complete
-                and (steps // accumulation) % checkpoint_interval == 0
-            ):
-                emit_checkpoint(
-                    restored_step + steps // accumulation,
-                    epoch=_epoch,
-                    micro_batch_cursor=epoch_micro_batch_cursor,
-                    scheduler_step=scheduler_steps,
-                    rows_processed=rows,
-                    coverage_totals=coverage_totals,
-                    loss_numerator_total=loss_numerator_total,
-                    loss_normalizer_total=loss_normalizer_total,
-                    metric_totals=metric_totals,
-                    evaluation_totals=evaluation_totals,
-                    reducer_observation=reducer_observation,
-                )
             raw = next_raw
-        if optimization.scheduler is not None and _should_apply_epoch_scheduler(
-            restore_same_stage=restore_same_stage,
-            epoch=_epoch,
-            restored_epoch=restored_epoch,
-            restored_epoch_scheduler_applied=restored_epoch_scheduler_applied,
-        ):
+        if optimization.scheduler is not None:
             scheduler_step = getattr(optimization.scheduler, "step", None)
             if not callable(scheduler_step):
                 raise AlgorithmConfigurationError(
                     "Torch scheduler must implement step()"
                 )
             scheduler_step()
-            scheduler_steps += 1
     for split in ("val", "test"):
         try:
             evaluation_data = ray.train.get_dataset_shard(split)
@@ -2621,16 +1494,9 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
                 raise AlgorithmConfigurationError(
                     "TorchRecipe.validation_step returned invalid result"
                 )
-            mapped_validation_metrics = map_metric_contributions(validation.metrics)
-            if (
-                not isinstance(validation.loss, TorchCompositeLossContribution)
-                and set(mapped_validation_metrics) != declared_metric_names
-            ):
-                raise AlgorithmExecutionError(
-                    "TorchRecipe.validation_step.metrics do not match TorchMetricPlan"
-                )
+            evaluation_rows[split] = evaluation_rows.get(split, 0) + batch.local_rows
             for metric_name, contribution in aligned_metric_contributions(
-                mapped_validation_metrics
+                validation.metrics
             ).items():
                 _accumulate_metric_totals(
                     evaluation_totals,
@@ -2649,7 +1515,6 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
                     device=next(model.parameters()).device,
                     dist=dist,
                     observation=reducer_observation,
-                    expected_metrics=expected_metric_names,
                 )
                 evaluation_metrics = {
                     name: contribution
@@ -2697,6 +1562,12 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
     node_id = ray.get_runtime_context().get_node_id()
     input_rows_evidence = dict(coverage_totals)
     input_rows_evidence[stage_roles[0]] = rows
+    for split, split_rows in evaluation_rows.items():
+        if split in input_rows_evidence:
+            raise AlgorithmExecutionError(
+                f"Torch evaluation role {split!r} conflicts with coverage evidence"
+            )
+        input_rows_evidence[split] = split_rows
     execution_worker = {
         "worker_id": f"torch-{rank}",
         "node_id": str(node_id),
@@ -2718,186 +1589,11 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
     if any(not isinstance(item, Mapping) for item in worker_records_raw):
         raise AlgorithmExecutionError("Torch worker evidence collective is incomplete")
     worker_records = [cast(dict[str, object], item) for item in worker_records_raw]
-    from ray.train import Checkpoint
-
     checkpoint_dir = Path(tempfile.mkdtemp(prefix="tributo_torch_checkpoint_"))
     try:
         torch.save(
             getattr(model, "module", model).state_dict(), checkpoint_dir / "model.pt"
         )
-        torch.save(cast(Any, optimizer).state_dict(), checkpoint_dir / "optimizer.pt")
-        torch.save(cast(Any, scaler).state_dict(), checkpoint_dir / "scaler.pt")
-        if optimization.scheduler is not None:
-            torch.save(
-                cast(Any, optimization.scheduler).state_dict(),
-                checkpoint_dir / "scheduler.pt",
-            )
-        final_cursor_values: list[object] = [None] * world_size
-        if dist.is_available() and dist.is_initialized():
-            dist.all_gather_object(final_cursor_values, epoch_micro_batch_cursor)
-        else:
-            final_cursor_values = [epoch_micro_batch_cursor]
-        if any(
-            not isinstance(value, int) or isinstance(value, bool) or value < 0
-            for value in final_cursor_values
-        ):
-            raise AlgorithmExecutionError("Torch final cursor collective is incomplete")
-        final_local_statistics = TorchRankProgressStatistics(
-            rows_processed=rows,
-            coverage_totals=coverage_totals,
-            loss_numerator_total=loss_numerator_total,
-            loss_normalizer_total=loss_normalizer_total,
-            metric_totals={
-                name: (values[0], values[1]) for name, values in metric_totals.items()
-            },
-            evaluation_totals={
-                name: (values[0], values[1])
-                for name, values in evaluation_totals.items()
-            },
-            reducer_observation=reducer_observation,
-        )
-        final_statistics_by_rank: list[object] = [None] * world_size
-        if dist.is_available() and dist.is_initialized():
-            dist.all_gather_object(
-                final_statistics_by_rank, final_local_statistics.to_dict()
-            )
-        else:
-            final_statistics_by_rank = [final_local_statistics.to_dict()]
-        if any(not isinstance(value, Mapping) for value in final_statistics_by_rank):
-            raise AlgorithmExecutionError(
-                "Torch final statistics collective is incomplete"
-            )
-        final_progress = TorchCheckpointProgress(
-            epoch=max(epochs - 1, 0),
-            micro_batch_cursor=epoch_micro_batch_cursor,
-            optimizer_step=restored_step + steps // accumulation,
-            scheduler_step=scheduler_steps,
-            accumulation_steps=accumulation,
-            dataset_cursor_by_rank={
-                str(rank_id): cast(int, cursor)
-                for rank_id, cursor in enumerate(final_cursor_values)
-            },
-            shuffle_seed=int(seed + max(epochs - 1, 0)),
-            rows_processed=rows,
-            coverage_totals=coverage_totals,
-            loss_numerator_total=loss_numerator_total,
-            loss_normalizer_total=loss_normalizer_total,
-            metric_totals={
-                name: (values[0], values[1]) for name, values in metric_totals.items()
-            },
-            evaluation_totals={
-                name: (values[0], values[1])
-                for name, values in evaluation_totals.items()
-            },
-            rank_statistics={
-                str(rank_id): TorchRankProgressStatistics.from_dict(
-                    cast(Mapping[str, Any], stats)
-                )
-                for rank_id, stats in enumerate(final_statistics_by_rank)
-            },
-            epoch_scheduler_applied=True,
-        )
-        (checkpoint_dir / "torch_progress.json").write_text(
-            json.dumps(final_progress.to_dict(), sort_keys=True, separators=(",", ":")),
-            encoding="utf-8",
-        )
-        rng_payload = torch.get_rng_state().cpu().numpy().tobytes()
-        rng_states: list[bytes | None] = [None] * world_size
-        if dist.is_available() and dist.is_initialized():
-            dist.all_gather_object(rng_states, rng_payload)
-        else:
-            rng_states = [rng_payload]
-        if any(not isinstance(value, bytes) for value in rng_states):
-            raise AlgorithmExecutionError("Torch RNG state collective is incomplete")
-        cuda_rng_payload: list[list[bytes]] = []
-        if torch.cuda.is_available():
-            local_cuda = [
-                state.cpu().numpy().tobytes()
-                for state in torch.cuda.get_rng_state_all()
-            ]
-            if dist.is_available() and dist.is_initialized():
-                all_cuda: list[object] = [None] * world_size
-                dist.all_gather_object(all_cuda, local_cuda)
-                if any(
-                    not isinstance(value, list)
-                    or any(not isinstance(state, bytes) for state in value)
-                    for value in all_cuda
-                ):
-                    raise AlgorithmExecutionError(
-                        "Torch CUDA RNG state collective is incomplete"
-                    )
-                cuda_rng_payload = cast(list[list[bytes]], all_cuda)
-            else:
-                cuda_rng_payload = [local_cuda]
-        torch.save(
-            {
-                "world_size": world_size,
-                "states": rng_states,
-                "cuda_states_by_rank": cuda_rng_payload,
-            },
-            checkpoint_dir / "rng_state.pt",
-        )
-        identity = stage_context.runtime.run_identity
-        if identity is None:
-            raise AlgorithmExecutionError(
-                "Torch Worker stage context has no run identity"
-            )
-        payload_names = [
-            "model.pt",
-            "optimizer.pt",
-            "scaler.pt",
-            "rng_state.pt",
-            "torch_progress.json",
-        ]
-        if optimization.scheduler is not None:
-            payload_names.append("scheduler.pt")
-        payload_files = {
-            name: hashlib.sha256((checkpoint_dir / name).read_bytes()).hexdigest()
-            for name in payload_names
-        }
-        descriptor = TorchCheckpointDescriptor(
-            schema_version=1,
-            identity=identity,
-            run_config_name=torch_run_config_name(identity),
-            state_layout=str(config.get("_core_state_layout", "replicated")),
-            world_size=world_size,
-            completed_step=restored_step + steps // accumulation,
-            policy_digest=stage_context.runtime.policy_digest,
-            execution_plan_digest=stage_context.runtime.execution_plan_digest,
-            input_binding_digest=str(config.get("_core_input_binding_digest", "")),
-            implementation_code_digest=str(
-                config.get("_core_implementation_code_digest", "")
-            ),
-            payload_files=payload_files,
-            adapter_identity=config.get("_core_adapter_identity"),
-            resume_supported=stage_context.runtime.resume_supported,
-            same_world_size_resume=stage_context.runtime.same_world_size_resume,
-        )
-
-        class _Draft:
-            checkpoint_dir: str | os.PathLike[str]
-
-            def __init__(
-                self, checkpoint_dir: Path, checkpoint_owner_rank: int
-            ) -> None:
-                self.checkpoint_dir = str(checkpoint_dir)
-                self._checkpoint_owner_rank = checkpoint_owner_rank
-
-            def report(
-                self,
-                *,
-                metrics: Mapping[str, object],
-                stage_context: object,
-                completed_step: int,
-            ) -> None:
-                del stage_context, completed_step
-                checkpoint = (
-                    Checkpoint.from_directory(str(checkpoint_dir))
-                    if rank == self._checkpoint_owner_rank
-                    else None
-                )
-                ray.train.report(dict(metrics), checkpoint=checkpoint)
-
         loss_state = torch.tensor(
             [loss_numerator_total, loss_normalizer_total],
             dtype=torch.float64,
@@ -2905,6 +1601,10 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
         )
         if dist.is_available() and dist.is_initialized():
             dist.all_reduce(loss_state, op=dist.ReduceOp.SUM)
+        if not composite_loss_seen and loss_state[1].item() <= 0:
+            raise AlgorithmExecutionError(
+                "Torch training produced no positive loss normalizer"
+            )
         train_loss = (
             float(loss_state[0].item() / loss_state[1].item())
             if loss_state[1].item() > 0
@@ -2916,10 +1616,19 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
         )
         if not isinstance(metric_reducers, Mapping):
             raise AlgorithmConfigurationError("Torch metric reducers must be a mapping")
+        resolved_metric_reducers = {
+            str(name): str(reducer) for name, reducer in metric_reducers.items()
+        }
+        for split in ("val", "test"):
+            for name, reducer in metric_reducers.items():
+                resolved_metric_reducers[f"{split}_{name}"] = str(reducer)
+            resolved_metric_reducers[f"{split}_loss"] = str(
+                metric_reducers["train_loss"]
+            )
         metric_values.update(
             _reduce_metric_totals(
                 metric_totals,
-                metric_reducers,
+                resolved_metric_reducers,
                 device=next(model.parameters()).device,
                 dist=dist,
                 world_size=world_size,
@@ -2932,16 +1641,13 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
         metric_values.update(
             _reduce_metric_totals(
                 evaluation_totals,
-                metric_reducers,
+                resolved_metric_reducers,
                 device=next(model.parameters()).device,
                 dist=dist,
                 world_size=world_size,
             )
         )
         metric_values.setdefault("train_loss", train_loss)
-        for source_name, target_name in metric_mapping.items():
-            if source_name in metric_values:
-                metric_values[target_name] = metric_values.pop(source_name)
         reducer_report = {
             "reducer_id": config.get("_core_global_loss_reducer_id"),
             "reducer_api_version": config.get("_core_global_loss_reducer_api_version"),
@@ -2959,15 +1665,14 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
                 **metric_values,
                 "execution_workers": worker_records,
                 "model_state_digest": state_digest,
-                "checkpoint_descriptor": descriptor.to_dict(),
                 **reducer_report,
             },
-            _Draft(
-                checkpoint_dir,
-                int(config.get("_core_checkpoint_owner_rank", 0)),
+            TorchCheckpointPayloadDraft(
+                checkpoint_dir=checkpoint_dir,
+                checkpoint_owner_rank=int(config.get("_core_checkpoint_owner_rank", 0)),
             ),
             stage_context,
-            restored_step + steps // accumulation,
+            optimizer_steps,
         )
     finally:
         import shutil
@@ -2977,19 +1682,26 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
 
 @DeveloperAPI
 def torch_recipe_train_loop_per_worker(config: Mapping[str, Any]) -> None:
-    """Public Core worker entrypoint referenced by ``TorchStageSpec``."""
+    """Run the Core-selected Recipe Worker wrapper."""
     _recipe_worker(config)
 
 
 @DeveloperAPI
 def ray_torch_adapter_train_loop_per_worker(config: Mapping[str, Any]) -> None:
-    """Public Core wrapper entrypoint for Adapter-owned Stage loops."""
+    """Run the Core-selected Adapter Worker wrapper."""
     reference = config.get("_core_implementation_ref")
     if not isinstance(reference, str):
         raise AlgorithmConfigurationError(
             "Adapter Worker implementation reference is missing"
         )
-    implementation = _load_reference(QualifiedReference.parse(reference))
+    implementation_reference = QualifiedReference.parse(reference)
+    implementation_digest = config.get("_core_implementation_code_digest")
+    if not isinstance(implementation_digest, str):
+        raise AlgorithmConfigurationError(
+            "Adapter Worker implementation code digest is missing"
+        )
+    _validate_module_digest(implementation_reference, implementation_digest)
+    implementation = _load_reference(implementation_reference)
     if not isinstance(implementation, type):
         raise AlgorithmConfigurationError("Adapter Worker reference is invalid")
     adapter = implementation()
@@ -3022,58 +1734,17 @@ class RayTrainTorchRuntime:
         self,
         plan: Any,
         run_id: str,
-        invocation_id: str,
-    ) -> TorchPreflightLease:
+    ) -> None:
         policy = _policy(plan)
-        if policy.state_layout == "sharded":
-            raise AlgorithmConfigurationError(
-                "Torch sharded state is reserved and not supported by Runtime v1"
-            )
-        if policy.evidence_adapter_ref is not None:
-            raise AlgorithmConfigurationError(
-                "Torch evidence_adapter_ref is reserved until a Core evidence adapter protocol is gated"
-            )
-        ray_config = plan.algorithm_config.get("ray", {})
-        resume_config = (
-            ray_config.get("resume", {}) if isinstance(ray_config, Mapping) else {}
-        )
-        has_external_recovery = plan.runtime.resume_from is not None or (
-            isinstance(resume_config, Mapping)
-            and any(
-                resume_config.get(name) is not None
-                for name in ("uri", "checkpoint_uri", "checkpoint_descriptor_digest")
-            )
-        )
-        if plan.runtime.torch_recovery is not None:
-            recovery = TorchRecoveryEnvelope.from_dict(plan.runtime.torch_recovery)
-            has_external_recovery = has_external_recovery or bool(
-                recovery.stage_checkpoints or recovery.active_checkpoint is not None
-            )
+        _torch_ray_config(plan)
+        _validate_runtime_policy(policy)
+        has_external_recovery = plan.runtime.resume_from is not None
         if has_external_recovery and not policy.resume_supported:
             raise AlgorithmConfigurationError(
                 "Torch Policy does not support external recovery"
             )
         implementation = _load_torch_implementation(plan)
-        for stage in policy.execution_plan.stages:
-            expected_loop_ref = (
-                _CORE_ADAPTER_LOOP_REF
-                if policy.loop_owner == "adapter"
-                else _CORE_RECIPE_LOOP_REF
-            )
-            if stage.worker_loop_ref != expected_loop_ref:
-                raise AlgorithmConfigurationError(
-                    "Torch Stage worker_loop_ref must use the Core-owned loop wrapper"
-                )
-            stage_worker = _load_reference(
-                QualifiedReference.parse(stage.worker_loop_ref)
-            )
-            if not callable(stage_worker):
-                raise AlgorithmConfigurationError(
-                    f"Torch Stage {stage.stage_id!r} worker_loop_ref is not callable"
-                )
-        identity = _identity(
-            plan, run_id, invocation_id, policy.execution_plan.final_stage_id
-        )
+        identity = _identity(plan, run_id, run_id, policy.execution_plan.final_stage_id)
         context = TorchRuntimeContext(
             algorithm_config=_torch_algorithm_context_config(plan),
             implementation_id=plan.implementation.implementation_id,
@@ -3091,7 +1762,6 @@ class RayTrainTorchRuntime:
                 else None
             ),
             resume_supported=policy.resume_supported,
-            same_world_size_resume=policy.same_world_size_resume,
         )
         if isinstance(implementation, RayTorchAdapter):
             implementation.validate_environment(context)
@@ -3144,19 +1814,6 @@ class RayTrainTorchRuntime:
                 raise AlgorithmConfigurationError(
                     "Torch global reducer code digest mismatch"
                 )
-        token = TorchPreflightTokenData(
-            run_id=run_id,
-            invocation_id=invocation_id,
-            algorithm=plan.resolution.algorithm,
-            implementation_ref=str(plan.implementation.implementation_ref),
-            implementation_code_digest=cast(str, plan.implementation.code_digest),
-            policy_digest=policy.digest,
-            execution_plan_digest=policy.execution_plan.digest,
-            runtime_id=self.runtime_id,
-            reducer_identity=policy.global_loss_reducer_ref,
-            plan_digest=plan.plan_id,
-        )
-        return TorchPreflightLease(token)
 
     @staticmethod
     def _validate_recipe_environment(context: TorchRuntimeContext) -> None:
@@ -3173,70 +1830,35 @@ class RayTrainTorchRuntime:
         if not hasattr(ray, "train") or not hasattr(torch, "nn"):
             raise AlgorithmConfigurationError("TorchRecipe environment is incomplete")
 
-    def execute(self, envelope: TorchRuntimeExecutionEnvelope) -> WorkerExecutionResult:
-        if not isinstance(envelope, TorchRuntimeExecutionEnvelope):
-            raise AlgorithmConfigurationError(
-                "Ray Train Torch requires TorchRuntimeExecutionEnvelope"
-            )
-        base = envelope.base
+    def execute(self, envelope: RuntimeExecutionEnvelope) -> WorkerExecutionResult:
+        base = envelope
         if base.cancelled:
             raise AlgorithmExecutionError("Torch execution was cancelled")
-        invocation_id = envelope.preflight_lease.data.invocation_id
-        token = envelope.preflight_lease.consume(
-            run_id=base.run_id,
-            invocation_id=invocation_id,
-            plan_digest=base.plan.plan_id,
-            runtime_id=self.runtime_id,
-        )
+        invocation_id = base.run_id
         implementation = _load_torch_implementation(base.plan)
         policy = _policy(base.plan)
-        if policy.state_layout == "sharded":
-            raise AlgorithmConfigurationError(
-                "Torch sharded state is reserved and not supported by Runtime v1"
-            )
-        if policy.evidence_adapter_ref is not None:
-            raise AlgorithmConfigurationError(
-                "Torch evidence_adapter_ref is reserved until a Core evidence adapter protocol is gated"
-            )
+        _validate_runtime_policy(policy)
         reducer_metadata = _reducer_metadata(policy)
-        completed_stage_ids, active_stage_id, recovery_records = _recovery_records(
-            base.plan,
-            policy,
-            worker_count=base.plan.runtime.worker_count,
-        )
+        resume_from = base.plan.runtime.resume_from
+        if resume_from is not None:
+            raise AlgorithmConfigurationError(
+                "Torch Runtime API v1 does not support cross-Run recovery"
+            )
         prepared = _prepare_datasets(base)
+        configured_storage_path, max_failures = _torch_ray_config(base.plan)
+        owned_storage_dirs: list[tempfile.TemporaryDirectory[str]] = []
         try:
             stages = policy.execution_plan.stages
-            stage_records: dict[str, dict[str, Any]] = dict(recovery_records)
+            stage_records: dict[str, dict[str, Any]] = {}
             last_result: Any = None
             final_result: Any = None
             stage_evidence: list[ComponentStageEvidence] = []
+            stage_metrics: dict[str, float] = {}
             final_expected_rows: Mapping[str, int] = {}
+            final_replicated_bytes: Mapping[str, int] = {}
             for index, stage in enumerate(stages):
-                if stage.stage_id in completed_stage_ids:
-                    recovered_record = stage_records.get(stage.stage_id)
-                    if recovered_record is None:
-                        raise AlgorithmExecutionError(
-                            f"Torch recovery is missing Stage {stage.stage_id!r}"
-                        )
-                    recovered_evidence = _recovered_stage_evidence(
-                        plan=base.plan,
-                        policy=policy,
-                        stage=stage,
-                        descriptor=recovered_record["descriptor"],
-                        evidence=recovered_record.get("evidence", {}),
-                    )
-                    if policy.state_layout == "component":
-                        stage_evidence.append(recovered_evidence)
-                    if stage.stage_id == policy.execution_plan.final_stage_id:
-                        final_expected_rows = {
-                            role.role: int(role.expected_rows or 0)
-                            for role in recovered_evidence.roles
-                            if role.present and role.expected_rows is not None
-                        }
-                    continue
                 identity = _identity(
-                    base.plan, token.run_id, token.invocation_id, stage.stage_id
+                    base.plan, base.run_id, invocation_id, stage.stage_id
                 )
                 runtime_context = TorchRuntimeContext(
                     algorithm_config=_torch_algorithm_context_config(base.plan),
@@ -3255,7 +1877,6 @@ class RayTrainTorchRuntime:
                         else None
                     ),
                     resume_supported=policy.resume_supported,
-                    same_world_size_resume=policy.same_world_size_resume,
                 )
                 predecessor_id = stage.checkpoint_from_stage
                 predecessor_record = (
@@ -3290,7 +1911,8 @@ class RayTrainTorchRuntime:
                         raise AlgorithmConfigurationError(
                             "RayTorchAdapter.bind_datasets must return named datasets"
                         )
-                expected_rows = _validate_stage_routes(
+                stage_datasets = dict(stage_datasets)
+                expected_rows, replicated_bytes_by_role = _validate_stage_routes(
                     policy,
                     stage,
                     stage_datasets,
@@ -3298,6 +1920,7 @@ class RayTrainTorchRuntime:
                 )
                 if stage.stage_id == policy.execution_plan.final_stage_id:
                     final_expected_rows = dict(expected_rows)
+                    final_replicated_bytes = dict(replicated_bytes_by_role)
                 if (
                     stage.checkpoint_from_stage is not None
                     and predecessor_record is None
@@ -3306,31 +1929,13 @@ class RayTrainTorchRuntime:
                         f"Torch Stage {stage.stage_id!r} is missing checkpoint from "
                         f"{stage.checkpoint_from_stage!r}"
                     )
-                core_control = _control_for_stage(
-                    base.plan,
-                    policy,
-                    stage,
-                    run_id=token.run_id,
-                    invocation_id=token.invocation_id,
-                    checkpoint=(
-                        stage_records.get(stage.stage_id)
-                        if active_stage_id == stage.stage_id
-                        else stage_records.get(stage.checkpoint_from_stage)
-                        if stage.checkpoint_from_stage is not None
-                        else None
-                    ),
-                    purpose=(
-                        "cross_run_initial_recovery"
-                        if active_stage_id == stage.stage_id
-                        else "stage_dependency"
-                        if stage.checkpoint_from_stage is not None
-                        else None
-                    ),
-                    source_stage_id=(
-                        None
-                        if active_stage_id == stage.stage_id
-                        else stage.checkpoint_from_stage
-                    ),
+                initial_checkpoint = (
+                    stage_records[stage.checkpoint_from_stage]["checkpoint"]
+                    if stage.checkpoint_from_stage is not None
+                    else None
+                )
+                checkpoint_source = (
+                    "stage_dependency" if initial_checkpoint is not None else "none"
                 )
                 train_config = _torch_algorithm_context_config(base.plan)
                 stage_binding = base.plan.input_bindings.get(stage.input_roles[0])
@@ -3352,9 +1957,6 @@ class RayTrainTorchRuntime:
                         "_core_weight_name": stage_binding.sample_weight_name,
                         "_core_stage_input_roles": list(stage.input_roles),
                         "_core_input_role_bindings": _torch_input_bindings(base.plan),
-                        "_core_checkpoint_interval_windows": int(
-                            getattr(stage, "checkpoint_interval_windows", 1)
-                        ),
                         "_core_policy_digest": policy.digest,
                         "_core_execution_plan_digest": policy.execution_plan.digest,
                         "_core_global_loss_reducer_ref": policy.global_loss_reducer_ref,
@@ -3371,15 +1973,12 @@ class RayTrainTorchRuntime:
                             name: reduction.value
                             for name, reduction in policy.metric_reducers.items()
                         },
-                        "_core_metric_mapping": dict(
-                            getattr(stage, "metric_mapping", {})
-                        ),
                         "_core_adapter_identity": (
                             base.plan.implementation.implementation_id
                             if isinstance(implementation, RayTorchAdapter)
                             else None
                         ),
-                        "_core_stage_context": context.to_dict(),
+                        "_core_stage_context": _worker_stage_context(context).to_dict(),
                         "_core_batch_size": int(
                             base.plan.algorithm_config.get("training", {}).get(
                                 "batch_size", 32
@@ -3390,25 +1989,13 @@ class RayTrainTorchRuntime:
                             else 32
                         ),
                         "_core_torch_evidence": {},
-                        "core_control": core_control,
-                        "_core_checkpoint_opener_ref": (
-                            "tributo.integrations.algorithm_runtimes.ray_train_torch:"
-                            "open_torch_checkpoint_locator"
-                            if core_control is not None
-                            else None
-                        ),
+                        "_core_initial_checkpoint": initial_checkpoint,
+                        "_core_checkpoint_source": checkpoint_source,
                     }
                 )
                 loop: Any
                 if isinstance(implementation, TorchRecipe):
-                    loop_ref = _load_reference(
-                        QualifiedReference.parse(stage.worker_loop_ref)
-                    )
-                    if not callable(loop_ref):
-                        raise AlgorithmConfigurationError(
-                            "Recipe Stage worker_loop_ref is not callable"
-                        )
-                    loop = loop_ref
+                    loop = torch_recipe_train_loop_per_worker
                 else:
                     adapter = cast(RayTorchAdapter, implementation)
                     adapter_config = adapter.worker_config(context)
@@ -3428,14 +2015,7 @@ class RayTrainTorchRuntime:
                             "Adapter worker config must be JSON-compatible"
                         ) from exc
                     train_config["adapter_config"] = dict(adapter_config)
-                    loop_ref = _load_reference(
-                        QualifiedReference.parse(stage.worker_loop_ref)
-                    )
-                    if not callable(loop_ref):
-                        raise AlgorithmConfigurationError(
-                            "Adapter Stage worker_loop_ref is not callable"
-                        )
-                    loop = loop_ref
+                    loop = ray_torch_adapter_train_loop_per_worker
                 from ray.train import FailureConfig, RunConfig, ScalingConfig
                 from ray.train.torch import TorchConfig, TorchTrainer
 
@@ -3443,28 +2023,16 @@ class RayTrainTorchRuntime:
                     TorchRoleDataConfig,
                 )
 
-                storage_path = None
-                ray_config = base.plan.algorithm_config.get("ray", {})
-                max_failures = 0
-                if isinstance(ray_config, Mapping):
-                    storage_path = ray_config.get("storage_path")
-                    configured_failures = ray_config.get("max_failures", 0)
-                    if (
-                        not isinstance(configured_failures, int)
-                        or isinstance(configured_failures, bool)
-                        or configured_failures < -1
-                    ):
-                        raise AlgorithmConfigurationError(
-                            "ray.max_failures must be -1 or a non-negative integer"
-                        )
-                    max_failures = configured_failures
+                storage_path = configured_storage_path
                 if (
                     storage_path is None
                     and cast(Any, base.plan.runtime.execution_profile).value == "local"
                 ):
-                    storage_path = tempfile.mkdtemp(prefix="tributo_torch_runs_")
-                if storage_path is not None:
-                    claim_torch_run_directory(storage_path, identity)
+                    owned_storage = tempfile.TemporaryDirectory(
+                        prefix="tributo_torch_runs_"
+                    )
+                    owned_storage_dirs.append(owned_storage)
+                    storage_path = owned_storage.name
                 trainer = TorchTrainer(
                     train_loop_per_worker=loop,
                     train_loop_config=train_config,
@@ -3476,7 +2044,7 @@ class RayTrainTorchRuntime:
                     ),
                     datasets=cast(Any, dict(stage_datasets)),
                     run_config=RunConfig(
-                        name=torch_run_config_name(identity),
+                        name=identity.run_config_name,
                         storage_path=str(storage_path)
                         if storage_path is not None
                         else None,
@@ -3493,12 +2061,18 @@ class RayTrainTorchRuntime:
                 if stage.stage_id == policy.execution_plan.final_stage_id:
                     final_result = last_result
                 metrics = last_result.metrics or {}
+                _record_stage_metrics(
+                    stage_metrics,
+                    metrics,
+                    set(policy.metric_reducers),
+                    is_final=stage.stage_id == policy.execution_plan.final_stage_id,
+                )
                 stage_descriptor_payload = metrics.get("checkpoint_descriptor")
                 checkpoint = getattr(last_result, "checkpoint", None)
                 if checkpoint is not None and isinstance(
                     stage_descriptor_payload, Mapping
                 ):
-                    validated_descriptor = describe_torch_checkpoint(
+                    validated_descriptor = _describe_torch_checkpoint(
                         TorchCheckpointRef(checkpoint),
                         TorchCheckpointContext(
                             stage=context,
@@ -3511,24 +2085,8 @@ class RayTrainTorchRuntime:
                         raise AlgorithmExecutionError(
                             "Torch Stage checkpoint descriptor differs from embedded payload"
                         )
-                    persisted_locator = _persist_stage_checkpoint(
-                        checkpoint,
-                        identity=identity,
-                        storage_path=storage_path,
-                        descriptor_digest=validated_descriptor.digest,
-                    )
-                    if persisted_locator is not None:
-                        stage_descriptor_payload = dict(stage_descriptor_payload)
-                        stage_descriptor_payload["locator"] = persisted_locator
-                        stage_descriptor_payload["descriptor_digest"] = (
-                            validated_descriptor.digest
-                        )
                     stage_records[stage.stage_id] = {
-                        "locator": (
-                            stage_descriptor_payload.get("locator")
-                            if isinstance(stage_descriptor_payload, Mapping)
-                            else None
-                        ),
+                        "checkpoint": checkpoint,
                         "descriptor_digest": validated_descriptor.digest,
                         "descriptor": validated_descriptor.to_dict(),
                         "evidence": {
@@ -3546,7 +2104,7 @@ class RayTrainTorchRuntime:
                             if key in metrics
                         },
                     }
-                elif stage.checkpoint_required:
+                else:
                     raise AlgorithmExecutionError(
                         f"Torch Stage {stage.stage_id!r} requires a Core checkpoint"
                     )
@@ -3558,6 +2116,7 @@ class RayTrainTorchRuntime:
                         identity=identity,
                         metrics=metrics,
                         expected_rows=expected_rows,
+                        replicated_bytes_by_role=replicated_bytes_by_role,
                     )
                 )
             final_stage = next(
@@ -3565,27 +2124,18 @@ class RayTrainTorchRuntime:
                 for stage in stages
                 if stage.stage_id == policy.execution_plan.final_stage_id
             )
-            if final_result is None and final_stage.stage_id in stage_records:
-                recovered = stage_records[final_stage.stage_id]
-                locator = TorchCheckpointLocator(
-                    cast(str, recovered["locator"]),
-                    cast(str, recovered["descriptor_digest"]),
-                )
-                recovered_checkpoint = open_torch_checkpoint_locator(locator)
-                final_result = _CheckpointResultProxy(
-                    recovered_checkpoint,
-                    recovered_checkpoint,
-                    metrics={
-                        **dict(recovered.get("evidence", {})),
-                        "checkpoint_descriptor": recovered["descriptor"],
-                    },
-                )
             if final_result is None:
                 raise AlgorithmExecutionError(
                     "Torch execution plan has no Stage result"
                 )
             last_result = final_result
             metrics = dict(final_result.metrics or {})
+            metrics.update(stage_metrics)
+            missing_metrics = sorted(set(policy.metric_reducers) - set(stage_metrics))
+            if missing_metrics:
+                raise AlgorithmExecutionError(
+                    f"Torch execution did not report declared metric(s): {missing_metrics}"
+                )
             checkpoint = getattr(final_result, "checkpoint", None)
             if checkpoint is not None:
                 raw_descriptor = metrics.get("checkpoint_descriptor")
@@ -3600,7 +2150,7 @@ class RayTrainTorchRuntime:
                     source_stage_id=descriptor.identity.stage_id,
                     descriptor=descriptor,
                 )
-                describe_torch_checkpoint(
+                _describe_torch_checkpoint(
                     checkpoint_ref,
                     TorchCheckpointContext(
                         stage=_stage_context(
@@ -3624,7 +2174,6 @@ class RayTrainTorchRuntime:
                                     else None
                                 ),
                                 resume_supported=policy.resume_supported,
-                                same_world_size_resume=policy.same_world_size_resume,
                             ),
                             final_stage,
                             stages.index(final_stage),
@@ -3636,8 +2185,8 @@ class RayTrainTorchRuntime:
                 )
             final_identity = _identity(
                 base.plan,
-                token.run_id,
-                token.invocation_id,
+                base.run_id,
+                invocation_id,
                 policy.execution_plan.final_stage_id,
             )
             supplied_evidence = metrics.get("torch_evidence")
@@ -3663,6 +2212,7 @@ class RayTrainTorchRuntime:
                 stage=final_stage,
                 workers=workers,
                 expected_rows=final_expected_rows,
+                replicated_bytes_by_role=final_replicated_bytes,
             )
             global_digest = metrics.get("model_state_digest")
             if not isinstance(global_digest, str) or len(global_digest) != 64:
@@ -3680,7 +2230,7 @@ class RayTrainTorchRuntime:
                 ).hexdigest()
             metrics["torch_evidence"] = TorchExecutionEvidence(
                 identity=final_identity,
-                run_config_name=torch_run_config_name(final_identity),
+                run_config_name=final_identity.run_config_name,
                 policy_digest=policy.digest,
                 parallelism_id=policy.parallelism_id,
                 state_layout=policy.state_layout,
@@ -3764,13 +2314,12 @@ class RayTrainTorchRuntime:
                                     else None
                                 ),
                                 resume_supported=policy.resume_supported,
-                                same_world_size_resume=policy.same_world_size_resume,
                             ),
                             final_stage,
                             stages.index(final_stage),
                         ),
-                        run_id=token.run_id,
-                        invocation_id=token.invocation_id,
+                        run_id=base.run_id,
+                        invocation_id=invocation_id,
                         checkpoint_owner="core",
                     )
                     checkpoint = implementation.checkpoint_source(
@@ -3785,7 +2334,7 @@ class RayTrainTorchRuntime:
                         if isinstance(checkpoint, TorchCheckpointRef)
                         else TorchCheckpointRef(checkpoint)
                     )
-                    describe_torch_checkpoint(checkpoint_ref, final_context)
+                    _describe_torch_checkpoint(checkpoint_ref, final_context)
                     export_result = _CheckpointResultProxy(
                         last_result,
                         checkpoint_ref.checkpoint,
@@ -3795,7 +2344,7 @@ class RayTrainTorchRuntime:
                 execution = export_ray_train_torch_result(
                     result=export_result,
                     plan=base.plan,
-                    run_id=token.run_id,
+                    run_id=base.run_id,
                     state_details_sink=export_state_details,
                 )
             raw_worker_metadata = metrics.get("execution_workers", [])
@@ -3810,7 +2359,9 @@ class RayTrainTorchRuntime:
                 else []
             )
             state_details = (
-                _component_state_details(tuple(stage_evidence))
+                _component_state_details(
+                    tuple(stage_evidence), policy.execution_plan.final_stage_id
+                )
                 if policy.state_layout == "component"
                 else export_state_details
             )
@@ -3836,7 +2387,11 @@ class RayTrainTorchRuntime:
                 },
             )
         finally:
-            prepared.close()
+            try:
+                prepared.close()
+            finally:
+                for directory in reversed(owned_storage_dirs):
+                    directory.cleanup()
 
 
 @DeveloperAPI

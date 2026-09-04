@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from types import SimpleNamespace
 
 from tests.algorithms.conftest import map_reduce_registration, request_for
 from tributo.algorithms.api import (
     AlgorithmOperation,
     AlgorithmRequest,
+    DistributionStrategy,
     ExecutionProfile,
     ExecutionRequest,
 )
@@ -18,6 +20,7 @@ from tributo.training.algorithm_spec import Capability
 from tributo.training.portable_tune import (
     PortableTuneRunner,
     _fit_only_plan,
+    _trial_checkpoint_enabled,
     _trial_request,
 )
 from tributo.training.tune_config import TuneSearchConfig
@@ -75,6 +78,14 @@ def test_trial_request_applies_only_sampled_config_and_isolates_checkpoint() -> 
     assert trial.algorithm_request.algorithm_config["runtime"] == {
         "checkpoint_dir": "/trial/checkpoint"
     }
+
+
+def test_torch_tune_trial_is_metric_only() -> None:
+    torch_plan = SimpleNamespace(
+        distribution_spec=SimpleNamespace(strategy=DistributionStrategy.RAY_TRAIN_TORCH)
+    )
+    assert not _trial_checkpoint_enabled(torch_plan)
+    assert _trial_checkpoint_enabled(_resolved_plan())
 
 
 def test_portable_tune_requires_tunable_descriptor_and_cluster_profile() -> None:

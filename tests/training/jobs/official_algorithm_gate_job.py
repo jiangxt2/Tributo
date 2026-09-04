@@ -70,11 +70,6 @@ def _tensor_columns(
             f"model input {name!r} has unsupported dynamic trailing shape {shape}"
         )
     width = math.prod(cast(tuple[int, ...], trailing)) if trailing else 1
-    if len(trailing) > 1:
-        # Preserve higher-rank typed tensors as one vector-valued table column;
-        # flattening them into scalar columns would make inference reconstruct
-        # rank two and violate the manifest signature.
-        return (name,)
     return tuple(f"{name}__{index}" for index in range(width))
 
 
@@ -134,35 +129,15 @@ def _stage_bundle_inference_input(
         columns = _tensor_columns(name=field.name, shape=field.shape)
         projected.extend(columns)
         for column_index, column in enumerate(columns):
-            if len(field.shape[1:]) > 1:
-                trailing = tuple(cast(tuple[int, ...], field.shape[1:]))
-                width = math.prod(trailing)
-                values[column] = [
-                    np.asarray(
-                        [
-                            _inference_value(
-                                field.dtype,
-                                row=row,
-                                column=field_index + offset,
-                                entry_point=entry_point,
-                            )
-                            for offset in range(width)
-                        ]
-                    )
-                    .reshape(trailing)
-                    .tolist()
-                    for row in range(16)
-                ]
-            else:
-                values[column] = [
-                    _inference_value(
-                        field.dtype,
-                        row=row,
-                        column=field_index + column_index,
-                        entry_point=entry_point,
-                    )
-                    for row in range(16)
-                ]
+            values[column] = [
+                _inference_value(
+                    field.dtype,
+                    row=row,
+                    column=field_index + column_index,
+                    entry_point=entry_point,
+                )
+                for row in range(16)
+            ]
         bindings.append(
             TensorInputBinding(
                 tensor_name=field.name,
@@ -1544,7 +1519,6 @@ def main() -> None:
                     "ray": {
                         "max_failures": 0,
                         "storage_path": str(root / "autoencoder-ray-results"),
-                        "resume": {"checkpoint_interval": 1},
                     },
                     "output": {"bundle_uri": str(root / "autoencoder-bundle")},
                 },
@@ -1572,7 +1546,6 @@ def main() -> None:
                     "ray": {
                         "max_failures": 0,
                         "storage_path": str(root / "timeseries-ray-results"),
-                        "resume": {"checkpoint_interval": 1},
                     },
                     "output": {"bundle_uri": str(root / "timeseries-bundle")},
                 },
@@ -1600,7 +1573,6 @@ def main() -> None:
                     "ray": {
                         "max_failures": 0,
                         "storage_path": str(root / "lstm-ray-results"),
-                        "resume": {"checkpoint_interval": 1},
                     },
                     "output": {"bundle_uri": str(root / "lstm-bundle")},
                 },
@@ -1628,7 +1600,6 @@ def main() -> None:
                     "ray": {
                         "max_failures": 0,
                         "storage_path": str(root / "gru-ray-results"),
-                        "resume": {"checkpoint_interval": 1},
                     },
                     "output": {"bundle_uri": str(root / "gru-bundle")},
                 },
@@ -1652,7 +1623,6 @@ def main() -> None:
                     "ray": {
                         "max_failures": 0,
                         "storage_path": str(root / "dnn-ray-results"),
-                        "resume": {"checkpoint_interval": 1},
                     },
                     "output": {"bundle_uri": str(root / "dnn-v2-bundle")},
                 },
@@ -1677,7 +1647,6 @@ def main() -> None:
                     "ray": {
                         "max_failures": 0,
                         "storage_path": str(root / "pu-ray-results"),
-                        "resume": {"checkpoint_interval": 1},
                     },
                     "output": {"bundle_uri": str(root / "pu-v2-bundle")},
                 },
@@ -1705,7 +1674,6 @@ def main() -> None:
                     "ray": {
                         "max_failures": 0,
                         "storage_path": str(root / "two-tower-ray-results"),
-                        "resume": {"checkpoint_interval": 1},
                     },
                     "output": {"bundle_uri": str(root / "two-tower-bundle")},
                 },
@@ -1760,7 +1728,6 @@ def main() -> None:
                     "ray": {
                         "max_failures": 0,
                         "storage_path": str(root / "transformer-ray-results"),
-                        "resume": {"checkpoint_interval": 1},
                     },
                     "output": {"bundle_uri": str(root / "transformer-bundle")},
                 },

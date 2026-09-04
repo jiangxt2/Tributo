@@ -334,15 +334,7 @@ documentation for every public stability tier.
 :no-members:
 ```
 
-```{autoclass} tributo.algorithms.api.torch_runtime.TorchCheckpointLocator
-:no-members:
-```
-
 ```{autoclass} tributo.algorithms.api.torch_runtime.TorchCheckpointPayloadDraft
-:no-members:
-```
-
-```{autoclass} tributo.algorithms.api.torch_runtime.TorchCheckpointProgress
 :no-members:
 ```
 
@@ -390,41 +382,11 @@ documentation for every public stability tier.
 :no-members:
 ```
 
-```{autoclass} tributo.algorithms.api.torch_runtime.TorchPreflightLease
-:no-members:
-```
-
-```{autoclass} tributo.algorithms.api.torch_runtime.TorchPreflightTokenData
-:no-members:
-```
-
-```{autoclass} tributo.algorithms.api.torch_runtime.TorchRankProgressStatistics
-:no-members:
-```
-
-```{autoclass} tributo.algorithms.api.torch_runtime.TorchRecoveryEnvelope
-:no-members:
-```
-
-```{autoclass} tributo.algorithms.api.torch_runtime.TorchRuntimeExecutionEnvelope
-:no-members:
-```
-
 ```{autoclass} tributo.algorithms.api.torch_runtime.TorchStageRunIdentity
 :no-members:
 ```
 
-```{autoclass} tributo.algorithms.api.torch_runtime.TorchWorkerControlEnvelope
-:no-members:
-```
-
 ```{autofunction} tributo.algorithms.api.torch_runtime.apply_torch_loss_backward
-```
-
-```{autofunction} tributo.algorithms.api.torch_runtime.claim_torch_run_directory
-```
-
-```{autofunction} tributo.algorithms.api.torch_runtime.describe_torch_checkpoint
 ```
 
 ```{autofunction} tributo.algorithms.api.torch_runtime.invoke_torch_global_loss_reducer
@@ -434,12 +396,6 @@ documentation for every public stability tier.
 ```
 
 ```{autofunction} tributo.algorithms.api.torch_runtime.report_torch_checkpoint
-```
-
-```{autofunction} tributo.algorithms.api.torch_runtime.torch_run_config_name
-```
-
-```{autofunction} tributo.algorithms.api.torch_runtime.validate_torch_retry_identity
 ```
 
 
@@ -542,10 +498,6 @@ documentation for every public stability tier.
 ```
 
 ```{autoclass} tributo.algorithms.spi.execution.RuntimeExecutionEnvelope
-:no-members:
-```
-
-```{autoclass} tributo.algorithms.spi.execution.TorchRuntimePreflight
 :no-members:
 ```
 

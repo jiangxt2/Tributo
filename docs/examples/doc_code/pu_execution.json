@@ -34,8 +34,7 @@
     },
     "ray": {
       "max_failures": 0,
-      "storage_path": "/shared/ray-results/pu-fraud",
-      "resume": {"checkpoint_interval": 1}
+      "storage_path": "/shared/ray-results/pu-fraud"
     },
     "output": {
       "bundle_uri": "/shared/models/pu-fraud"

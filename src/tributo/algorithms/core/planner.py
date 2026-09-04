@@ -316,11 +316,6 @@ class AlgorithmPlanner:
             strategy=distribution.strategy,
             distribution_digest=distribution.digest,
             resume_from=request.resume_from,
-            torch_recovery=(
-                request.torch_recovery.to_dict()
-                if request.torch_recovery is not None
-                else None
-            ),
         )
 
     @staticmethod

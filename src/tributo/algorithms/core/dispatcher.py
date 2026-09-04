@@ -22,8 +22,6 @@ from tributo.algorithms.api import (
     ResolvedAlgorithmPlan,
     StateCoordinationEvidence,
     TorchExecutionEvidence,
-    TorchPreflightLease,
-    TorchRuntimeExecutionEnvelope,
     WorkerExecutionEvidence,
     WorkerExecutionResult,
     WorkerResources,
@@ -40,7 +38,6 @@ from tributo.algorithms.spi import (
     ResolvedInputLease,
     RuntimeExecutionEnvelope,
     RuntimeInputBinding,
-    TorchRuntimePreflight,
     WorkerInputPayload,
     WorkerInputPayloadSet,
 )
@@ -71,19 +68,10 @@ class AlgorithmRunCoordinator:
         artifacts: tuple[ArtifactDraft, ...] = (),
         cancelled: bool = False,
         run_id: str | None = None,
-        torch_preflight_lease: TorchPreflightLease | None = None,
     ) -> AlgorithmRunResult:
         """Open input, invoke the selected Runtime, and close in reverse order."""
         plan.validate_integrity()
         run_id = run_id or uuid.uuid4().hex
-        is_torch = (
-            plan.distribution_spec is not None
-            and plan.distribution_spec.strategy is DistributionStrategy.RAY_TRAIN_TORCH
-        )
-        if is_torch and torch_preflight_lease is None:
-            raise AlgorithmConfigurationError(
-                "Torch execution requires a preflight lease"
-            )
         try:
             runtime = self._runtimes[plan.runtime.runtime_id]
         except KeyError as exc:
@@ -122,14 +110,7 @@ class AlgorithmRunCoordinator:
                 artifacts=artifacts,
                 cancelled=cancelled,
             )
-            runtime_result = cast(Any, runtime).execute(
-                TorchRuntimeExecutionEnvelope(
-                    base=base_envelope,
-                    preflight_lease=cast(TorchPreflightLease, torch_preflight_lease),
-                )
-                if is_torch
-                else base_envelope
-            )
+            runtime_result = cast(Any, runtime).execute(base_envelope)
             if not isinstance(runtime_result, WorkerExecutionResult) or not isinstance(
                 runtime_result.execution, AlgorithmExecutionResult
             ):
@@ -183,13 +164,6 @@ class AlgorithmRunCoordinator:
                         lease.close()
                 except Exception as exc:
                     cleanup_errors.append(exc)
-            if is_torch and torch_preflight_lease is not None:
-                try:
-                    if torch_preflight_lease.state != "consumed":
-                        torch_preflight_lease.close()
-                except Exception as exc:
-                    cleanup_errors.append(exc)
-
         if primary_error is not None:
             for cleanup_error in cleanup_errors:
                 primary_error.add_note(
@@ -248,8 +222,7 @@ class AlgorithmRunCoordinator:
         plan: ResolvedAlgorithmPlan,
         *,
         run_id: str,
-        invocation_id: str,
-    ) -> TorchPreflightLease:
+    ) -> None:
         """Run the Torch-only environment check before any input or Ray lease."""
         if (
             plan.distribution_spec is None
@@ -265,25 +238,10 @@ class AlgorithmRunCoordinator:
             raise AlgorithmConfigurationError(
                 f"missing execution component for {exc.args[0]!r}"
             ) from exc
-        if not isinstance(runtime, TorchRuntimePreflight):
+        preflight = getattr(runtime, "preflight", None)
+        if not callable(preflight):
             raise AlgorithmConfigurationError("selected Torch runtime has no preflight")
-        return runtime.preflight(plan, run_id, invocation_id)
-
-    @staticmethod
-    def claim_torch_preflight(
-        plan: ResolvedAlgorithmPlan,
-        *,
-        run_id: str,
-        invocation_id: str,
-        lease: TorchPreflightLease,
-    ) -> None:
-        """Claim a preflight lease before opening Runtime or inputs."""
-        lease.claim(
-            run_id=run_id,
-            invocation_id=invocation_id,
-            plan_digest=plan.plan_id,
-            runtime_id=plan.runtime.runtime_id,
-        )
+        preflight(plan, run_id)
 
     @staticmethod
     def _combine_role_bindings(
@@ -570,39 +528,17 @@ class AlgorithmDispatcher:
         if is_torch and cancelled:
             raise AlgorithmExecutionError("Torch execution was cancelled")
         run_id = uuid.uuid4().hex if is_torch else None
-        torch_lease: TorchPreflightLease | None = None
         if is_torch:
             torch_run_id = cast(str, run_id)
-            invocation_id = uuid.uuid4().hex
-            torch_lease = self._coordinator.torch_preflight(
-                plan,
-                run_id=torch_run_id,
-                invocation_id=invocation_id,
-            )
-            try:
-                self._coordinator.claim_torch_preflight(
-                    plan,
-                    run_id=torch_run_id,
-                    invocation_id=invocation_id,
-                    lease=torch_lease,
-                )
-            except BaseException:
-                torch_lease.close()
-                raise
+            self._coordinator.torch_preflight(plan, run_id=torch_run_id)
         if plan.runtime.execution_profile is None:
-            try:
-                return self._coordinator.execute(
-                    plan,
-                    context,
-                    artifacts,
-                    cancelled=cancelled,
-                    run_id=run_id,
-                    torch_preflight_lease=torch_lease,
-                )
-            except BaseException:
-                if torch_lease is not None and torch_lease.state != "consumed":
-                    torch_lease.close()
-                raise
+            return self._coordinator.execute(
+                plan,
+                context,
+                artifacts,
+                cancelled=cancelled,
+                run_id=run_id,
+            )
         if plan.distribution_spec is None:
             raise AlgorithmConfigurationError(
                 "formal execution profile requires a DistributionSpec"
@@ -613,34 +549,28 @@ class AlgorithmDispatcher:
             memory_bytes=getattr(plan.runtime, "memory_bytes", None),
             custom=plan.runtime.custom_resources,
         )
-        try:
-            with self._runtime_manager.open(
-                plan.runtime.execution_profile,
-                resources_per_worker=resources,
-                worker_count=plan.runtime.worker_count,
-            ) as runtime_session:
-                result = self._coordinator.execute(
-                    plan,
-                    context,
-                    artifacts,
-                    cancelled=cancelled,
-                    run_id=run_id,
-                    torch_preflight_lease=torch_lease,
-                )
-                receipt = result.execution_receipt
-                if receipt is None:
-                    return result
-                updated_receipt = replace(
-                    cast(ExecutionReceipt, receipt),
-                    cluster_resources=dict(runtime_session.cluster_resources),
-                    runtime_owned=runtime_session.runtime_owned,
-                    resource_preflight=runtime_session.resource_preflight,
-                )
-                return replace(result, execution_receipt=updated_receipt)
-        except BaseException:
-            if torch_lease is not None and torch_lease.state != "consumed":
-                torch_lease.close()
-            raise
+        with self._runtime_manager.open(
+            plan.runtime.execution_profile,
+            resources_per_worker=resources,
+            worker_count=plan.runtime.worker_count,
+        ) as runtime_session:
+            result = self._coordinator.execute(
+                plan,
+                context,
+                artifacts,
+                cancelled=cancelled,
+                run_id=run_id,
+            )
+            receipt = result.execution_receipt
+            if receipt is None:
+                return result
+            updated_receipt = replace(
+                cast(ExecutionReceipt, receipt),
+                cluster_resources=dict(runtime_session.cluster_resources),
+                runtime_owned=runtime_session.runtime_owned,
+                resource_preflight=runtime_session.resource_preflight,
+            )
+            return replace(result, execution_receipt=updated_receipt)
 
 
 __all__ = ["AlgorithmDispatcher", "AlgorithmRunCoordinator"]

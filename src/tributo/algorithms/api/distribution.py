@@ -606,66 +606,27 @@ class TorchStageSpec:
     """One Core-orchestrated stage in a Torch execution plan."""
 
     stage_id: str
-    worker_loop_ref: str
     input_roles: tuple[str, ...]
-    depends_on: tuple[str, ...] = ()
     checkpoint_from_stage: str | None = None
-    metric_mapping: Mapping[str, str] = field(default_factory=dict)
-    checkpoint_required: bool = True
-    checkpoint_interval_windows: int = 1
 
     def __post_init__(self) -> None:
         _string(self.stage_id, "Torch stage_id")
-        _qualified_reference(self.worker_loop_ref, "Torch worker_loop_ref")
         roles = tuple(self.input_roles)
         if not roles or any(not isinstance(role, str) or not role for role in roles):
             raise AlgorithmConfigurationError("Torch stage input_roles are required")
         if len(set(roles)) != len(roles):
             raise AlgorithmConfigurationError("Torch stage input_roles must be unique")
-        depends = tuple(self.depends_on)
-        if any(not isinstance(item, str) or not item for item in depends):
-            raise AlgorithmConfigurationError("Torch stage dependencies are invalid")
-        if len(set(depends)) != len(depends):
-            raise AlgorithmConfigurationError("Torch stage dependencies must be unique")
         if self.checkpoint_from_stage is not None and not isinstance(
             self.checkpoint_from_stage, str
         ):
             raise AlgorithmConfigurationError("Torch checkpoint_from_stage is invalid")
-        _boolean(self.checkpoint_required, "Torch checkpoint_required")
-        _positive_integer(
-            self.checkpoint_interval_windows,
-            "Torch checkpoint_interval_windows",
-        )
-        if any(
-            not isinstance(name, str)
-            or not name
-            or not isinstance(value, str)
-            or not value
-            for name, value in self.metric_mapping.items()
-        ):
-            raise AlgorithmConfigurationError(
-                "Torch stage metric_mapping must be named strings"
-            )
-        if len(set(self.metric_mapping.values())) != len(self.metric_mapping):
-            raise AlgorithmConfigurationError(
-                "Torch stage metric_mapping targets must be unique"
-            )
         object.__setattr__(self, "input_roles", roles)
-        object.__setattr__(self, "depends_on", depends)
-        object.__setattr__(
-            self, "metric_mapping", FrozenDict(dict(self.metric_mapping))
-        )
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "stage_id": self.stage_id,
-            "worker_loop_ref": self.worker_loop_ref,
             "input_roles": list(self.input_roles),
-            "depends_on": list(self.depends_on),
             "checkpoint_from_stage": self.checkpoint_from_stage,
-            "metric_mapping": dict(self.metric_mapping),
-            "checkpoint_required": self.checkpoint_required,
-            "checkpoint_interval_windows": self.checkpoint_interval_windows,
         }
         return payload
 
@@ -708,8 +669,6 @@ class SingleStageTorchPlan(TorchExecutionPlan):
     stage: TorchStageSpec = field(
         default_factory=lambda: TorchStageSpec(
             "train",
-            "tributo.integrations.algorithm_runtimes.ray_train_torch:"
-            "torch_recipe_train_loop_per_worker",
             ("train",),
         )
     )
@@ -719,7 +678,7 @@ class SingleStageTorchPlan(TorchExecutionPlan):
             raise AlgorithmConfigurationError(
                 "Torch execution plan api_version must be 1"
             )
-        if self.stage.depends_on or self.stage.checkpoint_from_stage is not None:
+        if self.stage.checkpoint_from_stage is not None:
             raise AlgorithmConfigurationError(
                 "single Torch stage cannot have dependencies"
             )
@@ -751,10 +710,6 @@ class ComponentStageTorchPlan(TorchExecutionPlan):
             raise AlgorithmConfigurationError("component Torch stage IDs are invalid")
         prior: set[str] = set()
         for stage in stages:
-            if any(dep not in prior for dep in stage.depends_on):
-                raise AlgorithmConfigurationError(
-                    "Torch stage dependencies must reference earlier stages"
-                )
             if (
                 stage.checkpoint_from_stage is not None
                 and stage.checkpoint_from_stage not in prior
@@ -762,16 +717,6 @@ class ComponentStageTorchPlan(TorchExecutionPlan):
                 raise AlgorithmConfigurationError(
                     "Torch checkpoint_from_stage must reference an earlier stage"
                 )
-            if stage.checkpoint_from_stage is not None:
-                source = next(
-                    item
-                    for item in stages
-                    if item.stage_id == stage.checkpoint_from_stage
-                )
-                if not source.checkpoint_required:
-                    raise AlgorithmConfigurationError(
-                        "Torch checkpoint_from_stage requires a checkpoint-producing source"
-                    )
             prior.add(stage.stage_id)
         object.__setattr__(self, "stages", stages)
 
@@ -798,9 +743,7 @@ class TorchPolicy:
     metric_reducers: Mapping[str, MetricReduction]
     backend: str = "auto"
     checkpoint_owner_rank: int = 0
-    resume_supported: bool = True
-    same_world_size_resume: bool | None = True
-    rank_seeded: bool = True
+    resume_supported: bool = False
     checkpoint_adapter_ref: str | None = None
     evidence_adapter_ref: str | None = None
     global_loss_reducer_ref: str | None = None
@@ -884,16 +827,9 @@ class TorchPolicy:
             raise AlgorithmConfigurationError("Torch backend is invalid")
         _non_negative_integer(self.checkpoint_owner_rank, "Torch checkpoint_owner_rank")
         _boolean(self.resume_supported, "Torch resume_supported")
-        _boolean(self.rank_seeded, "Torch rank_seeded")
-        if self.same_world_size_resume is not None:
-            _boolean(self.same_world_size_resume, "Torch same_world_size_resume")
-        if self.resume_supported and self.same_world_size_resume is not True:
+        if self.resume_supported:
             raise AlgorithmConfigurationError(
-                "Torch v1 recovery only supports same-world-size resume"
-            )
-        if not self.resume_supported and self.same_world_size_resume is not None:
-            raise AlgorithmConfigurationError(
-                "unsupported Torch resume must omit same_world_size_resume"
+                "Torch Runtime API v1 does not support cross-Run recovery"
             )
         if self.max_replicated_bytes_per_worker is not None:
             _positive_integer(
@@ -966,7 +902,6 @@ class TorchPolicy:
             "backend": self.backend,
             "checkpoint_owner_rank": self.checkpoint_owner_rank,
             "resume_supported": self.resume_supported,
-            "rank_seeded": self.rank_seeded,
             "checkpoint_adapter_ref": self.checkpoint_adapter_ref,
             "evidence_adapter_ref": self.evidence_adapter_ref,
             "global_loss_reducer_ref": self.global_loss_reducer_ref,
@@ -976,8 +911,6 @@ class TorchPolicy:
             "capabilities": list(self.capabilities),
             "max_replicated_bytes_per_worker": self.max_replicated_bytes_per_worker,
         }
-        if self.same_world_size_resume is not None:
-            payload["same_world_size_resume"] = self.same_world_size_resume
         return payload
 
     @property
@@ -989,43 +922,46 @@ class TorchPolicy:
     def from_dict(cls, value: Mapping[str, Any]) -> "TorchPolicy":
         """Reconstruct a policy without importing an implementation module."""
         try:
+            if set(value) & {"same_world_size_resume", "rank_seeded"}:
+                raise AlgorithmConfigurationError(
+                    "TorchPolicy payload contains removed recovery fields"
+                )
             plan_value = _mapping(value["execution_plan"], "Torch execution_plan")
             raw_stages = _sequence(plan_value["stages"], "Torch execution stages")
+            if any(
+                set(_mapping(item, "Torch stage"))
+                & {
+                    "worker_loop_ref",
+                    "depends_on",
+                    "metric_mapping",
+                    "checkpoint_required",
+                }
+                for item in raw_stages
+            ):
+                raise AlgorithmConfigurationError(
+                    "Torch stage payload contains removed fields"
+                )
             stages = tuple(
                 TorchStageSpec(
                     stage_id=_string(
                         _mapping(item, "Torch stage")["stage_id"], "stage_id"
-                    ),
-                    worker_loop_ref=_string(
-                        _mapping(item, "Torch stage")["worker_loop_ref"],
-                        "worker_loop_ref",
                     ),
                     input_roles=tuple(
                         _sequence(
                             _mapping(item, "Torch stage")["input_roles"], "input_roles"
                         )
                     ),
-                    depends_on=tuple(
-                        _sequence(
-                            _mapping(item, "Torch stage").get("depends_on", ()),
-                            "depends_on",
-                        )
-                    ),
                     checkpoint_from_stage=_mapping(item, "Torch stage").get(
                         "checkpoint_from_stage"
-                    ),
-                    metric_mapping=_mapping(
-                        _mapping(item, "Torch stage").get("metric_mapping", {}),
-                        "metric_mapping",
-                    ),
-                    checkpoint_required=_boolean(
-                        _mapping(item, "Torch stage").get("checkpoint_required", True),
-                        "checkpoint_required",
                     ),
                 )
                 for item in raw_stages
             )
             if plan_value.get("kind") == "single":
+                if len(stages) != 1:
+                    raise AlgorithmConfigurationError(
+                        "single Torch execution plan requires one stage"
+                    )
                 execution_plan: TorchExecutionPlan = SingleStageTorchPlan(
                     api_version=plan_value["api_version"], stage=stages[0]
                 )
@@ -1059,9 +995,7 @@ class TorchPolicy:
                 metric_reducers=metric_reducers,
                 backend=value.get("backend", "auto"),
                 checkpoint_owner_rank=value.get("checkpoint_owner_rank", 0),
-                resume_supported=value.get("resume_supported", True),
-                same_world_size_resume=value.get("same_world_size_resume"),
-                rank_seeded=value.get("rank_seeded", True),
+                resume_supported=value.get("resume_supported", False),
                 checkpoint_adapter_ref=value.get("checkpoint_adapter_ref"),
                 evidence_adapter_ref=value.get("evidence_adapter_ref"),
                 global_loss_reducer_ref=value.get("global_loss_reducer_ref"),
@@ -1447,172 +1381,12 @@ class DistributionSpec:
                     exactness=DistributedExactness(policy_value["exactness"]),
                 )
             elif kind == "torch":
-                execution_plan = _mapping(
-                    policy_value["execution_plan"], "Torch execution_plan"
-                )
-                stage_values = _sequence(
-                    execution_plan["stages"], "Torch execution stages"
-                )
-                stages = tuple(
-                    TorchStageSpec(
-                        stage_id=_string(
-                            _mapping(item, "Torch stage")["stage_id"],
-                            "Torch stage_id",
-                        ),
-                        worker_loop_ref=_string(
-                            _mapping(item, "Torch stage")["worker_loop_ref"],
-                            "Torch worker_loop_ref",
-                        ),
-                        input_roles=tuple(
-                            _string(role, "Torch input role")
-                            for role in _sequence(
-                                _mapping(item, "Torch stage")["input_roles"],
-                                "Torch input_roles",
-                            )
-                        ),
-                        depends_on=tuple(
-                            _string(dep, "Torch dependency")
-                            for dep in _sequence(
-                                _mapping(item, "Torch stage").get("depends_on", ()),
-                                "Torch depends_on",
-                            )
-                        ),
-                        checkpoint_from_stage=_mapping(item, "Torch stage").get(
-                            "checkpoint_from_stage"
-                        ),
-                        metric_mapping=_mapping(
-                            _mapping(item, "Torch stage").get("metric_mapping", {}),
-                            "Torch metric_mapping",
-                        ),
-                        checkpoint_required=_boolean(
-                            _mapping(item, "Torch stage").get(
-                                "checkpoint_required", True
-                            ),
-                            "Torch checkpoint_required",
-                        ),
-                    )
-                    for item in stage_values
-                )
-                plan_value: TorchExecutionPlan
-                if execution_plan.get("kind") == "single":
-                    plan_value = SingleStageTorchPlan(
-                        api_version=_positive_integer(
-                            execution_plan["api_version"],
-                            "Torch execution plan api_version",
-                        ),
-                        stage=stages[0],
-                    )
-                else:
-                    plan_value = ComponentStageTorchPlan(
-                        api_version=_positive_integer(
-                            execution_plan["api_version"],
-                            "Torch execution plan api_version",
-                        ),
-                        stages=stages,
-                        final_stage_id=_string(
-                            execution_plan["final_stage_id"],
-                            "Torch final_stage_id",
-                        ),
-                    )
-                routes = tuple(
-                    TorchDatasetRoute(
-                        role=_string(
-                            _mapping(item, "Torch route")["role"], "Torch role"
-                        ),
-                        mode=_string(
-                            _mapping(item, "Torch route")["mode"], "Torch mode"
-                        ),
-                        required=_boolean(
-                            _mapping(item, "Torch route").get("required", True),
-                            "Torch route required",
-                        ),
-                        min_total_rows_if_present=_non_negative_integer(
-                            _mapping(item, "Torch route").get(
-                                "min_total_rows_if_present", 1
-                            ),
-                            "Torch minimum total rows",
-                        ),
-                        min_rows_per_worker=_non_negative_integer(
-                            _mapping(item, "Torch route").get("min_rows_per_worker", 1),
-                            "Torch minimum rows per worker",
-                        ),
-                        empty_rank_policy=_string(
-                            _mapping(item, "Torch route").get(
-                                "empty_rank_policy", "reject"
-                            ),
-                            "Torch empty rank policy",
-                        ),
-                        max_rows=_mapping(item, "Torch route").get("max_rows"),
-                        max_bytes_per_worker=_mapping(item, "Torch route").get(
-                            "max_bytes_per_worker"
-                        ),
-                    )
-                    for item in _sequence(
-                        policy_value["dataset_routing"], "Torch dataset_routing"
-                    )
-                )
-                policy = TorchPolicy(
-                    torch_runtime_api_version=_positive_integer(
-                        policy_value["torch_runtime_api_version"],
-                        "Torch Runtime API version",
-                    ),
-                    loop_owner=_string(policy_value["loop_owner"], "Torch loop_owner"),
-                    parallelism_id=_string(
-                        policy_value["parallelism_id"], "Torch parallelism_id"
-                    ),
-                    dataset_routing=routes,
-                    execution_plan=plan_value,
-                    state_layout=_string(
-                        policy_value["state_layout"], "Torch state_layout"
-                    ),
-                    metric_reducers={
-                        _string(name, "Torch metric name"): MetricReduction(value)
-                        for name, value in _mapping(
-                            policy_value["metric_reducers"], "Torch metric_reducers"
-                        ).items()
-                    },
-                    backend=_string(
-                        policy_value.get("backend", "auto"), "Torch backend"
-                    ),
-                    checkpoint_owner_rank=_non_negative_integer(
-                        policy_value.get("checkpoint_owner_rank", 0),
-                        "Torch checkpoint_owner_rank",
-                    ),
-                    resume_supported=_boolean(
-                        policy_value.get("resume_supported", True),
-                        "Torch resume_supported",
-                    ),
-                    same_world_size_resume=policy_value.get("same_world_size_resume"),
-                    rank_seeded=_boolean(
-                        policy_value.get("rank_seeded", True), "Torch rank_seeded"
-                    ),
-                    checkpoint_adapter_ref=policy_value.get("checkpoint_adapter_ref"),
-                    evidence_adapter_ref=policy_value.get("evidence_adapter_ref"),
-                    global_loss_reducer_ref=policy_value.get("global_loss_reducer_ref"),
-                    global_loss_reducer_api_version=policy_value.get(
-                        "global_loss_reducer_api_version"
-                    ),
-                    global_loss_reducer_code_digest=policy_value.get(
-                        "global_loss_reducer_code_digest"
-                    ),
-                    composite_loss_schema_id=policy_value.get(
-                        "composite_loss_schema_id"
-                    ),
-                    capabilities=tuple(
-                        _string(capability, "Torch capability")
-                        for capability in _sequence(
-                            policy_value.get("capabilities", ()), "Torch capabilities"
-                        )
-                    ),
-                    max_replicated_bytes_per_worker=(
-                        _positive_integer(
-                            policy_value["max_replicated_bytes_per_worker"],
-                            "Torch max_replicated_bytes_per_worker",
-                        )
-                        if policy_value.get("max_replicated_bytes_per_worker")
-                        is not None
-                        else None
-                    ),
+                policy = TorchPolicy.from_dict(
+                    {
+                        name: value
+                        for name, value in policy_value.items()
+                        if name != "kind"
+                    }
                 )
             elif kind == "framework_native":
                 policy = FrameworkNativePolicy(

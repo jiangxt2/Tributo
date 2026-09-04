@@ -19,8 +19,7 @@ from tributo.algorithms.api import (
     TorchAccumulationWindow,
     TorchBackwardContext,
     TorchCheckpointDescriptor,
-    TorchCheckpointLocator,
-    TorchCheckpointProgress,
+    TorchCheckpointPayloadDraft,
     TorchCompositeLossContribution,
     TorchDatasetRoute,
     TorchGlobalLossReduction,
@@ -29,18 +28,17 @@ from tributo.algorithms.api import (
     TorchMetricPolicy,
     TorchMetricReductionContext,
     TorchPolicy,
-    TorchPreflightLease,
-    TorchPreflightTokenData,
-    TorchRankProgressStatistics,
-    TorchRecoveryEnvelope,
     TorchStageRunIdentity,
     TorchStageSpec,
     apply_torch_loss_backward,
     reduce_torch_metrics,
     report_torch_checkpoint,
-    torch_run_config_name,
 )
-from tributo.algorithms.spi import TorchRuntimeContext, TorchStageContext
+from tributo.algorithms.spi import (
+    TorchOptimizationPlan,
+    TorchRuntimeContext,
+    TorchStageContext,
+)
 
 
 class _Scalar:
@@ -56,25 +54,9 @@ class _Scalar:
         return self.value
 
 
-def _identity_kwargs() -> dict[str, object]:
-    return {
-        "run_id": "aabbccdd",
-        "invocation_id": "11223344",
-        "algorithm": "example",
-        "implementation_ref": "example:Recipe",
-        "implementation_code_digest": "0" * 64,
-        "policy_digest": "1" * 64,
-        "execution_plan_digest": "2" * 64,
-        "runtime_id": "tributo.ray_train_torch",
-        "plan_digest": "3" * 64,
-    }
-
-
 def test_torch_policy_and_run_name_are_deterministic() -> None:
     route = TorchDatasetRoute("train", "split_exact")
-    execution_plan = SingleStageTorchPlan(
-        stage=TorchStageSpec("train", "example:loop", ("train",))
-    )
+    execution_plan = SingleStageTorchPlan(stage=TorchStageSpec("train", ("train",)))
     policy = TorchPolicy(
         torch_runtime_api_version=1,
         loop_owner="core_recipe",
@@ -96,30 +78,7 @@ def test_torch_policy_and_run_name_are_deterministic() -> None:
         policy.digest,
         execution_plan.digest,
     )
-    assert torch_run_config_name(identity) == identity.run_config_name
-
-
-def test_preflight_lease_is_one_shot_and_identity_bound() -> None:
-    lease = TorchPreflightLease(TorchPreflightTokenData(**_identity_kwargs()))
-    lease.claim(
-        run_id="aabbccdd",
-        invocation_id="11223344",
-        plan_digest="3" * 64,
-        runtime_id="tributo.ray_train_torch",
-    )
-    lease.consume(
-        run_id="aabbccdd",
-        invocation_id="11223344",
-        plan_digest="3" * 64,
-        runtime_id="tributo.ray_train_torch",
-    )
-    with pytest.raises(AlgorithmExecutionError):
-        lease.consume(
-            run_id="aabbccdd",
-            invocation_id="11223344",
-            plan_digest="3" * 64,
-            runtime_id="tributo.ray_train_torch",
-        )
+    assert identity.run_config_name.startswith("tributo-torch-v1-")
 
 
 def test_loss_contribution_requires_zero_dimensional_scalar() -> None:
@@ -132,6 +91,35 @@ def test_loss_contribution_requires_zero_dimensional_scalar() -> None:
         {"count_a": 2, "count_b": 4},
     )
     assert set(composite.differentiable_components) == {"loss_a", "loss_b", "loss_c"}
+
+
+@pytest.mark.parametrize(
+    "max_gradient_norm",
+    [True, 0, -1, float("nan"), float("inf"), float("-inf")],
+)
+def test_torch_optimization_plan_rejects_invalid_gradient_clip_norm(
+    max_gradient_norm: float | int | bool,
+) -> None:
+    with pytest.raises(ValueError, match="finite and positive"):
+        TorchOptimizationPlan(
+            optimizer=object(),
+            max_gradient_norm=max_gradient_norm,
+        )
+
+
+def test_torch_optimization_plan_accepts_optional_positive_gradient_clip_norm() -> None:
+    assert (
+        TorchOptimizationPlan(
+            optimizer=object(), max_gradient_norm=None
+        ).max_gradient_norm
+        is None
+    )
+    assert (
+        TorchOptimizationPlan(
+            optimizer=object(), max_gradient_norm=1.0
+        ).max_gradient_norm
+        == 1.0
+    )
 
 
 def test_backward_and_metric_helpers_use_explicit_normalizers() -> None:
@@ -184,15 +172,11 @@ def test_backward_helper_reduces_only_the_accumulation_window_total() -> None:
     assert scales == [2 / 10]
 
 
-def test_locator_rejects_local_paths_and_policy_replicate_budget_is_explicit() -> None:
-    with pytest.raises(AlgorithmConfigurationError):
-        TorchCheckpointLocator("/tmp/checkpoint", "0" * 64)
+def test_policy_replicate_budget_is_explicit() -> None:
     route = TorchDatasetRoute(
         "nodes", "replicate", max_rows=10, max_bytes_per_worker=10
     )
-    plan = SingleStageTorchPlan(
-        stage=TorchStageSpec("train", "example:loop", ("nodes",))
-    )
+    plan = SingleStageTorchPlan(stage=TorchStageSpec("train", ("nodes",)))
     with pytest.raises(AlgorithmConfigurationError):
         TorchPolicy(
             1,
@@ -202,6 +186,22 @@ def test_locator_rejects_local_paths_and_policy_replicate_budget_is_explicit() -
             plan,
             "replicated",
             {"train_loss": MetricReduction.SUM_COUNT},
+        )
+
+
+def test_torch_v1_rejects_cross_run_recovery() -> None:
+    route = TorchDatasetRoute("train", "split_exact")
+    plan = SingleStageTorchPlan(stage=TorchStageSpec("train", ("train",)))
+    with pytest.raises(AlgorithmConfigurationError, match="cross-Run"):
+        TorchPolicy(
+            1,
+            "core_recipe",
+            "torch.ddp.replicated",
+            (route,),
+            plan,
+            "replicated",
+            {"train_loss": MetricReduction.SUM_COUNT},
+            resume_supported=True,
         )
 
 
@@ -218,35 +218,7 @@ def test_composite_global_state_keeps_component_and_normalizer_names_independent
     assert set(state.normalizers) == {"positive_count", "negative_count"}
 
 
-def test_stage_dependency_is_allowed_when_external_recovery_is_disabled() -> None:
-    from tributo.integrations.algorithm_runtimes.ray_train_torch import (
-        _control_for_stage,
-    )
-
-    control = _control_for_stage(
-        SimpleNamespace(
-            algorithm_config={},
-            runtime=SimpleNamespace(resume_from=None),
-        ),
-        SimpleNamespace(
-            resume_supported=False,
-            digest="1" * 64,
-            execution_plan=SimpleNamespace(digest="2" * 64),
-        ),
-        SimpleNamespace(stage_id="student", checkpoint_from_stage="teacher"),
-        run_id="aabbccdd",
-        invocation_id="11223344",
-        predecessor={
-            "locator": "s3://bucket/teacher-checkpoint",
-            "descriptor_digest": "3" * 64,
-        },
-    )
-    assert control is not None
-    assert control["purpose"] == "stage_dependency"
-    assert control["source_stage_id"] == "teacher"
-
-
-def test_role_evidence_falls_back_to_primary_binding_for_alias_roles() -> None:
+def test_role_evidence_requires_an_actual_role_binding() -> None:
     from tributo.integrations.algorithm_runtimes.ray_train_torch import (
         _binding_digest_for_role,
     )
@@ -255,11 +227,11 @@ def test_role_evidence_falls_back_to_primary_binding_for_alias_roles() -> None:
         def get(self, role: str) -> object:
             raise AlgorithmConfigurationError(f"unknown resolved input role: {role}")
 
-    primary = SimpleNamespace(binding_digest="3" * 64)
     plan = SimpleNamespace(
-        input_descriptors=Descriptors(), primary_input_descriptor=primary
+        input_descriptors=Descriptors(),
     )
-    assert _binding_digest_for_role(plan, "val") == "3" * 64
+    with pytest.raises(AlgorithmConfigurationError, match="no binding digest"):
+        _binding_digest_for_role(plan, "val")
 
 
 def test_worker_evidence_defaults_only_missing_declared_resources() -> None:
@@ -310,13 +282,40 @@ def test_component_state_details_project_stage_coverage() -> None:
             to_dict=lambda: {"stage_id": "finetune", "state": "b" * 64},
         ),
     )
-    details = _component_state_details(stages)
+    details = _component_state_details(stages, "pretrain")
     assert details["component_stage_count"] == 2
     assert details["component_stages"] == "pretrain,finetune"
-    assert details["anchor_stage"] == "finetune"
+    assert details["anchor_stage"] == "pretrain"
     assert details["stage.pretrain.rows"] == 16
     assert details["stage.finetune.rows"] == 12
     assert len(details["composition_digest"]) == 64
+
+
+def test_component_stage_metrics_keep_named_metrics_and_final_train_loss() -> None:
+    from tributo.integrations.algorithm_runtimes.ray_train_torch import (
+        _record_stage_metrics,
+    )
+
+    metrics: dict[str, float] = {}
+    declared = {"train_loss", "teacher_loss", "student_loss"}
+    _record_stage_metrics(
+        metrics,
+        {"train_loss": 2.0, "teacher_loss": 2.0},
+        declared,
+        is_final=False,
+    )
+    _record_stage_metrics(
+        metrics,
+        {"train_loss": 1.0, "student_loss": 1.0},
+        declared,
+        is_final=True,
+    )
+
+    assert metrics == {
+        "train_loss": 1.0,
+        "teacher_loss": 2.0,
+        "student_loss": 1.0,
+    }
 
 
 def test_source_state_details_preserve_adapter_declared_scalars() -> None:
@@ -339,6 +338,65 @@ def test_source_state_details_preserve_adapter_declared_scalars() -> None:
     }
 
 
+def test_torch_ray_config_rejects_removed_resume_options() -> None:
+    from tributo.integrations.algorithm_runtimes.ray_train_torch import (
+        _torch_ray_config,
+    )
+
+    plan = SimpleNamespace(
+        algorithm_config={"ray": {"storage_path": "/tmp/ray", "max_failures": 1}}
+    )
+    assert _torch_ray_config(plan) == ("/tmp/ray", 1)
+    plan.algorithm_config["ray"]["resume"] = {"checkpoint_interval": 1}
+    with pytest.raises(AlgorithmConfigurationError, match="unsupported key"):
+        _torch_ray_config(plan)
+
+
+def test_runtime_rejects_reserved_torch_policy_features() -> None:
+    from tributo.integrations.algorithm_runtimes.ray_train_torch import (
+        _validate_runtime_policy,
+    )
+
+    supported = SimpleNamespace(
+        state_layout="replicated",
+        dataset_routing=(SimpleNamespace(mode="split_exact"),),
+        checkpoint_owner_rank=0,
+        checkpoint_adapter_ref=None,
+        evidence_adapter_ref=None,
+    )
+    _validate_runtime_policy(supported)
+    for policy, message in (
+        (
+            SimpleNamespace(**{**vars(supported), "state_layout": "sharded"}),
+            "sharded",
+        ),
+        (
+            SimpleNamespace(**{**vars(supported), "checkpoint_owner_rank": 1}),
+            "checkpoint_owner_rank",
+        ),
+        (
+            SimpleNamespace(
+                **{
+                    **vars(supported),
+                    "dataset_routing": (SimpleNamespace(mode="split_framework"),),
+                }
+            ),
+            "split_framework",
+        ),
+        (
+            SimpleNamespace(
+                **{
+                    **vars(supported),
+                    "checkpoint_adapter_ref": "example:checkpoint",
+                }
+            ),
+            "adapter references",
+        ),
+    ):
+        with pytest.raises(AlgorithmConfigurationError, match=message):
+            _validate_runtime_policy(policy)
+
+
 def test_replicated_role_evidence_uses_per_rank_rows() -> None:
     from tributo.algorithms.api import TorchRoleExecutionEvidence
 
@@ -351,6 +409,7 @@ def test_replicated_role_evidence_uses_per_rank_rows() -> None:
         expected_rows=8,
         observed_rows=8,
         rows_per_rank=(8, 8),
+        replicated_bytes_per_worker=123,
     )
     assert evidence.rows_per_rank == (8, 8)
     with pytest.raises(AlgorithmConfigurationError):
@@ -363,7 +422,56 @@ def test_replicated_role_evidence_uses_per_rank_rows() -> None:
             expected_rows=8,
             observed_rows=8,
             rows_per_rank=(),
+            replicated_bytes_per_worker=123,
         )
+
+
+def test_stage_route_validation_returns_actual_replicated_bytes() -> None:
+    from tributo.integrations.algorithm_runtimes.ray_train_torch import (
+        _validate_stage_routes,
+    )
+
+    calls: list[str] = []
+
+    class MaterializedDataset:
+        def count(self) -> int:
+            calls.append("count")
+            return 8
+
+        def size_bytes(self) -> int:
+            calls.append("size_bytes")
+            return 123
+
+    materialized = MaterializedDataset()
+
+    class LimitedDataset:
+        def materialize(self) -> MaterializedDataset:
+            calls.append("materialize")
+            return materialized
+
+    class Dataset:
+        def count(self) -> int:
+            raise AssertionError("the unbounded Dataset must not be counted")
+
+        def limit(self, count: int) -> LimitedDataset:
+            calls.append(f"limit:{count}")
+            assert count == 9
+            return LimitedDataset()
+
+    route = TorchDatasetRoute(
+        "nodes", "replicate", max_rows=8, max_bytes_per_worker=256
+    )
+    datasets: dict[str, object] = {"nodes": Dataset()}
+    rows, replicated_bytes = _validate_stage_routes(
+        SimpleNamespace(dataset_routing=(route,), max_replicated_bytes_per_worker=256),
+        SimpleNamespace(input_roles=("nodes",)),
+        datasets,
+        2,
+    )
+    assert rows == {"nodes": 8}
+    assert replicated_bytes == {"nodes": 123}
+    assert datasets["nodes"] is materialized
+    assert calls == ["limit:9", "materialize", "count", "size_bytes"]
 
 
 def test_adapter_worker_config_cannot_carry_core_paths() -> None:
@@ -536,7 +644,9 @@ def test_component_export_result_contains_composition_digest(
     assert execution.outputs["composition_digest"] == "a" * 64
 
 
-def test_checkpoint_report_builds_descriptor_from_payload(tmp_path) -> None:
+def test_checkpoint_report_builds_descriptor_from_payload(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     identity = TorchStageRunIdentity(
         "aabbccdd",
         "11223344",
@@ -561,18 +671,18 @@ def test_checkpoint_report_builds_descriptor_from_payload(tmp_path) -> None:
     payload = tmp_path / "model.pt"
     payload.write_bytes(b"model")
     captured: dict[str, object] = {}
-
-    class Draft:
-        checkpoint_dir = tmp_path
-
-        def report(self, *, metrics, stage_context, completed_step) -> None:
-            captured.update(metrics)
-            assert stage_context is stage
-            assert completed_step == 1
+    monkeypatch.setattr(
+        "ray.train.get_context",
+        lambda: SimpleNamespace(get_world_rank=lambda: 0),
+    )
+    monkeypatch.setattr(
+        "ray.train.report",
+        lambda metrics, checkpoint=None: captured.update(metrics),
+    )
 
     report_torch_checkpoint(
         {"train_loss": 0.5},
-        Draft(),
+        TorchCheckpointPayloadDraft(tmp_path),
         stage,
         1,
     )
@@ -582,34 +692,6 @@ def test_checkpoint_report_builds_descriptor_from_payload(tmp_path) -> None:
         "model.pt": __import__("hashlib").sha256(b"model").hexdigest()
     }
     assert (tmp_path / "torch_checkpoint_descriptor.json").is_file()
-
-
-def test_recovery_envelope_roundtrip_and_locator_digest_binding() -> None:
-    locator = TorchCheckpointLocator("s3://bucket/stage", "4" * 64)
-    envelope = TorchRecoveryEnvelope(
-        completed_stage_ids=("pretrain",),
-        stage_checkpoints={"pretrain": locator},
-        active_stage_id="finetune",
-        active_checkpoint=TorchCheckpointLocator("s3://bucket/active", "5" * 64),
-    )
-    restored = TorchRecoveryEnvelope.from_dict(envelope.to_dict())
-    assert restored == envelope
-    with pytest.raises(AlgorithmConfigurationError):
-        TorchRecoveryEnvelope(
-            completed_stage_ids=("pretrain",),
-            stage_checkpoints={
-                "pretrain": TorchCheckpointLocator("s3://bucket/stage", "4" * 64)
-            },
-            active_stage_id="pretrain",
-            active_checkpoint=TorchCheckpointLocator("s3://bucket/active", "5" * 64),
-        )
-    with pytest.raises(AlgorithmConfigurationError):
-        TorchRecoveryEnvelope.from_dict(
-            {
-                "completed_stage_ids": ["pretrain"],
-                "stage_checkpoints": {"pretrain": "not-a-locator"},
-            }
-        )
 
 
 def test_checkpoint_payload_rejects_symlinked_descriptor(tmp_path) -> None:
@@ -639,14 +721,8 @@ def test_checkpoint_payload_rejects_symlinked_descriptor(tmp_path) -> None:
     target.write_text("{}", encoding="utf-8")
     (tmp_path / "torch_checkpoint_descriptor.json").symlink_to(target)
 
-    class Draft:
-        checkpoint_dir = tmp_path
-
-        def report(self, *, metrics, stage_context, completed_step) -> None:
-            del metrics, stage_context, completed_step
-
     with pytest.raises(AlgorithmExecutionError):
-        report_torch_checkpoint({}, Draft(), stage, 1)
+        report_torch_checkpoint({}, TorchCheckpointPayloadDraft(tmp_path), stage, 1)
 
 
 def test_checkpoint_report_rejects_core_metadata_fields(tmp_path) -> None:
@@ -673,29 +749,16 @@ def test_checkpoint_report_rejects_core_metadata_fields(tmp_path) -> None:
     stage = TorchStageContext(runtime, "train", 0, True, ("train",))
     (tmp_path / "model.pt").write_bytes(b"model")
 
-    class Draft:
-        checkpoint_dir = tmp_path
-
-        def report(self, *, metrics, stage_context, completed_step) -> None:
-            del metrics, stage_context, completed_step
-
     with pytest.raises(AlgorithmConfigurationError):
         report_torch_checkpoint(
-            {"checkpoint_locator": "s3://bucket/private"}, Draft(), stage, 1
+            {"checkpoint_locator": "s3://bucket/private"},
+            TorchCheckpointPayloadDraft(tmp_path),
+            stage,
+            1,
         )
 
 
-def test_checkpoint_progress_roundtrip_and_conditional_resume_serialization() -> None:
-    progress = TorchCheckpointProgress(
-        epoch=2,
-        micro_batch_cursor=3,
-        optimizer_step=7,
-        scheduler_step=2,
-        accumulation_steps=4,
-        dataset_cursor_by_rank={"0": 3, "1": 3},
-        shuffle_seed=44,
-    )
-    assert TorchCheckpointProgress.from_dict(progress.to_dict()) == progress
+def test_checkpoint_descriptor_omits_unsupported_resume_state() -> None:
     identity = TorchStageRunIdentity(
         "aabbccdd",
         "11223344",
@@ -720,25 +783,12 @@ def test_checkpoint_progress_roundtrip_and_conditional_resume_serialization() ->
         implementation_code_digest=identity.implementation_code_digest,
         payload_files={"model.pt": "4" * 64},
         resume_supported=False,
-        same_world_size_resume=None,
     )
     assert "same_world_size_resume" not in descriptor.to_dict()
     assert TorchCheckpointDescriptor.from_dict(descriptor.to_dict()) == descriptor
 
 
-def test_rank_progress_statistics_and_runtime_context_are_typed() -> None:
-    statistics = TorchRankProgressStatistics(
-        rows_processed=4,
-        coverage_totals={"coverage.positive": 2},
-        loss_numerator_total=3.0,
-        loss_normalizer_total=4.0,
-        metric_totals={"accuracy": (2.0, 4.0)},
-        reducer_observation={"branch": "nnpu_normal"},
-    )
-    assert TorchRankProgressStatistics.from_dict(statistics.to_dict()) == statistics
-    with pytest.raises(AlgorithmConfigurationError):
-        TorchRankProgressStatistics.from_dict({"rows_processed": "four"})
-
+def test_runtime_context_omits_unsupported_resume_state() -> None:
     runtime = TorchRuntimeContext(
         algorithm_config={},
         implementation_id="example.adapter",
@@ -746,7 +796,6 @@ def test_rank_progress_statistics_and_runtime_context_are_typed() -> None:
         policy_digest="1" * 64,
         execution_plan_digest="2" * 64,
         resume_supported=False,
-        same_world_size_resume=None,
     )
     payload = runtime.to_dict()
     assert "same_world_size_resume" not in payload
@@ -759,95 +808,33 @@ def test_rank_progress_statistics_and_runtime_context_are_typed() -> None:
             "input_roles": ["train"],
         }
     )
-    assert restored.runtime.same_world_size_resume is None
+    assert not hasattr(restored.runtime, "same_world_size_resume")
 
 
-def test_scheduler_boundary_and_recovery_commit_are_fail_closed(tmp_path) -> None:
+def test_worker_stage_context_omits_driver_output_paths() -> None:
     from tributo.integrations.algorithm_runtimes.ray_train_torch import (
-        _require_checkpoint_commit,
-        _should_apply_epoch_scheduler,
+        _worker_stage_context,
     )
 
-    assert _should_apply_epoch_scheduler(
-        restore_same_stage=True,
-        epoch=1,
-        restored_epoch=1,
-        restored_epoch_scheduler_applied=False,
-    )
-    assert not _should_apply_epoch_scheduler(
-        restore_same_stage=True,
-        epoch=1,
-        restored_epoch=1,
-        restored_epoch_scheduler_applied=True,
-    )
-    identity = TorchStageRunIdentity(
-        "aabbccdd",
-        "11223344",
+    stage = TorchStageContext(
+        TorchRuntimeContext(
+            algorithm_config={},
+            implementation_id="example.adapter",
+            world_size=1,
+            policy_digest="1" * 64,
+            execution_plan_digest="2" * 64,
+            output_config={"bundle_uri": "/driver/model"},
+        ),
         "train",
-        1,
-        "example",
-        "example.recipe",
-        "0" * 64,
-        "1" * 64,
-        "2" * 64,
-    )
-    (tmp_path / "model.pt").write_bytes(b"model")
-    descriptor = TorchCheckpointDescriptor(
-        schema_version=1,
-        identity=identity,
-        run_config_name=identity.run_config_name,
-        state_layout="replicated",
-        world_size=1,
-        completed_step=1,
-        policy_digest=identity.policy_digest,
-        execution_plan_digest=identity.execution_plan_digest,
-        input_binding_digest="3" * 64,
-        implementation_code_digest=identity.implementation_code_digest,
-        payload_files={"model.pt": "4" * 64},
-    )
-    with pytest.raises(AlgorithmExecutionError, match="commit"):
-        _require_checkpoint_commit(tmp_path, descriptor)
-
-
-def test_local_stage_staging_ignores_prior_partial_attempt(tmp_path) -> None:
-    from tributo.integrations.algorithm_runtimes.ray_train_torch import (
-        _persist_stage_checkpoint,
+        0,
+        True,
+        ("train",),
     )
 
-    identity = TorchStageRunIdentity(
-        "aabbccdd",
-        "11223344",
-        "train",
-        1,
-        "example",
-        "example.recipe",
-        "0" * 64,
-        "1" * 64,
-        "2" * 64,
-    )
-    source = tmp_path / "source"
-    source.mkdir()
-    (source / "model.pt").write_bytes(b"model")
-    run_root = tmp_path / identity.run_config_name
-    run_root.mkdir()
+    worker_context = _worker_stage_context(stage)
 
-    class Checkpoint:
-        @contextmanager
-        def as_directory(self):
-            yield source
-
-    # A previous attempt with the same digest must not block a fresh staging
-    # attempt; only the committed destination is authoritative.
-    stale_path = run_root / f".stage_checkpoint.staging-{'4' * 64}-old"
-    stale_path.mkdir()
-    locator = _persist_stage_checkpoint(
-        Checkpoint(),
-        identity=identity,
-        storage_path=tmp_path,
-        descriptor_digest="4" * 64,
-    )
-    assert locator == f"ray://{run_root / 'stage_checkpoint'}"
-    assert (run_root / "stage_checkpoint" / "torch_stage_commit.json").is_file()
+    assert stage.runtime.output_config == {"bundle_uri": "/driver/model"}
+    assert worker_context.runtime.output_config == {}
 
 
 def test_composite_zero_global_normalizer_fails_before_reducer(
@@ -918,3 +905,18 @@ def test_removed_torch_public_surfaces_are_not_exported() -> None:
     assert not hasattr(algorithms, "TrainingRecipeV2")
     assert not hasattr(algorithms.AlgorithmBuilder, "from_torch_recipe")
     assert not hasattr(algorithms.AlgorithmBuilder, "from_training_recipe_v2")
+    for name in (
+        "TorchCheckpointLocator",
+        "TorchCheckpointProgress",
+        "TorchPreflightLease",
+        "TorchPreflightTokenData",
+        "TorchRankProgressStatistics",
+        "TorchRecoveryEnvelope",
+        "TorchRuntimeExecutionEnvelope",
+        "TorchWorkerControlEnvelope",
+        "claim_torch_run_directory",
+        "describe_torch_checkpoint",
+        "torch_run_config_name",
+        "validate_torch_retry_identity",
+    ):
+        assert not hasattr(algorithms, name)

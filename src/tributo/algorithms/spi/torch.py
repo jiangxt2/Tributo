@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -34,12 +35,10 @@ class TorchRuntimeContext:
 
     input_bindings: Mapping[str, object] = field(default_factory=dict)
     output_config: Mapping[str, object] = field(default_factory=dict)
-    recovery_identity: Mapping[str, object] | None = None
     input_binding_digest: str | None = None
     state_layout: str = "replicated"
     adapter_identity: str | None = None
-    resume_supported: bool = True
-    same_world_size_resume: bool | None = True
+    resume_supported: bool = False
     torch_runtime_api_version: int = 1
 
     def __post_init__(self) -> None:
@@ -75,21 +74,11 @@ class TorchRuntimeContext:
             raise ValueError("TorchRuntimeContext state_layout is invalid")
         if not isinstance(self.resume_supported, bool):
             raise ValueError("TorchRuntimeContext resume_supported must be boolean")
-        if self.same_world_size_resume is not None and not isinstance(
-            self.same_world_size_resume, bool
-        ):
-            raise ValueError(
-                "TorchRuntimeContext same_world_size_resume must be boolean"
-            )
+        if self.resume_supported:
+            raise ValueError("Torch Runtime API v1 does not support cross-Run recovery")
         object.__setattr__(self, "algorithm_config", deep_freeze(self.algorithm_config))
         object.__setattr__(self, "input_bindings", deep_freeze(self.input_bindings))
         object.__setattr__(self, "output_config", deep_freeze(self.output_config))
-        if self.recovery_identity is not None:
-            object.__setattr__(
-                self,
-                "recovery_identity",
-                deep_freeze(self.recovery_identity),
-            )
 
     def to_dict(self) -> dict[str, object]:
         payload: dict[str, object] = {
@@ -101,17 +90,12 @@ class TorchRuntimeContext:
             "run_identity": self.run_identity.to_dict() if self.run_identity else None,
             "input_bindings": dict(self.input_bindings),
             "output_config": dict(self.output_config),
-            "recovery_identity": dict(self.recovery_identity)
-            if self.recovery_identity
-            else None,
             "input_binding_digest": self.input_binding_digest,
             "state_layout": self.state_layout,
             "adapter_identity": self.adapter_identity,
             "resume_supported": self.resume_supported,
             "torch_runtime_api_version": self.torch_runtime_api_version,
         }
-        if self.same_world_size_resume is not None:
-            payload["same_world_size_resume"] = self.same_world_size_resume
         return payload
 
 
@@ -127,9 +111,6 @@ class TorchStageContext:
     input_roles: tuple[str, ...]
     predecessor_stage_id: str | None = None
     predecessor_checkpoint_descriptor: Mapping[str, Any] | None = None
-    metric_mapping: Mapping[str, str] = field(default_factory=dict)
-    checkpoint_required: bool = True
-    checkpoint_interval_windows: int = 1
 
     def __post_init__(self) -> None:
         if not isinstance(self.runtime, TorchRuntimeContext):
@@ -145,27 +126,6 @@ class TorchStageContext:
         if not isinstance(self.is_final, bool):
             raise ValueError("TorchStageContext is_final must be boolean")
         object.__setattr__(self, "input_roles", tuple(self.input_roles))
-        if any(
-            not isinstance(name, str)
-            or not name
-            or not isinstance(target, str)
-            or not target
-            for name, target in self.metric_mapping.items()
-        ):
-            raise ValueError("TorchStageContext metric_mapping is malformed")
-        if len(set(self.metric_mapping.values())) != len(self.metric_mapping):
-            raise ValueError("TorchStageContext metric_mapping targets must be unique")
-        if not isinstance(self.checkpoint_required, bool):
-            raise ValueError("TorchStageContext checkpoint_required must be boolean")
-        if (
-            not isinstance(self.checkpoint_interval_windows, int)
-            or isinstance(self.checkpoint_interval_windows, bool)
-            or self.checkpoint_interval_windows < 1
-        ):
-            raise ValueError(
-                "TorchStageContext checkpoint_interval_windows must be positive"
-            )
-        object.__setattr__(self, "metric_mapping", deep_freeze(self.metric_mapping))
         if self.predecessor_checkpoint_descriptor is not None:
             if any(
                 key in {"locator", "checkpoint_locator", "path", "credential"}
@@ -193,9 +153,6 @@ class TorchStageContext:
             )
             if self.predecessor_checkpoint_descriptor
             else None,
-            "metric_mapping": dict(self.metric_mapping),
-            "checkpoint_required": self.checkpoint_required,
-            "checkpoint_interval_windows": self.checkpoint_interval_windows,
         }
 
     @classmethod
@@ -204,7 +161,7 @@ class TorchStageContext:
         if not isinstance(runtime_value, Mapping):
             raise ValueError("TorchStageContext runtime payload is invalid")
         identity_value = runtime_value.get("run_identity")
-        resume_supported = runtime_value.get("resume_supported", True)
+        resume_supported = runtime_value.get("resume_supported", False)
         runtime = TorchRuntimeContext(
             algorithm_config=runtime_value.get("algorithm_config", {}),
             implementation_id=runtime_value["implementation_id"],
@@ -218,14 +175,10 @@ class TorchStageContext:
             ),
             input_bindings=runtime_value.get("input_bindings", {}),
             output_config=runtime_value.get("output_config", {}),
-            recovery_identity=runtime_value.get("recovery_identity"),
             input_binding_digest=runtime_value.get("input_binding_digest"),
             state_layout=runtime_value.get("state_layout", "replicated"),
             adapter_identity=runtime_value.get("adapter_identity"),
             resume_supported=resume_supported,
-            same_world_size_resume=runtime_value.get(
-                "same_world_size_resume", True if resume_supported else None
-            ),
             torch_runtime_api_version=runtime_value.get("torch_runtime_api_version", 1),
         )
         return cls(
@@ -238,11 +191,6 @@ class TorchStageContext:
             predecessor_checkpoint_descriptor=cast(
                 Mapping[str, Any] | None,
                 value.get("predecessor_checkpoint_descriptor"),
-            ),
-            metric_mapping=cast(Mapping[str, str], value.get("metric_mapping", {})),
-            checkpoint_required=cast(bool, value.get("checkpoint_required", True)),
-            checkpoint_interval_windows=cast(
-                int, value.get("checkpoint_interval_windows", 1)
             ),
         )
 
@@ -279,9 +227,7 @@ class TorchWorkerCheckpointContext:
             raise ValueError("TorchWorkerCheckpointContext stage is required")
         if self.source not in {
             "none",
-            "ray_failure_retry",
             "stage_dependency",
-            "cross_run_initial_recovery",
         }:
             raise ValueError("TorchWorkerCheckpointContext source is invalid")
         if self.source == "none" and self.checkpoint is not None:
@@ -514,6 +460,13 @@ class TorchOptimizationPlan:
             or self.gradient_accumulation_steps < 1
         ):
             raise ValueError("gradient_accumulation_steps must be positive")
+        if self.max_gradient_norm is not None and (
+            not isinstance(self.max_gradient_norm, (int, float))
+            or isinstance(self.max_gradient_norm, bool)
+            or not math.isfinite(float(self.max_gradient_norm))
+            or float(self.max_gradient_norm) <= 0
+        ):
+            raise ValueError("max_gradient_norm must be finite and positive")
 
 
 @PublicAPI(stability="alpha")

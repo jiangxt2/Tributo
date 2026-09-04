@@ -227,9 +227,10 @@ class AlgorithmSupportEvidence:
             "issued_at": self.issued_at.isoformat(),
             "gate": self.gate,
             "result_reference": self.result_reference,
-            "torch_runtime_api_version": self.torch_runtime_api_version,
-            "torch_policy_digest": self.torch_policy_digest,
         }
+        if self.torch_runtime_api_version is not None:
+            payload["torch_runtime_api_version"] = self.torch_runtime_api_version
+            payload["torch_policy_digest"] = self.torch_policy_digest
         return hashlib.sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()

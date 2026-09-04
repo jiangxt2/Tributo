@@ -215,6 +215,40 @@ artifact preflight. A non-empty `algorithm_ids` allowlist is enforced against
 an offline Bundle's manifest; an empty allowlist means that the Profile does
 not restrict the algorithm family.
 
+## Migrate legacy PyTorch extensions
+
+The unified Torch API replaces the former recipe and framework-native PyTorch
+entry points. The migration is intentionally source-breaking; there are no
+legacy aliases or compatibility adapters.
+
+| Legacy API or hook | Unified Torch replacement |
+| --- | --- |
+| `TorchTrainingRecipe.model_factory()` and `loss_factory()` | `TorchRecipe.build_modules(TorchBuildContext)` returning a `TorchModuleSet` |
+| `TorchTrainingRecipe.optimizer_factory()` | `TorchRecipe.configure_optimizers()` returning `TorchOptimizationPlan` |
+| `TorchTrainingRecipe.metric_factories()` | Typed contributions from `training_step()` / `validation_step()` plus declarations from `metric_plan()` |
+| `TorchTrainingRecipe.forward()` and `compute_loss()` | Algorithm-owned `training_step()` / `validation_step()` |
+| `TrainingRecipeV2.build_modules(config)` | `TorchRecipe.build_modules(TorchBuildContext)` |
+| `TrainingRecipeV2.batch_adapter()` | `TorchRecipe.adapt_batch(batch, TorchBatchContext)` returning `TorchBatch` |
+| `TrainingRecipeV2.training_step()` and `validation_step()` | The same named typed hooks returning `TorchStepResult` with explicit numerator/normalizer contributions |
+| `TrainingRecipeV2.optimization_plan()` | `TorchRecipe.configure_optimizers()` |
+| `TrainingRecipeV2.metric_plan()` callable factories | `TorchRecipe.metric_plan()` reducer declarations; step hooks return metric contributions |
+| `TrainingRecipeV2.checkpoint_codec()` | Core-owned checkpoint reporting and `TorchCheckpointDescriptor`; no Recipe-owned serialization hook |
+| PyTorch `FrameworkNativeAlgorithm.validate_environment()` and `bind_datasets()` | `RayTorchAdapter.validate_environment(context)` and `bind_datasets(datasets, context)` |
+| PyTorch `FrameworkNativeAlgorithm.build_trainer()` | Removed; Core owns the sole `TorchTrainer`, while the Adapter supplies `worker_config()` and `train_loop_per_worker()` |
+| PyTorch `FrameworkNativeAlgorithm.collect_evidence()` | Core-owned evidence collection from bounded worker reports |
+| PyTorch `FrameworkNativeAlgorithm.checkpoint_source()` | `RayTorchAdapter.checkpoint_source(result, context)` |
+| `RayTorchRecipeSourceProvider` / `TorchRecipeSourceOptions` | `RayTorchSourceProvider` / `TorchSourceOptions`; Recipes use Core reconstruction, while Adapters provide `artifact_plan()` and `open_export_source()` |
+
+Registration and runtime identities migrate as follows:
+
+| Legacy registration | Unified registration |
+| --- | --- |
+| `AlgorithmBuilder.from_torch_recipe()` | `AlgorithmBuilder.from_torch()` |
+| `AlgorithmBuilder.from_training_recipe_v2()` | `AlgorithmBuilder.from_torch()` |
+| PyTorch `FrameworkNativeAlgorithm` registrations | `AlgorithmBuilder.from_torch_adapter()` with `RAY_TRAIN_TORCH` |
+| Legacy PyTorch Runtime IDs | `tributo.ray_train_torch` |
+| `ray-torch-recipe-v1` Source Provider | `ray-torch-v1` |
+
 ## Use a low-code PyTorch recipe
 
 For Core-owned training, subclass `TorchRecipe` and implement the typed
@@ -226,9 +260,11 @@ and cannot create a nested Trainer or declare a second execution plan.
 
 ```python
 from tributo.algorithms import (
+    TorchArtifactPlan,
     TorchBatch,
     TorchLossContribution,
     TorchMetricPlan,
+    TorchModuleSet,
     TorchOptimizationPlan,
     TorchRecipe,
     TorchStepResult,
@@ -239,13 +275,15 @@ class BinaryLinearRecipe(TorchRecipe):
     def build_modules(self, context):
         import torch
 
-        return {"model": torch.nn.Linear(2, 1), "loss": torch.nn.BCEWithLogitsLoss()}
+        return TorchModuleSet(
+            {"model": torch.nn.Linear(2, 1), "loss": torch.nn.BCEWithLogitsLoss()}
+        )
 
     def adapt_batch(self, batch, context):
         import torch
 
         features = torch.as_tensor(batch["features"])
-        targets = torch.as_tensor(batch["label"])
+        targets = torch.as_tensor(batch["label"]).reshape(-1, 1)
         return TorchBatch(positional=(features,), targets=targets, local_rows=len(targets))
 
     def training_step(self, modules, batch, context):
@@ -272,7 +310,23 @@ class BinaryLinearRecipe(TorchRecipe):
         return TorchMetricPlan({"train_loss": "sum_count"})
 
     def artifact_plan(self, context):
-        return {"source_kind": "torch_module", "roles": {"inference": "onnx-model"}}
+        return TorchArtifactPlan(
+            source_kind="torch_module",
+            input_signature=(
+                {"name": "features", "dtype": "float32", "shape": ("batch", 2)},
+            ),
+            output_signature=(
+                {"name": "prediction", "dtype": "float32", "shape": ("batch", 1)},
+            ),
+            targets=(
+                {
+                    "name": "onnx-model",
+                    "format": "onnx",
+                    "exporter_id": "torch-onnx-v1",
+                },
+            ),
+            roles={"inference": "onnx-model"},
+        )
 ```
 
 Use `AlgorithmBuilder.from_torch()` to lower a Recipe, or

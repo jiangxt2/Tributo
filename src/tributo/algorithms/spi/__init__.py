@@ -16,7 +16,6 @@ from tributo.algorithms.spi.execution import (
     PortableRuntimeAdapter,
     Predictable,
     RuntimeExecutionEnvelope,
-    TorchRuntimePreflight,
     Transformable,
 )
 from tributo.algorithms.spi.input import (
@@ -74,7 +73,6 @@ __all__ = [
     "PortableRuntimeAdapter",
     "Predictable",
     "RuntimeExecutionEnvelope",
-    "TorchRuntimePreflight",
     "PreparedInput",
     "ResolvedInputLease",
     "RuntimeInputBinding",
