@@ -7,5 +7,5 @@ myst-parser==4.0.1
 sphinx-click==6.1.0
 pydata-sphinx-theme==0.16.1
 sphinxcontrib-spelling==8.0.1
-pydantic==2.13.4
+pydantic==2.13.5
 protobuf==6.33.6
