@@ -121,6 +121,50 @@ Other SQL dialects and arbitrary Ray resource dictionaries are rejected. The
 Ray Doris route remains adapter-only until its real-database conformance gate
 is satisfied.
 
+## Read a ClickHouse table with Ray Data
+
+Install the `ray-clickhouse==0.1.0` wheel from its GitHub Release in the same
+environment as `tributo[clickhouse]`, then select Ray explicitly. The wheel is
+not yet part of the Tributo lockfile or canonical full image.
+
+```python
+from tributo.data import (
+    IngestionRequest,
+    ReadOptions,
+    SqlPartitioning,
+    SqlSourceConfig,
+    open_ingestion,
+)
+
+source = SqlSourceConfig(
+    dialect="clickhouse",
+    host="clickhouse.example",
+    database="analytics",
+    table="events",
+    columns=["id", "category"],
+    partitioning=SqlPartitioning(mode="auto", num_partitions=8),
+)
+
+request = IngestionRequest(
+    source=source,
+    engine="ray",
+    read_options=ReadOptions(
+        batch_size=32_768,
+        target_split_size_bytes=32 * 1024 * 1024,
+        concurrency=4,
+    ),
+)
+with open_ingestion(request) as result:
+    dataset = result.handle.dataset
+```
+
+`single` maps to one streaming ClickHouse query, `auto` requests physical
+partition splitting, and `parallel` maps its one declared integer column to
+range splitting. Views and Distributed tables must use `single`; physical
+partition and range splitting are limited to eligible direct MergeTree-family
+tables. `batch_size` and `target_split_size_bytes` become the connector's row
+and byte block targets. Raw SQL remains outside Tributo's ingestion contract.
+
 ```{warning}
 Do not place passwords, tokens, signed query strings, or URI user information
 in a source that can appear in a receipt or log. Use the source's environment,

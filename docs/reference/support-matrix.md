@@ -48,7 +48,7 @@ endpoint.
 | PostgreSQL structured table reads | Verified | Ray uses a single public SQL read and fails closed on parallel shard requirements; Daft may use native partition hints |
 | ClickHouse/Doris raw SQL | Unsupported | Legacy shapes return a credential-free migration error; use structured table input or execute SQL outside Tributo ingestion |
 | HDFS Parquet/CSV reads | Adapter only | Ray binding exists; real HDFS/JVM/worker gate is pending |
-| ClickHouse reads | Adapter only | Uses locked `daft-clickhouse==1.0` through `tributo[clickhouse]`; real-database Conformance is still required, and provider partition discovery is distinct from engine auto-routing |
+| ClickHouse reads | Adapter only | Daft uses locked `daft-clickhouse==1.0`; Ray uses the separately installed `ray-clickhouse==0.1.0` wheel and delegates single, physical-partition, integer-range, and bounded Arrow block behavior to it. Real-database Tributo Conformance is still required |
 | Doris reads | Adapter only | Ray routes use locked `ray-doris==1.0`; Daft routes use locked `daft-doris==1.0`; real-database Conformance is still required and tablet planning remains provider/binding-owned |
 | HiveServer2 structured table reads | Alpha, verified | `ProviderSourceConfig(provider="tributo.hive", uri="hive://host:port/database/table")` routes only to the Ray `tributo.ray.hive` Binding and locked `ray-hive==1.0`; Hive 4.2.0 Conformance verifies projection, schema, worker execution, and binary NOSASL transport. Raw SQL, Daft Hive, HTTP, TLS, Kerberos, and Hive writes are outside this contract |
 | Native ORC file reads | Unsupported | Tributo does not implement an ORC reader. The verified Hive fixture is ORC-backed, but HiveServer2 and `ray-hive` own its SQL execution and decoding; this is not HDFS or file-level ORC support |
@@ -171,7 +171,7 @@ tensors; it does not apply DNN/PU preprocessing implicitly.
 | Capability | Status | Boundary |
 | --- | --- | --- |
 | Full Tributo runtime image for CPU validation | Alpha, directly buildable | Linux `arm64`/`amd64`, defaulting to the native host architecture; Python 3.12, Ray 2.55.1, locked dependency closure, and all first-party runtime extras including Alpha modules. Linux PyTorch resolution may include transitive CUDA/NVIDIA distributions, but no GPU support is claimed |
-| Custom connector wheelhouse variant | Alpha, optional extension | An external wheelhouse remains available for packages outside the locked v1.0 connector set; it is not required for the canonical ClickHouse/Doris/Ray Hive image and does not change the Tributo lockfile |
+| Custom connector wheelhouse variant | Alpha, optional extension | An external wheelhouse remains available for packages outside the locked connector set and is currently required for `ray-clickhouse==0.1.0`; it does not change the Tributo lockfile |
 | Runtime image attestation | Alpha | `manifest.json`, `image-profile.json`, normalized distribution inventory, and sealed `org.tributo.manifest-sha256` label |
 | Runtime image Ray Jobs gate | Alpha, validation gate | Requires a unique two-node Docker Ray cluster on a native host architecture; verifies driver/worker imports, Ray Data, Jobs API submission, and v1.0 ClickHouse/Doris/Ray Hive package presence. `linux/amd64` requires a matching native host |
 | GPU runtime image | Not implemented | The Linux dependency closure may contain transitive CUDA/NVIDIA distributions from PyTorch, but no GPU driver, scheduling, NCCL, or GPU compatibility contract has been validated |
