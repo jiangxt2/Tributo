@@ -31,6 +31,10 @@ _DAFT_CLICKHOUSE_INSTALL_HINT = (
     "Install daft-clickhouse==1.0 with Tributo: "
     "pip install 'tributo[clickhouse]' (or uv sync --extra clickhouse)"
 )
+_RAY_CLICKHOUSE_INSTALL_HINT = (
+    "Install the ray-clickhouse==0.1.0 wheel, then install Tributo's "
+    "ClickHouse dependencies with pip install 'tributo[clickhouse]'"
+)
 _DAFT_DORIS_INSTALL_HINT = (
     "Install daft-doris==1.0 with Tributo: pip install 'tributo[mysql]' "
     "(or uv sync --extra mysql); use 'tributo[doris-flight]' for Flight"
@@ -297,6 +301,34 @@ def _daft_clickhouse_descriptor() -> BindingDescriptor:
             {ReadHint.TARGET_PARALLELISM, ReadHint.BATCH_SIZE}
         ),
         install_hint=_DAFT_CLICKHOUSE_INSTALL_HINT,
+    )
+
+
+def _ray_clickhouse_descriptor() -> BindingDescriptor:
+    from tributo.data.bindings.ray_clickhouse import RayClickHouseBinding
+
+    return BindingDescriptor(
+        key=BindingKey(
+            "tributo.ray_data",
+            ScanKind.SQL,
+            "clickhouse",
+            "ray_clickhouse.ray.clickhouse",
+        ),
+        factory=RayClickHouseBinding,
+        capabilities=frozenset({SourceCapability.PROJECTION}),
+        distribution_name="ray-clickhouse",
+        distribution_version=_distribution_version("ray-clickhouse") or "0.1.0",
+        engine_version_spec=_RAY_VERSION_SPEC,
+        dependency_distributions=("clickhouse-connect", "pyarrow"),
+        supported_read_hints=frozenset(
+            {
+                ReadHint.TARGET_PARALLELISM,
+                ReadHint.TARGET_SPLIT_SIZE_BYTES,
+                ReadHint.BATCH_SIZE,
+                ReadHint.CONCURRENCY,
+            }
+        ),
+        install_hint=_RAY_CLICKHOUSE_INSTALL_HINT,
     )
 
 
@@ -654,6 +686,24 @@ def default_engine_bindings() -> EngineBindings:
                 _DAFT_CLICKHOUSE_INSTALL_HINT,
                 None,
                 ("daft-clickhouse", "clickhouse-connect"),
+            ),
+            (
+                _ray_clickhouse_descriptor,
+                BindingKey(
+                    "tributo.ray_data",
+                    ScanKind.SQL,
+                    "clickhouse",
+                    "ray_clickhouse.ray.clickhouse",
+                ),
+                "ray",
+                _RAY_VERSION_SPEC,
+                _RAY_CLICKHOUSE_INSTALL_HINT,
+                None,
+                (
+                    ("ray-clickhouse", "==0.1.0"),
+                    ("clickhouse-connect", ">=1.5,<1.6"),
+                    ("pyarrow", ">=19,<20"),
+                ),
             ),
             (
                 _daft_doris_descriptor,

@@ -126,14 +126,16 @@ dialect or backend you use:
 | Local/S3 Iceberg and Lance | Ray Data / Daft public readers | `tributo[data,data-daft]` | Alpha; real dual-engine Conformance |
 | PostgreSQL structured table | Ray Data / Daft SQL readers | `tributo[postgresql,data-daft]` | Alpha; real PostgreSQL Conformance |
 | HDFS Parquet/CSV | Ray Data + PyArrow Hadoop filesystem | Ray runtime with HDFS libraries | Adapter present; cluster gate pending |
-| ClickHouse | `daft-clickhouse==1.0` | `tributo[clickhouse]` or `uv sync --extra clickhouse` | Adapter only; the full image contains the v1.0 package, while real-database Conformance remains the support gate |
+| ClickHouse | `ray-clickhouse==0.1.0` / `daft-clickhouse==1.0` | `tributo[clickhouse]` plus the external Ray wheel when selecting Ray | Adapter only; the full image contains the Daft package, while the Ray package uses the external wheelhouse until PyPI publication and real-database Conformance remains the support gate |
 | Doris | `ray-doris==1.0` / `daft-doris==1.0` | `tributo[mysql]` or `tributo[doris-flight]` | Adapter only; Ray routes require `ray-doris`, Daft routes require `daft-doris`, and real-database Conformance remains the support gate |
 | HiveServer2 structured tables | `ray-hive==1.0` through the built-in Ray Binding | `tributo[hive-ray]` or `uv sync --extra hive-ray` | Alpha; real Hive 4.2.0 structured-projection Conformance |
 | Native ORC files | no built-in reader | — | Unsupported; use an engine or table service that owns ORC decoding |
 
 Provider/binding presence is not a support claim. The canonical full image
-contains the locked v1.0 ClickHouse and Doris connector packages, but those
-paths remain adapter-only until their real-database Conformance gates pass.
+contains the locked v1.0 Daft ClickHouse and Doris connector packages, but the
+Ray ClickHouse route requires the external `ray-clickhouse==0.1.0` wheel until
+that package is published to PyPI. These paths remain adapter-only until their
+real-database Conformance gates pass.
 HDFS still requires its own infrastructure gate. Hive is Ray-only, uses binary
 HiveServer2 transport, and does not imply native ORC/HDFS access or a Daft Hive
 route. Tributo never installs optional providers or bindings at runtime.

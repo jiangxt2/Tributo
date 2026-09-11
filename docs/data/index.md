@@ -56,7 +56,7 @@ selects `binding_id` explicitly.
 | Local/S3 Lance | Native reader | Native reader | Verified |
 | PostgreSQL structured table | Native SQL reader | Native SQL reader | Verified |
 | HDFS Parquet/CSV | Native reader with PyArrow HDFS | No locked public reader | Adapted; cluster gate pending |
-| ClickHouse | No selected Binding | `daft-clickhouse==1.0` | Adapter only; install with `tributo[clickhouse]` or `uv sync --extra clickhouse`; real-database Conformance remains the support gate |
+| ClickHouse | `ray-clickhouse==0.1.0` external wheel | `daft-clickhouse==1.0` | Adapter only; Ray uses the installed wheel through `ray_clickhouse.ray.clickhouse`, Daft uses `tributo[clickhouse]`, and real-database Conformance remains the support gate |
 | Doris | `ray-doris==1.0` | `daft-doris==1.0` | Adapter only; Ray routes use `ray-doris`, Daft routes use `daft-doris`, and the full runtime image contains both v1.0 packages |
 | HiveServer2 structured table | `ray-hive==1.0` through `tributo.ray.hive` | No built-in route | Alpha, verified with Hive 4.2.0; projection and worker execution only through binary HiveServer2 |
 | Native ORC file | No built-in route | No built-in route | Unsupported; the HiveServer2 path does not expose ORC/HDFS files |
@@ -64,10 +64,10 @@ selects `binding_id` explicitly.
 “Verified” means the current combination has semantic Conformance and real
 storage or database evidence. It does not turn every engine/source combination
 into a supported path. See the [support matrix](../reference/support-matrix.md)
-for the exact boundary. Daft and Ray Doris are explicit engine routes; a
-missing `ray-doris` package does not silently fall back to Daft. Hive requests
-must explicitly select the Ray engine; Tributo does not add a Daft route or
-fall back to file-level ORC/HDFS access.
+for the exact boundary. Ray ClickHouse, Daft ClickHouse, Daft Doris, and Ray
+Doris are explicit engine routes; a missing wheel never causes an engine
+fallback. Hive requests must explicitly select the Ray engine; Tributo does not
+add a Daft route or fall back to file-level ORC/HDFS access.
 
 Credentials belong to runtime configuration. They must not appear in dataset
 identifiers, logical plans, receipts, logs, or public errors. Bounded providers

@@ -17,6 +17,7 @@ from tributo.data.bindings.daft_doris import DaftDorisBinding
 from tributo.data.bindings.daft_iceberg import DaftIcebergBinding
 from tributo.data.bindings.daft_lance import DaftLanceBinding
 from tributo.data.bindings.daft_postgresql import DaftPostgreSqlBinding
+from tributo.data.bindings.ray_clickhouse import RayClickHouseBinding
 from tributo.data.bindings.ray_csv import RayCsvBinding
 from tributo.data.bindings.ray_doris import RayDorisBinding
 from tributo.data.bindings.ray_hdfs import (
@@ -564,6 +565,142 @@ def test_ray_doris_binding_delegates_to_external_connector(
     }
     assert result.reader_api == "ray_doris.read_doris"
     assert result.transport_id == "mysql"
+
+
+def test_ray_clickhouse_binding_delegates_bounded_range_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+    module = ModuleType("ray_clickhouse")
+    module.read_clickhouse = lambda **kwargs: calls.append(kwargs) or _RayDataset()
+    monkeypatch.setitem(sys.modules, "ray_clickhouse", module)
+    monkeypatch.setattr(
+        "tributo.data.bindings.ray_clickhouse.importlib.metadata.version",
+        lambda name: "2.55.1",
+    )
+
+    result = RayClickHouseBinding().compile(
+        _request(
+            _sql_plan("clickhouse"),
+            runtime_options={
+                "host": "clickhouse.example",
+                "port": 8123,
+                "database": "analytics",
+                "user": "reader",
+                "password": "secret",
+            },
+            read_options=ReadOptions(
+                batch_size=128,
+                target_split_size_bytes=4096,
+                concurrency=2,
+            ),
+        )
+    )
+
+    assert isinstance(result.handle, RayDataHandle)
+    assert calls == [
+        {
+            "host": "clickhouse.example",
+            "port": 8123,
+            "database": "analytics",
+            "table": "events",
+            "username": "reader",
+            "password": "secret",
+            "columns": ("id",),
+            "split": "range",
+            "range_column": "id",
+            "batch_rows": 128,
+            "batch_bytes": 4096,
+            "concurrency": 2,
+            "target_tasks": 6,
+            "max_tasks": 6,
+            "override_num_blocks": 6,
+        }
+    ]
+    assert result.reader_api == "ray_clickhouse.read_clickhouse"
+    assert result.transport_id == "clickhouse.http.arrow_stream"
+    assert result.physical_splits.detail is not None
+    assert "range" in result.physical_splits.detail
+
+
+def test_ray_clickhouse_binding_maps_auto_to_partition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+    module = ModuleType("ray_clickhouse")
+    module.read_clickhouse = lambda **kwargs: calls.append(kwargs) or _RayDataset()
+    monkeypatch.setitem(sys.modules, "ray_clickhouse", module)
+    monkeypatch.setattr(
+        "tributo.data.bindings.ray_clickhouse.importlib.metadata.version",
+        lambda name: "2.55.1",
+    )
+
+    RayClickHouseBinding().compile(
+        _request(
+            _daft_auto_sql_plan("clickhouse"),
+            runtime_options={
+                "host": "clickhouse.example",
+                "port": 8123,
+                "database": "analytics",
+            },
+        )
+    )
+
+    assert calls[0]["split"] == "partition"
+    assert calls[0]["target_tasks"] == 6
+    assert calls[0]["override_num_blocks"] == 6
+
+
+def test_ray_clickhouse_single_read_rejects_parallelism_hint() -> None:
+    plan = SqlScan(
+        provider_id="tributo.clickhouse",
+        connector_id="clickhouse",
+        target=SqlTableRead(schema="analytics", table="events"),
+    )
+
+    with pytest.raises(BindingStageError) as exc_info:
+        RayClickHouseBinding().compile(
+            _request(plan, read_options=ReadOptions(target_parallelism=2))
+        )
+
+    assert exc_info.value.diagnostic_code == (
+        "single_sql_read_rejects_parallelism_hint"
+    )
+
+
+def test_ray_clickhouse_range_rejects_multiple_columns() -> None:
+    plan = SqlScan(
+        provider_id="tributo.clickhouse",
+        connector_id="clickhouse",
+        target=SqlTableRead(schema="analytics", table="events"),
+        sharding=SqlShardRequirement(
+            mode=SqlShardMode.PARALLEL,
+            columns=("id", "tenant_id"),
+        ),
+    )
+
+    with pytest.raises(BindingStageError) as exc_info:
+        RayClickHouseBinding().compile(_request(plan))
+
+    assert exc_info.value.diagnostic_code == "clickhouse_range_requires_one_column"
+
+
+def test_ray_clickhouse_range_rejects_percentile_bounds() -> None:
+    plan = SqlScan(
+        provider_id="tributo.clickhouse",
+        connector_id="clickhouse",
+        target=SqlTableRead(schema="analytics", table="events"),
+        sharding=SqlShardRequirement(
+            mode=SqlShardMode.PARALLEL,
+            columns=("id",),
+        ),
+        options={"partition_bound_strategy": "percentile"},
+    )
+
+    with pytest.raises(BindingStageError) as exc_info:
+        RayClickHouseBinding().compile(_request(plan))
+
+    assert exc_info.value.diagnostic_code == "clickhouse_range_strategy_unsupported"
 
 
 def test_ray_doris_binding_rejects_unvalidated_ray_remote_args(

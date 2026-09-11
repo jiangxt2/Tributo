@@ -21,6 +21,7 @@ Pydantic, ONNX Runtime, PyArrow, pandas, and S3 filesystem support.
 | HiveServer2 via Ray Data connector package | `python -m pip install "tributo[hive-ray]"` |
 | PostgreSQL ingestion | `python -m pip install "tributo[postgresql]"` |
 | ClickHouse via Daft | `python -m pip install "tributo[clickhouse]"` |
+| ClickHouse via Ray Data | Install `tributo[clickhouse]`, then install the external `ray-clickhouse==0.1.0` wheel |
 | Doris via Daft/Ray Data | `python -m pip install "tributo[mysql]"` |
 | Doris Flight via Daft/Ray Data | `python -m pip install "tributo[doris-flight]"` |
 | Distributed training | `python -m pip install "tributo[training]"` |
@@ -38,7 +39,9 @@ reserved problem type into a verified implementation. Check the
 [support matrix](../reference/support-matrix.md) before deployment. Ray Tune
 itself is included by the core Ray dependency; the `tune` extra adds the
 optional BayesOpt search implementation. The `clickhouse` extra installs
-`daft-clickhouse==1.0`; `mysql` installs `daft-doris==1.0` and
+`daft-clickhouse==1.0` and the shared ClickHouse driver dependencies. The Ray
+route additionally requires the `ray-clickhouse==0.1.0` GitHub Release wheel
+until its PyPI publication. `mysql` installs `daft-doris==1.0` and
 `ray-doris==1.0` for their explicit engine routes, while `doris-flight` adds
 their Flight dependencies. The `hive-ray` extra installs `ray-hive==1.0` for
 the built-in Ray-only HiveServer2 Provider/Binding route. This does not add
