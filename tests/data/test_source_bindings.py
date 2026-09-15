@@ -8,6 +8,7 @@ from typing import Any
 
 import pyarrow as pa
 import pytest
+from fsspec.implementations.webhdfs import WebHDFS as RealWebHDFS
 
 from tributo.data.bindings._postgresql import compile_table_query
 from tributo.data.bindings._sql_shared import resolve_sql_target
@@ -192,6 +193,96 @@ def test_hdfs_bindings_use_pyarrow_filesystem_and_ray_reader(
     assert calls[0][1]["filesystem"] is filesystem
     assert calls[0][1]["override_num_blocks"] == 4
     assert result.transport_id == "hdfs"
+
+
+def test_hdfs_parquet_falls_back_only_for_missing_native_library(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    class _HadoopFileSystem:
+        @staticmethod
+        def from_uri(uri: str) -> tuple[object, str]:
+            del uri
+            raise OSError("Unable to load libhdfs")
+
+    class _WebHDFS(RealWebHDFS):
+        def __init__(self, host: str, **kwargs: Any) -> None:
+            del host
+            calls.append(kwargs)
+            super().__init__("namenode", **kwargs)
+
+    monkeypatch.setattr(
+        "tributo.data.bindings.ray_hdfs.pafs.HadoopFileSystem",
+        _HadoopFileSystem,
+    )
+    monkeypatch.setattr(
+        "fsspec.implementations.webhdfs.WebHDFS",
+        _WebHDFS,
+    )
+    monkeypatch.setenv("TRIBUTO_HDFS_DATA_PROXY_HOST", "hdfs")
+    monkeypatch.setenv("TRIBUTO_HDFS_WEB_PORT", "9870")
+    monkeypatch.setattr(
+        "ray.data.read_parquet",
+        lambda path, **kwargs: _RayDataset(),
+    )
+    monkeypatch.setattr(
+        "tributo.data.bindings.ray_hdfs.importlib.metadata.version",
+        lambda name: "2.55.1",
+    )
+
+    result = RayHdfsParquetBinding().compile(
+        _request(
+            FileScan(
+                provider_id="tributo.parquet",
+                connector_id="parquet",
+                uri="hdfs://namenode/warehouse/input.parquet",
+                filesystem_id="hdfs",
+                options={"columns": ["id"]},
+            )
+        )
+    )
+
+    assert isinstance(result.handle, RayDataHandle)
+    assert calls[0]["user"] is None
+    assert calls[0]["data_proxy"]("http://datanode:9864/x") == ("http://hdfs:9864/x")
+
+
+def test_hdfs_parquet_preserves_non_loader_oserror(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _HadoopFileSystem:
+        @staticmethod
+        def from_uri(uri: str) -> tuple[object, str]:
+            del uri
+            raise OSError("connection refused")
+
+    monkeypatch.setattr(
+        "tributo.data.bindings.ray_hdfs.pafs.HadoopFileSystem",
+        _HadoopFileSystem,
+    )
+
+    with pytest.raises(OSError, match="connection refused"):
+        RayHdfsParquetBinding()._filesystem("hdfs://namenode/warehouse/input.parquet")
+
+
+def test_hdfs_parquet_preserves_loader_oserror_without_webhdfs_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _HadoopFileSystem:
+        @staticmethod
+        def from_uri(uri: str) -> tuple[object, str]:
+            del uri
+            raise OSError("Unable to load libhdfs")
+
+    monkeypatch.setattr(
+        "tributo.data.bindings.ray_hdfs.pafs.HadoopFileSystem",
+        _HadoopFileSystem,
+    )
+    monkeypatch.delenv("TRIBUTO_HDFS_WEB_PORT", raising=False)
+
+    with pytest.raises(OSError, match="Unable to load libhdfs"):
+        RayHdfsParquetBinding()._filesystem("hdfs://namenode/warehouse/input.parquet")
 
 
 def _iceberg_plan() -> TableScan:

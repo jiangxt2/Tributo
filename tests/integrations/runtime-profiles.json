@@ -37,6 +37,29 @@
         "thrift": "0.16.0"
       }
     },
+    "data-ingestion-hdfs": {
+      "base_image": "rayproject/ray:2.55.1-py312@sha256:911245f2478ad2e9f67ac13978dc2a75bcae0498b9f188b10bba703324b78379",
+      "base_image_mirror": "docker.m.daocloud.io/rayproject/ray:2.55.1-py312@sha256:911245f2478ad2e9f67ac13978dc2a75bcae0498b9f188b10bba703324b78379",
+      "dependency_mode": "host-uv-export",
+      "dockerfile": "tests/integrations/Dockerfile.data-ingestion-hdfs",
+      "extras": [
+        "dev",
+        "data"
+      ],
+      "hdfs_image": "apache/hive:4.2.0@sha256:b0d2842722567a89ac35da8af9002b6bba0fc2d0eb272664954a1fa46d694472",
+      "minio_image": "minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e",
+      "python_version": "3.12",
+      "runtime_repository": "tributo-it-runtime-hdfs",
+      "uv_version": "0.11.23",
+      "version_contract": {
+        "hadoop_client": "3.4.1",
+        "java": "21",
+        "pyarrow": "19.0.1",
+        "pyiceberg": "0.11.1",
+        "pylance": "9.0.0",
+        "ray": "2.55.1"
+      }
+    },
     "runtime-full": {
       "base_image": "rayproject/ray:2.55.1-py312@sha256:911245f2478ad2e9f67ac13978dc2a75bcae0498b9f188b10bba703324b78379",
       "base_image_mirror": "docker.m.daocloud.io/rayproject/ray:2.55.1-py312@sha256:911245f2478ad2e9f67ac13978dc2a75bcae0498b9f188b10bba703324b78379",

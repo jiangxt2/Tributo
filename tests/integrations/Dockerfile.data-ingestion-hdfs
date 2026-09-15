@@ -1,0 +1,38 @@
+ARG BASE_IMAGE=rayproject/ray:2.55.1-py312@sha256:911245f2478ad2e9f67ac13978dc2a75bcae0498b9f188b10bba703324b78379
+ARG HADOOP_IMAGE=apache/hive:4.2.0@sha256:b0d2842722567a89ac35da8af9002b6bba0fc2d0eb272664954a1fa46d694472
+
+FROM ${HADOOP_IMAGE} AS hadoop-runtime
+
+FROM ${BASE_IMAGE}
+
+USER root
+RUN python -m venv /opt/tributo/.venv && chown -R 1000:100 /opt/tributo
+
+COPY --from=hadoop-runtime /opt/hadoop /opt/hadoop
+COPY --from=hadoop-runtime /opt/java/openjdk /opt/java/openjdk
+RUN mkdir -p /opt/hadoop/webapps/hdfs && \
+    chown -R 1000:100 /opt/hadoop /opt/java
+
+USER 1000:100
+
+ENV PATH="/opt/tributo/.venv/bin:/opt/hadoop/bin:${PATH}" \
+    PIP_DEFAULT_TIMEOUT=600 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    JAVA_HOME=/opt/java/openjdk \
+    HADOOP_HOME=/opt/hadoop \
+    ARROW_LIBHDFS_DIR=/opt/hadoop/lib/native \
+    LD_LIBRARY_PATH=/opt/hadoop/lib/native:/opt/java/openjdk/lib/server \
+    CLASSPATH=/opt/hadoop:/opt/hadoop/etc/hadoop:/opt/hadoop/share/hadoop/common/*:/opt/hadoop/share/hadoop/common/lib/*:/opt/hadoop/share/hadoop/hdfs/*:/opt/hadoop/share/hadoop/hdfs/lib/*:/opt/hadoop/share/hadoop/yarn/*:/opt/hadoop/share/hadoop/yarn/lib/*:/opt/hadoop/share/hadoop/mapreduce/*:/opt/hadoop/share/hadoop/mapreduce/lib/*
+
+COPY --from=locked-requirements --chown=1000:100 /requirements.txt /opt/tributo/requirements.txt
+
+WORKDIR /opt/tributo
+
+RUN --mount=type=cache,target=/home/ray/.cache/pip,uid=1000,gid=100 \
+    python -m pip install --require-hashes -r /opt/tributo/requirements.txt
+
+RUN python -c "import importlib.metadata as m, sys; assert sys.version_info[:2] == (3, 12); assert m.version('ray') == '2.55.1'; assert m.version('pyarrow') == '19.0.1'; assert m.version('pyiceberg') == '0.11.1'; assert m.version('pylance') == '9.0.0'; assert __import__('os').path.exists('/opt/hadoop/lib/native/libhdfs.so'); assert __import__('os').path.exists('/opt/java/openjdk/lib/server/libjvm.so')"
+
+WORKDIR /workspace/tributo-src

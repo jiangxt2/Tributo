@@ -82,7 +82,9 @@ EXCLUDED_DIRECTORY_NAMES = {
     "logs",
 }
 EXCLUDED_FILE_NAMES = {".coverage", ".pypirc", "id_rsa", "id_ed25519"}
-PROJECT_PREFIXES = frozenset({"tributo-ingestion", "tributo-lance-vector"})
+PROJECT_PREFIXES = frozenset(
+    {"tributo-ingestion", "tributo-lance-vector", "tributo-hdfs-ingestion"}
+)
 DIGEST_REFERENCE_PATTERN = re.compile(r"^.+:[^/@]+@sha256:[0-9a-f]{64}$")
 LOCAL_RUNTIME_BASE_IMAGE = "tributo-ray-base:2.55.1-py312"
 LOCAL_RUNTIME_UV_IMAGE = "tributo-uv:0.11.23"
@@ -174,6 +176,11 @@ class RuntimeProfile:
     @property
     def postgres_image(self) -> str | None:
         value = self.definition.get("postgres_image")
+        return str(value) if value is not None else None
+
+    @property
+    def hdfs_image(self) -> str | None:
+        value = self.definition.get("hdfs_image")
         return str(value) if value is not None else None
 
     @property
@@ -329,6 +336,7 @@ def load_profile(
     for optional_image in (
         "hive_image",
         "postgres_image",
+        "hdfs_image",
         "tool_image",
         "uv_image",
     ):
@@ -546,8 +554,29 @@ def _version_check_code(identity: RuntimeIdentity) -> str:
         "import importlib.metadata as metadata,sys",
         f"assert sys.version_info[:2] == ({int(major)}, {int(minor)})",
         f"assert metadata.version('ray') == {contract['ray']!r}",
-        f"assert metadata.version('daft').startswith({contract['daft_prefix']!r})",
     ]
+    if "daft_prefix" in contract:
+        checks.append(
+            f"assert metadata.version('daft').startswith({contract['daft_prefix']!r})"
+        )
+    if "java" in contract:
+        checks.append("import os")
+    if "java" in contract or "hadoop_client" in contract:
+        checks.append("import subprocess")
+    if "java" in contract:
+        checks.extend(
+            (
+                "java_version=subprocess.run([os.path.join(os.environ['JAVA_HOME'], 'bin', 'java'), '-version'], capture_output=True, text=True, check=True).stderr",
+                f"assert 'version \\\"{contract['java']}.' in java_version",
+            )
+        )
+    if "hadoop_client" in contract:
+        checks.extend(
+            (
+                "hadoop_version=subprocess.run(['hadoop', 'version'], capture_output=True, text=True, check=True).stdout",
+                f"assert 'Hadoop {contract['hadoop_client']}' in hadoop_version",
+            )
+        )
     for key, distribution in (
         ("pylance", "pylance"),
         ("lance_ray", "lance-ray"),
@@ -1396,6 +1425,7 @@ def _compose_environment(
     minio_image: str,
     hive_image: str | None,
     postgres_image: str | None,
+    hdfs_image: str | None,
 ) -> dict[str, str]:
     env = os.environ.copy()
     versions_file = ROOT / "tests" / "integrations" / "component-versions.env"
@@ -1427,6 +1457,9 @@ def _compose_environment(
     if postgres_image is not None:
         env["TRIBUTO_IT_POSTGRES_IMAGE"] = postgres_image
         profiles.append("postgres-ingestion")
+    if hdfs_image is not None:
+        env["TRIBUTO_IT_HDFS_IMAGE"] = hdfs_image
+        profiles.append("hdfs-ingestion")
     if profiles:
         env["COMPOSE_PROFILES"] = ",".join(profiles)
     return env
@@ -1459,6 +1492,7 @@ def validate_compose_contract(
     minio_image: str | None = None,
     hive_image: str | None = None,
     postgres_image: str | None = None,
+    hdfs_image: str | None = None,
 ) -> None:
     """Validate the resolved config rather than trusting YAML inheritance."""
     services = config.get("services")
@@ -1543,6 +1577,21 @@ def validate_compose_contract(
         ) or {}
         if dependency.get("condition") != "service_healthy":
             raise TributoITError("postgres-test must depend on healthy PostgreSQL")
+    hdfs_services = {"hdfs", "hdfs-init"}.intersection(services)
+    if hdfs_services and hdfs_services != {"hdfs", "hdfs-init"}:
+        raise TributoITError("resolved Compose config has an incomplete HDFS profile")
+    if hdfs_services:
+        if hdfs_image is None:
+            raise TributoITError("active HDFS profile requires a prepared HDFS image")
+        if services["hdfs"].get("image") != hdfs_image:
+            raise TributoITError("hdfs must use the pinned Hadoop image")
+        if services["hdfs-init"].get("image") != runtime.identity.local_tag:
+            raise TributoITError("hdfs-init must reuse the prepared runtime")
+        if services["hdfs-init"].get("restart") != "no":
+            raise TributoITError('hdfs-init must set restart: "no"')
+        dependency = (services["hdfs-init"].get("depends_on") or {}).get("hdfs") or {}
+        if dependency.get("condition") != "service_healthy":
+            raise TributoITError("hdfs-init must depend on healthy HDFS")
     runtime_users = {
         name
         for name, service in services.items()
@@ -1558,6 +1607,8 @@ def validate_compose_contract(
         expected_runtime_users.add("hive-init")
     if postgres_services:
         expected_runtime_users.add("postgres-test")
+    if hdfs_services:
+        expected_runtime_users.add("hdfs-init")
     root_initializers = {"source-init", "workspace-init"}
     for name in expected_runtime_users - root_initializers:
         configured_user = str(services[name].get("user") or "").split(":", 1)[0]
@@ -2002,6 +2053,7 @@ def _run_docker_ray_suite(
     display_name: str,
     enable_hive: bool = False,
     enable_postgresql: bool = False,
+    enable_hdfs: bool = False,
 ) -> None:
     """Run one module on the shared isolated Ray/MinIO lifecycle."""
     project = os.environ.get("COMPOSE_PROJECT_NAME") or _default_project(project_prefix)
@@ -2070,12 +2122,21 @@ def _run_docker_ray_suite(
                 )
             ensure_digest_image(profile.postgres_image)
             postgres_image = _local_digest_reference(profile.postgres_image)
+        hdfs_image: str | None = None
+        if enable_hdfs:
+            if profile.hdfs_image is None:
+                raise TributoITError(
+                    f"runtime profile {profile.name!r} does not define hdfs_image"
+                )
+            ensure_digest_image(profile.hdfs_image)
+            hdfs_image = _local_digest_reference(profile.hdfs_image)
         env = _compose_environment(
             project,
             prepared,
             minio_image=minio_image,
             hive_image=hive_image,
             postgres_image=postgres_image,
+            hdfs_image=hdfs_image,
         )
         config = resolved_compose_config(env)
         validate_compose_contract(
@@ -2085,6 +2146,7 @@ def _run_docker_ray_suite(
             minio_image=minio_image,
             hive_image=hive_image,
             postgres_image=postgres_image,
+            hdfs_image=hdfs_image,
         )
         _run(
             _compose_args(
@@ -2099,6 +2161,8 @@ def _run_docker_ray_suite(
         )
         if enable_hive:
             _wait_for_completed_service(env, "hive-init")
+        if enable_hdfs:
+            _wait_for_completed_service(env, "hdfs-init")
         _wait_for_services(env)
         if enable_postgresql:
             _wait_for_completed_service(env, "postgres-test")
@@ -2207,6 +2271,17 @@ def run_data_ingestion(profile: RuntimeProfile) -> None:
         display_name="Data Ingestion",
         enable_hive=True,
         enable_postgresql=True,
+    )
+
+
+def run_hdfs_ingestion(profile: RuntimeProfile) -> None:
+    """Run the scoped Ray HDFS Parquet ingestion gate."""
+    _run_docker_ray_suite(
+        profile,
+        project_prefix="tributo-hdfs-ingestion",
+        test_module="tests.integrations.test_hdfs_ingestion",
+        display_name="HDFS Data Ingestion",
+        enable_hdfs=True,
     )
 
 
@@ -2422,6 +2497,9 @@ def _parser() -> argparse.ArgumentParser:
     run_parser = subparsers.add_parser("run-data-ingestion")
     run_parser.add_argument("--profile", default="data-ingestion")
 
+    hdfs_parser = subparsers.add_parser("run-hdfs-ingestion")
+    hdfs_parser.add_argument("--profile", default="data-ingestion-hdfs")
+
     vector_parser = subparsers.add_parser("run-lance-vector-index")
     vector_parser.add_argument("--profile", default="data-ingestion")
 
@@ -2451,6 +2529,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         if args.command == "run-data-ingestion":
             run_data_ingestion(load_profile(args.profile))
+            return 0
+
+        if args.command == "run-hdfs-ingestion":
+            run_hdfs_ingestion(load_profile(args.profile))
             return 0
 
         if args.command == "run-lance-vector-index":
