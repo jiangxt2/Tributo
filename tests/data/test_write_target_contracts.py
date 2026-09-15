@@ -49,6 +49,19 @@ def test_target_registry_resolves_builtin_formats() -> None:
     assert resolved.factory().provider_id == "tributo.target.parquet"
 
 
+def test_target_registry_resolves_clickhouse_table_target() -> None:
+    request = _request(
+        target_kind="clickhouse",
+        target="clickhouse://ch.example/analytics/results",
+        mode=WriteMode.APPEND,
+    )
+
+    resolved = WriteTargetRegistry().resolve(request)
+
+    assert resolved.target_kind == "clickhouse"
+    assert resolved.factory().provider_id == "tributo.target.clickhouse"
+
+
 def test_target_registry_fails_closed_for_unknown_format() -> None:
     registry = WriteTargetRegistry()
 
@@ -73,4 +86,38 @@ def test_logical_plan_rejects_non_hex_digest() -> None:
             mode=WriteMode.OVERWRITE,
             options={},
             runtime_options={},
+        )
+
+
+def test_logical_plan_preserves_safe_runtime_credential_reference() -> None:
+    request = _request(
+        target_kind="clickhouse",
+        target="clickhouse://ch.example/analytics/results",
+        mode=WriteMode.APPEND,
+        runtime_options={
+            "user": "writer",
+            "credential_ref": "env://CLICKHOUSE_PASSWORD",
+        },
+    )
+
+    plan = GenericWriteTargetProvider("clickhouse").plan(request)
+
+    assert plan.runtime_options == {
+        "user": "writer",
+        "credential_ref": "env://CLICKHOUSE_PASSWORD",
+    }
+
+
+def test_logical_plan_rejects_resolved_runtime_credential() -> None:
+    with pytest.raises(ValueError, match="inline credentials"):
+        LogicalWritePlan(
+            plan_version=1,
+            provider_id="tributo.target.clickhouse",
+            request_digest="a" * 64,
+            engine_id="ray",
+            target_kind="clickhouse",
+            target="clickhouse://ch.example/analytics/results",
+            mode=WriteMode.APPEND,
+            options={},
+            runtime_options={"password": "do-not-leak"},
         )
