@@ -21,6 +21,34 @@ verified. Mode support is defined by the selected native Binding's capability
 descriptor; there is no format-specific compatibility facade that changes that
 boundary.
 
+## Append a Ray Dataset to ClickHouse
+
+Install the external `ray-clickhouse==0.1.0` wheel, then use the same
+`WriteGateway` boundary as other native writers. The target URI must contain no
+credentials. Pass the password as an environment-variable reference so it does
+not enter plans, digests, receipts, or logs.
+
+```python
+from tributo.data import RayDataHandle
+from tributo.data.writing import WriteMode, WriteRequest, default_write_gateway
+
+request = WriteRequest(
+    engine="ray",
+    target_kind="clickhouse",
+    target="clickhouse://ch.example:8123/analytics/inference_results",
+    binding_id="tributo.ray.clickhouse",
+    mode=WriteMode.APPEND,
+    runtime_options={
+        "user": "writer",
+        "credential_ref": "env://CLICKHOUSE_PASSWORD",
+    },
+)
+receipt = default_write_gateway().execute(request, RayDataHandle(dataset))
+```
+
+This adapter supports append to an existing table only. ClickHouse writes have
+no Tributo exactly-once guarantee; an ambiguous native write fails closed.
+
 ## Interpret the receipt
 
 `WriteReceipt.committed` reports the binding's terminal result. Row and byte
