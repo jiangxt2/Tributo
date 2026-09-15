@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<configuration>
+  <property>
+    <name>dfs.replication</name>
+    <value>1</value>
+  </property>
+  <property>
+    <name>dfs.namenode.name.dir</name>
+    <value>file:///data/name</value>
+  </property>
+  <property>
+    <name>dfs.datanode.data.dir</name>
+    <value>file:///data/data</value>
+  </property>
+  <property>
+    <name>dfs.namenode.rpc-address</name>
+    <value>hdfs:8020</value>
+  </property>
+  <property>
+    <name>dfs.namenode.http-address</name>
+    <value>hdfs:9870</value>
+  </property>
+</configuration>

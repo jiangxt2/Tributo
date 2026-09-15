@@ -433,6 +433,42 @@
       "rationale": "Distributed Ray Data and Daft semantics require the owned Docker Ray cluster."
     },
     {
+      "id": "hdfs-ingestion-cluster",
+      "owner": "data",
+      "domain": "data",
+      "tier": "manual_external",
+      "workflow": "external",
+      "owns_tests": true,
+      "entrypoint": ["./scripts/run_hdfs_ingestion_it.sh"],
+      "args": [],
+      "extras": [],
+      "test_paths": [
+        "scripts/run_hdfs_ingestion_it.sh",
+        "tests/integrations/test_hdfs_ingestion.py"
+      ],
+      "trigger_domains": [],
+      "trigger_paths": [
+        "src/tributo/data/**",
+        "tests/data/test_source_bindings.py",
+        "tests/integrations/Dockerfile.data-ingestion-hdfs",
+        "tests/integrations/docker-compose.data-ingestion.yml",
+        "tests/integrations/hdfs/**",
+        "tests/integrations/setup_hdfs_fixture.py",
+        "tests/integrations/test_hdfs_ingestion.py",
+        "tests/integrations/runtime-profiles.json",
+        "scripts/run_hdfs_ingestion_it.sh",
+        "tools/tributo_it.py",
+        "pyproject.toml",
+        "uv.lock"
+      ],
+      "requires": ["docker", "multi_node_ray", "minio", "hdfs"],
+      "budget_seconds": 1800,
+      "ci_allowed": false,
+      "forbid_skips": true,
+      "log_contract": "/tmp/tributo-it-logs/<project>-test.log and services.log",
+      "rationale": "HDFS native/fallback transport and Ray worker evidence require one isolated Docker Ray cluster."
+    },
+    {
       "id": "lance-vector-cluster",
       "owner": "vector-index",
       "domain": "vector-index",
