@@ -17,7 +17,7 @@ Tributo is a **Ray-native ML Framework/SDK** — not a multi-tenant ML Platform.
 | Multi-tenancy | Not in this cycle | Project/Quota/RBAC, tenant isolation, audit |
 | Training | Distributed XGBoost, DNN, PU Learning, constrained algorithm SPI, and selected sklearn MapReduce adapters | AutoML, managed notebooks, experiment tracking UI |
 | Inference | Batch with Ray Data, explainability batches, and online Ray Serve or gRPC | A/B testing, canary, shadow, auto-rollback |
-| Data | Explicit Ray Data or Daft bounded ingestion and native writing; `StreamSource` for unbounded input | Managed ETL, data catalog, schema registry |
+| Data | Explicit Ray Data or Daft bounded ingestion and native writing | Managed ETL, data catalog, schema registry, unbounded streaming I/O |
 | Vector indexing | Build, search, optimize, and compact existing Lance vector datasets through Lance-Ray | Vector database control plane, automatic embedding or index policy |
 | Observability | Framework-level metrics, logs, trace IDs | Centralized dashboard, alerting, cost attribution |
 
@@ -31,8 +31,9 @@ carry their own integrity and provenance.
 1. **Unify data source protocol**: Training, inference, and graph
    adapters consume typed bounded-ingestion handles behind one Gateway. Ray
    Data and Daft perform reads; Tributo owns only contracts, translation,
-   routing, error normalization, and provenance. Bounded data and streaming
-   remain separate protocols with shared schema/error/credential semantics.
+   routing, error normalization, and provenance. Unbounded streaming I/O is an
+   external connector responsibility and does not enter the Tributo ingestion
+   or inference contracts.
 2. **Unify model export kernel**: All trainers produce a single `Bundle` format
    consumed by `BundleReader`. Legacy exporters become compat adapters.
 3. **Fix export failure semantics**: Required artifact failure → task failure.
@@ -58,7 +59,7 @@ when that trigger fires.
 | Control plane HA / cross-region DR | Platform concern, not SDK concern | Tributo deployed as a service (not library) across regions |
 | Unify all DAG DSLs (`_common.dag`, `pipeline.Pipeline`, `exporting.planner`) | Each serves a different domain; premature unification creates coupling | Two or more DSLs converge on identical semantics |
 | Full PluginManager with lifecycle | A descriptor-only ingestion SPI does not require a platform manager | Third-party extensions require shared lifecycle, isolation, or dependency management |
-| Complete streaming semantics (at-least-once, backpressure, dead-letter) | No production Kafka workload | Kafka source runs continuously ≥ 24 hours in production |
+| Unbounded streaming ingestion and delivery semantics | Outside the Tributo core; delegated to an external connector | A future connector passes its own source/sink semantics gate and receives a separate reintroduction ADR |
 | Automatic distributed conversion of arbitrary Trainer or sklearn estimators | Distribution requires algorithm-specific state semantics | A new algorithm implements and proves one supported distribution strategy |
 | TransformCompiler pushdown | No production Provider with benchmarked pushdown path | D1+D2 merged AND pushdown shows ≥ 20% improvement on ≥ 10 GB |
 

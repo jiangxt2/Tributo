@@ -10,7 +10,6 @@ DOC_MOCK_IMPORTS: tuple[str, ...] = (
     "accelerate",
     "boto3",
     "clickhouse_connect",
-    "confluent_kafka",
     "daft",
     "dowhy",
     "econml",

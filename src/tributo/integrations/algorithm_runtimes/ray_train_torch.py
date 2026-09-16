@@ -17,7 +17,10 @@ from collections.abc import Mapping
 from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    import torch
 
 from tributo.algorithms.api import (
     AlgorithmConfigurationError,
@@ -315,7 +318,7 @@ def _reduce_metric_totals(
     totals: Mapping[str, list[float]],
     reducers: Mapping[str, str],
     *,
-    device: object,
+    device: torch.device,
     dist: Any,
     world_size: int,
 ) -> dict[str, float]:
@@ -794,7 +797,7 @@ def _reduce_composite_loss(
     *,
     config: Mapping[str, Any],
     world_size: int,
-    device: object,
+    device: torch.device,
     dist: Any,
     observation: dict[str, object] | None = None,
     expected_reducer_metrics: frozenset[str] = frozenset({"train_loss"}),
@@ -919,7 +922,7 @@ def _composite_backward(
     *,
     config: Mapping[str, Any],
     world_size: int,
-    device: object,
+    device: torch.device,
     dist: Any,
     observation: dict[str, object] | None = None,
     metric_totals: dict[str, list[float]] | None = None,
@@ -1435,14 +1438,14 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
             evaluation_data.iter_torch_batches(batch_size=batch_size, drop_last=False)
         )
         raw = next(iterator, None)
-        active = torch.tensor(
+        active_state = torch.tensor(
             1 if raw is not None else 0,
             dtype=torch.int64,
             device=next(model.parameters()).device,
         )
         if dist.is_available() and dist.is_initialized():
-            dist.all_reduce(active, op=dist.ReduceOp.SUM)
-        if int(active.item()) == 0:
+            dist.all_reduce(active_state, op=dist.ReduceOp.SUM)
+        if int(active_state.item()) == 0:
             continue
         template_raw: object | None = raw
         if dist.is_available() and dist.is_initialized():
@@ -1463,14 +1466,14 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
             )
         while True:
             local_active = raw is not None
-            active = torch.tensor(
+            active_state = torch.tensor(
                 1 if local_active else 0,
                 dtype=torch.int64,
                 device=next(model.parameters()).device,
             )
             if dist.is_available() and dist.is_initialized():
-                dist.all_reduce(active, op=dist.ReduceOp.SUM)
-            if int(active.item()) == 0:
+                dist.all_reduce(active_state, op=dist.ReduceOp.SUM)
+            if int(active_state.item()) == 0:
                 break
             next_raw = next(iterator, None) if local_active else None
             batch = (

@@ -149,10 +149,6 @@ causal = [
     "dowhy>=0.11.0",
     "econml>=0.15.0",
 ]
-streaming-inference = [
-    "confluent-kafka>=2.3.0",
-    "ray[serve]",
-]
 test-integration = [
     "tributo[registry,training]",
     "catboost>=1.2,<2",
@@ -208,9 +204,6 @@ mlflow-log-artifacts-v1 = "tributo.integrations.hooks.mlflow_hook:MLflowPostPubl
 
 [project.entry-points."tributo.explainers"]
 shap-v1 = "tributo.explainability.shap:ShapAdapter"
-
-[project.entry-points."tributo.stream_sources"]
-kafka = "tributo.streaming.kafka_source:KafkaStreamSource"
 
 [build-system]
 requires = ["hatchling"]

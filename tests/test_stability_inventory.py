@@ -190,10 +190,6 @@ STABILITY_MAP: dict[str, str] = {
     "tributo.serving.streaming_deployment": "alpha",
     # Serving — developer (generated)
     "tributo.serving.proto": "developer",
-    # Streaming — beta
-    "tributo.streaming.protocol": "beta",
-    # Streaming — alpha
-    "tributo.streaming.kafka_source": "alpha",
     # Pipeline — alpha
     "tributo.pipeline.core": "alpha",
     # Registry — beta
@@ -226,9 +222,6 @@ _SYMBOL_OVERRIDES: dict[str, str] = {
     "tributo.exceptions.UnsupportedArtifactFormat": "beta",
     "tributo.exceptions.PostPublishCallbackError": "beta",
     "tributo.exceptions.PluginLoadIssue": "beta",
-    "tributo.exceptions.StreamSourceError": "beta",
-    "tributo.exceptions.KafkaCommitError": "beta",
-    "tributo.exceptions.KafkaPoisonMessageError": "beta",
     "tributo.exceptions.ResourceBudgetExceededError": "beta",
     "tributo.exceptions.EngineNotAvailableError": "alpha",
     "tributo.inference.job_runner.InferenceJobAttempt": "alpha",

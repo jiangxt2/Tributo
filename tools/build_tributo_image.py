@@ -100,13 +100,11 @@ RUNTIME_EXTRAS = (
     "registry",
     "graph",
     "causal",
-    "streaming-inference",
 )
 
 ALPHA_CAPABILITIES = (
     "explainability",
     "vector_index",
-    "kafka_streaming",
     "pipeline",
     "graph",
     "causal",

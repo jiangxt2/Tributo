@@ -151,4 +151,6 @@ class TestParity:
 
     def test_unknown_type_rejected(self) -> None:
         with pytest.raises(ValidationError):
-            load_ray_dataset_from_source({"type": "kafka", "bootstrap": "x"})
+            load_ray_dataset_from_source(
+                {"type": "unknown-source", "location": "example"}
+            )

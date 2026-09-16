@@ -359,17 +359,3 @@ documentation for every public stability tier.
 ```{autoclass} tributo.integrations.sources.ray_torch.TorchSourceOptions
 :no-members:
 ```
-
-
-## `tributo.streaming.kafka_source`
-
-```{autoclass} tributo.streaming.kafka_source.KafkaStreamSource
-:no-members:
-```
-
-
-## `tributo.streaming.protocol`
-
-```{autoclass} tributo.streaming.protocol.StreamSource
-:no-members:
-```
