@@ -190,8 +190,6 @@ STABILITY_MAP: dict[str, str] = {
     "tributo.serving.streaming_deployment": "alpha",
     # Serving — developer (generated)
     "tributo.serving.proto": "developer",
-    # Pipeline — alpha
-    "tributo.pipeline.core": "alpha",
     # Registry — beta
     "tributo.registry.model_registry": "beta",
     "tributo.registry.schema": "beta",

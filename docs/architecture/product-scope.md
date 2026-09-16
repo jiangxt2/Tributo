@@ -57,7 +57,7 @@ when that trigger fires.
 | Multi-tenant control plane | No production multi-tenant demand | Multiple teams request isolated namespaces/quotas |
 | Model Registry governance (approval, canary, rollback) | Out of scope for Framework SDK | MLflow registry used in production with > 10 models |
 | Control plane HA / cross-region DR | Platform concern, not SDK concern | Tributo deployed as a service (not library) across regions |
-| Unify all DAG DSLs (`_common.dag`, `pipeline.Pipeline`, `exporting.planner`) | Each serves a different domain; premature unification creates coupling | Two or more DSLs converge on identical semantics |
+| Unify unrelated DAG implementations (`_common.dag`, `exporting.planner`) | Each serves a different domain; premature unification creates coupling | The implementations converge on identical semantics |
 | Full PluginManager with lifecycle | A descriptor-only ingestion SPI does not require a platform manager | Third-party extensions require shared lifecycle, isolation, or dependency management |
 | Unbounded streaming ingestion and delivery semantics | Outside the Tributo core; delegated to an external connector | A future connector passes its own source/sink semantics gate and receives a separate reintroduction ADR |
 | Automatic distributed conversion of arbitrary Trainer or sklearn estimators | Distribution requires algorithm-specific state semantics | A new algorithm implements and proves one supported distribution strategy |

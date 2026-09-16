@@ -1,9 +1,8 @@
 """Shared DAG utilities — topological sort and cycle detection.
 
-Used by ``Pipeline`` (training workflow orchestration) and ``ModelRunner``
-(inference pipeline composition).  Both need Kahn's algorithm for
-topological ordering with cycle detection; this module provides the
-single canonical implementation.
+Used by internal Serving composition and other DAG consumers.  They need
+Kahn's algorithm for topological ordering with cycle detection; this module
+provides the single canonical implementation.
 """
 
 from __future__ import annotations

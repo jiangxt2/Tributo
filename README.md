@@ -260,7 +260,6 @@ src/tributo/
 ├── explainability/      # Batch explanation planning and adapters
 ├── registry/            # MLflow tracking and registry integration
 ├── integrations/        # Optional framework, format, sink, and hook adapters
-├── pipeline/            # Alpha in-process DAG compatibility utility
 └── util/                # @PublicAPI decorator, stability annotations
 ```
 

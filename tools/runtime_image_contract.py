@@ -12,7 +12,6 @@ REQUIRED_IMPORTS = (
     "tributo.vector_index",
     "tributo.explainability",
     "tributo.registry",
-    "tributo.pipeline",
     "daft",
     "ray_hive",
     "lance_ray",
