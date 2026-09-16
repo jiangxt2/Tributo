@@ -258,7 +258,6 @@ src/tributo/
 ├── serving/             # Ray Serve HTTP, gRPC, and streaming transports
 ├── vector_index/        # Lance vector-index jobs and maintenance
 ├── explainability/      # Batch explanation planning and adapters
-├── streaming/           # Unbounded input protocols such as Kafka
 ├── registry/            # MLflow tracking and registry integration
 ├── integrations/        # Optional framework, format, sink, and hook adapters
 ├── pipeline/            # Alpha in-process DAG compatibility utility

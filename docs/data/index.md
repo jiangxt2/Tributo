@@ -70,9 +70,8 @@ fallback. Hive requests must explicitly select the Ray engine; Tributo does not
 add a Daft route or fall back to file-level ORC/HDFS access.
 
 Credentials belong to runtime configuration. They must not appear in dataset
-identifiers, logical plans, receipts, logs, or public errors. Bounded providers
-and unbounded stream sources remain separate contracts, and a bounded input
-provider does not imply an inference output sink.
+identifiers, logical plans, receipts, logs, or public errors. Bounded input
+providers only describe reads; inference output sinks are selected separately.
 
 ## Lance output compatibility
 

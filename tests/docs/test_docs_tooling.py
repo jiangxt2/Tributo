@@ -108,6 +108,13 @@ def test_generated_public_api_reference_covers_source_inventory() -> None:
 
     assert inventory
     assert len({symbol.target for symbol in inventory}) == len(inventory)
+    assert all(
+        not symbol.module.startswith("tributo.streaming") for symbol in inventory
+    )
+    assert all(
+        "tributo.streaming" not in page
+        for page in public_api_generator.expected_pages(inventory).values()
+    )
     assert {component_for(symbol) for symbol in inventory} == {
         "algorithms-training",
         "core",

@@ -32,7 +32,6 @@ Pydantic, ONNX Runtime, PyArrow, pandas, and S3 filesystem support.
 | Hugging Face sources/exporters | `python -m pip install "tributo[model-export-hf]"` |
 | MLflow registry | `python -m pip install "tributo[registry]"` |
 | gRPC serving | `python -m pip install "tributo[grpc]"` |
-| Kafka stream source | `python -m pip install "tributo[streaming-inference]"` |
 
 An extra installs dependencies. It does not turn a protocol, adapter, or
 reserved problem type into a verified implementation. Check the

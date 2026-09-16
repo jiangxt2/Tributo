@@ -32,7 +32,6 @@ This page provides module-level guidance and deprecation notes.
 | `tributo.exceptions` — core exceptions | `stable` | ``TributoError`` and 16 common subtypes |
 | `tributo.exceptions` — `ResultMaterializationError` | `alpha` | Credential-safe lazy inference action failure |
 | `tributo.exceptions` — Bundle/Plugin exceptions | `beta` | ``BundleExportError``, ``BundleCommitBusyError``, ``AliasConflict``, ``UnsupportedArtifactFormat``, ``PostPublishCallbackError``, ``PluginLoadIssue`` |
-| `tributo.exceptions` — Streaming exceptions | `beta` | ``StreamSourceError``, ``KafkaCommitError``, ``KafkaPoisonMessageError`` |
 | `tributo.exceptions` — `EngineNotAvailableError` | `alpha` | Candidate bounded-ingestion error |
 | `tributo.cli` | `beta` | Command-line interface |
 
@@ -254,13 +253,6 @@ from the legacy setup-only propagation rule.
 | `tributo.serving.proto.*` | `developer` | Generated protobuf code |
 | `tributo.serving.proto` | `developer` | Generated protobuf package |
 
-### Streaming (tributo.streaming.*)
-
-| Module | Level | Notes |
-|--------|-------|-------|
-| `tributo.streaming.protocol` — `StreamSource` | `beta` | Streaming protocol |
-| `tributo.streaming.kafka_source` | `alpha` | Kafka source (fail-closed safety baseline: commit retention, poison-message stop, uncommitted-batch barrier) |
-
 ### Pipeline (tributo.pipeline.*)
 
 | Module | Level | Notes |
@@ -340,7 +332,6 @@ This is informative only — `STABILITY.md` is the canonical reference.
 - `tributo.pipeline.core` — "Alpha; lightweight in-process DAG executor"
 - `tributo.training.graph_trainer` — "Alpha; GNN training"
 - `tributo.serving.streaming_deployment` — "Alpha; streaming inference service"
-- `tributo.streaming.kafka_source` — "Alpha; Kafka source"
 
 ### Marked as beta
 

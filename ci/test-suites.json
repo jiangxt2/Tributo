@@ -362,7 +362,6 @@
         "tests/inference",
         "tests/registry",
         "tests/serving",
-        "tests/streaming",
         "tests/vector_index",
         "-o",
         "addopts=",
@@ -833,7 +832,6 @@
       "trigger_domains": [],
       "trigger_paths": [
         "src/tributo/serving/**",
-        "src/tributo/streaming/**",
         "tests/integrations/test_e2e_streaming.py",
         "tests/serving/test_grpc_integration.py",
         "tests/serving/test_streaming_integration.py"

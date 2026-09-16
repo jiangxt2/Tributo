@@ -189,7 +189,7 @@ def component_for(symbol: PublicSymbol) -> str:
         "_common",
     }:
         return "core"
-    if package in {"data", "streaming"}:
+    if package == "data":
         return "data"
     if package in {"algorithms", "training"}:
         return "algorithms-training"
