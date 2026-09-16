@@ -1,4 +1,4 @@
-# Pipeline and extension API
+# Extension API
 
 ```{important}
 This page is generated from top-level `@PublicAPI` annotations. Do not edit it
@@ -80,29 +80,6 @@ documentation for every public stability tier.
 ## `tributo.integrations.model_runtimes.resolver`
 
 ```{autoclass} tributo.integrations.model_runtimes.resolver.BundleModelReferenceResolver
-:no-members:
-```
-
-
-## `tributo.pipeline.core`
-
-```{autoclass} tributo.pipeline.core.ArtifactRef
-:no-members:
-```
-
-```{autoclass} tributo.pipeline.core.ArtifactSpec
-:no-members:
-```
-
-```{autoclass} tributo.pipeline.core.InputBinding
-:no-members:
-```
-
-```{autoclass} tributo.pipeline.core.Pipeline
-:no-members:
-```
-
-```{autoclass} tributo.pipeline.core.PipelineStep
 :no-members:
 ```
 

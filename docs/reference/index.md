@@ -13,7 +13,7 @@ Algorithms and training API <api/algorithms-training>
 Model lifecycle API <api/model-lifecycle>
 Inference and serving API <api/inference-serving>
 Vector-index API <api/vector-index>
-Pipeline and extension API <api/extensions>
+Extension API <api/extensions>
 ../cli
 support-matrix
 ../STABILITY

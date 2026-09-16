@@ -199,7 +199,6 @@ parseable
 Passthrough
 passthrough
 pathlib
-PipelineStep
 plugin
 plugins
 plaintext

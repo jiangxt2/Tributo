@@ -342,7 +342,6 @@ def test_manifest_core_contains_alpha_and_runtime_closure() -> None:
     assert core["alpha_capabilities"] == [
         "explainability",
         "vector_index",
-        "pipeline",
         "graph",
         "causal",
     ]

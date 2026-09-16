@@ -105,7 +105,6 @@ RUNTIME_EXTRAS = (
 ALPHA_CAPABILITIES = (
     "explainability",
     "vector_index",
-    "pipeline",
     "graph",
     "causal",
 )

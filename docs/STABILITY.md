@@ -253,12 +253,6 @@ from the legacy setup-only propagation rule.
 | `tributo.serving.proto.*` | `developer` | Generated protobuf code |
 | `tributo.serving.proto` | `developer` | Generated protobuf package |
 
-### Pipeline (tributo.pipeline.*)
-
-| Module | Level | Notes |
-|--------|-------|-------|
-| `tributo.pipeline.core` | `alpha` | Pipeline orchestration |
-
 ### Registry (tributo.registry.*)
 
 | Module | Level | Notes |
@@ -329,7 +323,6 @@ This is informative only — `STABILITY.md` is the canonical reference.
 
 - `tributo.data.transform_ir` — versioned engine-neutral ETL contract
 - `tributo.data.ingestion` — candidate dual-engine ingestion API
-- `tributo.pipeline.core` — "Alpha; lightweight in-process DAG executor"
 - `tributo.training.graph_trainer` — "Alpha; GNN training"
 - `tributo.serving.streaming_deployment` — "Alpha; streaming inference service"
 
