@@ -4,10 +4,10 @@ Tributo's MLflow publication Hook records a committed bundle as provenance in
 an MLflow tracking run. It is opt-in: exporting without `hooks` neither imports
 MLflow nor creates a receipt.
 
-Install the optional integration:
+From the source checkout, install the optional integration:
 
 ```bash
-pip install 'tributo[registry]'
+uv sync --locked --no-dev --extra registry
 ```
 
 Configure a new MLflow run by naming an experiment:
@@ -44,7 +44,7 @@ fails before any artifact or provenance value is changed.
 The CLI accepts the same binding as repeatable JSON:
 
 ```bash
-tributo export \
+uv run --locked --no-sync tributo export \
   --source /checkpoints/model \
   --targets onnx \
   --output /models/customer-risk \

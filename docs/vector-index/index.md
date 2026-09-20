@@ -25,8 +25,8 @@ Tributo validates the control plane and records evidence. Lance owns dataset
 metadata and transactions. Lance-Ray owns distributed index construction,
 search, and maintenance tasks. Ray owns scheduling and worker resources.
 
-Install the fixed compatibility profile with
-`python -m pip install "tributo[vector-index]"`.
+Install the fixed compatibility profile from the source checkout with
+`uv sync --locked --no-dev --extra vector-index`.
 
 See the generated
 [Vector-index API](../reference/api/vector-index.md) for
