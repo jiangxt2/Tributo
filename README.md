@@ -5,11 +5,10 @@
 </p>
 
 <p align="center">
-  <a href="https://pypi.org/project/tributo"><img src="https://img.shields.io/pypi/v/tributo?color=blue" alt="PyPI"></a>
+  <a href="https://github.com/jiangxt2/Tributo/releases/latest"><img src="https://img.shields.io/github/v/release/jiangxt2/Tributo?display_name=tag&amp;sort=semver" alt="GitHub Release"></a>
   <a href="https://github.com/jiangxt2/tributo/actions/workflows/pr-test-suite.yml"><img src="https://github.com/jiangxt2/tributo/actions/workflows/pr-test-suite.yml/badge.svg" alt="CI"></a>
   <a href="https://tributo.readthedocs.io/en/latest/"><img src="https://readthedocs.org/projects/tributo/badge/?version=latest" alt="Documentation"></a>
-  <a href="https://codecov.io/gh/jiangxt2/tributo"><img src="https://codecov.io/gh/jiangxt2/tributo/branch/master/graph/badge.svg" alt="Coverage"></a>
-  <a href="https://pypi.org/project/tributo"><img src="https://img.shields.io/pypi/pyversions/tributo" alt="Python versions"></a>
+  <a href="pyproject.toml"><img src="https://img.shields.io/badge/python-3.12%20%7C%203.13-blue" alt="Python versions"></a>
   <a href="https://github.com/jiangxt2/tributo/blob/master/LICENSE"><img src="https://img.shields.io/github/license/jiangxt2/tributo" alt="License"></a>
 </p>
 
@@ -25,7 +24,8 @@ model bundles.
 - Submit and manage workloads through Ray Jobs.
 - Read bounded data through explicit Ray Data or Daft bindings.
 - Run distributed XGBoost, DNN, positive-unlabeled learning, and the formal
-  algorithm execution contract.
+  algorithm execution contract through separately installed official algorithm
+  Wheels.
 - Publish validated, multi-format model bundles to local storage or S3.
 - Run bundle-backed batch inference and Ray Serve HTTP or gRPC endpoints.
 - Build, search, optimize, or compact Lance vector indexes as separate
@@ -41,9 +41,17 @@ for verified paths and explicit boundaries.
 
 ## Quick start
 
+Tributo 1.0.0 is a source-only GitHub Release; no PyPI distribution is
+published for this version.
+
 ```bash
-pip install tributo
+git clone --branch tributo-1.0.0 --depth 1 https://github.com/jiangxt2/Tributo.git
+cd Tributo
+uv sync --locked --no-dev
 ```
+
+Run Python and CLI commands through `uv run --locked --no-sync` so they use
+the release's locked environment.
 
 ```python
 from tributo import TributoClient
@@ -82,35 +90,37 @@ guarantees, see the [System Landscape](docs/architecture/system-landscape.md),
 ## Installation
 
 ```bash
-git clone https://github.com/jiangxt2/tributo.git
-cd tributo
+git clone --branch tributo-1.0.0 --depth 1 https://github.com/jiangxt2/Tributo.git
+cd Tributo
+
+# Each runtime profile below is an alternative. Combine extras in one uv sync.
 
 # Core install
-uv sync
+uv sync --locked --no-dev
 
-# With XGBoost training + ONNX export
-uv sync --extra training
+# With training data, export, and storage dependencies
+uv sync --locked --no-dev --extra training
 
 # With BayesOpt search for Ray Tune
-uv sync --extra tune
+uv sync --locked --no-dev --extra tune
 
 # With data formats (Lance / Iceberg)
-uv sync --extra data
+uv sync --locked --no-dev --extra data
 
 # With structured HiveServer2 table reads through Ray Data
-uv sync --extra hive-ray
+uv sync --locked --no-dev --extra hive-ray
 
 # With Hugging Face sources/exporters
-uv sync --extra model-export-hf
+uv sync --locked --no-dev --extra model-export-hf
 
 # With Lance vector-index operations
-uv sync --extra vector-index
+uv sync --locked --no-dev --extra vector-index
 
 # Development dependencies
-uv sync --extra dev
+uv sync --locked --extra dev
 
 # Dual-engine files/tables and PostgreSQL
-uv sync --extra data --extra data-daft --extra postgresql
+uv sync --locked --no-dev --extra data --extra data-daft --extra postgresql
 ```
 
 ---
@@ -128,7 +138,7 @@ dialect or backend you use:
 | HDFS Parquet/CSV | Ray Data + PyArrow Hadoop filesystem | Ray runtime with HDFS libraries | Adapter present; cluster gate pending |
 | ClickHouse | `ray-clickhouse==0.1.0` / `daft-clickhouse==1.0` | `tributo[clickhouse]` plus the external Ray wheel when selecting Ray | Adapter only; the full image contains the Daft package, while the Ray package uses the external wheelhouse until PyPI publication and real-database Conformance remains the support gate |
 | Doris | `ray-doris==1.0` / `daft-doris==1.0` | `tributo[mysql]` or `tributo[doris-flight]` | Adapter only; Ray routes require `ray-doris`, Daft routes require `daft-doris`, and real-database Conformance remains the support gate |
-| HiveServer2 structured tables | `ray-hive==1.0` through the built-in Ray Binding | `tributo[hive-ray]` or `uv sync --extra hive-ray` | Alpha; real Hive 4.2.0 structured-projection Conformance |
+| HiveServer2 structured tables | `ray-hive==1.0` through the built-in Ray Binding | `tributo[hive-ray]` or `uv sync --locked --no-dev --extra hive-ray` | Alpha; real Hive 4.2.0 structured-projection Conformance |
 | Native ORC files | no built-in reader | — | Unsupported; use an engine or table service that owns ORC decoding |
 
 Provider/binding presence is not a support claim. The canonical full image
@@ -144,13 +154,12 @@ route. Tributo never installs optional providers or bindings at runtime.
 
 ## Modules
 
-### Distributed XGBoost training
+### Formal distributed algorithms
 
-XGBoost on Ray Train with S3 data sources and automatic ONNX export.
-
-```bash
-uv run python examples/xgboost_s3_training.py
-```
+Production implementations, including XGBoost, DNN, and PU learning, are
+distributed as independently versioned official algorithm Wheels. Install a
+compatible Wheel, confirm it appears in `tributo algo list --json`, and follow
+the [formal algorithm guide](docs/algorithms/getting-started.md).
 
 ### Positive-unlabeled learning
 
@@ -218,8 +227,8 @@ uv run tributo serve streaming status
 ### Hyperparameter tuning with Ray Tune
 
 Random search / BayesOpt with FIFO / ASHA / HyperBand schedulers.
-BayesOpt requires the optional `tune` extra (`uv sync --extra tune` or
-`python -m pip install "tributo[tune]"`); the full runtime image already
+BayesOpt requires the optional `tune` extra
+(`uv sync --locked --no-dev --extra tune`); the full runtime image already
 contains it.
 Tune trials execute setup and fit only: they report the configured metric and
 checkpoint without publishing production Bundles. After selecting parameters,

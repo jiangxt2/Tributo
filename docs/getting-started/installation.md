@@ -3,10 +3,19 @@
 Tributo supports Python 3.12 and 3.13. Install the smallest dependency set for
 your workload.
 
+Tributo 1.0.0 is distributed as a source-only GitHub Release. Clone
+the versioned tag and use the committed lock file:
+
+```bash
+git clone --branch tributo-1.0.0 --depth 1 https://github.com/jiangxt2/Tributo.git
+cd Tributo
+```
+
 ## Install the core package
 
 ```bash
-python -m pip install tributo
+uv sync --locked --no-dev
+uv run --locked --no-sync tributo --help
 ```
 
 The core package includes the Ray Jobs client, Ray Data, Ray Serve, Ray Tune,
@@ -16,22 +25,26 @@ Pydantic, ONNX Runtime, PyArrow, pandas, and S3 filesystem support.
 
 | Workload | Installation |
 | --- | --- |
-| Ray Data table formats | `python -m pip install "tributo[data]"` |
-| Daft ingestion | `python -m pip install "tributo[data,data-daft]"` |
-| HiveServer2 via Ray Data connector package | `python -m pip install "tributo[hive-ray]"` |
-| PostgreSQL ingestion | `python -m pip install "tributo[postgresql]"` |
-| ClickHouse via Daft | `python -m pip install "tributo[clickhouse]"` |
-| ClickHouse via Ray Data | Install `tributo[clickhouse]`, then install the external `ray-clickhouse==0.1.0` wheel |
-| Doris via Daft/Ray Data | `python -m pip install "tributo[mysql]"` |
-| Doris Flight via Daft/Ray Data | `python -m pip install "tributo[doris-flight]"` |
-| Distributed training | `python -m pip install "tributo[training]"` |
-| BayesOpt search for Ray Tune | `python -m pip install "tributo[tune]"` |
-| Explainability | `python -m pip install "tributo[explainability]"` |
-| Lance vector indexing | `python -m pip install "tributo[vector-index]"` |
-| Torch model export | `python -m pip install "tributo[model-export-torch]"` |
-| Hugging Face sources/exporters | `python -m pip install "tributo[model-export-hf]"` |
-| MLflow registry | `python -m pip install "tributo[registry]"` |
-| gRPC serving | `python -m pip install "tributo[grpc]"` |
+| Ray Data table formats | `uv sync --locked --no-dev --extra data` |
+| Daft ingestion | `uv sync --locked --no-dev --extra data --extra data-daft` |
+| HiveServer2 via Ray Data connector package | `uv sync --locked --no-dev --extra hive-ray` |
+| PostgreSQL ingestion | `uv sync --locked --no-dev --extra postgresql` |
+| ClickHouse via Daft | `uv sync --locked --no-dev --extra clickhouse` |
+| ClickHouse via Ray Data | Sync `clickhouse`, then install the external `ray-clickhouse==0.1.0` wheel into `.venv` |
+| Doris via Daft/Ray Data | `uv sync --locked --no-dev --extra mysql` |
+| Doris Flight via Daft/Ray Data | `uv sync --locked --no-dev --extra doris-flight` |
+| Training data, export, and storage profile | `uv sync --locked --no-dev --extra training` |
+| BayesOpt search for Ray Tune | `uv sync --locked --no-dev --extra tune` |
+| Explainability | `uv sync --locked --no-dev --extra explainability` |
+| Lance vector indexing | `uv sync --locked --no-dev --extra vector-index` |
+| Torch model export | `uv sync --locked --no-dev --extra model-export-torch` |
+| Hugging Face sources/exporters | `uv sync --locked --no-dev --extra model-export-hf` |
+| MLflow registry | `uv sync --locked --no-dev --extra registry` |
+| gRPC serving | `uv sync --locked --no-dev --extra grpc` |
+
+Each row is an installation profile. `uv sync` reconciles the environment to
+the selected extras, so combine multiple workloads in one command by providing
+all required `--extra` flags together.
 
 An extra installs dependencies. It does not turn a protocol, adapter, or
 reserved problem type into a verified implementation. Check the
@@ -44,17 +57,18 @@ until its PyPI publication. `mysql` installs `daft-doris==1.0` and
 `ray-doris==1.0` for their explicit engine routes, while `doris-flight` adds
 their Flight dependencies. The `hive-ray` extra installs `ray-hive==1.0` for
 the built-in Ray-only HiveServer2 Provider/Binding route. This does not add
-Daft Hive, native ORC/HDFS access, raw SQL, or Hive writes. The equivalent uv
-commands are
-`uv sync --extra clickhouse`, `uv sync --extra mysql`,
-`uv sync --extra doris-flight`, and `uv sync --extra hive-ray`.
+Daft Hive, native ORC/HDFS access, raw SQL, or Hive writes.
 
-## Prepare a source checkout
+The `training` extra aggregates Core's optional data, export, and storage
+dependencies for training workloads. It does not install XGBoost or any
+official algorithm implementation. Install a compatible, independently
+versioned algorithm Wheel before using `tributo algo run`, then confirm
+discovery with `uv run --locked --no-sync tributo algo list --json`.
+
+## Add development dependencies
 
 ```bash
-git clone https://github.com/jiangxt2/tributo.git
-cd tributo
-uv sync --extra dev --locked
+uv sync --locked --extra dev
 uv run --locked --no-sync tributo --help
 ```
 
