@@ -17,13 +17,14 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Generator, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Generator, Protocol, cast, runtime_checkable
 
 from tributo._common.immutable import deep_freeze
 from tributo.algorithms.api.errors import (
     AlgorithmConfigurationError,
     AlgorithmExecutionError,
 )
+from tributo.algorithms.api.graph import GraphReadHandle
 from tributo.util.annotations import PublicAPI
 
 if TYPE_CHECKING:
@@ -814,10 +815,87 @@ def report_torch_checkpoint(
     completed_step: int,
 ) -> None:
     """Report a Core-validated Torch checkpoint through Ray Train."""
+    _report_torch_checkpoint(
+        metrics,
+        payload_draft,
+        stage_context,
+        completed_step,
+        graph_reader=None,
+    )
+
+
+@PublicAPI(stability="alpha")
+def report_torch_graph_checkpoint(
+    metrics: Mapping[str, object],
+    payload_draft: TorchCheckpointPayloadDraft,
+    stage_context: TorchStageContext,
+    completed_step: int,
+    *,
+    graph_reader: GraphReadHandle,
+) -> None:
+    """Report a graph Torch checkpoint with Core-generated sampling evidence."""
+    _report_torch_checkpoint(
+        metrics,
+        payload_draft,
+        stage_context,
+        completed_step,
+        graph_reader=graph_reader,
+    )
+
+
+def _report_torch_checkpoint(
+    metrics: Mapping[str, object],
+    payload_draft: TorchCheckpointPayloadDraft,
+    stage_context: TorchStageContext,
+    completed_step: int,
+    *,
+    graph_reader: GraphReadHandle | None,
+) -> None:
+    """Validate one Torch checkpoint and attest optional graph sampling evidence."""
     if completed_step < 0:
         raise AlgorithmConfigurationError("completed_step must be non-negative")
     if not isinstance(metrics, Mapping):
         raise AlgorithmConfigurationError("Torch checkpoint metrics must be a mapping")
+    portable_metrics = dict(metrics)
+    if graph_reader is not None:
+        workers = portable_metrics.get("execution_workers")
+        if not isinstance(workers, (list, tuple)):
+            raise AlgorithmConfigurationError(
+                "partitioned graph checkpoints require execution_workers evidence"
+            )
+        local_graph = graph_reader.worker_evidence().to_dict()
+        import torch.distributed as dist
+
+        graph_by_rank: list[object] = [local_graph]
+        if dist.is_available() and dist.is_initialized():
+            graph_by_rank = [None] * stage_context.runtime.world_size
+            dist.all_gather_object(graph_by_rank, local_graph)
+        if len(workers) != len(graph_by_rank):
+            raise AlgorithmConfigurationError(
+                "graph and Worker execution evidence counts disagree"
+            )
+        normalized_workers: list[dict[str, object]] = []
+        for worker in workers:
+            if not isinstance(worker, Mapping):
+                raise AlgorithmConfigurationError(
+                    "Worker execution evidence is malformed"
+                )
+            rank = worker.get("rank")
+            if (
+                not isinstance(rank, int)
+                or isinstance(rank, bool)
+                or not 0 <= rank < len(graph_by_rank)
+                or not isinstance(graph_by_rank[rank], Mapping)
+            ):
+                raise AlgorithmConfigurationError(
+                    "graph Worker rank evidence is invalid"
+                )
+            if "graph" in worker:
+                raise AlgorithmConfigurationError("graph Worker evidence is Core-owned")
+            normalized = dict(worker)
+            normalized["graph"] = dict(cast(Mapping[str, object], graph_by_rank[rank]))
+            normalized_workers.append(normalized)
+        portable_metrics["execution_workers"] = normalized_workers
 
     def validate_metric_metadata(value: object, path: str = "metrics") -> None:
         if isinstance(value, Mapping):
@@ -854,7 +932,7 @@ def report_torch_checkpoint(
                     f"Torch checkpoint metrics contain a path or URI value: {path}"
                 )
 
-    validate_metric_metadata(metrics)
+    validate_metric_metadata(portable_metrics)
     if not isinstance(payload_draft, TorchCheckpointPayloadDraft):
         raise AlgorithmExecutionError("Torch checkpoints require a typed payload draft")
     root = Path(payload_draft.checkpoint_dir)
@@ -905,8 +983,8 @@ def report_torch_checkpoint(
         raise AlgorithmExecutionError(
             "Torch checkpoint execution evidence must not be a symlink"
         )
-    evidence_payload = {
-        name: metrics[name]
+    evidence_payload: dict[str, Any] = {
+        name: portable_metrics[name]
         for name in (
             "execution_workers",
             "model_state_digest",
@@ -917,7 +995,7 @@ def report_torch_checkpoint(
             "reducer_branch",
             "reducer_evidence",
         )
-        if name in metrics
+        if name in portable_metrics
     }
     if evidence_payload:
         temporary_evidence = root / ".torch_execution_evidence.tmp"
@@ -984,7 +1062,7 @@ def report_torch_checkpoint(
         raise AlgorithmExecutionError(
             "failed to atomically write Torch checkpoint descriptor"
         ) from exc
-    report_metrics = dict(metrics)
+    report_metrics = portable_metrics
     report_metrics["checkpoint_descriptor"] = descriptor.to_dict()
     import ray.train
     from ray.train import Checkpoint
@@ -1273,4 +1351,5 @@ __all__ = [
     "invoke_torch_global_loss_reducer",
     "reduce_torch_metrics",
     "report_torch_checkpoint",
+    "report_torch_graph_checkpoint",
 ]

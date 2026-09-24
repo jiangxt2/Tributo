@@ -20,6 +20,7 @@ from tributo.algorithms.api.distribution import (
     WorkerResources,
 )
 from tributo.algorithms.api.errors import AlgorithmConfigurationError
+from tributo.algorithms.api.graph import GraphPartitionEvidence, GraphWorkerEvidence
 from tributo.algorithms.api.models import (
     FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS,
     AlgorithmRequest,
@@ -129,6 +130,7 @@ class WorkerExecutionEvidence:
     input_rows: Mapping[str, int] = field(default_factory=dict)
     batch_count: int | None = None
     collective_steps: int | None = None
+    graph: GraphWorkerEvidence | None = None
 
     def __post_init__(self) -> None:
         _non_empty(self.worker_id, "worker_id")
@@ -200,10 +202,12 @@ class WorkerExecutionEvidence:
             raise AlgorithmConfigurationError(
                 "batch_count cannot exceed collective_steps"
             )
+        if self.graph is not None and not isinstance(self.graph, GraphWorkerEvidence):
+            raise AlgorithmConfigurationError("worker graph evidence is invalid")
 
     def to_dict(self) -> dict[str, Any]:
         """Return portable evidence metadata."""
-        return {
+        payload = {
             "worker_id": self.worker_id,
             "node_id": self.node_id,
             "rank": self.rank,
@@ -216,6 +220,9 @@ class WorkerExecutionEvidence:
             "batch_count": self.batch_count,
             "collective_steps": self.collective_steps,
         }
+        if self.graph is not None:
+            payload["graph"] = self.graph.to_dict()
+        return payload
 
     @classmethod
     def from_dict(cls, value: Mapping[str, object]) -> WorkerExecutionEvidence:
@@ -228,6 +235,9 @@ class WorkerExecutionEvidence:
             rows_processed = value.get("rows_processed")
             batch_count = value.get("batch_count")
             collective_steps = value.get("collective_steps")
+            graph_value = value.get("graph")
+            if graph_value is not None and not isinstance(graph_value, Mapping):
+                raise AlgorithmConfigurationError("Worker graph evidence is malformed")
             return cls(
                 worker_id=_non_empty(value["worker_id"], "worker_id"),
                 node_id=_non_empty(value["node_id"], "node_id"),
@@ -275,6 +285,11 @@ class WorkerExecutionEvidence:
                 collective_steps=(
                     _integer(collective_steps, "collective_steps")
                     if collective_steps is not None
+                    else None
+                ),
+                graph=(
+                    GraphWorkerEvidence.from_dict(dict(graph_value))
+                    if isinstance(graph_value, Mapping)
                     else None
                 ),
             )
@@ -613,6 +628,7 @@ class TorchExecutionEvidence:
     torch_runtime_api_version: int = 1
     reducer_branch: str | None = None
     reducer_evidence: Mapping[str, object] = field(default_factory=dict)
+    graph_partition: GraphPartitionEvidence | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.identity, TorchStageRunIdentity):
@@ -650,6 +666,53 @@ class TorchExecutionEvidence:
             raise AlgorithmConfigurationError(
                 "Torch execution role evidence is malformed"
             )
+        if self.graph_partition is not None:
+            if not isinstance(self.graph_partition, GraphPartitionEvidence):
+                raise AlgorithmConfigurationError(
+                    "Torch graph partition evidence is invalid"
+                )
+            if len(workers) < 2 or any(worker.graph is None for worker in workers):
+                raise AlgorithmConfigurationError(
+                    "partitioned graph execution requires evidence from every worker"
+                )
+            graph_workers = tuple(
+                cast(GraphWorkerEvidence, worker.graph) for worker in workers
+            )
+            if any(
+                item.graph_version != self.graph_partition.graph_version
+                or item.partition_count != self.graph_partition.partition_count
+                for item in graph_workers
+            ):
+                raise AlgorithmConfigurationError(
+                    "Torch graph worker evidence does not match graph partitions"
+                )
+            seed_role = next(
+                (role for role in roles if role.role == self.graph_partition.seed_role),
+                None,
+            )
+            by_rank = {worker.rank: worker.graph for worker in workers}
+            seed_rows_by_rank = (
+                {
+                    worker.rank: seed_role.rows_per_rank[index]
+                    for index, worker in enumerate(workers)
+                }
+                if seed_role is not None
+                and len(seed_role.rows_per_rank) == len(workers)
+                else {}
+            )
+            if (
+                seed_role is None
+                or sum(item.seed_rows for item in graph_workers)
+                != seed_role.observed_rows
+                or any(
+                    by_rank.get(rank) is None
+                    or cast(GraphWorkerEvidence, by_rank[rank]).seed_rows != rows
+                    for rank, rows in seed_rows_by_rank.items()
+                )
+            ):
+                raise AlgorithmConfigurationError(
+                    "Torch graph seed evidence does not match role coverage"
+                )
         if self.state_layout == "replicated":
             if self.replicated_state is None or self.stages:
                 raise AlgorithmConfigurationError(
@@ -742,7 +805,7 @@ class TorchExecutionEvidence:
         object.__setattr__(self, "roles", roles)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "identity": self.identity.to_dict(),
             "run_config_name": self.run_config_name,
             "policy_digest": self.policy_digest,
@@ -764,6 +827,9 @@ class TorchExecutionEvidence:
             "reducer_branch": self.reducer_branch,
             "reducer_evidence": dict(self.reducer_evidence),
         }
+        if self.graph_partition is not None:
+            payload["graph_partition"] = self.graph_partition.to_dict()
+        return payload
 
     @classmethod
     def from_dict(cls, value: Mapping[str, object]) -> "TorchExecutionEvidence":
@@ -805,6 +871,13 @@ class TorchExecutionEvidence:
             if isinstance(replicated_value, Mapping)
             else None
         )
+        graph_partition_value = value.get("graph_partition")
+        if graph_partition_value is not None and not isinstance(
+            graph_partition_value, Mapping
+        ):
+            raise AlgorithmConfigurationError(
+                "Torch graph partition evidence is malformed"
+            )
         return cls(
             identity=identity,
             run_config_name=cast(str, value["run_config_name"]),
@@ -829,6 +902,11 @@ class TorchExecutionEvidence:
             reducer_branch=cast(str | None, value.get("reducer_branch")),
             reducer_evidence=cast(
                 Mapping[str, object], value.get("reducer_evidence", {})
+            ),
+            graph_partition=(
+                GraphPartitionEvidence.from_dict(dict(graph_partition_value))
+                if isinstance(graph_partition_value, Mapping)
+                else None
             ),
         )
 

@@ -19,6 +19,7 @@ from typing import Any, cast
 
 from tributo._common.immutable import FrozenDict
 from tributo.algorithms.api.errors import AlgorithmConfigurationError
+from tributo.algorithms.api.graph import GraphInputSpec
 from tributo.util.annotations import PublicAPI
 
 _REFERENCE = re.compile(
@@ -752,6 +753,7 @@ class TorchPolicy:
     composite_loss_schema_id: str | None = None
     capabilities: tuple[str, ...] = ()
     max_replicated_bytes_per_worker: int | None = None
+    graph_input: GraphInputSpec | None = None
 
     def __post_init__(self) -> None:
         if self.torch_runtime_api_version != 1:
@@ -790,6 +792,27 @@ class TorchPolicy:
             raise AlgorithmConfigurationError(
                 "Torch Policy declares an input route unused by its execution plan"
             )
+        if self.graph_input is not None:
+            if not isinstance(self.graph_input, GraphInputSpec):
+                raise AlgorithmConfigurationError("Torch graph_input is invalid")
+            if not isinstance(self.execution_plan, SingleStageTorchPlan):
+                raise AlgorithmConfigurationError(
+                    "partitioned graph input currently requires one Torch Stage"
+                )
+            if self.loop_owner != "adapter" or self.state_layout != "replicated":
+                raise AlgorithmConfigurationError(
+                    "partitioned graph input requires a replicated Adapter Stage"
+                )
+            if self.graph_input.seed_role not in stage_roles:
+                raise AlgorithmConfigurationError(
+                    "Torch graph seed role must be a Stage input"
+                )
+            if {self.graph_input.node_role, self.graph_input.edge_role} & (
+                route_roles | stage_roles
+            ):
+                raise AlgorithmConfigurationError(
+                    "partitioned graph node and edge roles must be Core-only inputs"
+                )
         if any(
             route.mode == "split_framework" and self.loop_owner != "adapter"
             for route in routes
@@ -911,6 +934,8 @@ class TorchPolicy:
             "capabilities": list(self.capabilities),
             "max_replicated_bytes_per_worker": self.max_replicated_bytes_per_worker,
         }
+        if self.graph_input is not None:
+            payload["graph_input"] = self.graph_input.to_dict()
         return payload
 
     @property
@@ -1009,6 +1034,13 @@ class TorchPolicy:
                 capabilities=tuple(value.get("capabilities", ())),
                 max_replicated_bytes_per_worker=value.get(
                     "max_replicated_bytes_per_worker"
+                ),
+                graph_input=(
+                    GraphInputSpec.from_dict(
+                        dict(_mapping(value["graph_input"], "graph_input"))
+                    )
+                    if value.get("graph_input") is not None
+                    else None
                 ),
             )
         except (KeyError, TypeError, ValueError) as exc:
