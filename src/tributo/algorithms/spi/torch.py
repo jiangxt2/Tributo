@@ -10,6 +10,7 @@ from types import MappingProxyType
 from typing import Any, cast
 
 from tributo._common.immutable import deep_freeze
+from tributo.algorithms.api.graph import GraphReadHandle
 from tributo.algorithms.api.torch_runtime import (
     TorchCheckpointRef,
     TorchCompositeLossContribution,
@@ -221,6 +222,9 @@ class TorchWorkerCheckpointContext:
     stage: TorchStageContext
     source: str
     checkpoint: TorchCheckpointRef | None = None
+    graph_reader: GraphReadHandle | None = field(
+        default=None, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         if not isinstance(self.stage, TorchStageContext):
@@ -236,6 +240,10 @@ class TorchWorkerCheckpointContext:
             self.checkpoint, TorchCheckpointRef
         ):
             raise ValueError("TorchWorkerCheckpointContext checkpoint is invalid")
+        if self.graph_reader is not None and not isinstance(
+            self.graph_reader, GraphReadHandle
+        ):
+            raise ValueError("TorchWorkerCheckpointContext graph_reader is invalid")
 
 
 @PublicAPI(stability="alpha")
