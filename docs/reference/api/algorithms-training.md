@@ -198,6 +198,37 @@ documentation for every public stability tier.
 ```
 
 
+## `tributo.algorithms.api.graph`
+
+```{autoclass} tributo.algorithms.api.graph.GraphBatch
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.graph.GraphInputSpec
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.graph.GraphPartitionEvidence
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.graph.GraphReadHandle
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.graph.GraphSamplingEvidence
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.graph.GraphSamplingSpec
+:no-members:
+```
+
+```{autoclass} tributo.algorithms.api.graph.GraphWorkerEvidence
+:no-members:
+```
+
+
 ## `tributo.algorithms.api.models`
 
 ```{autoclass} tributo.algorithms.api.models.AlgorithmExecutionResult
@@ -396,6 +427,9 @@ documentation for every public stability tier.
 ```
 
 ```{autofunction} tributo.algorithms.api.torch_runtime.report_torch_checkpoint
+```
+
+```{autofunction} tributo.algorithms.api.torch_runtime.report_torch_graph_checkpoint
 ```
 
 
