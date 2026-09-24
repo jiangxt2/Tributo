@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.metadata
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,12 +17,14 @@ from tributo.data.base import S3Config
 from tributo.data.contracts.modes import WriteMode
 from tributo.data.writing import (
     GenericWriteTargetProvider,
+    WriteCapabilityError,
     WriteExecutionContext,
     WriteRequest,
     default_write_gateway,
 )
 from tributo.data.writing.native_bindings import (
     DaftLanceWriteBinding,
+    RayClickHouseWriteBinding,
     RayLanceWriteBinding,
 )
 
@@ -76,6 +79,25 @@ def test_lance_bindings_declare_native_dependency_distributions() -> None:
         "pylance",
         "daft-lance",
     )
+
+
+def test_clickhouse_binding_declares_append_only_native_contract() -> None:
+    descriptor = RayClickHouseWriteBinding._descriptor
+
+    assert descriptor.dependency_distributions == ("ray-clickhouse",)
+    assert descriptor.capabilities.supported_modes == frozenset({WriteMode.APPEND})
+    assert descriptor.capabilities.requires_existing_target is True
+    assert descriptor.capabilities.supports_empty_input is True
+
+
+def test_clickhouse_binding_requires_the_supported_connector_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(importlib.metadata, "version", lambda _name: "0.1.0")
+    assert RayClickHouseWriteBinding.is_available() is True
+
+    monkeypatch.setattr(importlib.metadata, "version", lambda _name: "0.2.0")
+    assert RayClickHouseWriteBinding.is_available() is False
 
 
 @pytest.mark.parametrize(
@@ -273,3 +295,129 @@ def test_native_binding_receives_engine_runtime_credentials_without_receipt_leak
     assert request.credential_free_runtime_options == {
         "s3": {"endpoint": "http://minio:9000"}
     }
+
+
+def test_ray_clickhouse_binding_delegates_append_with_credential_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    write_clickhouse = MagicMock(
+        return_value=SimpleNamespace(
+            rows_written=3,
+            bytes_written=48,
+            batches_written=1,
+            ambiguous_batches=0,
+            status="confirmed",
+        )
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "ray_clickhouse",
+        SimpleNamespace(write_clickhouse=write_clickhouse),
+    )
+    monkeypatch.setenv("KNOVA_CLICKHOUSE_PASSWORD", "do-not-forward")
+    dataset = _RayDataset()
+    request = WriteRequest(
+        engine="ray",
+        target_kind="clickhouse",
+        target="clickhouse://ch.example:8443/analytics/inference_results",
+        binding_id="tributo.ray.clickhouse",
+        mode=WriteMode.APPEND,
+        options={
+            "secure": True,
+            "insert_mode": "sync",
+            "batch_rows": 10_000,
+            "concurrency": 2,
+        },
+        runtime_options={
+            "user": "writer",
+            "credential_ref": "env://KNOVA_CLICKHOUSE_PASSWORD",
+        },
+    )
+
+    receipt = _execute_optional_binding(
+        RayClickHouseWriteBinding(), request, RayDataHandle(dataset)
+    )
+
+    write_clickhouse.assert_called_once_with(
+        dataset,
+        host="ch.example",
+        port=8443,
+        database="analytics",
+        table="inference_results",
+        username="writer",
+        password_env="KNOVA_CLICKHOUSE_PASSWORD",
+        write_mode="append",
+        secure=True,
+        insert_mode="sync",
+        batch_rows=10_000,
+        concurrency=2,
+    )
+    assert receipt.rows_written == 3
+    assert receipt.bytes_written == 48
+    assert receipt.metadata == {
+        "batches_written": 1,
+        "ambiguous_batches": 0,
+        "native_status": "confirmed",
+    }
+    assert "do-not-forward" not in receipt.model_dump_json()
+
+
+def test_ray_clickhouse_binding_fails_closed_without_native_confirmation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(
+        sys.modules,
+        "ray_clickhouse",
+        SimpleNamespace(
+            write_clickhouse=MagicMock(
+                return_value=SimpleNamespace(
+                    rows_written=3,
+                    bytes_written=48,
+                    batches_written=1,
+                    ambiguous_batches=1,
+                    status="unknown",
+                )
+            )
+        ),
+    )
+    request = WriteRequest(
+        engine="ray",
+        target_kind="clickhouse",
+        target="clickhouse://ch.example/analytics/inference_results",
+        mode=WriteMode.APPEND,
+    )
+
+    with pytest.raises(WriteCapabilityError, match="unambiguous confirmation"):
+        _execute_optional_binding(
+            RayClickHouseWriteBinding(), request, RayDataHandle(_RayDataset())
+        )
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "analytics.results",
+        "clickhouse://user:secret@ch.example/analytics/results",
+        "clickhouse://ch.example/analytics",
+        "clickhouse://ch.example/analytics/results/extra",
+        "clickhouse://ch.example:0/analytics/results",
+        "clickhouse://ch.example:65536/analytics/results",
+        "clickhouse://ch.example//analytics/results",
+        "clickhouse://ch.example/analytics/results/",
+        "clickhouse://ch.example/analytics%2Farchive/results",
+    ],
+)
+def test_ray_clickhouse_binding_rejects_noncanonical_target(target: str) -> None:
+    with pytest.raises(
+        (ValueError, WriteCapabilityError),
+        match="credential|ClickHouse write target",
+    ):
+        request = WriteRequest(
+            engine="ray",
+            target_kind="clickhouse",
+            target=target,
+            mode=WriteMode.APPEND,
+        )
+        _execute_optional_binding(
+            RayClickHouseWriteBinding(), request, RayDataHandle(_RayDataset())
+        )
