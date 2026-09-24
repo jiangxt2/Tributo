@@ -606,10 +606,3 @@ def open_ray_graph_partitions(
         reader=RayGraphReadHandle(owners, stats),
         _owners=owners,
     )
-
-
-__all__ = [
-    "RayGraphPartitionLease",
-    "RayGraphReadHandle",
-    "open_ray_graph_partitions",
-]
