@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
@@ -138,6 +140,34 @@ def test_descriptor_cannot_self_grant_tested_or_supported() -> None:
     assert record.tested is False
     assert record.supported is False
     assert record.validated_execution_profiles == ()
+
+
+def test_non_torch_evidence_id_keeps_the_pre_torch_payload() -> None:
+    descriptor = _descriptor()
+    issued_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    evidence = _evidence(descriptor, issued_at=issued_at)
+    expected = {
+        "algorithm_id": evidence.algorithm_id,
+        "implementation_id": evidence.implementation_id,
+        "distribution": evidence.distribution,
+        "package_version": evidence.package_version,
+        "wheel_sha256": evidence.wheel_sha256,
+        "descriptor_api_version": evidence.descriptor_api_version,
+        "contract_digests": evidence.contract_digests,
+        "distributed_semantics": evidence.distributed_semantics.value,
+        "execution_profile": evidence.execution_profile.value,
+        "issuer": evidence.issuer,
+        "issued_at": issued_at.isoformat(),
+        "gate": evidence.gate,
+        "result_reference": evidence.result_reference,
+    }
+
+    assert (
+        evidence.evidence_id
+        == hashlib.sha256(
+            json.dumps(expected, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    )
 
 
 def test_exact_trusted_wheel_evidence_grants_support() -> None:

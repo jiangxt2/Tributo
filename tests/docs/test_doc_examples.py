@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import runpy
 import subprocess
@@ -10,7 +9,6 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
-import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 
@@ -20,7 +18,7 @@ from tributo.config import AlgorithmExecutionConfig
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_quickstart_data_and_request_example_executes(
+def test_quickstart_examples_execute(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -37,17 +35,29 @@ def test_quickstart_data_and_request_example_executes(
     )
 
     workspace = tmp_path / "tributo-quickstart"
-    table = pq.read_table(workspace / "training.parquet")
-    request = AlgorithmExecutionConfig.model_validate_json(
-        (workspace / "execution.json").read_text(encoding="utf-8")
-    )
+    table = pq.read_table(workspace / "input.parquet")
 
     assert table.num_rows == 8
-    assert request.algorithm == "multinomial_nb"
-    assert request.worker_count == 2
-    assert json.loads((workspace / "execution.json").read_text())["profile"] == (
-        "local"
+    assert table.column_names == ["message_count", "call_duration", "label"]
+    assert table.column("label").to_pylist() == [0, 0, 0, 1, 1, 1, 0, 1]
+
+    target = workspace / "output"
+    script = REPOSITORY_ROOT / "docs" / "examples" / "doc_code" / "local_data.py"
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = str(REPOSITORY_ROOT / "src")
+    environment["RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO"] = "0"
+    environment["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] = "0"
+    completed = subprocess.run(
+        [sys.executable, str(script), str(workspace / "input.parquet"), str(target)],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=environment,
+        timeout=90,
     )
+
+    assert "committed=True" in completed.stdout
+    assert ds.dataset(target, format="parquet").to_table().equals(table)
 
 
 def test_pu_execution_request_is_valid() -> None:
@@ -62,29 +72,6 @@ def test_pu_execution_request_is_valid() -> None:
     assert request.worker_count == 2
     assert training["loss"]["class_prior"] == 0.3
     assert training["output"]["bundle_uri"] == "/shared/models/pu-fraud"
-
-
-def test_local_data_example_executes(tmp_path: Path) -> None:
-    source = tmp_path / "input.parquet"
-    target = tmp_path / "output"
-    expected = pa.table({"entity_id": [1, 2], "value": [0.5, 1.5]})
-    pq.write_table(expected, source)
-    script = REPOSITORY_ROOT / "docs" / "examples" / "doc_code" / "local_data.py"
-    environment = dict(os.environ)
-    environment["PYTHONPATH"] = str(REPOSITORY_ROOT / "src")
-    environment["RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO"] = "0"
-    environment["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] = "0"
-    completed = subprocess.run(
-        [sys.executable, str(script), str(source), str(target)],
-        check=True,
-        capture_output=True,
-        text=True,
-        env=environment,
-        timeout=90,
-    )
-
-    assert "committed=True" in completed.stdout
-    assert ds.dataset(target, format="parquet").to_table().equals(expected)
 
 
 def test_vector_index_example_builds_valid_requests(monkeypatch) -> None:

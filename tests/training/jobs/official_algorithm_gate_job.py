@@ -1519,7 +1519,6 @@ def main() -> None:
                     "ray": {
                         "max_failures": 0,
                         "storage_path": str(root / "autoencoder-ray-results"),
-                        "resume": {"checkpoint_interval": 1},
                     },
                     "output": {"bundle_uri": str(root / "autoencoder-bundle")},
                 },
@@ -1547,7 +1546,6 @@ def main() -> None:
                     "ray": {
                         "max_failures": 0,
                         "storage_path": str(root / "timeseries-ray-results"),
-                        "resume": {"checkpoint_interval": 1},
                     },
                     "output": {"bundle_uri": str(root / "timeseries-bundle")},
                 },
@@ -1575,7 +1573,6 @@ def main() -> None:
                     "ray": {
                         "max_failures": 0,
                         "storage_path": str(root / "lstm-ray-results"),
-                        "resume": {"checkpoint_interval": 1},
                     },
                     "output": {"bundle_uri": str(root / "lstm-bundle")},
                 },
@@ -1603,7 +1600,6 @@ def main() -> None:
                     "ray": {
                         "max_failures": 0,
                         "storage_path": str(root / "gru-ray-results"),
-                        "resume": {"checkpoint_interval": 1},
                     },
                     "output": {"bundle_uri": str(root / "gru-bundle")},
                 },
@@ -1627,7 +1623,6 @@ def main() -> None:
                     "ray": {
                         "max_failures": 0,
                         "storage_path": str(root / "dnn-ray-results"),
-                        "resume": {"checkpoint_interval": 1},
                     },
                     "output": {"bundle_uri": str(root / "dnn-v2-bundle")},
                 },
@@ -1652,7 +1647,6 @@ def main() -> None:
                     "ray": {
                         "max_failures": 0,
                         "storage_path": str(root / "pu-ray-results"),
-                        "resume": {"checkpoint_interval": 1},
                     },
                     "output": {"bundle_uri": str(root / "pu-v2-bundle")},
                 },
@@ -1680,7 +1674,6 @@ def main() -> None:
                     "ray": {
                         "max_failures": 0,
                         "storage_path": str(root / "two-tower-ray-results"),
-                        "resume": {"checkpoint_interval": 1},
                     },
                     "output": {"bundle_uri": str(root / "two-tower-bundle")},
                 },
@@ -1735,7 +1728,6 @@ def main() -> None:
                     "ray": {
                         "max_failures": 0,
                         "storage_path": str(root / "transformer-ray-results"),
-                        "resume": {"checkpoint_interval": 1},
                     },
                     "output": {"bundle_uri": str(root / "transformer-bundle")},
                 },

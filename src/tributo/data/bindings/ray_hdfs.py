@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import importlib.metadata
+import os
 from dataclasses import dataclass
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
+from urllib.parse import urlsplit, urlunsplit
 
 import pyarrow as pa
 import pyarrow.csv as pacsv
@@ -65,7 +67,7 @@ class _RayHdfsFileBinding:
     ) -> _RayHdfsNativePlan:
         import ray.data
 
-        filesystem, path = pafs.HadoopFileSystem.from_uri(plan.uri)
+        filesystem, path = self._filesystem(plan.uri)
         options: dict[str, Any] = {"filesystem": filesystem}
         if request.read_options.target_parallelism is not None:
             options["override_num_blocks"] = request.read_options.target_parallelism
@@ -89,6 +91,52 @@ class _RayHdfsFileBinding:
             request.transforms, TransformBackend.RAY, schema
         )
         return _RayHdfsNativePlan(dataset, schema, transforms)
+
+    def _filesystem(self, uri: str) -> tuple[pafs.FileSystem, str]:
+        try:
+            filesystem, path = pafs.HadoopFileSystem.from_uri(uri)
+            return cast(pafs.FileSystem, filesystem), cast(str, path)
+        except OSError as error:
+            if self.connector_id != "parquet" or not any(
+                marker in str(error)
+                for marker in ("Unable to load libhdfs", "Unable to load libjvm")
+            ):
+                raise
+            parsed = urlsplit(uri)
+            if parsed.scheme != "hdfs" or parsed.hostname is None:
+                raise
+            webhdfs_port_value = os.environ.get("TRIBUTO_HDFS_WEB_PORT")
+            if webhdfs_port_value is None:
+                raise
+            webhdfs_port = int(webhdfs_port_value)
+            from fsspec.implementations.webhdfs import WebHDFS
+
+            data_proxy = None
+            proxy_host = os.environ.get("TRIBUTO_HDFS_DATA_PROXY_HOST")
+            if proxy_host:
+
+                def data_proxy(url: str) -> str:
+                    redirected = urlsplit(url)
+                    netloc = proxy_host
+                    if redirected.port is not None:
+                        netloc = f"{netloc}:{redirected.port}"
+                    return urlunsplit(
+                        (
+                            redirected.scheme,
+                            netloc,
+                            redirected.path,
+                            redirected.query,
+                            redirected.fragment,
+                        )
+                    )
+
+            webhdfs = WebHDFS(
+                parsed.hostname,
+                port=webhdfs_port,
+                user=os.environ.get("HADOOP_USER_NAME"),
+                data_proxy=data_proxy,
+            )
+            return pafs.PyFileSystem(pafs.FSSpecHandler(webhdfs)), parsed.path or "/"
 
     def _wrap(
         self,

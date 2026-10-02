@@ -115,7 +115,7 @@ class TestCanonicalSourceInput:
         # RawSourceConfig passthrough lives in the legacy layer only.
         with pytest.raises(ValidationError):
             TypeAdapter(CanonicalSourceInput).validate_python(
-                {"type": "kafka", "bootstrap": "localhost:9092"}
+                {"type": "unknown-source", "location": "example"}
             )
 
 

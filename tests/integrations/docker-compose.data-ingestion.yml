@@ -28,6 +28,15 @@ x-ray-common: &ray-common
     TRIBUTO_POSTGRESQL_DB: tributo
     TRIBUTO_POSTGRESQL_USER: tributo
     TRIBUTO_POSTGRESQL_PASSWORD: tributo-test
+    JAVA_HOME: /opt/java/openjdk
+    HADOOP_HOME: /opt/hadoop
+    HADOOP_USER_NAME: ray
+    TRIBUTO_HDFS_DATA_PROXY_HOST: hdfs
+    TRIBUTO_HDFS_WEB_PORT: "9870"
+    ARROW_LIBHDFS_DIR: /opt/hadoop/lib/native
+    HADOOP_CONF_DIR: /workspace/tributo-src/tests/integrations/hdfs
+    LD_LIBRARY_PATH: /opt/hadoop/lib/native:/opt/java/openjdk/lib/server
+    CLASSPATH: /opt/hadoop/etc/hadoop:/opt/hadoop/share/hadoop/common/*:/opt/hadoop/share/hadoop/common/lib/*:/opt/hadoop/share/hadoop/hdfs/*:/opt/hadoop/share/hadoop/hdfs/lib/*:/opt/hadoop/share/hadoop/yarn/*:/opt/hadoop/share/hadoop/yarn/lib/*:/opt/hadoop/share/hadoop/mapreduce/*:/opt/hadoop/share/hadoop/mapreduce/lib/*
     TRIBUTO_STORAGE_PROFILE_VECTOR_IT: '{"endpoint":"http://minio:9000","region":"us-east-1","access_key_id":"minioadmin","secret_access_key":"minioadmin123","use_ssl":false,"path_style":true}'
     MLFLOW_TRACKING_URI: http://mlflow:5000
     PYTHON_VERSION: ${PYTHON_VERSION}
@@ -144,6 +153,85 @@ services:
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin123
+
+  hdfs:
+    image: ${TRIBUTO_IT_HDFS_IMAGE:-tributo-hdfs-disabled:local}
+    pull_policy: never
+    profiles: ["hdfs-ingestion"]
+    user: "0:0"
+    environment:
+      JAVA_HOME: /opt/java/openjdk
+      HADOOP_HOME: /opt/hadoop
+      HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop
+      HADOOP_PID_DIR: /tmp/hadoop-pid
+      HADOOP_LOG_DIR: /tmp/hadoop-log
+      CLASSPATH: /opt/hadoop:/opt/hadoop/etc/hadoop:/opt/hadoop/share/hadoop/common/*:/opt/hadoop/share/hadoop/common/lib/*:/opt/hadoop/share/hadoop/hdfs/*:/opt/hadoop/share/hadoop/hdfs/lib/*:/opt/hadoop/share/hadoop/yarn/*:/opt/hadoop/share/hadoop/yarn/lib/*:/opt/hadoop/share/hadoop/mapreduce/*:/opt/hadoop/share/hadoop/mapreduce/lib/*
+    entrypoint:
+      - /bin/bash
+      - -lc
+    command:
+      - >-
+        set -eu;
+        export JAVA_HOME=/opt/java/openjdk HADOOP_HOME=/opt/hadoop
+        HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop;
+        mkdir -p /opt/hadoop/webapps/hdfs /opt/hadoop/webapps/datanode;
+        cp /workspace/tributo-src/tests/integrations/hdfs/core-site.xml "$$HADOOP_CONF_DIR/core-site.xml";
+        cp /workspace/tributo-src/tests/integrations/hdfs/hdfs-site.xml "$$HADOOP_CONF_DIR/hdfs-site.xml";
+        HADOOP_PID_DIR=/tmp/hadoop-pid HADOOP_LOG_DIR=/tmp/hadoop-log;
+        mkdir -p "$$HADOOP_PID_DIR" "$$HADOOP_LOG_DIR";
+        if [ ! -f /data/name/current/VERSION ]; then
+        hdfs namenode -format -force -nonInteractive; fi;
+        HADOOP_RUNTIME_CLASSPATH="/opt/hadoop:$$(hadoop classpath --glob)";
+        mkdir -p /tmp/hadoop-log;
+        java --add-opens=java.base/java.lang=ALL-UNNAMED -cp "$$HADOOP_RUNTIME_CLASSPATH" -Dproc_namenode -Djava.net.preferIPv4Stack=true -Djava.library.path=/opt/hadoop/lib/native org.apache.hadoop.hdfs.server.namenode.NameNode >/tmp/hadoop-log/namenode.out 2>&1 & namenode_pid=$$!;
+        java --add-opens=java.base/java.lang=ALL-UNNAMED -cp "$$HADOOP_RUNTIME_CLASSPATH" -Dproc_datanode -Djava.net.preferIPv4Stack=true -Djava.library.path=/opt/hadoop/lib/native org.apache.hadoop.hdfs.server.datanode.DataNode >/tmp/hadoop-log/datanode.out 2>&1 & datanode_pid=$$!;
+        trap 'kill "$$namenode_pid" "$$datanode_pid" 2>/dev/null || true' INT TERM EXIT;
+        until hdfs dfs -mkdir -p /tributo-hdfs; do sleep 1; done;
+        hdfs dfs -chmod -R 777 /tributo-hdfs;
+        tail -f /dev/null
+    volumes:
+      - ingestion-source:/workspace/tributo-src:ro
+      - hdfs-name-data:/data/name
+      - hdfs-data-data:/data/data
+    depends_on:
+      source-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          export JAVA_HOME=/opt/java/openjdk HADOOP_HOME=/opt/hadoop
+          HADOOP_CONF_DIR=/workspace/tributo-src/tests/integrations/hdfs;
+          hdfs dfs -test -d /tributo-hdfs
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 15s
+
+  hdfs-init:
+    <<: *ray-common
+    profiles: ["hdfs-ingestion"]
+    entrypoint:
+      - /bin/bash
+      - -lc
+    command:
+      - >-
+        set -eu;
+        cp /workspace/tributo-src/tests/integrations/hdfs/core-site.xml /opt/hadoop/etc/hadoop/core-site.xml;
+        cp /workspace/tributo-src/tests/integrations/hdfs/hdfs-site.xml /opt/hadoop/etc/hadoop/hdfs-site.xml;
+        export HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop;
+        exec python /workspace/tributo-src/tests/integrations/setup_hdfs_fixture.py
+    environment:
+      TRIBUTO_HDFS_HOST: hdfs
+      TRIBUTO_HDFS_PORT: "8020"
+    depends_on:
+      hdfs:
+        condition: service_healthy
+      source-init:
+        condition: service_completed_successfully
+      workspace-init:
+        condition: service_completed_successfully
+    restart: "no"
 
   postgres:
     image: ${TRIBUTO_IT_POSTGRES_IMAGE:-postgres:16.14}
@@ -278,3 +366,5 @@ volumes:
   ingestion-workspace:
   mlflow-data:
   postgres-data:
+  hdfs-name-data:
+  hdfs-data-data:

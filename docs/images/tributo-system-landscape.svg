@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="736" height="860" viewBox="0 0 736 860" role="img" aria-labelledby="title description">
   <title id="title">Tributo system landscape on Ray</title>
-  <desc id="description">Users submit training, vector-index, inference, explainability, serving, and streaming workloads through Tributo. Tributo owns portable framework contracts and delegates distributed execution to Ray 2.55.1. Data systems, bundle stores, Lance, MLflow, and Kafka remain external systems. Platform control-plane capabilities are outside the Tributo boundary.</desc>
+  <desc id="description">Users submit training, vector-index, inference, explainability, and serving workloads through Tributo. Tributo owns portable framework contracts and delegates distributed execution to Ray 2.55.1. Data systems, bundle stores, Lance, and MLflow remain external systems. Platform control-plane capabilities are outside the Tributo boundary.</desc>
   <style>
     :root {
       --canvas: #ffffff;
@@ -171,9 +171,6 @@
   <line class="divider" x1="156" y1="256" x2="686" y2="256"/>
   <text x="156" y="286">Online serving</text>
   <text class="tiny" x="156" y="307">HTTP + gRPC + SSE</text>
-  <line class="divider" x1="421" y1="268" x2="421" y2="310"/>
-  <text x="440" y="286">Streaming input</text>
-  <text class="tiny" x="440" y="307">Kafka StreamSource Alpha</text>
 
   <path class="flow" d="M 421 322 V 348"/>
   <rect class="group" x="138" y="350" width="566" height="192" rx="8"/>
@@ -233,15 +230,11 @@
   <text class="tiny" x="290" y="797">Local + file://</text>
   <text class="tiny" x="290" y="816">S3 manifest last</text>
 
-  <rect class="node external" x="424" y="744" width="154" height="86" rx="8"/>
+  <rect class="node external" x="424" y="744" width="300" height="86" rx="8"/>
   <text class="strong" x="440" y="773">MLflow</text>
   <text class="tiny" x="440" y="797">Import + tracking</text>
   <text class="tiny" x="440" y="816">Optional hook</text>
 
-  <rect class="node external" x="588" y="744" width="136" height="86" rx="8"/>
-  <text class="strong" x="604" y="773">Kafka</text>
-  <text class="tiny" x="604" y="797">StreamSource</text>
-  <text class="tiny" x="604" y="816">No service loop</text>
   </g>
   <g class="narrow">
     <rect class="node entry" x="30" y="12" width="676" height="64" rx="8"/>
@@ -263,8 +256,7 @@
     <rect class="node workload" x="38" y="234" width="660" height="152" rx="8"/>
     <text class="strong" x="56" y="271">Scenario workloads</text>
     <text x="56" y="304">Train / Tune · Batch inference</text>
-    <text x="56" y="337">Vector index / Explain · Serve / Stream</text>
-    <text x="56" y="370">Kafka input Alpha · no service loop</text>
+    <text x="56" y="337">Vector index / Explain · Serve / LLM SSE</text>
 
     <path class="flow" d="M 368 386 V 398"/>
 
@@ -291,7 +283,7 @@
     <text class="strong" x="48" y="733">External systems</text>
     <text x="48" y="766">Data systems</text>
     <text x="48" y="799">Bundle stores</text>
-    <text x="48" y="832">Lance · MLflow · Kafka</text>
+    <text x="48" y="832">Lance · MLflow</text>
 
     <rect class="node excluded" x="376" y="696" width="330" height="152" rx="8"/>
     <text class="strong" x="394" y="733">Out of scope</text>

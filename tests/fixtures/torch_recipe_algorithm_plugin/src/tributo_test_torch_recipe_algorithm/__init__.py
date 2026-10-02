@@ -2,10 +2,22 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
-from typing import Any
+from pathlib import Path
 
-from tributo.algorithms import AlgorithmBuilder, TorchTrainingRecipe
+from tributo.algorithms import (
+    AlgorithmBuilder,
+    TorchArtifactPlan,
+    TorchBatch,
+    TorchBatchContext,
+    TorchLossContribution,
+    TorchMetricPlan,
+    TorchModuleSet,
+    TorchOptimizationPlan,
+    TorchRecipe,
+    TorchStepResult,
+)
 from tributo.algorithms.api import (
     EnvironmentSpec,
     ExecutionMode,
@@ -20,51 +32,96 @@ from tributo.training.algorithm_spec import (
     ProblemType,
 )
 
+CODE_DIGEST = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
-class ThirdPartyBinaryLinearRecipe(TorchTrainingRecipe):
-    """Define only the four model-level factories required by the recipe SPI."""
 
-    def model_factory(self, config: Mapping[str, Any]) -> object:
+class ThirdPartyBinaryLinearRecipe(TorchRecipe):
+    """A low-dependency out-of-tree implementation of the new Recipe SPI."""
+
+    def build_modules(self, context: object) -> TorchModuleSet:
         import torch
 
-        return torch.nn.Linear(int(config.get("input_features", 2)), 1)
-
-    def loss_factory(self, config: Mapping[str, Any]) -> object:
-        import torch
-
-        del config
-        return torch.nn.BCEWithLogitsLoss()
-
-    def optimizer_factory(
-        self,
-        model: object,
-        config: Mapping[str, Any],
-    ) -> object:
-        import torch
-
-        if not isinstance(model, torch.nn.Module):
-            raise TypeError("model must be torch.nn.Module")
-        return torch.optim.SGD(
-            model.parameters(),
-            lr=float(config.get("learning_rate", 0.1)),
+        return TorchModuleSet(
+            {"model": torch.nn.Linear(2, 1), "loss": torch.nn.BCEWithLogitsLoss()}
         )
 
-    def metric_factories(self, config: Mapping[str, Any]) -> Mapping[str, Any]:
-        del config
+    def adapt_batch(self, batch: object, context: object) -> TorchBatch:
+        import torch
 
-        def accuracy(predictions: object, targets: object) -> object:
-            import torch
+        if not isinstance(batch, Mapping):
+            raise TypeError("batch must be a mapping")
+        if not isinstance(context, TorchBatchContext):
+            raise TypeError("Torch batch context is invalid")
+        features = torch.stack(
+            [
+                torch.as_tensor(batch[name], dtype=torch.float32)
+                for name in context.feature_names
+            ],
+            dim=1,
+        )
+        if context.label_name is None:
+            raise ValueError("Torch fixture requires a label")
+        targets = torch.as_tensor(
+            batch[context.label_name], dtype=torch.float32
+        ).reshape(-1, 1)
+        return TorchBatch(
+            positional=(features,), targets=targets, local_rows=len(targets)
+        )
 
-            if not isinstance(predictions, torch.Tensor) or not isinstance(
-                targets, torch.Tensor
-            ):
-                raise TypeError("accuracy requires Tensor values")
-            return (torch.sigmoid(predictions) >= 0.5) == targets.bool()
+    def training_step(
+        self, modules: TorchModuleSet, batch: TorchBatch, context: object
+    ) -> TorchStepResult:
+        import torch
 
-        return {"accuracy": accuracy}
+        del context
+        predictions = modules["model"](batch.positional[0])
+        numerator = torch.nn.functional.binary_cross_entropy_with_logits(
+            predictions, batch.targets.float(), reduction="sum"
+        )
+        return TorchStepResult(
+            outputs={"prediction": predictions},
+            loss=TorchLossContribution(numerator, batch.local_rows),
+        )
+
+    def validation_step(
+        self, modules: TorchModuleSet, batch: TorchBatch, context: object
+    ) -> TorchStepResult:
+        return self.training_step(modules, batch, context)
+
+    def configure_optimizers(
+        self, modules: TorchModuleSet, context: object
+    ) -> TorchOptimizationPlan:
+        import torch
+
+        del context
+        return TorchOptimizationPlan(
+            torch.optim.SGD(modules["model"].parameters(), lr=0.1)
+        )
+
+    def metric_plan(self, context: object) -> TorchMetricPlan:
+        del context
+        return TorchMetricPlan({"accuracy": "sum_count", "train_loss": "sum_count"})
+
+    def artifact_plan(self, context: object) -> TorchArtifactPlan:
+        del context
+        return TorchArtifactPlan(
+            source_kind="torch_module",
+            input_signature=(
+                {
+                    "name": "features",
+                    "dtype": "float32",
+                    "shape": ("batch", 2),
+                },
+            ),
+            output_signature=(
+                {"name": "prediction", "dtype": "float32", "shape": ("batch", 1)},
+            ),
+            targets=({"name": "onnx-model", "format": "onnx"},),
+            roles={"inference": "onnx-model"},
+        )
 
 
-DESCRIPTOR = AlgorithmBuilder.from_torch_recipe(
+DESCRIPTOR = AlgorithmBuilder.from_torch(
     spec=AlgorithmSpec(
         name="third_party_binary_linear",
         trainer_cls=None,
@@ -79,7 +136,7 @@ DESCRIPTOR = AlgorithmBuilder.from_torch_recipe(
         model_family="linear_model",
         data_modalities=("tabular",),
         lifecycle_kind="batch_fit",
-        allowed_execution_modes=(ExecutionMode.COLLECTIVE.value,),
+        allowed_execution_modes=(ExecutionMode.RAY_TRAIN_TORCH.value,),
         config_contract_ref="example.torch_recipe.config.v1",
         input_contract_ref="tributo.tabular.dense.v1",
         output_contract_ref="tributo.classification.onnx.v1",
@@ -105,6 +162,8 @@ DESCRIPTOR = AlgorithmBuilder.from_torch_recipe(
     package_name="tributo-test-torch-recipe-algorithm",
     package_version="0.1.0",
     tributo_version_spec=">=1,<2",
+    code_digest=CODE_DIGEST,
+    descriptor_api_version=1,
     stability="alpha",
     tested=True,
     supported=True,

@@ -19,10 +19,10 @@ Pydantic model.
 
 ## An optional module cannot be imported
 
-Install the extra associated with the feature:
+From the source checkout, sync the extra associated with the feature:
 
 ```bash
-python -m pip install "tributo[training]"
+uv sync --locked --no-dev --extra training
 ```
 
 Missing optional dependencies should fail with an installation hint. Do not

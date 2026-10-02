@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from ray.train import DataConfig
@@ -72,4 +73,17 @@ class ExactCoverageDataConfig(DataConfig):
         return output
 
 
-__all__ = ["ExactCoverageDataConfig"]
+@DeveloperAPI
+class TorchRoleDataConfig(ExactCoverageDataConfig):
+    """Route Torch roles independently: split_exact roles shard, replicate roles do not."""
+
+    def __init__(self, routes: Mapping[str, object], **kwargs: Any) -> None:
+        split_roles = [
+            role
+            for role, route in routes.items()
+            if getattr(route, "mode", None) == "split_exact"
+        ]
+        super().__init__(datasets_to_split=split_roles, **kwargs)
+
+
+__all__ = ["ExactCoverageDataConfig", "TorchRoleDataConfig"]

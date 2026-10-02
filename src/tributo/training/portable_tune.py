@@ -12,6 +12,7 @@ from ray.tune import ResultGrid, RunConfig, Tuner
 from tributo._common.immutable import deep_thaw
 from tributo.algorithms.api import (
     DistributedAlgorithmDescriptor,
+    DistributionStrategy,
     ExecutionRequest,
     ResolvedAlgorithmPlan,
     ResultPolicy,
@@ -85,6 +86,14 @@ def _trial_request(
             algorithm_config=config,
         ),
         resume_from=None,
+    )
+
+
+def _trial_checkpoint_enabled(plan: ResolvedAlgorithmPlan) -> bool:
+    """Return whether the existing portable checkpoint files apply to this plan."""
+    return not (
+        plan.distribution_spec is not None
+        and plan.distribution_spec.strategy is DistributionStrategy.RAY_TRAIN_TORCH
     )
 
 
@@ -173,6 +182,9 @@ class PortableTuneRunner:
             )
             metric = _extract_target_metric(result.execution.metrics, metric_name)
             metrics = {metric_name: metric}
+            if not _trial_checkpoint_enabled(plan):
+                ray_tune.report(metrics)
+                return
             manifest = checkpoint_dir / "manifest.json"
             state = checkpoint_dir / "state.bin"
             if manifest.is_file() and state.is_file():

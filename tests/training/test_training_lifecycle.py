@@ -714,7 +714,7 @@ class TestBundleMode:
 
         lifecycle_module._load_provider_plugins(registry)
 
-        assert registry.list_all() == ["ray-torch-recipe-v1"]
+        assert registry.list_all() == ["ray-torch-v1"]
 
     def test_bundle_real_routing_contract(
         self, monkeypatch: pytest.MonkeyPatch

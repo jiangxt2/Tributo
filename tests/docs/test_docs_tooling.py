@@ -108,6 +108,13 @@ def test_generated_public_api_reference_covers_source_inventory() -> None:
 
     assert inventory
     assert len({symbol.target for symbol in inventory}) == len(inventory)
+    assert all(
+        not symbol.module.startswith("tributo.streaming") for symbol in inventory
+    )
+    assert all(
+        "tributo.streaming" not in page
+        for page in public_api_generator.expected_pages(inventory).values()
+    )
     assert {component_for(symbol) for symbol in inventory} == {
         "algorithms-training",
         "core",
@@ -117,11 +124,6 @@ def test_generated_public_api_reference_covers_source_inventory() -> None:
         "inference-serving",
         "model-lifecycle",
     }
-    pipeline_symbols = tuple(
-        symbol for symbol in inventory if symbol.module.startswith("tributo.pipeline.")
-    )
-    assert pipeline_symbols
-    assert {component_for(symbol) for symbol in pipeline_symbols} == {"extensions"}
     assert all(
         page.endswith("\n") and not page.endswith("\n\n")
         for page in public_api_generator.expected_pages(inventory).values()

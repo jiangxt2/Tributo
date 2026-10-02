@@ -350,26 +350,12 @@ documentation for every public stability tier.
 ```
 
 
-## `tributo.integrations.sources.ray_torch_recipe`
+## `tributo.integrations.sources.ray_torch`
 
-```{autoclass} tributo.integrations.sources.ray_torch_recipe.RayTorchRecipeSourceProvider
+```{autoclass} tributo.integrations.sources.ray_torch.RayTorchSourceProvider
 :no-members:
 ```
 
-```{autoclass} tributo.integrations.sources.ray_torch_recipe.TorchRecipeSourceOptions
-:no-members:
-```
-
-
-## `tributo.streaming.kafka_source`
-
-```{autoclass} tributo.streaming.kafka_source.KafkaStreamSource
-:no-members:
-```
-
-
-## `tributo.streaming.protocol`
-
-```{autoclass} tributo.streaming.protocol.StreamSource
+```{autoclass} tributo.integrations.sources.ray_torch.TorchSourceOptions
 :no-members:
 ```

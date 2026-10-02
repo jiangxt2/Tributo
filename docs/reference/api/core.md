@@ -111,12 +111,6 @@ documentation for every public stability tier.
 ```{autoexception} tributo.JobTimeoutError
 ```
 
-```{autoexception} tributo.exceptions.KafkaCommitError
-```
-
-```{autoexception} tributo.exceptions.KafkaPoisonMessageError
-```
-
 ```{autoexception} tributo.ModelExportError
 ```
 
@@ -148,9 +142,6 @@ documentation for every public stability tier.
 ```
 
 ```{autoexception} tributo.exceptions.SessionFatalError
-```
-
-```{autoexception} tributo.exceptions.StreamSourceError
 ```
 
 ```{autoexception} tributo.TributoError

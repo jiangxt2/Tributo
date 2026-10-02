@@ -46,6 +46,9 @@ _EXEMPT_NAMES: set[str] = {
     # their concrete handle types are annotated.
     "DataHandle",
     "WriteHandle",
+    # Torch loss union aliases — type aliases cannot be decorated; their
+    # concrete loss contribution types are annotated.
+    "TorchStepLoss",
     # Stable string constants — Python str objects cannot be decorated.
     "ARTIFACT_KIND_MODEL",
     "ARTIFACT_KIND_REPORT",
@@ -62,6 +65,9 @@ _EXEMPT_NAMES: set[str] = {
     "TORCH",
     "TRANSFORMERS",
     "XGBOOST",
+    # Runtime identity constants are stable strings and cannot carry a
+    # decorator; the Runtime class and entrypoint functions are annotated.
+    "RAY_TRAIN_TORCH_RUNTIME_ID",
 }
 
 

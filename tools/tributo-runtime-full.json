@@ -28,8 +28,7 @@
     "grpc",
     "registry",
     "graph",
-    "causal",
-    "streaming-inference"
+    "causal"
   ],
   "external_wheelhouse": null
 }

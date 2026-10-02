@@ -24,6 +24,6 @@ The primary execution path is:
 canonical source -> Ray Dataset -> trainer -> model bundle -> inference
 ```
 
-Bounded data providers, Kafka streaming sources, and model output sinks are
-separate contracts. A working read provider does not imply that Tributo can
-write inference results back to the same system.
+Bounded data providers and model output sinks are separate contracts. A working
+read provider does not imply that Tributo can write inference results back to
+the same system.

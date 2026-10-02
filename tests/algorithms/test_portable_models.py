@@ -64,7 +64,6 @@ def _formal_policy(
 ):
     if strategy in {
         DistributionStrategy.RAY_TRAIN_COLLECTIVE,
-        DistributionStrategy.RAY_TRAIN_RECIPE_V2,
     }:
         return CollectivePolicy(
             backend="gloo",
@@ -109,7 +108,6 @@ def _formal_descriptor(
         DistributionStrategy.RAY_ITERATIVE_OPTIMIZATION: (
             ExecutionMode.ITERATIVE_OPTIMIZATION
         ),
-        DistributionStrategy.RAY_TRAIN_RECIPE_V2: ExecutionMode.TRAINING_RECIPE_V2,
     }[strategy]
     return AlgorithmBuilder.from_distributed_algorithm(
         spec=make_spec(
@@ -383,6 +381,8 @@ def test_distributed_builder_lowers_each_strategy_deterministically(
 
 def test_distributed_builder_contract_is_shared_with_registration_fields() -> None:
     for strategy, contract in FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS.items():
+        if strategy is DistributionStrategy.RAY_TRAIN_TORCH:
+            continue
         registration = _formal_descriptor(strategy).registration
         distribution = registration.distribution_spec
         assert distribution is not None

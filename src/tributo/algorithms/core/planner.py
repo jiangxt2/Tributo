@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 
 from tributo._common.immutable import deep_thaw
 from tributo.algorithms.api import (
     AlgorithmConfigurationError,
     AlgorithmRequest,
     AlgorithmResolution,
+    DistributionStrategy,
     ExecutionRequest,
     InputBinding,
     InputBindingSet,
@@ -19,6 +20,7 @@ from tributo.algorithms.api import (
     ResolvedInputDescriptorSet,
     RuntimeBinding,
     RuntimeTopology,
+    TorchPolicy,
     WorkerResources,
     canonical_digest,
 )
@@ -99,6 +101,20 @@ class AlgorithmPlanner:
             available_resources=available_resources,
         )
         binding_set = algorithm_request.input_bindings
+        if (
+            registration.distribution_spec is not None
+            and registration.distribution_spec.strategy
+            is DistributionStrategy.RAY_TRAIN_TORCH
+        ):
+            policy = cast(TorchPolicy, registration.distribution_spec.policy)
+            routes = {route.role: route for route in policy.dataset_routing}
+            unknown_roles = sorted(
+                {binding.name for binding in binding_set.bindings} - set(routes)
+            )
+            if unknown_roles:
+                raise AlgorithmConfigurationError(
+                    f"Torch input binding role(s) are not declared by TorchPolicy: {unknown_roles}"
+                )
         resolution_context = context or InputResolutionContext()
         descriptors: list[ResolvedInputDescriptor] = []
         for binding in binding_set.bindings:
@@ -229,7 +245,7 @@ class AlgorithmPlanner:
         if (
             registration.distribution_spec is not None
             and registration.distribution_spec.input_distribution
-            is InputDistribution.SHARDED
+            in {InputDistribution.SHARDED, InputDistribution.ROLE_ROUTED}
             and "shardable" not in descriptor.input_capabilities
         ):
             raise AlgorithmConfigurationError(

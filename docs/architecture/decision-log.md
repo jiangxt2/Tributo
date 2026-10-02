@@ -95,21 +95,25 @@ package registers a Tributo entry point outside the `tributo` package itself.
 
 ### Streaming (S0/S1/S2)
 
-**S0 status**: The unconditional fail-closed safety baseline is delivered
-(2026-08-03): commit failures retain pending offsets for retry, poisoned
-records stop the source instead of being skipped, and an uncommitted batch
-blocks further polling. The `StreamSource` contract tests are added in
-`tests/streaming/`. S1/S2 remain NO-GO (see table below).
+> **Status: Superseded (2026-09-16).** The entries below preserve the retired
+> Tributo Kafka/`StreamSource` decision history and are not current product or
+> API support claims. Future unbounded connectors require a separate ADR.
 
-**Trigger**: A0 is complete AND a Kafka source runs continuously for ≥ 24 hours
-in a production or equivalent pre-production environment.
+**Historical S0 status**: The unconditional fail-closed safety baseline was
+delivered on 2026-08-03: commit failures retained pending offsets for retry,
+poisoned records stopped the source instead of being skipped, and an
+uncommitted batch blocked further polling. The retired `StreamSource` contract
+tests were added in `tests/streaming/`. S1/S2 remained NO-GO (see table below).
 
-**Decision criteria**:
-- A `StreamSource` consumer runs for ≥ 24 hours without manual intervention.
-- OR a user reports a specific Kafka consumption issue (offset loss, poison
-  message, commit failure) that requires S1/S2 fixes.
-- The existing `kafka_source.py` unit tests passing is NOT sufficient — the
-  Go requires demonstrated production load.
+**Historical trigger**: A0 was complete AND a Kafka source ran continuously for
+≥ 24 hours in a production or equivalent pre-production environment.
+
+**Historical decision criteria**:
+- A `StreamSource` consumer ran for ≥ 24 hours without manual intervention.
+- OR a user reported a specific Kafka consumption issue (offset loss, poison
+  message, commit failure) that required S1/S2 fixes.
+- Passing the existing `kafka_source.py` unit tests was NOT sufficient — the
+  Go required demonstrated production load.
 
 | Date | Decision | Evidence | Decider |
 |------|----------|----------|---------|

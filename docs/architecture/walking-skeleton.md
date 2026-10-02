@@ -114,7 +114,7 @@ container.
 |----------|----------|
 | GPU training | The external validation is CPU-only. |
 | DNN/PU full training | Their Bundle vertical slices and exporter/source conformance are separate integration tests. |
-| Streaming | Streaming has a separate lifecycle and is not part of model-export publication. |
+| LLM SSE serving | Ray Serve LLM SSE has a separate lifecycle and is not part of model-export publication. |
 | MLflow Model Version/Alias | This cycle provides Bundle provenance only. |
 | Cross-process Hook recovery | PostgreSQL, Outbox, and asynchronous workers require a separate scope amendment. |
 

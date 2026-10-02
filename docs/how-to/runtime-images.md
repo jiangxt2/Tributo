@@ -69,21 +69,30 @@ it is copied into a named build context and installed with
 `pip --no-index --no-deps`; every wheel is recorded by filename,
 package/version, size, and SHA-256. Such a variant is an attested,
 image-specific extension and does not change the Tributo lockfile.
+The Ray ClickHouse Binding uses this path for the
+`ray_clickhouse-0.1.0-py3-none-any.whl` GitHub Release artifact until the
+distribution is published to PyPI. The wheel must be supplied unchanged; the
+image manifest records its filename, version, size, and SHA-256.
 
-The connector extras can also be installed outside Docker:
+The connector extras can also be installed from the source checkout outside
+Docker. These commands are alternatives; run the single profile you need. To
+combine profiles, pass every required `--extra` to one `uv sync` command because
+each sync reconciles the environment to its selected extras:
 
 ```bash
-pip install "tributo[clickhouse]"
-pip install "tributo[mysql]"          # Daft Doris + Ray Doris over MySQL
-pip install "tributo[doris-flight]"   # Daft/Ray Doris Flight dependencies
-pip install "tributo[hive-ray]"       # Ray HiveServer2 connector package
+uv sync --locked --no-dev --extra clickhouse
+# Ray ClickHouse additionally requires the external ray-clickhouse 0.1.0 wheel.
+uv sync --locked --no-dev --extra mysql          # Daft Doris + Ray Doris over MySQL
+uv sync --locked --no-dev --extra doris-flight   # Daft/Ray Doris Flight dependencies
+uv sync --locked --no-dev --extra hive-ray       # Ray HiveServer2 connector package
 ```
 
-The equivalent uv commands are `uv sync --extra clickhouse`,
-`uv sync --extra mysql`, `uv sync --extra doris-flight`, and
-`uv sync --extra hive-ray`. A Doris test that selects
+A Doris test that selects
 `engine="tributo.daft"` needs `daft-doris`; a Ray Doris or generic training
 path that selects `engine="tributo.ray_data"` needs `ray-doris`.
+The Ray ClickHouse route similarly needs the separately installed
+`ray-clickhouse==0.1.0` wheel; installing only `tributo[clickhouse]` leaves the
+Daft route available and the Ray route unavailable rather than falling back.
 `ray-hive` backs the built-in `tributo.hive` to `tributo.ray.hive` route. The
 request must still select Ray explicitly; no Daft, native ORC/HDFS, or automatic
 fallback route is added.

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from typing import Any
 
 from tributo.algorithms.api import (
@@ -26,7 +26,11 @@ FIT_ONLY_EVIDENCE_METRIC_NAMES = frozenset(
 )
 
 
-def portable_fit_only_metrics(metrics: Mapping[Any, Any]) -> dict[str, Any]:
+def portable_fit_only_metrics(
+    metrics: Mapping[Any, Any],
+    *,
+    extra_evidence_names: Collection[str] = (),
+) -> dict[str, Any]:
     """Return user metrics after one fail-closed portable-value validation.
 
     Runtime evidence fields are intentionally removed before validation. Any
@@ -37,10 +41,11 @@ def portable_fit_only_metrics(metrics: Mapping[Any, Any]) -> dict[str, Any]:
         raise AlgorithmExecutionError(
             "FIT_ONLY user metrics must be provided as a mapping"
         )
+    evidence_names = FIT_ONLY_EVIDENCE_METRIC_NAMES | frozenset(extra_evidence_names)
     user_metrics = {
         name: value
         for name, value in metrics.items()
-        if not (isinstance(name, str) and name in FIT_ONLY_EVIDENCE_METRIC_NAMES)
+        if not (isinstance(name, str) and name in evidence_names)
     }
     if any(not isinstance(name, str) for name in user_metrics):
         raise AlgorithmExecutionError("FIT_ONLY user metric names must be strings")

@@ -1,7 +1,14 @@
 # Run a formal algorithm
 
-The [local quickstart](../getting-started/quickstart.md) provides a complete
-Multinomial Naive Bayes example. Every formal request declares:
+Tributo Core does not bundle production algorithms. Install a compatible,
+independently versioned Wheel from the official
+[tributo-algorithms repository](https://github.com/jiangxt2/tributo-algorithms)
+or another trusted provider before executing a formal request. Registry
+discovery never installs packages at runtime.
+
+Use the Core-only [local quickstart](../getting-started/quickstart.md) to verify
+the source checkout and bounded-data path before adding an algorithm package.
+Every formal request declares:
 
 - an algorithm and operation;
 - an explicit owned-local or attached-cluster execution profile;
@@ -12,9 +19,15 @@ Multinomial Naive Bayes example. Every formal request declares:
 Validate the JSON shape through the same CLI that executes it:
 
 ```bash
-tributo algo run --config execution.json
+uv run --locked --no-sync tributo algo run --config execution.json
 ```
 
-Use `tributo algo list --json` to inspect registered algorithms and
-`tributo algo config-schema` to inspect an algorithm's configuration schema.
-Registry discovery does not install packages at runtime.
+Use `uv run --locked --no-sync tributo algo list --json` to inspect registered
+algorithms. Replace `ALGORITHM_NAME` with an ID from that list to inspect its
+configuration schema:
+
+```bash
+uv run --locked --no-sync tributo algo config-schema ALGORITHM_NAME
+```
+
+An empty list is expected when no algorithm Wheel is installed.

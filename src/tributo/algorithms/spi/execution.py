@@ -67,6 +67,7 @@ class RuntimeExecutionEnvelope:
                 RuntimeTopology.DATA_PARALLEL,
                 RuntimeTopology.RAY_MAP_REDUCE,
                 RuntimeTopology.RAY_ITERATIVE_OPTIMIZATION,
+                RuntimeTopology.RAY_TRAIN_TORCH,
             }
             else 1
         )

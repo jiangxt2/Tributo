@@ -27,13 +27,6 @@ credential-free `WriteReceipt`. The binding delegates to an engine API such as
 Tributo does not implement file, fragment, transaction, manifest, or commit
 writers.
 
-## Unbounded input
-
-`StreamSource` represents an unbounded microbatch source. It does not return a
-finite dataset and cannot replace bounded ingestion. A Kafka batch remains
-pending until downstream inference and output succeed and the caller commits
-its offsets.
-
 ## Credential ownership
 
 Logical requests, references, receipts, logs, and errors remain
