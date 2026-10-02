@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from types import MappingProxyType
 
 
@@ -16,197 +18,46 @@ class OfficialAlgorithmIdentity:
     implementation_id: str
 
 
-OFFICIAL_ALGORITHM_IDENTITIES: Mapping[str, OfficialAlgorithmIdentity] = (
-    MappingProxyType(
-        {
-            "catboost.parallel_ensemble": OfficialAlgorithmIdentity(
-                "tributo-algorithms-catboost",
-                "catboost",
-                "tributo.official.catboost.parallel_ensemble",
-            ),
-            "difference_in_means_ate": OfficialAlgorithmIdentity(
-                "tributo-algorithms-causal-core",
-                "difference_in_means_ate",
-                "tributo.official.causal.difference_in_means",
-            ),
-            "dnn.recipe_v2": OfficialAlgorithmIdentity(
-                "tributo-algorithms-tabular-torch",
-                "dnn",
-                "tributo.official.tabular_torch.dnn",
-            ),
-            "doubly_robust_ate": OfficialAlgorithmIdentity(
-                "tributo-algorithms-causal-dr",
-                "doubly_robust_ate",
-                "tributo.official.causal_dr.aipw",
-            ),
-            "dowhy_linear_refutation": OfficialAlgorithmIdentity(
-                "tributo-algorithms-causal-dowhy",
-                "dowhy_linear_refutation",
-                "tributo.official.causal_dowhy.linear_refutation",
-            ),
-            "extra_trees.joblib": OfficialAlgorithmIdentity(
-                "tributo-algorithms-classical",
-                "extra_trees",
-                "tributo.official.extra_trees.joblib",
-            ),
-            "extra_trees.native": OfficialAlgorithmIdentity(
-                "tributo-algorithms-classical",
-                "extra_trees",
-                "tributo.official.extra_trees.native_ensemble",
-            ),
-            "gcm_root_cause": OfficialAlgorithmIdentity(
-                "tributo-algorithms-causal-dowhy",
-                "gcm_root_cause",
-                "tributo.official.causal_dowhy.gcm_root_cause",
-            ),
-            "graphsage_node_classifier": OfficialAlgorithmIdentity(
-                "tributo-algorithms-graph-pyg",
-                "graphsage_node_classifier",
-                "tributo.official.graph_pyg.graphsage",
-            ),
-            "gru_classifier.recipe_v2": OfficialAlgorithmIdentity(
-                "tributo-algorithms-timeseries",
-                "gru_classifier",
-                "tributo.official.timeseries.gru.recipe_v2",
-            ),
-            "isolation_forest.parallel_ensemble": OfficialAlgorithmIdentity(
-                "tributo-algorithms-classical",
-                "isolation_forest",
-                "tributo.official.classical.isolation_forest.parallel_ensemble",
-            ),
-            "jagged_embedding_recommender": OfficialAlgorithmIdentity(
-                "tributo-algorithms-recsys-torch",
-                "jagged_embedding_recommender",
-                "tributo.official.recsys_torch.jagged_embedding",
-            ),
-            "kmeans.iterative": OfficialAlgorithmIdentity(
-                "tributo-algorithms-classical",
-                "kmeans",
-                "tributo.official.classical.kmeans.iterative",
-            ),
-            "kmeans_minibatch.iterative": OfficialAlgorithmIdentity(
-                "tributo-algorithms-classical",
-                "kmeans_minibatch",
-                "tributo.official.classical.kmeans_minibatch.iterative",
-            ),
-            "lightgbm.framework_native": OfficialAlgorithmIdentity(
-                "tributo-algorithms-boosting",
-                "lightgbm",
-                "tributo.official.boosting.lightgbm",
-            ),
-            "linear_dml_ate": OfficialAlgorithmIdentity(
-                "tributo-algorithms-causal-core",
-                "linear_dml_ate",
-                "tributo.official.causal.linear_dml",
-            ),
-            "linear_iv_ate": OfficialAlgorithmIdentity(
-                "tributo-algorithms-causal-core",
-                "linear_iv_ate",
-                "tributo.official.causal.linear_iv",
-            ),
-            "linear_regression.iterative": OfficialAlgorithmIdentity(
-                "tributo-algorithms-classical",
-                "linear_regression",
-                "tributo.official.linear_regression.squared_l2",
-            ),
-            "logistic_regression.iterative": OfficialAlgorithmIdentity(
-                "tributo-algorithms-classical",
-                "logistic_regression",
-                "tributo.official.logistic_regression.binary_l2",
-            ),
-            "lstm_classifier.recipe_v2": OfficialAlgorithmIdentity(
-                "tributo-algorithms-timeseries",
-                "lstm_classifier",
-                "tributo.official.timeseries.lstm.recipe_v2",
-            ),
-            "multinomial_nb": OfficialAlgorithmIdentity(
-                "tributo-algorithms-classical",
-                "multinomial_nb",
-                "tributo.official.multinomial_nb.map_reduce",
-            ),
-            "pc_stability_discovery": OfficialAlgorithmIdentity(
-                "tributo-algorithms-causal-discovery",
-                "pc_stability_discovery",
-                "tributo.official.causal_discovery.pc_stability",
-            ),
-            "pca.map_reduce": OfficialAlgorithmIdentity(
-                "tributo-algorithms-classical",
-                "pca",
-                "tributo.official.classical.pca.map_reduce",
-            ),
-            "pretrain_finetune_classifier": OfficialAlgorithmIdentity(
-                "tributo-algorithms-multistage-torch",
-                "pretrain_finetune_classifier",
-                "tributo.official.multistage_torch.pretrain_finetune",
-            ),
-            "pu.recipe_v2": OfficialAlgorithmIdentity(
-                "tributo-algorithms-tabular-torch",
-                "pu",
-                "tributo.official.tabular_torch.pu",
-            ),
-            "random_forest.joblib": OfficialAlgorithmIdentity(
-                "tributo-algorithms-classical",
-                "random_forest",
-                "tributo.official.random_forest.joblib",
-            ),
-            "random_forest.native": OfficialAlgorithmIdentity(
-                "tributo-algorithms-classical",
-                "random_forest",
-                "tributo.official.random_forest.native_ensemble",
-            ),
-            "rgcn_node_classifier": OfficialAlgorithmIdentity(
-                "tributo-algorithms-graph-pyg",
-                "rgcn_node_classifier",
-                "tributo.official.graph_pyg.rgcn",
-            ),
-            "sgd_classifier.iterative": OfficialAlgorithmIdentity(
-                "tributo-algorithms-classical",
-                "sgd_classifier",
-                "tributo.official.classical.sgd_classifier.iterative",
-            ),
-            "sgd_regressor.iterative": OfficialAlgorithmIdentity(
-                "tributo-algorithms-classical",
-                "sgd_regressor",
-                "tributo.official.classical.sgd_regressor.iterative",
-            ),
-            "tabular_autoencoder": OfficialAlgorithmIdentity(
-                "tributo-algorithms-representation",
-                "tabular_autoencoder",
-                "tributo.official.representation.tabular_autoencoder",
-            ),
-            "teacher_student_distillation": OfficialAlgorithmIdentity(
-                "tributo-algorithms-multistage-torch",
-                "teacher_student_distillation",
-                "tributo.official.multistage_torch.distillation",
-            ),
-            "temporal_conv_classifier": OfficialAlgorithmIdentity(
-                "tributo-algorithms-timeseries",
-                "temporal_conv_classifier",
-                "tributo.official.timeseries.temporal_conv",
-            ),
-            "token_transformer_classifier": OfficialAlgorithmIdentity(
-                "tributo-algorithms-transformers-nlp",
-                "token_transformer_classifier",
-                "tributo.official.transformer.token_classifier",
-            ),
-            "two_tower_recommender": OfficialAlgorithmIdentity(
-                "tributo-algorithms-recsys-torch",
-                "two_tower_recommender",
-                "tributo.official.recsys_torch.two_tower",
-            ),
-            "x_learner.framework_native": OfficialAlgorithmIdentity(
-                "tributo-algorithms-causal-xlearner",
-                "x_learner",
-                "tributo.official.causal_xlearner.xgboost",
-            ),
-            "xgboost.framework_native": OfficialAlgorithmIdentity(
-                "tributo-algorithms-boosting",
-                "xgboost",
-                "tributo.official.boosting.xgboost",
-            ),
-        }
-    )
-)
+def _load_official_algorithm_identities() -> Mapping[str, OfficialAlgorithmIdentity]:
+    path = Path(__file__).with_name("official_algorithm_identities.json")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            "official algorithm identity manifest is unavailable"
+        ) from exc
+    entries = payload.get("entry_points") if isinstance(payload, Mapping) else None
+    if (
+        not isinstance(payload, Mapping)
+        or payload.get("schema_version") != 1
+        or not isinstance(entries, Mapping)
+        or len(entries) != 37
+    ):
+        raise RuntimeError("official algorithm identity manifest is malformed")
+    identities: dict[str, OfficialAlgorithmIdentity] = {}
+    required = {"distribution", "algorithm_id", "implementation_id"}
+    for entry_point, value in entries.items():
+        if (
+            not isinstance(entry_point, str)
+            or not entry_point
+            or not isinstance(value, Mapping)
+            or set(value) != required
+            or any(
+                not isinstance(value[name], str) or not value[name] for name in required
+            )
+        ):
+            raise RuntimeError(
+                "official algorithm identity manifest entry is malformed"
+            )
+        identities[entry_point] = OfficialAlgorithmIdentity(
+            distribution=value["distribution"],
+            algorithm_id=value["algorithm_id"],
+            implementation_id=value["implementation_id"],
+        )
+    return MappingProxyType(identities)
+
+
+OFFICIAL_ALGORITHM_IDENTITIES = _load_official_algorithm_identities()
 
 
 def _build_distribution_entry_points() -> Mapping[str, tuple[str, ...]]:
@@ -252,10 +103,10 @@ CATEGORY_ENTRY_POINTS: Mapping[str, tuple[str, ...]] = MappingProxyType(
             "xgboost.framework_native",
         ),
         "torch": (
-            "dnn.recipe_v2",
-            "gru_classifier.recipe_v2",
-            "lstm_classifier.recipe_v2",
-            "pu.recipe_v2",
+            "dnn",
+            "gru_classifier",
+            "lstm_classifier",
+            "pu",
             "tabular_autoencoder",
             "temporal_conv_classifier",
         ),

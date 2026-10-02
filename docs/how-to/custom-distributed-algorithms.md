@@ -215,65 +215,130 @@ artifact preflight. A non-empty `algorithm_ids` allowlist is enforced against
 an offline Bundle's manifest; an empty allowlist means that the Profile does
 not restrict the algorithm family.
 
+## Migrate legacy PyTorch extensions
+
+The unified Torch API replaces the former recipe and framework-native PyTorch
+entry points. The migration is intentionally source-breaking; there are no
+legacy aliases or compatibility adapters.
+
+| Legacy API or hook | Unified Torch replacement |
+| --- | --- |
+| `TorchTrainingRecipe.model_factory()` and `loss_factory()` | `TorchRecipe.build_modules(TorchBuildContext)` returning a `TorchModuleSet` |
+| `TorchTrainingRecipe.optimizer_factory()` | `TorchRecipe.configure_optimizers()` returning `TorchOptimizationPlan` |
+| `TorchTrainingRecipe.metric_factories()` | Typed contributions from `training_step()` / `validation_step()` plus declarations from `metric_plan()` |
+| `TorchTrainingRecipe.forward()` and `compute_loss()` | Algorithm-owned `training_step()` / `validation_step()` |
+| `TrainingRecipeV2.build_modules(config)` | `TorchRecipe.build_modules(TorchBuildContext)` |
+| `TrainingRecipeV2.batch_adapter()` | `TorchRecipe.adapt_batch(batch, TorchBatchContext)` returning `TorchBatch` |
+| `TrainingRecipeV2.training_step()` and `validation_step()` | The same named typed hooks returning `TorchStepResult` with explicit numerator/normalizer contributions |
+| `TrainingRecipeV2.optimization_plan()` | `TorchRecipe.configure_optimizers()` |
+| `TrainingRecipeV2.metric_plan()` callable factories | `TorchRecipe.metric_plan()` reducer declarations; step hooks return metric contributions |
+| `TrainingRecipeV2.checkpoint_codec()` | Core-owned checkpoint reporting and `TorchCheckpointDescriptor`; no Recipe-owned serialization hook |
+| PyTorch `FrameworkNativeAlgorithm.validate_environment()` and `bind_datasets()` | `RayTorchAdapter.validate_environment(context)` and `bind_datasets(datasets, context)` |
+| PyTorch `FrameworkNativeAlgorithm.build_trainer()` | Removed; Core owns the sole `TorchTrainer`, while the Adapter supplies `worker_config()` and `train_loop_per_worker()` |
+| PyTorch `FrameworkNativeAlgorithm.collect_evidence()` | Core-owned evidence collection from bounded worker reports |
+| PyTorch `FrameworkNativeAlgorithm.checkpoint_source()` | `RayTorchAdapter.checkpoint_source(result, context)` |
+| `RayTorchRecipeSourceProvider` / `TorchRecipeSourceOptions` | `RayTorchSourceProvider` / `TorchSourceOptions`; Recipes use Core reconstruction, while Adapters provide `artifact_plan()` and `open_export_source()` |
+
+Registration and runtime identities migrate as follows:
+
+| Legacy registration | Unified registration |
+| --- | --- |
+| `AlgorithmBuilder.from_torch_recipe()` | `AlgorithmBuilder.from_torch()` |
+| `AlgorithmBuilder.from_training_recipe_v2()` | `AlgorithmBuilder.from_torch()` |
+| PyTorch `FrameworkNativeAlgorithm` registrations | `AlgorithmBuilder.from_torch_adapter()` with `RAY_TRAIN_TORCH` |
+| Legacy PyTorch Runtime IDs | `tributo.ray_train_torch` |
+| `ray-torch-recipe-v1` Source Provider | `ray-torch-v1` |
+
 ## Use a low-code PyTorch recipe
 
-For scalar-column dense tabular models, subclass `TorchTrainingRecipe` and implement only
-the four factories. The runtime stacks the feature columns declared by
-`InputBinding` into one float32 tensor and supplies the declared label and
-optional sample-weight roles.
-
-For multi-worker exact coverage, an exhausted rank can invoke `forward()` with
-a zero-row tensor while another rank consumes its final batch. The model must
-accept an empty leading batch dimension and return the corresponding empty
-output shape; no observed row is replayed as padding.
+For Core-owned training, subclass `TorchRecipe` and implement the typed
+`build_modules`, `adapt_batch`, `training_step`, `validation_step`,
+`configure_optimizers`, `metric_plan`, and `artifact_plan` hooks. Framework-
+owned training instead subclasses `RayTorchAdapter`; the Adapter validates its
+environment, binds role datasets, receives a Core-selected checkpoint context,
+and cannot create a nested Trainer or declare a second execution plan.
 
 ```python
-from collections.abc import Mapping
-from typing import Any
+from tributo.algorithms import (
+    TorchArtifactPlan,
+    TorchBatch,
+    TorchLossContribution,
+    TorchMetricPlan,
+    TorchModuleSet,
+    TorchOptimizationPlan,
+    TorchRecipe,
+    TorchStepResult,
+)
 
-from tributo.algorithms import TorchTrainingRecipe
 
-
-class BinaryLinearRecipe(TorchTrainingRecipe):
-    def model_factory(self, config: Mapping[str, Any]) -> object:
+class BinaryLinearRecipe(TorchRecipe):
+    def build_modules(self, context):
         import torch
 
-        return torch.nn.Linear(int(config["input_features"]), 1)
+        return TorchModuleSet(
+            {"model": torch.nn.Linear(2, 1), "loss": torch.nn.BCEWithLogitsLoss()}
+        )
 
-    def loss_factory(self, config: Mapping[str, Any]) -> object:
+    def adapt_batch(self, batch, context):
         import torch
 
-        return torch.nn.BCEWithLogitsLoss()
+        features = torch.as_tensor(batch["features"])
+        targets = torch.as_tensor(batch["label"]).reshape(-1, 1)
+        return TorchBatch(positional=(features,), targets=targets, local_rows=len(targets))
 
-    def optimizer_factory(self, model: object, config: Mapping[str, Any]) -> object:
+    def training_step(self, modules, batch, context):
         import torch
 
-        return torch.optim.Adam(model.parameters(), lr=float(config["lr"]))
+        predictions = modules["model"](batch.positional[0])
+        numerator = torch.nn.functional.binary_cross_entropy_with_logits(
+            predictions, batch.targets.float(), reduction="sum"
+        )
+        return TorchStepResult(
+            outputs={"prediction": predictions},
+            loss=TorchLossContribution(numerator, batch.local_rows),
+        )
 
-    def metric_factories(self, config: Mapping[str, Any]):
+    def validation_step(self, modules, batch, context):
+        return self.training_step(modules, batch, context)
+
+    def configure_optimizers(self, modules, context):
         import torch
 
-        return {
-            "accuracy": lambda prediction, target: (
-                (torch.sigmoid(prediction) >= 0.5) == target.bool()
-            )
-        }
+        return TorchOptimizationPlan(torch.optim.Adam(modules["model"].parameters(), lr=1e-3))
+
+    def metric_plan(self, context):
+        return TorchMetricPlan({"train_loss": "sum_count"})
+
+    def artifact_plan(self, context):
+        return TorchArtifactPlan(
+            source_kind="torch_module",
+            input_signature=(
+                {"name": "features", "dtype": "float32", "shape": ("batch", 2)},
+            ),
+            output_signature=(
+                {"name": "prediction", "dtype": "float32", "shape": ("batch", 1)},
+            ),
+            targets=(
+                {
+                    "name": "onnx-model",
+                    "format": "onnx",
+                    "exporter_id": "torch-onnx-v1",
+                },
+            ),
+            roles={"inference": "onnx-model"},
+        )
 ```
 
-Declare the reducer and use `AlgorithmBuilder.from_torch_recipe()` to lower the
-class to the existing Ray Train collective runtime. `train_loss` is added with
-the fixed `sum_count` reducer. The supported reducer set is `sum_count`,
-`weighted_mean`, `min`, and `max`; a weighted metric requires
-`InputBinding.sample_weight_name`.
+Use `AlgorithmBuilder.from_torch()` to lower a Recipe, or
+`AlgorithmBuilder.from_torch_adapter()` for a framework Adapter. Losses always
+submit explicit numerator/normalizer pairs; model-specific composite reducers
+remain owned by the algorithm Wheel while Core owns collectives and scaling.
 
 The complete independent package used by conformance lives under
-`tests/fixtures/torch_recipe_algorithm_plugin`. It contains no Tributo builtin,
+the installed algorithm Wheel. It contains no Tributo private Runtime import,
 Ray worker loop, checkpoint upload, Bundle publisher, or deployment code.
-Default recipes receive a pre-bound training Dataset and do not own train/test
-splitting. Use the advanced recipe hooks only for a custom model invocation or
-loss call. Choose a framework adapter or `CollectiveAlgorithm` when the model
-needs a custom training step, multiple optimizers, framework callbacks, or
-special collectives.
+Default Recipes receive role-routed datasets; the Core Runtime owns sharding,
+checkpoint handling, evidence and Bundle publication.
 
 ## Choose the state coordination strategy
 

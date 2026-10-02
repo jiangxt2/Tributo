@@ -14,6 +14,7 @@ from tributo.algorithms.api import (
     AlgorithmConfigurationError,
     AlgorithmExecutionResult,
     AlgorithmOperation,
+    ComponentStageEvidence,
     DistributionStrategy,
     ExecutionProfile,
     ExecutionReceipt,
@@ -110,6 +111,22 @@ def test_worker_and_state_evidence_reject_truthy_string_coercion() -> None:
         StateCoordinationEvidence.from_dict(state)
 
 
+@pytest.mark.parametrize("worker_digest", [None, "c" * 64])
+def test_component_stage_rejects_unbound_worker_state_digest(
+    worker_digest: str | None,
+) -> None:
+    with pytest.raises(AlgorithmConfigurationError, match="model digests"):
+        ComponentStageEvidence(
+            stage_id="teacher",
+            workers=(
+                _worker(0),
+                replace(_worker(1), model_state_digest=worker_digest),
+            ),
+            roles=(),
+            state_digest="a" * 64,
+        )
+
+
 def test_local_multi_worker_proves_model_distribution_not_cross_node() -> None:
     receipt = _receipt(ExecutionProfile.LOCAL)
 
@@ -121,6 +138,7 @@ def test_local_multi_worker_proves_model_distribution_not_cross_node() -> None:
     assert receipt.to_dict()["distributed"] is True
     assert receipt.to_dict()["runtime_owned"] is False
     assert receipt.to_dict()["resource_preflight"] == "validated"
+    assert "torch_evidence" not in receipt.to_dict()
 
 
 def test_coordinator_receipt_preserves_requested_alias_and_canonical_algorithm() -> (

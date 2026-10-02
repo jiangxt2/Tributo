@@ -127,16 +127,3 @@ Mitigations:
   dimension, and serialized-size bounds.
 - Inline results enforce row and byte limits; materialized results require an
   explicit Parquet destination.
-
-### Kafka offset loss or premature commit
-
-Threat: Committing offsets before inference and output succeed can lose
-messages. Polling past an uncommitted batch can hide replay responsibility.
-
-Mitigations:
-
-- `KafkaStreamSource` disables automatic commit.
-- An uncommitted batch blocks the next poll.
-- Commit failure preserves pending offsets for retry.
-- Tombstones, malformed JSON, consumer errors, and non-object records fail
-  closed as poison messages.

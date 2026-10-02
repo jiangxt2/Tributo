@@ -260,7 +260,7 @@ class TestResolveLegacy:
 
     def test_legacy_unknown_type(self, mock_provider: object) -> None:
         with pytest.raises(JobConfigurationError, match="Unknown legacy source type"):
-            resolve_provider(LegacySourceInput(raw={"type": "kafka"}))
+            resolve_provider(LegacySourceInput(raw={"type": "unknown-source"}))
 
     def test_legacy_bad_s3_format(self) -> None:
         with pytest.raises(JobConfigurationError, match="Unsupported s3 format"):

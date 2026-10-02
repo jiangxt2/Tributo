@@ -1,63 +1,62 @@
-# Run the local quickstart
+# Run the local bounded-data quickstart
 
-This workflow creates a local Parquet dataset, runs the formal distributed
-Multinomial Naive Bayes implementation on a local Ray runtime, and publishes a
-validated ONNX Bundle. It does not require S3, Docker, or a remote cluster.
+This Core-only workflow creates a local Parquet dataset, reads it through the
+Alpha bounded-ingestion Gateway on Ray Data, and writes a native Parquet copy
+through the Alpha bounded-write Gateway. It does not require an external
+algorithm Wheel, S3, Docker, or a remote cluster.
 
-## Install the training dependencies
-
-```bash
-python -m pip install "tributo[training]"
-```
-
-## Create the input and execution request
-
-Download {download}`create_quickstart_data.py <../examples/doc_code/create_quickstart_data.py>`
-and run it from a writable directory:
+## Prepare the Core environment
 
 ```bash
-python create_quickstart_data.py
+uv sync --locked --no-dev
 ```
 
-The script uses the same JSON envelope that the CLI validates:
+## Create the local input
+
+Run the repository-backed input generator from the source checkout:
+
+```bash
+uv run --locked --no-sync python \
+  docs/examples/doc_code/create_quickstart_data.py
+```
+
+The script creates `tributo-quickstart/input.parquet` with a deterministic
+schema and eight rows:
 
 ```{literalinclude} ../examples/doc_code/create_quickstart_data.py
 :language: python
 :caption: create_quickstart_data.py
 ```
 
-## Run the formal algorithm
+## Read and write through Tributo
 
 ```bash
-tributo algo run --config tributo-quickstart/execution.json
+uv run --locked --no-sync python \
+  docs/examples/doc_code/local_data.py \
+  tributo-quickstart/input.parquet \
+  tributo-quickstart/output
 ```
 
-The local profile owns the Ray runtime for this process. Two workers consume
-disjoint Ray Data shards, reduce bounded sufficient statistics, and publish the
-Bundle under `tributo-quickstart/bundle/<bundle-id>`.
+The example owns a one-CPU local Ray runtime, prints the native schema and read
+receipt, and copies the input through `WriteGateway` with overwrite semantics.
 
 ## Inspect the result
 
-The command prints a structured algorithm result. Confirm that the result
-contains a completed execution receipt and an `outputs.bundle_uri` value. The
-configured `bundle_uri` is the store root; the returned value identifies the
-committed Bundle. Inspect its manifest at:
+Confirm that the command prints `committed=True` and that
+`tributo-quickstart/output` contains the copied Parquet data. Tributo records
+the selected Provider, Binding, engine version, and write evidence without
+duplicating the data plane owned by Ray Data.
 
-```bash
-python -m json.tool <outputs.bundle_uri>/manifest.json
-```
+## Continue to algorithms and clusters
 
-## Move to a cluster
-
-Do not replace the local profile with a Ray Client connection. Use the
+Tributo Core does not bundle production algorithms. Install a compatible,
+independently versioned algorithm Wheel before following the
+[formal algorithm guide](../algorithms/getting-started.md). Use the
 [Ray Jobs and cluster guide](../ray-jobs/index.md) when a cluster should own
-execution. The `kubernetes` algorithm profile runs inside an existing KubeRay
-RayJob and connects to that job's cluster with `address="auto"`; Tributo does
-not create the Kubernetes control plane.
+execution; do not replace that boundary with Ray Client.
 
 ## Continue learning
 
-- Read [algorithm key concepts](../algorithms/key-concepts.md).
-- Configure [distributed training](../how-to/training.md).
-- Learn how [Bundles](../model-lifecycle/key-concepts.md) become the model
-  exchange boundary between training and inference.
+- Read the [data concepts](../data/key-concepts.md).
+- Learn how to [read bounded data](../data/user-guides/read-data.md).
+- Learn how to [write bounded data](../data/user-guides/write-data.md).

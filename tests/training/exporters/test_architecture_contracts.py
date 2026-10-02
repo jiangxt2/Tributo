@@ -209,7 +209,7 @@ def test_first_party_source_providers_have_stable_unique_ids() -> None:
     providers = first_party_source_providers()
 
     assert {provider.provider_id for provider in providers} == {
-        "ray-torch-recipe-v1",
+        "ray-torch-v1",
     }
     assert len({provider.trainer_type for provider in providers}) == len(providers)
 

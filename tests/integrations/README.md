@@ -11,8 +11,9 @@ connectors through Tributo extras. `daft-clickhouse==1.0`,
 `daft-doris==1.0`, `ray-doris==1.0`, and `ray-hive==1.0` are resolved by
 `uv.lock`. The Data Ingestion Gate validates the Tributo Ray HiveServer2
 Provider/Binding separately from the canonical full-runtime package-presence
-gate. A custom external wheelhouse is only for packages outside that locked
-set.
+gate. The Ray ClickHouse Binding requires the external
+`ray-clickhouse==0.1.0` wheel until PyPI publication; the wheelhouse path keeps
+that package outside the Tributo lockfile.
 
 ---
 

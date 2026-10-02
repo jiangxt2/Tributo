@@ -15,11 +15,10 @@ The main flow runs from top to bottom:
 - Users and applications use the CLI or Python API. Persisted configuration
   uses strict JSON, while `TributoClient` wraps submission, status, logs, and
   stop operations over the Ray Jobs API.
-- Scenario workloads cover training and tuning, custom batch inference,
-  online serving, and streaming input. Their stability is not uniform: legacy
-  trainers remain Beta compatibility paths, portable algorithm execution is
-  Alpha, vector indexing and explainability are Alpha, and Kafka is an Alpha
-  `StreamSource` rather than a complete service loop.
+- Scenario workloads cover training and tuning, custom batch inference, and
+  online serving. Their stability is not uniform: legacy trainers remain Beta
+  compatibility paths, portable algorithm execution is Alpha, and vector
+  indexing and explainability are Alpha.
 - The portable contract layer separates bounded ingestion, algorithm dispatch,
   and Bundle-based model delivery. Providers, engine bindings, exporters,
   validators, model importers, flavors, hooks, runtime adapters, and sinks
@@ -29,8 +28,8 @@ The main flow runs from top to bottom:
 
 ## External systems
 
-Data systems, Bundle stores, MLflow, Lance namespaces, and Kafka remain outside the framework
-boundary:
+Data systems, Bundle stores, MLflow, and Lance namespaces remain outside the
+framework boundary:
 
 - Data systems supply bounded inputs. Support varies by source and engine;
   adapter presence alone is not a support claim.
@@ -41,8 +40,6 @@ boundary:
   integration. It is not the source of truth for Bundle readability.
 - Lance stores vector data and index metadata. Tributo validates requests and
   receipts; Lance-Ray executes distributed index and maintenance tasks.
-- Kafka provides a fail-closed microbatch input protocol. Tributo does not ship
-  a built-in Kafka-to-inference long-running service loop.
 
 The [support matrix](../reference/support-matrix.md) is the authoritative view
 of verified, Alpha, Beta, adapter-only, and unsupported paths. The diagram

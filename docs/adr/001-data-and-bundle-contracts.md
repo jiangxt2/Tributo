@@ -219,9 +219,8 @@ evidence. Training, Inference, and Graph must not import or branch
 on the new source. Adding another execution engine, an unbounded source, or a
 new scan semantic remains a separate ADR.
 
-`DatasetHandle` represents a bounded finite read. It does not carry Kafka
-offsets, commits, partition ownership, or other `StreamSource` lifecycle
-semantics.
+`DatasetHandle` represents a bounded finite read. It does not carry offset,
+commit, partition-ownership, or other unbounded-stream lifecycle semantics.
 
 ### Manifest Schema Version (Bundle Domain)
 
@@ -252,6 +251,10 @@ resulting matrix is:
 
 
 ### Bounded Data vs Streaming Protocol Boundary
+
+> **Status: Superseded (2026-09-16).** This section records the retired
+> Tributo `StreamSource`/Kafka design. It is historical context, not a current
+> Tributo public contract; future unbounded connectors require a separate ADR.
 
 ```
                     ┌─────────────────────────┐
@@ -295,12 +298,13 @@ resulting matrix is:
 - `DataSourceProvider` handles **bounded** reads with finite lifecycle:
   open → read → return `DatasetHandle` → close. No offset tracking, no commit,
   no partition ownership.
-- `StreamSource` handles **unbounded** streaming with persistent offset/commit
-  lifecycle. Kafka enters through `StreamSource`, never through `DataSourceProvider`.
-- Both share: schema representation, error model, credential resolution, and
-  capability description format.
-- They do **not** share: offset lifecycle, commit semantics, partition ownership,
-  watermark, or triggering.
+- The retired `StreamSource` design handled **unbounded** streaming with a
+  persistent offset/commit lifecycle. Kafka entered through `StreamSource`,
+  never through `DataSourceProvider`.
+- The retired designs shared: schema representation, error model, credential
+  resolution, and capability description format.
+- The retired designs did **not** share: offset lifecycle, commit semantics,
+  partition ownership, watermark, or triggering.
 
 ### Error Model
 
@@ -370,8 +374,8 @@ Every exported artifact has one of these statuses:
 - E1 can evolve the Manifest schema with clear compatibility rules.
 - The `DatasetRef` type can be implemented once in a shared location and consumed
   by both data and bundle code.
-- Kafka streaming enters through a separate protocol without polluting the bounded
-  data provider contract.
+- The retired streaming design entered through a separate protocol without
+  polluting the bounded data provider contract.
 
 ### What this constrains
 

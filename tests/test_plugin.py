@@ -419,8 +419,8 @@ def test_independent_torch_recipe_package_passes_narrow_conformance(
     assert diagnostics == []
     assert (
         str(fixture.DESCRIPTOR.registration.implementation.executable_factory_ref)
-        == "tributo.integrations.algorithm_runtimes.torch_recipe:"
-        "create_torch_recipe_algorithm"
+        == "tributo.integrations.algorithm_runtimes.ray_train_torch:"
+        "create_torch_algorithm"
     )
 
 
@@ -535,7 +535,7 @@ def test_distributed_algorithm_discovery_rejects_wrong_recipe_base(
     monkeypatch.setattr(importlib.metadata, "version", package_version)
     diagnostics = []
 
-    with pytest.raises(TypeError, match="TorchTrainingRecipe"):
+    with pytest.raises(TypeError, match="TorchRecipe"):
         plugin.validate_distributed_algorithm_descriptor(
             invalid_descriptor,
             entry_point_name=descriptor.name,

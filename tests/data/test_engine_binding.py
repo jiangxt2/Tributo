@@ -726,7 +726,7 @@ def test_transform_decision_rejects_inconsistent_state() -> None:
         )
 
 
-def test_daft_sql_descriptors_use_new_package_identity(
+def test_external_sql_descriptors_use_package_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -735,11 +735,13 @@ def test_daft_sql_descriptors_use_new_package_identity(
         lambda name: {
             "daft-clickhouse": "1.0",
             "daft-doris": "1.0",
+            "ray-clickhouse": "0.1.0",
         }.get(name),
     )
 
     clickhouse = builtin_bindings._daft_clickhouse_descriptor()
     doris = builtin_bindings._daft_doris_descriptor()
+    ray_clickhouse = builtin_bindings._ray_clickhouse_descriptor()
 
     assert clickhouse.key.binding_id == "daft_clickhouse.daft.clickhouse"
     assert clickhouse.distribution_name == "daft-clickhouse"
@@ -747,9 +749,15 @@ def test_daft_sql_descriptors_use_new_package_identity(
     assert doris.key.binding_id == "daft_doris.daft.doris"
     assert doris.distribution_name == "daft-doris"
     assert doris.dependency_distributions == ("PyMySQL",)
+    assert ray_clickhouse.key.binding_id == "ray_clickhouse.ray.clickhouse"
+    assert ray_clickhouse.distribution_name == "ray-clickhouse"
+    assert ray_clickhouse.dependency_distributions == (
+        "clickhouse-connect",
+        "pyarrow",
+    )
 
 
-def test_missing_daft_sql_packages_report_new_install_hints(
+def test_missing_external_sql_packages_report_install_hints(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(builtin_bindings, "_DEFAULT_BINDINGS", None)
@@ -760,6 +768,10 @@ def test_missing_daft_sql_packages_report_new_install_hints(
     }
     monkeypatch.setattr(
         builtin_bindings, "_distribution_version", lambda name: versions.get(name)
+    )
+    monkeypatch.setattr(
+        "tributo.data.engine_binding.importlib.metadata.version",
+        lambda name: versions[name],
     )
 
     bindings = builtin_bindings.default_engine_bindings()
@@ -778,6 +790,18 @@ def test_missing_daft_sql_packages_report_new_install_hints(
         )
     with pytest.raises(
         EngineNotAvailableError,
+        match=r"ray_clickhouse\.ray\.clickhouse.*ray-clickhouse.*wheel",
+    ):
+        bindings.resolve(
+            BindingKey(
+                "tributo.ray_data",
+                ScanKind.SQL,
+                "clickhouse",
+                "ray_clickhouse.ray.clickhouse",
+            )
+        )
+    with pytest.raises(
+        EngineNotAvailableError,
         match=r"daft_doris\.daft\.doris.*daft-doris.*tributo\[mysql\]",
     ):
         bindings.resolve(
@@ -788,6 +812,39 @@ def test_missing_daft_sql_packages_report_new_install_hints(
                 "daft_doris.daft.doris",
             )
         )
+
+
+def test_installed_ray_clickhouse_registers_default_ray_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(builtin_bindings, "_DEFAULT_BINDINGS", None)
+    versions = {
+        "clickhouse-connect": "1.5.0",
+        "pyarrow": "19.0.1",
+        "ray": "2.55.1",
+        "ray-clickhouse": "0.1.0",
+        "tributo": "1.0.0",
+    }
+    monkeypatch.setattr(
+        builtin_bindings, "_distribution_version", lambda name: versions.get(name)
+    )
+    monkeypatch.setattr(
+        "tributo.data.engine_binding.importlib.metadata.version",
+        lambda name: versions[name],
+    )
+
+    bindings = builtin_bindings.default_engine_bindings()
+    descriptor = bindings.resolve(
+        BindingKey(
+            "tributo.ray_data",
+            ScanKind.SQL,
+            "clickhouse",
+            "ray_clickhouse.ray.clickhouse",
+        )
+    )
+
+    assert descriptor.distribution_name == "ray-clickhouse"
+    assert descriptor.distribution_version == "0.1.0"
 
 
 def test_incompatible_optional_daft_does_not_disable_ray(

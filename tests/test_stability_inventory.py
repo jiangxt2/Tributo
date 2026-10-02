@@ -44,6 +44,7 @@ STABILITY_MAP: dict[str, str] = {
     "tributo.algorithms.api.execution": "alpha",
     "tributo.algorithms.api.models": "alpha",
     "tributo.algorithms.api.support": "alpha",
+    "tributo.algorithms.api.torch_runtime": "alpha",
     "tributo.algorithms.conformance": "alpha",
     "tributo.algorithms.composition": "alpha",
     "tributo.algorithms.core.builder": "alpha",
@@ -153,7 +154,7 @@ STABILITY_MAP: dict[str, str] = {
     "tributo.integrations.model_runtimes.resolver": "alpha",
     "tributo.integrations.validators": "beta",
     "tributo.integrations.sources": "beta",
-    "tributo.integrations.sources.ray_torch_recipe": "alpha",
+    "tributo.integrations.sources.ray_torch": "alpha",
     "tributo.integrations.storage": "beta",
     "tributo.integrations.hooks": "beta",
     "tributo.integrations.sinks.parquet": "alpha",
@@ -189,12 +190,6 @@ STABILITY_MAP: dict[str, str] = {
     "tributo.serving.streaming_deployment": "alpha",
     # Serving — developer (generated)
     "tributo.serving.proto": "developer",
-    # Streaming — beta
-    "tributo.streaming.protocol": "beta",
-    # Streaming — alpha
-    "tributo.streaming.kafka_source": "alpha",
-    # Pipeline — alpha
-    "tributo.pipeline.core": "alpha",
     # Registry — beta
     "tributo.registry.model_registry": "beta",
     "tributo.registry.schema": "beta",
@@ -225,9 +220,6 @@ _SYMBOL_OVERRIDES: dict[str, str] = {
     "tributo.exceptions.UnsupportedArtifactFormat": "beta",
     "tributo.exceptions.PostPublishCallbackError": "beta",
     "tributo.exceptions.PluginLoadIssue": "beta",
-    "tributo.exceptions.StreamSourceError": "beta",
-    "tributo.exceptions.KafkaCommitError": "beta",
-    "tributo.exceptions.KafkaPoisonMessageError": "beta",
     "tributo.exceptions.ResourceBudgetExceededError": "beta",
     "tributo.exceptions.EngineNotAvailableError": "alpha",
     "tributo.inference.job_runner.InferenceJobAttempt": "alpha",

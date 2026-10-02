@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from tributo.algorithms import AlgorithmBuilder, TorchTrainingRecipe
+from tributo.algorithms import AlgorithmBuilder, TorchRecipe
 from tributo.algorithms.api import (
     AlgorithmConfigurationError,
     EnvironmentSpec,
@@ -20,11 +20,11 @@ from .conftest import make_spec
 
 
 def _descriptor():
-    return AlgorithmBuilder.from_torch_recipe(
+    return AlgorithmBuilder.from_torch(
         spec=make_spec(
             "external_torch_recipe",
             operations=("fit",),
-            mode=ExecutionMode.COLLECTIVE,
+            mode=ExecutionMode.RAY_TRAIN_TORCH,
             default_config={
                 "model": {"input_features": 2},
                 "output": {"bundle_uri": "./bundle"},
@@ -51,37 +51,40 @@ def _descriptor():
         package_name="example-torch-recipe",
         package_version="1.0.0",
         tributo_version_spec=">=1,<2",
+        code_digest="0" * 64,
+        descriptor_api_version=1,
     )
 
 
-def test_torch_recipe_is_narrower_than_collective_worker_loop() -> None:
-    abstract_methods = TorchTrainingRecipe.__abstractmethods__
+def test_torch_recipe_has_only_typed_math_and_export_hooks() -> None:
+    abstract_methods = TorchRecipe.__abstractmethods__
 
     assert abstract_methods == {
-        "loss_factory",
-        "metric_factories",
-        "model_factory",
-        "optimizer_factory",
+        "adapt_batch",
+        "artifact_plan",
+        "build_modules",
+        "configure_optimizers",
+        "metric_plan",
+        "training_step",
+        "validation_step",
     }
-    assert "train_loop_per_worker" not in abstract_methods
-    assert "checkpoint_state" not in abstract_methods
+    assert "execution_plan" not in abstract_methods
 
 
-def test_builder_lowers_recipe_to_existing_collective_runtime() -> None:
+def test_builder_lowers_recipe_to_unified_torch_runtime() -> None:
     descriptor = _descriptor()
     registration = descriptor.registration
 
-    assert registration.implementation.runtime_id == "tributo.ray_train_collective"
+    assert registration.implementation.runtime_id == "tributo.ray_train_torch"
     assert str(registration.implementation.implementation_ref) == (
         "tests.support.torch_recipe:BinaryLinearRecipe"
     )
     assert str(registration.implementation.executable_factory_ref) == (
-        "tributo.integrations.algorithm_runtimes.torch_recipe:"
-        "create_torch_recipe_algorithm"
+        "tributo.integrations.algorithm_runtimes.ray_train_torch:create_torch_algorithm"
     )
     assert str(registration.implementation.exporter_ref) == (
-        "tributo.integrations.algorithm_runtimes.torch_recipe:"
-        "export_torch_recipe_result"
+        "tributo.integrations.algorithm_runtimes.ray_train_torch:"
+        "export_ray_train_torch_result"
     )
     assert registration.distribution_spec is not None
     assert registration.distribution_spec.result_policy is ResultPolicy.BUNDLE_REQUIRED
@@ -90,6 +93,7 @@ def test_builder_lowers_recipe_to_existing_collective_runtime() -> None:
         "train_loss": MetricReduction.SUM_COUNT,
     }
     assert registration.implementation.allowed_config_keys == (
+        "data",
         "loss",
         "metrics",
         "model",
@@ -102,11 +106,11 @@ def test_builder_lowers_recipe_to_existing_collective_runtime() -> None:
 
 def test_builder_rejects_train_loss_reducer_override() -> None:
     with pytest.raises(AlgorithmConfigurationError, match="train_loss"):
-        AlgorithmBuilder.from_torch_recipe(
+        AlgorithmBuilder.from_torch(
             spec=make_spec(
                 "invalid_torch_recipe",
                 operations=("fit",),
-                mode=ExecutionMode.COLLECTIVE,
+                mode=ExecutionMode.RAY_TRAIN_TORCH,
             ),
             implementation_id="example.torch_recipe.invalid",
             implementation_version="1.0.0",
@@ -122,4 +126,5 @@ def test_builder_rejects_train_loss_reducer_override() -> None:
             package_name="example-torch-recipe",
             package_version="1.0.0",
             tributo_version_spec=">=1,<2",
+            code_digest="0" * 64,
         )

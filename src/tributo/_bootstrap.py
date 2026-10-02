@@ -43,11 +43,9 @@ def first_party_export_plugins() -> tuple[
 
 def first_party_source_providers() -> tuple[type[ExportSourceProvider], ...]:
     """Return built-in checkpoint providers without entry-point metadata."""
-    from tributo.integrations.sources.ray_torch_recipe import (
-        RayTorchRecipeSourceProvider,
-    )
+    from tributo.integrations.sources.ray_torch import RayTorchSourceProvider
 
-    return (RayTorchRecipeSourceProvider,)
+    return (RayTorchSourceProvider,)
 
 
 def first_party_model_flavors() -> tuple[type[BundleModelFlavor], ...]:

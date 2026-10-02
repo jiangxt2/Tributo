@@ -6,7 +6,7 @@ import importlib
 import sys
 from pathlib import Path
 
-from tributo.algorithms import TorchTrainingRecipe
+from tributo.algorithms import TorchRecipe
 from tributo.algorithms.api import ExecutionProfile, ResultPolicy
 
 
@@ -37,7 +37,7 @@ def test_out_of_tree_recipe_descriptor_uses_public_lowering_contract() -> None:
     finally:
         sys.path.remove(str(_fixture_source()))
 
-    assert issubclass(module.ThirdPartyBinaryLinearRecipe, TorchTrainingRecipe)
+    assert issubclass(module.ThirdPartyBinaryLinearRecipe, TorchRecipe)
     distribution = module.DESCRIPTOR.registration.distribution_spec
     assert distribution is not None
     assert distribution.result_policy is ResultPolicy.BUNDLE_REQUIRED

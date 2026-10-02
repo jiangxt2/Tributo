@@ -50,7 +50,7 @@ COMPONENTS: Final[tuple[Component, ...]] = (
     Component("model-lifecycle", "Model lifecycle API"),
     Component("inference-serving", "Inference and serving API"),
     Component("vector-index", "Vector-index API"),
-    Component("extensions", "Pipeline and extension API"),
+    Component("extensions", "Extension API"),
 )
 
 _ROOT_ALIASES: Final[dict[str, str]] = {
@@ -189,7 +189,7 @@ def component_for(symbol: PublicSymbol) -> str:
         "_common",
     }:
         return "core"
-    if package in {"data", "streaming"}:
+    if package == "data":
         return "data"
     if package in {"algorithms", "training"}:
         return "algorithms-training"
@@ -199,8 +199,6 @@ def component_for(symbol: PublicSymbol) -> str:
         return "inference-serving"
     if package == "vector_index":
         return "vector-index"
-    if package == "pipeline":
-        return "extensions"
     if package == "integrations" and len(parts) > 2:
         integration = parts[2]
         if integration in {"algorithm_inputs", "algorithm_runtimes"}:

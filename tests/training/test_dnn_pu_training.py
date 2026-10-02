@@ -304,7 +304,7 @@ def _submit_official_algorithm_gate_job(
 def test_official_algorithm_wheels_complete_on_ray_cluster(
     job_client: JobSubmissionClient,
 ) -> None:
-    """Prove official decomposition and RecipeV2 Wheels train across nodes."""
+    """Prove official decomposition and Torch Wheels train across nodes."""
     if os.environ.get("TRIBUTO_DOCKER_DISTRIBUTED_ALGORITHM_IT") != "1":
         pytest.fail("official algorithm IT must run in its owned Docker cluster")
     wheels = _official_algorithm_wheels()
@@ -419,7 +419,7 @@ def test_official_algorithm_wheels_complete_on_ray_cluster(
         "ray_parallel_ensemble",
         "ray_iterative_optimization",
         "ray_map_reduce",
-        "ray_train_recipe_v2",
+        "ray_train_torch",
         "framework_native",
     }
     actual_strategies = {record["receipt"]["strategy"] for record in records}

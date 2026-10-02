@@ -32,7 +32,6 @@ This page provides module-level guidance and deprecation notes.
 | `tributo.exceptions` — core exceptions | `stable` | ``TributoError`` and 16 common subtypes |
 | `tributo.exceptions` — `ResultMaterializationError` | `alpha` | Credential-safe lazy inference action failure |
 | `tributo.exceptions` — Bundle/Plugin exceptions | `beta` | ``BundleExportError``, ``BundleCommitBusyError``, ``AliasConflict``, ``UnsupportedArtifactFormat``, ``PostPublishCallbackError``, ``PluginLoadIssue`` |
-| `tributo.exceptions` — Streaming exceptions | `beta` | ``StreamSourceError``, ``KafkaCommitError``, ``KafkaPoisonMessageError`` |
 | `tributo.exceptions` — `EngineNotAvailableError` | `alpha` | Candidate bounded-ingestion error |
 | `tributo.cli` | `beta` | Command-line interface |
 
@@ -45,7 +44,7 @@ covered by the external `runtime-image` suite.
 | Surface | Level | Notes |
 |--------|-------|-------|
 | `tools/build_tributo_image.py` | `alpha` | JSON-only Buildx builder for the pinned image validated for CPU execution by default, with explicit `linux/amd64`/`linux/arm64` targeting; it performs dependency-closure discovery, manifest sealing, and fail-closed import checks |
-| `tools/tributo-runtime-full.json` | `alpha` | Multi-architecture pinned Ray/uv image references, native-platform default, complete first-party runtime-extra closure including locked v1.0 ClickHouse/Doris connectors and `ray-hive` for the built-in Ray HiveServer2 Binding, and optional external wheelhouse support |
+| `tools/tributo-runtime-full.json` | `alpha` | Multi-architecture pinned Ray/uv image references, native-platform default, complete first-party runtime-extra closure including locked v1.0 Daft ClickHouse/Doris and Ray Doris connectors plus `ray-hive`; optional external wheelhouse support supplies `ray-clickhouse==0.1.0` until PyPI publication |
 | `manifest.json` / `image-profile.json` | `alpha` | Build attestations consumed for immutable image selection and algorithm artifact compatibility; not a registry or deployment API |
 
 ### Training (tributo.training.*)
@@ -97,6 +96,7 @@ from the legacy setup-only propagation rule.
 | `tributo.algorithms.api.context` — `UserExecutionContext` | `alpha` | Restricted context for trusted module-qualified Worker functions |
 | `tributo.algorithms.api.errors` | `alpha` | Portable execution error taxonomy |
 | `tributo.algorithms.api.support` | `alpha` | Trusted Wheel support evidence, execution semantics, expiry, and revocation |
+| `tributo.algorithms.api.torch_runtime` | `alpha` | Versioned Torch Runtime helpers, Stage identity, checkpoint and reducer contracts |
 | `tributo.algorithms.conformance` | `alpha` | Descriptor-only and installed algorithm Wheel Conformance Testkit |
 | `tributo.algorithms.builtin.*` | `deprecated` | Production algorithms moved to the official `tributo-algorithms` Wheels; Core retains only public SPI and Ray runtimes |
 | `tributo.algorithms.core.builder` — `AlgorithmBuilder` | `alpha` | Provisional sklearn and Custom Ray Function registration builders |
@@ -105,7 +105,7 @@ from the legacy setup-only propagation rule.
 | `tributo.algorithms.spi.execution` | `alpha` | Provisional operation and Runtime execution protocols |
 | `tributo.algorithms.spi.contracts` | `alpha` | Executable algorithm contract validator protocol |
 | `tributo.algorithms.spi.input` | `alpha` | Two-stage input resolution and Driver/Worker ownership contracts |
-| `tributo.algorithms.spi.torch` | `alpha` | Narrow model/loss/optimizer/metric recipe contract lowered to Ray Train |
+| `tributo.algorithms.spi.torch` | `alpha` | Versioned TorchRecipe and RayTorchAdapter contracts |
 
 ### Data (tributo.data.*)
 
@@ -202,7 +202,7 @@ from the legacy setup-only propagation rule.
 | `tributo.integrations.validators.*` | `beta` | Built-in validator implementations |
 | `tributo.integrations.sources` | `beta` | Built-in source provider package |
 | `tributo.integrations.sources.*` | `beta` | Built-in source providers |
-| `tributo.integrations.sources.ray_torch_recipe` | `alpha` | Generic trusted Torch recipe checkpoint provider |
+| `tributo.integrations.sources.ray_torch` | `alpha` | Generic trusted Torch checkpoint provider |
 | `tributo.integrations.storage` | `beta` | Built-in storage adapter package |
 | `tributo.integrations.storage.*` | `beta` | Built-in storage backends |
 | `tributo.integrations.hooks` | `beta` | Built-in Hook package |
@@ -252,19 +252,6 @@ from the legacy setup-only propagation rule.
 | `tributo.serving.schema` | `beta` | Serving schema types |
 | `tributo.serving.proto.*` | `developer` | Generated protobuf code |
 | `tributo.serving.proto` | `developer` | Generated protobuf package |
-
-### Streaming (tributo.streaming.*)
-
-| Module | Level | Notes |
-|--------|-------|-------|
-| `tributo.streaming.protocol` — `StreamSource` | `beta` | Streaming protocol |
-| `tributo.streaming.kafka_source` | `alpha` | Kafka source (fail-closed safety baseline: commit retention, poison-message stop, uncommitted-batch barrier) |
-
-### Pipeline (tributo.pipeline.*)
-
-| Module | Level | Notes |
-|--------|-------|-------|
-| `tributo.pipeline.core` | `alpha` | Pipeline orchestration |
 
 ### Registry (tributo.registry.*)
 
@@ -336,10 +323,8 @@ This is informative only — `STABILITY.md` is the canonical reference.
 
 - `tributo.data.transform_ir` — versioned engine-neutral ETL contract
 - `tributo.data.ingestion` — candidate dual-engine ingestion API
-- `tributo.pipeline.core` — "Alpha; lightweight in-process DAG executor"
 - `tributo.training.graph_trainer` — "Alpha; GNN training"
 - `tributo.serving.streaming_deployment` — "Alpha; streaming inference service"
-- `tributo.streaming.kafka_source` — "Alpha; Kafka source"
 
 ### Marked as beta
 

@@ -12,8 +12,7 @@ data ingestion, unbounded inference streams, training, inference, Bundle
 publication, and result sinks retain their existing Tributo contracts.
 
 Transport clients and external wire protocols must remain independently
-installable. Core must be usable and testable without Redis, Kafka, RabbitMQ,
-or another provider dependency.
+installable. Core must be usable and testable without any provider dependency.
 
 ## Decision
 

@@ -1,4 +1,4 @@
-"""Independent TrainingRecipeV2 fixture without Ray orchestration code."""
+"""Migrated TorchRecipe fixture kept for compatibility-focused test imports."""
 
 from __future__ import annotations
 
@@ -7,10 +7,19 @@ from collections.abc import Mapping
 from typing import Any, cast
 
 from tributo.algorithms import (
-    MetricPlan,
-    OptimizationPlan,
-    TrainingRecipeV2,
-    TrainingStepResult,
+    TorchArtifactContext,
+    TorchArtifactPlan,
+    TorchBatch,
+    TorchBatchContext,
+    TorchBuildContext,
+    TorchLossContribution,
+    TorchMetricContribution,
+    TorchMetricPlan,
+    TorchModuleSet,
+    TorchOptimizationPlan,
+    TorchRecipe,
+    TorchStepContext,
+    TorchStepResult,
 )
 
 
@@ -23,7 +32,9 @@ def _accuracy(predictions: object, targets: object) -> object:
     return (predicted == target_tensor).to(dtype=torch.float32).mean()
 
 
-class PickleCheckpointCodec:
+class CheckpointCodec:
+    """Legacy fixture codec retained only for migration tests."""
+
     def dumps(self, value: object) -> bytes:
         return pickle.dumps(value, protocol=5)
 
@@ -31,93 +42,115 @@ class PickleCheckpointCodec:
         return pickle.loads(payload)
 
 
-class BinaryLinearRecipeV2(TrainingRecipeV2):
-    """Define only modules, batch conversion, Step, Plan, and Codec."""
+class BinaryLinearRecipeV2(TorchRecipe):
+    """The old fixture name using the new typed TorchRecipe contract."""
 
-    def build_modules(self, config: Mapping[str, Any]) -> Mapping[str, object]:
+    def build_modules(self, context: TorchBuildContext) -> TorchModuleSet:
         import torch
 
-        model_config = config.get("model", {})
+        model_config = context.runtime.algorithm_config.get("model", {})
         if not isinstance(model_config, Mapping):
             raise ValueError("model config must be a mapping")
         feature_count = int(model_config.get("input_features", 2))
-        return {
-            "model": torch.nn.Linear(feature_count, 1),
-            "loss": torch.nn.BCEWithLogitsLoss(),
-        }
+        return TorchModuleSet(
+            {
+                "model": torch.nn.Linear(feature_count, 1),
+                "loss": torch.nn.BCEWithLogitsLoss(),
+            }
+        )
 
-    def batch_adapter(
+    def adapt_batch(
         self,
         batch: object,
-        *,
-        feature_names: tuple[str, ...],
-        label_name: str | None,
-        weight_name: str | None,
-        config: Mapping[str, Any],
-    ) -> tuple[object, object, object | None, int]:
+        context: TorchBatchContext,
+    ) -> TorchBatch:
         import torch
 
-        del config
         if not isinstance(batch, Mapping):
             raise ValueError("batch must be columnar")
         features = torch.stack(
-            [batch[name].to(dtype=torch.float32) for name in feature_names],
+            [batch[name].to(dtype=torch.float32) for name in context.feature_names],
             dim=1,
         )
-        if label_name is None:
+        if context.label_name is None:
             raise ValueError("binary fixture requires a label")
-        targets = batch[label_name].to(dtype=torch.float32).reshape(-1, 1)
-        weights = batch.get(weight_name) if weight_name is not None else None
-        return features, targets, weights, int(features.shape[0])
+        targets = batch[context.label_name].to(dtype=torch.float32).reshape(-1, 1)
+        weights = (
+            batch.get(context.weight_name) if context.weight_name is not None else None
+        )
+        return TorchBatch(
+            positional=(features,),
+            targets=targets,
+            weights=weights,
+            local_rows=int(features.shape[0]),
+        )
 
     def training_step(
         self,
-        modules: Mapping[str, object],
-        features: object,
-        targets: object,
-        weights: object | None,
-        config: Mapping[str, Any],
-    ) -> TrainingStepResult:
-        del weights, config
+        modules: TorchModuleSet,
+        batch: TorchBatch,
+        context: TorchStepContext,
+    ) -> TorchStepResult:
+        del context
         model = cast(Any, modules["model"])
         loss = cast(Any, modules["loss"])
-        predictions = model(features)
-        return TrainingStepResult(
-            predictions=predictions, loss=loss(predictions, targets)
+        predictions = model(batch.positional[0])
+        loss_numerator = loss(predictions, batch.targets) * batch.local_rows
+        accuracy = _accuracy(predictions, batch.targets)
+        return TorchStepResult(
+            outputs={"prediction": predictions},
+            loss=TorchLossContribution(loss_numerator, batch.local_rows),
+            metrics={
+                "accuracy": TorchMetricContribution(
+                    float(accuracy.detach().item()) * batch.local_rows,
+                    batch.local_rows,
+                )
+            },
         )
 
     def validation_step(
         self,
-        modules: Mapping[str, object],
-        features: object,
-        targets: object,
-        weights: object | None,
-        config: Mapping[str, Any],
-    ) -> TrainingStepResult:
-        return self.training_step(modules, features, targets, weights, config)
+        modules: TorchModuleSet,
+        batch: TorchBatch,
+        context: TorchStepContext,
+    ) -> TorchStepResult:
+        return self.training_step(modules, batch, context)
 
-    def optimization_plan(
+    def configure_optimizers(
         self,
-        model: object,
-        config: Mapping[str, Any],
-    ) -> OptimizationPlan:
+        modules: TorchModuleSet,
+        context: TorchBuildContext,
+    ) -> TorchOptimizationPlan:
         import torch
 
-        return OptimizationPlan(
+        return TorchOptimizationPlan(
             optimizer=torch.optim.SGD(
-                cast(Any, model).parameters(),
-                lr=float(config.get("learning_rate", 0.1)),
+                cast(Any, modules["model"]).parameters(),
+                lr=float(context.runtime.algorithm_config.get("learning_rate", 0.1)),
             ),
-            gradient_accumulation_steps=int(config.get("accumulation_steps", 1)),
-            max_gradient_norm=float(config.get("max_gradient_norm", 1.0)),
+            gradient_accumulation_steps=int(
+                context.runtime.algorithm_config.get("accumulation_steps", 1)
+            ),
+            max_gradient_norm=float(
+                context.runtime.algorithm_config.get("max_gradient_norm", 1.0)
+            ),
         )
 
-    def metric_plan(self, config: Mapping[str, Any]) -> MetricPlan:
-        del config
-        return MetricPlan(factories={"accuracy": _accuracy})
+    def metric_plan(self, context: object) -> TorchMetricPlan:
+        del context
+        return TorchMetricPlan({"accuracy": "sum_count", "train_loss": "sum_count"})
 
-    def checkpoint_codec(self) -> object:
-        return PickleCheckpointCodec()
+    def artifact_plan(self, context: TorchArtifactContext) -> TorchArtifactPlan:
+        del context
+        return TorchArtifactPlan(
+            source_kind="torch_module",
+            input_signature=(),
+            output_signature=(
+                {"name": "prediction", "dtype": "float32", "shape": ("batch", 1)},
+            ),
+            targets=(),
+            roles={},
+        )
 
 
-__all__ = ["BinaryLinearRecipeV2", "PickleCheckpointCodec"]
+__all__ = ["BinaryLinearRecipeV2", "CheckpointCodec"]

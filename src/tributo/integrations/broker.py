@@ -1,8 +1,8 @@
 """Transport-neutral contracts for independently installed broker providers.
 
-Core intentionally knows nothing about Redis, Kafka, RabbitMQ, or an external
-operation protocol. Providers own transport semantics, request mapping, event
-publication, and their production consume loop.
+Core intentionally knows nothing about external message-broker transports or an
+external operation protocol. Providers own transport semantics, request
+mapping, event publication, and their production consume loop.
 """
 
 from __future__ import annotations
