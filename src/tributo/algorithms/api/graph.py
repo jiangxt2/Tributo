@@ -289,7 +289,11 @@ class GraphSamplingEvidence:
 @PublicAPI(stability="alpha")
 @dataclass(frozen=True)
 class GraphWorkerEvidence:
-    """Worker-local sampling counts produced by a Core graph reader."""
+    """Cumulative sampling counts produced by a Core graph reader.
+
+    ``seed_rows`` counts seed occurrences across successful requests, including
+    repeated epochs and evaluation. It does not count distinct input rows.
+    """
 
     graph_version: str
     partition_count: int
@@ -548,7 +552,7 @@ class GraphReadHandle(Protocol):
         """Return one local graph batch for the given seed nodes."""
 
     def worker_evidence(self) -> GraphWorkerEvidence:
-        """Return Core-generated sampling counters for this worker."""
+        """Return cumulative Core counters across successful sampling requests."""
 
 
 def _valid_digest(value: object) -> bool:

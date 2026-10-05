@@ -700,13 +700,15 @@ class TorchExecutionEvidence:
                 and len(seed_role.rows_per_rank) == len(workers)
                 else {}
             )
+            # Role rows attest one input pass; graph counters include all
+            # successful sampling calls, including later epochs and evaluation.
             if (
                 seed_role is None
-                or sum(item.seed_rows for item in graph_workers)
-                != seed_role.observed_rows
+                or seed_role.mode != "split_exact"
+                or len(seed_rows_by_rank) != len(workers)
                 or any(
                     by_rank.get(rank) is None
-                    or cast(GraphWorkerEvidence, by_rank[rank]).seed_rows != rows
+                    or cast(GraphWorkerEvidence, by_rank[rank]).seed_rows < rows
                     for rank, rows in seed_rows_by_rank.items()
                 )
             ):

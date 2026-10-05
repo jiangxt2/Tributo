@@ -807,6 +807,13 @@ class TorchPolicy:
                 raise AlgorithmConfigurationError(
                     "Torch graph seed role must be a Stage input"
                 )
+            seed_route = next(
+                route for route in routes if route.role == self.graph_input.seed_role
+            )
+            if seed_route.mode != "split_exact":
+                raise AlgorithmConfigurationError(
+                    "Torch graph seed role must use split_exact routing"
+                )
             if {self.graph_input.node_role, self.graph_input.edge_role} & (
                 route_roles | stage_roles
             ):

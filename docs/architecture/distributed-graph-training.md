@@ -50,8 +50,13 @@ The public contract contains:
   of the random-seed sequence), touched partitions, graph version digest, and
   owner row counts.
 
-Core validates graph seed coverage against the existing Torch role receipt and
-attaches partition ownership to `TorchExecutionEvidence`. Graph handles and
+Core validates exact seed input coverage through the existing Torch role
+receipt and attaches partition ownership to `TorchExecutionEvidence`. The seed
+role must use `split_exact` routing. `GraphWorkerEvidence.seed_rows` counts
+cumulative seed occurrences across all successful sampling requests, including
+repeated training epochs and evaluation reads. Each worker's sampling count must
+be at least its seed input row count; extra requests do not change input coverage
+or the algorithm's training metric denominator. Graph handles and
 actor references stay out of JSON algorithm configuration. Existing Torch
 Adapters receive no graph handle unless their `TorchPolicy` declares a
 `GraphInputSpec`.
@@ -87,7 +92,8 @@ Unit tests cover role policy, seed placement, local ID mapping, incoming and
 outgoing fanout, empty neighborhoods, repeated seeds, missing sampled features,
 parallel duplicate edge rows, numeric feature and relation validation, sampler
 evidence, and graph-version consistency. The Docker Ray Jobs Gate uses two
-workers on separate nodes and a graph with cross-partition neighbors; its
-receipt proves exact seed coverage and checks that no owner or worker receives
-the complete graph inputs and that the driver materializes no training rows.
+workers on separate nodes and a graph with cross-partition neighbors. It runs
+two training epochs and one additional evaluation sampling request per worker;
+its receipt proves exact seed input coverage and checks that no owner or worker
+receives the complete graph inputs and that the driver materializes no training rows.
 Historical full-batch GraphSAGE/R-GCN Gate results do not certify this new path.

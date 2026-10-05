@@ -1,4 +1,4 @@
-"""Two-worker Ray Jobs Gate for Core-owned partitioned graph training."""
+"""Two-worker Ray Jobs Gate with repeated graph training and evaluation reads."""
 
 from __future__ import annotations
 
@@ -134,57 +134,82 @@ class GraphCoreAdapter(RayTorchAdapter):
         correct = 0
         seed_rows = 0
         batch_count = 0
-        for raw_batch in training_shard.iter_torch_batches(
-            batch_size=batch_size,
-            dtypes={"node_id": torch.int64, "label": torch.int64},
-        ):
-            batch = cast(Mapping[str, torch.Tensor], raw_batch)
-            seed_ids = tuple(int(value) for value in batch["node_id"].tolist())
-            labels = tuple(int(value) for value in batch["label"].tolist())
-            graph_batch = graph_reader.sample(
-                seed_ids,
-                labels,
-                GraphSamplingSpec(
-                    fanouts=fanouts,
-                    seed_batch_size=batch_size,
-                    random_seed=random_seed + batch_count,
-                ),
-            )
-            features = torch.tensor(
-                graph_batch.node_features,
-                dtype=torch.float32,
-                device=device,
-            )
-            aggregated = features.clone()
-            degrees = torch.ones((len(graph_batch.node_ids), 1), device=device)
-            if graph_batch.edge_index:
-                source = torch.tensor(
-                    [edge[0] for edge in graph_batch.edge_index],
-                    dtype=torch.long,
+        input_seed_rows = 0
+        evaluation_seed: tuple[int, int] | None = None
+        for epoch in range(2):
+            epoch_seed_rows = 0
+            for raw_batch in training_shard.iter_torch_batches(
+                batch_size=batch_size,
+                dtypes={"node_id": torch.int64, "label": torch.int64},
+            ):
+                batch = cast(Mapping[str, torch.Tensor], raw_batch)
+                seed_ids = tuple(int(value) for value in batch["node_id"].tolist())
+                labels = tuple(int(value) for value in batch["label"].tolist())
+                if evaluation_seed is None:
+                    evaluation_seed = (seed_ids[0], labels[0])
+                graph_batch = graph_reader.sample(
+                    seed_ids,
+                    labels,
+                    GraphSamplingSpec(
+                        fanouts=fanouts,
+                        seed_batch_size=batch_size,
+                        random_seed=random_seed + batch_count,
+                    ),
+                )
+                features = torch.tensor(
+                    graph_batch.node_features,
+                    dtype=torch.float32,
                     device=device,
                 )
-                destination = torch.tensor(
-                    [edge[1] for edge in graph_batch.edge_index],
-                    dtype=torch.long,
-                    device=device,
-                )
-                aggregated.index_add_(0, destination, features[source])
-                degrees.index_add_(
-                    0,
-                    destination,
-                    torch.ones((len(destination), 1), device=device),
-                )
-            aggregated = aggregated / degrees
-            logits = model(aggregated[: graph_batch.seed_count])
-            target = torch.tensor(labels, dtype=torch.long, device=device)
-            loss = functional.cross_entropy(logits, target)
-            optimizer.zero_grad(set_to_none=True)
-            loss.backward()
-            optimizer.step()
-            loss_sum += float(loss.detach().item()) * len(labels)
-            correct += int((logits.argmax(dim=1) == target).sum().item())
-            seed_rows += len(labels)
-            batch_count += 1
+                aggregated = features.clone()
+                degrees = torch.ones((len(graph_batch.node_ids), 1), device=device)
+                if graph_batch.edge_index:
+                    source = torch.tensor(
+                        [edge[0] for edge in graph_batch.edge_index],
+                        dtype=torch.long,
+                        device=device,
+                    )
+                    destination = torch.tensor(
+                        [edge[1] for edge in graph_batch.edge_index],
+                        dtype=torch.long,
+                        device=device,
+                    )
+                    aggregated.index_add_(0, destination, features[source])
+                    degrees.index_add_(
+                        0,
+                        destination,
+                        torch.ones((len(destination), 1), device=device),
+                    )
+                aggregated = aggregated / degrees
+                logits = model(aggregated[: graph_batch.seed_count])
+                target = torch.tensor(labels, dtype=torch.long, device=device)
+                loss = functional.cross_entropy(logits, target)
+                optimizer.zero_grad(set_to_none=True)
+                loss.backward()
+                optimizer.step()
+                loss_sum += float(loss.detach().item()) * len(labels)
+                correct += int((logits.argmax(dim=1) == target).sum().item())
+                seed_rows += len(labels)
+                batch_count += 1
+                epoch_seed_rows += len(labels)
+            if epoch == 0:
+                input_seed_rows = epoch_seed_rows
+            elif epoch_seed_rows != input_seed_rows:
+                raise AssertionError("seed shard row count changed across epochs")
+
+        if evaluation_seed is None:
+            raise AssertionError("graph fixture received no seed rows")
+        evaluation_batch = graph_reader.sample(
+            (evaluation_seed[0],),
+            (evaluation_seed[1],),
+            GraphSamplingSpec(
+                fanouts=fanouts,
+                seed_batch_size=1,
+                random_seed=random_seed + batch_count,
+            ),
+        )
+        if evaluation_batch.seed_node_ids != (evaluation_seed[0],):
+            raise AssertionError("evaluation sampling lost its seed")
 
         metrics_tensor = torch.tensor(
             [loss_sum, float(correct), float(seed_rows)],
@@ -205,7 +230,7 @@ class GraphCoreAdapter(RayTorchAdapter):
             "world_size": rank_context.get_world_size(),
             "shard_id": f"train-{rank_context.get_world_rank()}",
             "rows_processed": seed_rows,
-            "input_rows": {"train": seed_rows},
+            "input_rows": {"train": input_seed_rows},
             "batch_count": batch_count,
             "collective_steps": batch_count,
             "resources": {
@@ -526,13 +551,18 @@ def main() -> None:
         raise AssertionError("graph training workers did not run on separate Ray nodes")
     if any(set(worker["input_rows"]) != {"train"} for worker in workers):
         raise AssertionError("a graph role was copied into a training worker")
-    if sum(worker["graph"]["seed_rows"] for worker in workers) != 8:
-        raise AssertionError("graph worker seed coverage is incomplete")
+    seed_role = next(role for role in evidence["roles"] if role["role"] == "train")
+    if seed_role["observed_rows"] != 8 or seed_role["mode"] != "split_exact":
+        raise AssertionError("graph worker input seed coverage is incomplete")
+    if sum(worker["graph"]["seed_rows"] for worker in workers) != 18:
+        raise AssertionError("graph sampling omitted repeated or evaluation seeds")
     if any(
-        worker["graph"]["seed_rows"] != worker["input_rows"]["train"]
+        worker["graph"]["seed_rows"] != 2 * worker["input_rows"]["train"] + 1
         for worker in workers
     ):
-        raise AssertionError("graph worker sample rows differ from its seed shard")
+        raise AssertionError(
+            "graph sampling counts differ from two epochs plus evaluation"
+        )
     if any(
         worker["graph"]["sampled_edge_rows"] < 1
         or worker["graph"]["touched_partitions"] != [0, 1]

@@ -151,6 +151,7 @@ def test_partitioned_graph_reader_fetches_cross_partition_neighbors(
     assert sampling.random_seed_min == 3
     assert sampling.random_seed_max == 4
     assert sampling.request_count == 2
+    assert reader.worker_evidence().seed_rows == 2
 
 
 def test_multihop_sampling_expands_a_seed_again_when_it_is_also_context(

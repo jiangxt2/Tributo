@@ -336,20 +336,34 @@ def _submit_graph_core_gate_job(
     assert len(workers) == 2
     assert len({worker["node_id"] for worker in workers}) == 2
     assert all(set(worker["input_rows"]) == {"train"} for worker in workers)
-    assert sum(worker["graph"]["seed_rows"] for worker in workers) == 8
+    seed_role = next(
+        role for role in evidence["torch_evidence"]["roles"] if role["role"] == "train"
+    )
+    assert seed_role["observed_rows"] == 8
+    assert seed_role["rows_per_rank"] == [4, 4]
+    assert sum(worker["graph"]["seed_rows"] for worker in workers) == 18
+    assert all(worker["rows_processed"] == 8 for worker in workers)
+    assert all(worker["batch_count"] == 4 for worker in workers)
+    assert all(worker["graph"]["batch_count"] == 5 for worker in workers)
     assert all(worker["graph"]["touched_partitions"] == [0, 1] for worker in workers)
     sampling_profiles = [worker["graph"]["sampling_profiles"] for worker in workers]
-    assert all(len(profiles) == 1 for profiles in sampling_profiles)
-    assert all(
-        profile[0]["fanouts"] == [2]
-        and profile[0]["seed_batch_size"] == 2
-        and profile[0]["direction"] == "incoming"
-        and profile[0]["request_count"] == 2
-        and profile[0]["random_seed_min"] == 17
-        and profile[0]["random_seed_max"] == 18
-        and len(profile[0]["random_seed_digest"]) == 64
-        for profile in sampling_profiles
-    )
+    for profiles in sampling_profiles:
+        assert len(profiles) == 2
+        by_batch_size = {profile["seed_batch_size"]: profile for profile in profiles}
+        assert set(by_batch_size) == {1, 2}
+        training_profile = by_batch_size[2]
+        evaluation_profile = by_batch_size[1]
+        assert training_profile["fanouts"] == [2]
+        assert training_profile["direction"] == "incoming"
+        assert training_profile["request_count"] == 4
+        assert training_profile["random_seed_min"] == 17
+        assert training_profile["random_seed_max"] == 20
+        assert evaluation_profile["fanouts"] == [2]
+        assert evaluation_profile["direction"] == "incoming"
+        assert evaluation_profile["request_count"] == 1
+        assert evaluation_profile["random_seed_min"] == 21
+        assert evaluation_profile["random_seed_max"] == 21
+        assert all(len(profile["random_seed_digest"]) == 64 for profile in profiles)
     return evidence
 
 
