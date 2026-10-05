@@ -107,14 +107,7 @@ class AlgorithmPlanner:
             is DistributionStrategy.RAY_TRAIN_TORCH
         ):
             policy = cast(TorchPolicy, registration.distribution_spec.policy)
-            routes = {route.role: route for route in policy.dataset_routing}
-            unknown_roles = sorted(
-                {binding.name for binding in binding_set.bindings} - set(routes)
-            )
-            if unknown_roles:
-                raise AlgorithmConfigurationError(
-                    f"Torch input binding role(s) are not declared by TorchPolicy: {unknown_roles}"
-                )
+            AlgorithmPlanner._validate_torch_binding_roles(binding_set, policy)
         resolution_context = context or InputResolutionContext()
         descriptors: list[ResolvedInputDescriptor] = []
         for binding in binding_set.bindings:
@@ -250,6 +243,31 @@ class AlgorithmPlanner:
         ):
             raise AlgorithmConfigurationError(
                 "the declared distribution strategy requires shardable input"
+            )
+
+    @staticmethod
+    def _validate_torch_binding_roles(
+        bindings: InputBindingSet,
+        policy: TorchPolicy,
+    ) -> None:
+        """Validate ordinary Stage roles and Core-owned graph input roles."""
+        route_roles = {route.role for route in policy.dataset_routing}
+        graph_roles = (
+            {policy.graph_input.node_role, policy.graph_input.edge_role}
+            if policy.graph_input is not None
+            else set()
+        )
+        binding_roles = {binding.name for binding in bindings.bindings}
+        missing_graph_roles = sorted(graph_roles - binding_roles)
+        if missing_graph_roles:
+            raise AlgorithmConfigurationError(
+                f"Torch graph input binding role(s) are missing: {missing_graph_roles}"
+            )
+        unknown_roles = sorted(binding_roles - route_roles - graph_roles)
+        if unknown_roles:
+            raise AlgorithmConfigurationError(
+                "Torch input binding role(s) are not declared by TorchPolicy: "
+                f"{unknown_roles}"
             )
 
     @staticmethod

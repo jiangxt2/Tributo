@@ -87,7 +87,7 @@ which is tested locally rather than installed by Tributo's GitHub CI.
 | Portable distributed execution | Alpha | Explicit collective, framework-native, and bounded tree-MapReduce strategies; owned local and attached cluster profiles share one contract |
 | Constrained algorithm descriptor SPI | Alpha | Trusted packages from the selected image or a validated Job artifact; no arbitrary dependency resolution, isolation, hot reload, or PluginManager lifecycle |
 | Algorithm Wheel distribution | Alpha | Image Profiles plus code-only `py_modules` Wheels by default; opt-in offline Wheelhouse installs use `--no-index`, an attested manifest, and the existing entry-point registry. No online dependency resolution or untrusted-code sandbox is provided |
-| Graph training | Alpha skeleton | No built-in PyG/DGL trainer |
+| Graph training | Alpha Core data path | Core provides partitioned Ray graph reads and seed mini-batches for static homogeneous node tasks; no built-in PyG/DGL trainer, and the external GraphSAGE/R-GCN Wheel remains full-batch until separately migrated |
 | X-Learner causal estimation | Alpha, conformance-tested | Binary treatment/outcome, numeric tabular features, deterministic 5-fold cross-fitting over five native Ray Train XGBoost stages, causal report, and batch CATE inference; priority multi-node Gate passed, while the full 27-record Gate remains pending |
 
 The tabular DNN, PU, and XGBoost legacy Trainer implementations remain

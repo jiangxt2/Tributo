@@ -52,6 +52,15 @@ from tributo.algorithms.api.execution import (
     TorchRoleExecutionEvidence,
     WorkerExecutionEvidence,
 )
+from tributo.algorithms.api.graph import (
+    GraphBatch,
+    GraphInputSpec,
+    GraphPartitionEvidence,
+    GraphReadHandle,
+    GraphSamplingEvidence,
+    GraphSamplingSpec,
+    GraphWorkerEvidence,
+)
 from tributo.algorithms.api.models import (
     AlgorithmExecutionResult,
     AlgorithmOperation,
@@ -108,6 +117,7 @@ from tributo.algorithms.api.torch_runtime import (
     invoke_torch_global_loss_reducer,
     reduce_torch_metrics,
     report_torch_checkpoint,
+    report_torch_graph_checkpoint,
 )
 
 __all__ = [
@@ -151,6 +161,13 @@ __all__ = [
     "TorchRoleExecutionEvidence",
     "FailureCategory",
     "FrameworkNativePolicy",
+    "GraphBatch",
+    "GraphInputSpec",
+    "GraphPartitionEvidence",
+    "GraphReadHandle",
+    "GraphSamplingEvidence",
+    "GraphSamplingSpec",
+    "GraphWorkerEvidence",
     "ImplementationDescriptor",
     "ImageProfile",
     "InputDistribution",
@@ -206,4 +223,5 @@ __all__ = [
     "invoke_torch_global_loss_reducer",
     "reduce_torch_metrics",
     "report_torch_checkpoint",
+    "report_torch_graph_checkpoint",
 ]

@@ -301,6 +301,72 @@ def _submit_official_algorithm_gate_job(
     return result
 
 
+def _submit_graph_core_gate_job(
+    job_client: JobSubmissionClient,
+) -> dict[str, Any]:
+    """Run the Core graph-partition fixture as one isolated Ray Job."""
+    core_wheel_value = os.environ.get("TRIBUTO_CORE_WHEEL")
+    if not core_wheel_value:
+        pytest.fail("graph Core gate requires the fixed Tributo Core Wheel")
+    core_wheel = Path(core_wheel_value)
+    if not core_wheel.is_file():
+        pytest.fail(f"graph Core gate Wheel is unavailable: {core_wheel}")
+    gate_root = Path(
+        f"/workspace/tributo-work/tributo-graph-core-gate-{uuid.uuid4().hex}"
+    )
+    result = _submit_official_algorithm_gate_job(
+        job_client,
+        root=gate_root,
+        wheels=(core_wheel,),
+        entrypoint="python tests/training/jobs/graph_core_gate_job.py",
+        category="graph-core",
+    )
+    assert result["status"] == JobStatus.SUCCEEDED, (
+        f"Core graph partition Gate failed:\n{result['message']}\n{result['logs']}"
+    )
+    evidence = _object_from_logs(str(result["logs"]), "GRAPH_CORE_RESULT: ")
+    graph = evidence["torch_evidence"]["graph_partition"]
+    assert evidence["distributed"] is True
+    assert evidence["cross_node"] is True
+    assert evidence["driver_materialized_training_rows"] == 0
+    assert graph["partition_count"] == 2
+    assert graph["total_nodes"] == 8
+    assert graph["total_edges"] == 8
+    workers = evidence["torch_evidence"]["workers"]
+    assert len(workers) == 2
+    assert len({worker["node_id"] for worker in workers}) == 2
+    assert all(set(worker["input_rows"]) == {"train"} for worker in workers)
+    seed_role = next(
+        role for role in evidence["torch_evidence"]["roles"] if role["role"] == "train"
+    )
+    assert seed_role["observed_rows"] == 8
+    assert seed_role["rows_per_rank"] == [4, 4]
+    assert sum(worker["graph"]["seed_rows"] for worker in workers) == 18
+    assert all(worker["rows_processed"] == 8 for worker in workers)
+    assert all(worker["batch_count"] == 4 for worker in workers)
+    assert all(worker["graph"]["batch_count"] == 5 for worker in workers)
+    assert all(worker["graph"]["touched_partitions"] == [0, 1] for worker in workers)
+    sampling_profiles = [worker["graph"]["sampling_profiles"] for worker in workers]
+    for profiles in sampling_profiles:
+        assert len(profiles) == 2
+        by_batch_size = {profile["seed_batch_size"]: profile for profile in profiles}
+        assert set(by_batch_size) == {1, 2}
+        training_profile = by_batch_size[2]
+        evaluation_profile = by_batch_size[1]
+        assert training_profile["fanouts"] == [2]
+        assert training_profile["direction"] == "incoming"
+        assert training_profile["request_count"] == 4
+        assert training_profile["random_seed_min"] == 17
+        assert training_profile["random_seed_max"] == 20
+        assert evaluation_profile["fanouts"] == [2]
+        assert evaluation_profile["direction"] == "incoming"
+        assert evaluation_profile["request_count"] == 1
+        assert evaluation_profile["random_seed_min"] == 21
+        assert evaluation_profile["random_seed_max"] == 21
+        assert all(len(profile["random_seed_digest"]) == 64 for profile in profiles)
+    return evidence
+
+
 def test_official_algorithm_wheels_complete_on_ray_cluster(
     job_client: JobSubmissionClient,
 ) -> None:
@@ -442,6 +508,8 @@ def test_official_algorithm_wheels_complete_on_ray_cluster(
         assert distributed_inference["node_count"] == 2
         assert len(distributed_inference["manifest_sha256"]) == 64
         assert len(distributed_inference["result_id"]) == 64
+    if "graph" in categories:
+        _submit_graph_core_gate_job(job_client)
 
 
 def test_priority_algorithm_wheels_complete_on_ray_cluster(

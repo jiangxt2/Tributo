@@ -28,6 +28,8 @@ from tributo.algorithms.api import (
     AlgorithmExecutionResult,
     ComponentStageEvidence,
     DistributionStrategy,
+    GraphInputSpec,
+    GraphReadHandle,
     QualifiedReference,
     ReplicatedTorchStateEvidence,
     ResultPolicy,
@@ -76,6 +78,10 @@ from tributo.algorithms.spi import (
     TorchStepContext,
     TorchStepResult,
     TorchWorkerCheckpointContext,
+)
+from tributo.integrations.algorithm_runtimes.graph_partition import (
+    RayGraphPartitionLease,
+    open_ray_graph_partitions,
 )
 from tributo.integrations.algorithm_runtimes.portable_metrics import (
     portable_fit_only_metrics,
@@ -490,6 +496,53 @@ def _prepare_datasets(envelope: RuntimeExecutionEnvelope) -> PreparedInput:
             "Torch input adapter did not expose Ray datasets"
         )
     return prepared
+
+
+def _open_graph_partition_lease(
+    *,
+    plan: Any,
+    graph_input: GraphInputSpec,
+    views: Mapping[str, object],
+    worker_count: int,
+) -> RayGraphPartitionLease:
+    """Build Core-owned graph readers from typed role bindings and Ray datasets."""
+    bindings = {binding.name: binding for binding in plan.input_bindings.bindings}
+    try:
+        node_binding = bindings[graph_input.node_role]
+        edge_binding = bindings[graph_input.edge_role]
+        seed_binding = bindings[graph_input.seed_role]
+        nodes_dataset = views[graph_input.node_role]
+        edges_dataset = views[graph_input.edge_role]
+    except (KeyError, TypeError):
+        raise AlgorithmConfigurationError(
+            "partitioned graph inputs do not match resolved role bindings"
+        ) from None
+    if (
+        len(node_binding.feature_names) < 2
+        or len(edge_binding.feature_names) not in {2, 3}
+        or len(seed_binding.feature_names) != 1
+        or not seed_binding.label_name
+    ):
+        raise AlgorithmConfigurationError(
+            "partitioned graph input bindings have an invalid typed layout"
+        )
+    partition_count = graph_input.partition_count or max(worker_count, 2)
+    return open_ray_graph_partitions(
+        nodes_dataset=nodes_dataset,
+        edges_dataset=edges_dataset,
+        node_id_column=node_binding.feature_names[0],
+        node_feature_columns=tuple(node_binding.feature_names[1:]),
+        edge_source_column=edge_binding.feature_names[0],
+        edge_destination_column=edge_binding.feature_names[1],
+        edge_type_column=(
+            edge_binding.feature_names[2]
+            if len(edge_binding.feature_names) == 3
+            else None
+        ),
+        graph_version=_input_binding_digest(plan),
+        seed_role=graph_input.seed_role,
+        partition_count=partition_count,
+    )
 
 
 def _resource_map(plan: Any) -> dict[str, float]:
@@ -977,6 +1030,9 @@ def _select_worker_checkpoint(
     stage_context: TorchStageContext,
 ) -> TorchWorkerCheckpointContext:
     """Expose only an invocation-local Stage dependency to the algorithm."""
+    graph_reader = config.get("_core_graph_reader")
+    if graph_reader is not None and not isinstance(graph_reader, GraphReadHandle):
+        raise AlgorithmExecutionError("Core graph reader handle is invalid")
     initial = config.get("_core_initial_checkpoint")
     if initial is not None:
         source = config.get("_core_checkpoint_source")
@@ -1004,8 +1060,13 @@ def _select_worker_checkpoint(
                 source_stage_id=descriptor.identity.stage_id,
                 descriptor=descriptor,
             ),
+            graph_reader=graph_reader,
         )
-    return TorchWorkerCheckpointContext(stage=stage_context, source="none")
+    return TorchWorkerCheckpointContext(
+        stage=stage_context,
+        source="none",
+        graph_reader=graph_reader,
+    )
 
 
 def _recipe_worker(config: Mapping[str, Any]) -> None:
@@ -1850,7 +1911,15 @@ class RayTrainTorchRuntime:
         prepared = _prepare_datasets(base)
         configured_storage_path, max_failures = _torch_ray_config(base.plan)
         owned_storage_dirs: list[tempfile.TemporaryDirectory[str]] = []
+        graph_lease: RayGraphPartitionLease | None = None
         try:
+            if policy.graph_input is not None:
+                graph_lease = _open_graph_partition_lease(
+                    plan=base.plan,
+                    graph_input=policy.graph_input,
+                    views=prepared.views,
+                    worker_count=base.plan.runtime.worker_count,
+                )
             stages = policy.execution_plan.stages
             stage_records: dict[str, dict[str, Any]] = {}
             last_result: Any = None
@@ -1904,10 +1973,21 @@ class RayTrainTorchRuntime:
                     predecessor=predecessor_id,
                     predecessor_descriptor=context_descriptor,
                 )
-                stage_datasets: Mapping[str, object] = prepared.views
+                adapter_views: Mapping[str, object] = prepared.views
+                if policy.graph_input is not None:
+                    adapter_views = {
+                        role: prepared.views[role]
+                        for role in stage.input_roles
+                        if role in prepared.views
+                    }
+                    if set(adapter_views) != set(stage.input_roles):
+                        raise AlgorithmConfigurationError(
+                            "partitioned graph Stage is missing a non-graph input role"
+                        )
+                stage_datasets: Mapping[str, object] = adapter_views
                 if isinstance(implementation, RayTorchAdapter):
                     stage_datasets = implementation.bind_datasets(
-                        prepared.views,
+                        adapter_views,
                         context,
                     )
                     if not isinstance(stage_datasets, Mapping) or not stage_datasets:
@@ -1915,6 +1995,12 @@ class RayTrainTorchRuntime:
                             "RayTorchAdapter.bind_datasets must return named datasets"
                         )
                 stage_datasets = dict(stage_datasets)
+                if policy.graph_input is not None and set(stage_datasets) != set(
+                    stage.input_roles
+                ):
+                    raise AlgorithmConfigurationError(
+                        "partitioned graph TorchTrainer datasets must contain only Stage roles"
+                    )
                 expected_rows, replicated_bytes_by_role = _validate_stage_routes(
                     policy,
                     stage,
@@ -1996,6 +2082,8 @@ class RayTrainTorchRuntime:
                         "_core_checkpoint_source": checkpoint_source,
                     }
                 )
+                if graph_lease is not None:
+                    train_config["_core_graph_reader"] = graph_lease.reader
                 loop: Any
                 if isinstance(implementation, TorchRecipe):
                     loop = torch_recipe_train_loop_per_worker
@@ -2217,6 +2305,15 @@ class RayTrainTorchRuntime:
                 expected_rows=final_expected_rows,
                 replicated_bytes_by_role=final_replicated_bytes,
             )
+            if policy.graph_input is not None:
+                if graph_lease is None:
+                    raise AlgorithmExecutionError(
+                        "partitioned graph execution lost its Core graph lease"
+                    )
+                if any(worker.graph is None for worker in workers):
+                    raise AlgorithmExecutionError(
+                        "a Torch worker omitted Core graph sampling evidence"
+                    )
             global_digest = metrics.get("model_state_digest")
             if not isinstance(global_digest, str) or len(global_digest) != 64:
                 raise AlgorithmExecutionError(
@@ -2278,6 +2375,11 @@ class RayTrainTorchRuntime:
                     dict(metrics["reducer_evidence"])
                     if isinstance(metrics.get("reducer_evidence"), Mapping)
                     else {}
+                ),
+                graph_partition=(
+                    graph_lease.reader.partition_stats
+                    if graph_lease is not None
+                    else None
                 ),
             ).to_dict()
             execution = AlgorithmExecutionResult(
@@ -2368,6 +2470,24 @@ class RayTrainTorchRuntime:
                 if policy.state_layout == "component"
                 else export_state_details
             )
+            if graph_lease is not None and isinstance(state_details, dict):
+                partition_evidence = graph_lease.reader.partition_stats
+                state_details.update(
+                    {
+                        "graph_version": partition_evidence.graph_version,
+                        "graph_partition_count": partition_evidence.partition_count,
+                        "graph_total_nodes": partition_evidence.total_nodes,
+                        "graph_total_edges": partition_evidence.total_edges,
+                        "graph_max_owner_rows": max(
+                            nodes + edges
+                            for nodes, edges in zip(
+                                partition_evidence.owner_node_rows,
+                                partition_evidence.owner_edge_rows,
+                                strict=True,
+                            )
+                        ),
+                    }
+                )
             return WorkerExecutionResult(
                 execution=execution,
                 actual_versions=_actual_environment_versions(
@@ -2391,10 +2511,14 @@ class RayTrainTorchRuntime:
             )
         finally:
             try:
-                prepared.close()
+                if graph_lease is not None:
+                    graph_lease.close()
             finally:
-                for directory in reversed(owned_storage_dirs):
-                    directory.cleanup()
+                try:
+                    prepared.close()
+                finally:
+                    for directory in reversed(owned_storage_dirs):
+                        directory.cleanup()
 
 
 @DeveloperAPI
