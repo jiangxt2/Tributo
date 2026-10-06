@@ -52,9 +52,16 @@ def installed_versions(monkeypatch: pytest.MonkeyPatch) -> None:
         "test-helper": "4.5.6",
         "tributo": "1.0.0",
     }
+    real_version = importlib.metadata.version
+
+    def version_for_test(name: str) -> str:
+        if name in versions:
+            return versions[name]
+        return real_version(name)
+
     monkeypatch.setattr(
         "tributo.data.engine_binding.importlib.metadata.version",
-        lambda name: versions[name],
+        version_for_test,
     )
 
 
