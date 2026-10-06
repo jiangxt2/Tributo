@@ -69,7 +69,6 @@ def test_vector_runtime_is_exactly_versioned_in_the_shared_profile() -> None:
     assert "vector-index" in profile["extras"]
     assert profile["version_contract"] == {
         "daft_prefix": "0.7.",
-        "daft_clickhouse": "1.0",
         "daft_doris": "1.0",
         "lance_ray": "0.5.0",
         "pyarrow": "19.0.1",
@@ -85,7 +84,6 @@ def test_vector_runtime_is_exactly_versioned_in_the_shared_profile() -> None:
     assert "m.version('pylance') == '9.0.0'" in dockerfile
     assert "m.version('lance-ray') == '0.5.0'" in dockerfile
     assert "m.version('pyarrow') == '19.0.1'" in dockerfile
-    assert "m.version('daft-clickhouse') == '1.0'" in dockerfile
     assert "m.version('daft-doris') == '1.0'" in dockerfile
     assert "m.version('ray-doris') == '1.0'" in dockerfile
     assert "m.version('ray-hive') == '1.0'" in dockerfile

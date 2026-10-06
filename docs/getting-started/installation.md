@@ -29,7 +29,6 @@ Pydantic, ONNX Runtime, PyArrow, pandas, and S3 filesystem support.
 | Daft ingestion | `uv sync --locked --no-dev --extra data --extra data-daft` |
 | HiveServer2 via Ray Data connector package | `uv sync --locked --no-dev --extra hive-ray` |
 | PostgreSQL ingestion | `uv sync --locked --no-dev --extra postgresql` |
-| ClickHouse via Daft | `uv sync --locked --no-dev --extra clickhouse` |
 | ClickHouse via Ray Data | Sync `clickhouse`, then install the external `ray-clickhouse==0.1.0` wheel into `.venv` |
 | Doris via Daft/Ray Data | `uv sync --locked --no-dev --extra mysql` |
 | Doris Flight via Daft/Ray Data | `uv sync --locked --no-dev --extra doris-flight` |
@@ -50,10 +49,10 @@ An extra installs dependencies. It does not turn a protocol, adapter, or
 reserved problem type into a verified implementation. Check the
 [support matrix](../reference/support-matrix.md) before deployment. Ray Tune
 itself is included by the core Ray dependency; the `tune` extra adds the
-optional BayesOpt search implementation. The `clickhouse` extra installs
-`daft-clickhouse==1.0` and the shared ClickHouse driver dependencies. The Ray
-route additionally requires the `ray-clickhouse==0.1.0` GitHub Release wheel
-until its PyPI publication. `mysql` installs `daft-doris==1.0` and
+optional BayesOpt search implementation. The `clickhouse` extra installs the
+shared ClickHouse driver dependency. ClickHouse reads use the Ray route, which
+additionally requires the `ray-clickhouse==0.1.0` GitHub Release wheel until its
+PyPI publication. `mysql` installs `daft-doris==1.0` and
 `ray-doris==1.0` for their explicit engine routes, while `doris-flight` adds
 their Flight dependencies. The `hive-ray` extra installs `ray-hive==1.0` for
 the built-in Ray-only HiveServer2 Provider/Binding route. This does not add

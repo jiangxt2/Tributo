@@ -1,4 +1,4 @@
-"""Shared Daft SQL bindings for independent database connector packages."""
+"""Daft SQL binding for the independent daft-doris connector package."""
 
 from __future__ import annotations
 
@@ -75,15 +75,14 @@ class _DaftSqlBinding:
                         "target_parallelism"
                     ),
                 )
-            if self.connector_id == "doris":
-                protocol = str(request.runtime_options.get("protocol") or "mysql")
-                if protocol not in {"mysql", "flight"}:
-                    raise BindingStageError.framework_diagnostic(
-                        "validate_capabilities",
-                        error_type=JobConfigurationError,
-                        diagnostic_code="unsupported_doris_transport",
-                        diagnostic=("Doris transport must be 'mysql' or 'flight'"),
-                    )
+            protocol = str(request.runtime_options.get("protocol") or "mysql")
+            if protocol not in {"mysql", "flight"}:
+                raise BindingStageError.framework_diagnostic(
+                    "validate_capabilities",
+                    error_type=JobConfigurationError,
+                    diagnostic_code="unsupported_doris_transport",
+                    diagnostic=("Doris transport must be 'mysql' or 'flight'"),
+                )
         with binding_stage("classify_transforms"):
             decisions = residual_decisions(request.transforms)
         with binding_stage("build_native_plan"):
@@ -114,26 +113,19 @@ class _DaftSqlBinding:
         if target_tasks is not None:
             options["target_tasks"] = target_tasks
 
-        if self.connector_id == "clickhouse":
-            from daft_clickhouse import read_clickhouse
+        from daft_doris import read_doris
 
-            options["port"] = target.port
-            dataframe = read_clickhouse(**options)
-            transport_id = "clickhouse_native"
-        else:
-            from daft_doris import read_doris
-
-            protocol = str(request.runtime_options.get("protocol") or "mysql")
-            options["transport"] = protocol
-            options["mysql_port"] = target.port
-            http_port = request.runtime_options.get("http_port")
-            flight_port = request.runtime_options.get("flight_port")
-            if http_port is not None:
-                options["http_port"] = int(http_port)
-            if flight_port is not None:
-                options["flight_port"] = int(flight_port)
-            dataframe = read_doris(**options)
-            transport_id = protocol
+        protocol = str(request.runtime_options.get("protocol") or "mysql")
+        options["transport"] = protocol
+        options["mysql_port"] = target.port
+        http_port = request.runtime_options.get("http_port")
+        flight_port = request.runtime_options.get("flight_port")
+        if http_port is not None:
+            options["http_port"] = int(http_port)
+        if flight_port is not None:
+            options["flight_port"] = int(flight_port)
+        dataframe = read_doris(**options)
+        transport_id = protocol
 
         schema = canonical_engine_schema(dataframe.schema())
         transforms = ConcreteTransformCompiler().compile(
@@ -176,13 +168,6 @@ class _DaftSqlBinding:
             ),
             diagnostics=("database metadata I/O was used for schema inference",),
         )
-
-
-@PublicAPI(stability=Stability.ALPHA)
-class DaftClickHouseBinding(_DaftSqlBinding):
-    connector_id = "clickhouse"
-    package_name = "daft-clickhouse"
-    reader_api = "daft_clickhouse.read_clickhouse"
 
 
 @PublicAPI(stability=Stability.ALPHA)

@@ -7,8 +7,8 @@ pre-existing container. `ci/test-suites.json` owns their impact rules and
 reports required evidence, but no GitHub Actions event executes these suites.
 
 The data-ingestion image installs database drivers and the v1.0 database
-connectors through Tributo extras. `daft-clickhouse==1.0`,
-`daft-doris==1.0`, `ray-doris==1.0`, and `ray-hive==1.0` are resolved by
+connectors through Tributo extras. `daft-doris==1.0`, `ray-doris==1.0`,
+and `ray-hive==1.0` are resolved by
 `uv.lock`. The Data Ingestion Gate validates the Tributo Ray HiveServer2
 Provider/Binding separately from the canonical full-runtime package-presence
 gate. The Ray ClickHouse Binding requires the external
@@ -26,7 +26,6 @@ that package outside the Tributo lockfile.
 | S3/MinIO contract | `../integration/test_export_s3.py`, `../integration/test_minio_compat.py` | `ci_fast` Moto / `manual_external` MinIO | Manifest-last publication, Lease/CAS, alias, GC, path-style access, and conditional writes | Ephemeral Moto in CI; run-owned MinIO externally |
 | Runtime image gate | `../../scripts/run_runtime_image_it.sh`, `jobs/runtime_image_gate_job.py` | `manual_external` | Pinned full image, first-party and Alpha imports on driver/worker, Ray Data, Ray Jobs, and image attestations | Docker Buildx + two-node Ray cluster on a matching native host architecture |
 | MLflow Hook | `test_e2e_mlflow.py` | `manual_external` | Committed Bundle upload, replay deduplication, explicit run reuse, and failure semantics | Isolated model-export runner |
-| ClickHouse E2E | `test_e2e_clickhouse.py` | `quarantine` | ClickHouse table → Daft ClickHouse Binding → explicit Daft-to-Ray adapter → XGBoost distributed training → MLflow → ONNX | Full image or `tributo[clickhouse]`; lifecycle and ownership contract pending |
 | Data Ingestion Docker | `test_data_ingestion_dual_engine.py` | `manual_external` | Local/S3 Parquet, Iceberg-on-MinIO Ray/Daft reads, native writes, Ray HiveServer2 structured projection, typed handles, and worker-version evidence | Docker Ray cluster + Daft + MinIO + Hive 4.2.0 |
 | Lance vector index | `test_lance_vector_index.py` | `manual_external` | Distributed IVF_FLAT/IVF_PQ build, append coverage, global Top-K, fallback, optimization, compaction, Ray Jobs, and S3 result delivery | Docker Ray cluster + Lance-Ray + MinIO |
 | File conformance | `../integration/test_data_ingestion_conformance.py` | `manual_external` | Local/MinIO Parquet and CSV through Ray Data and Daft | Local Ray runtime + MinIO |

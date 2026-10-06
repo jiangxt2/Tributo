@@ -582,7 +582,6 @@ def _version_check_code(identity: RuntimeIdentity) -> str:
         ("lance_ray", "lance-ray"),
         ("pyarrow", "pyarrow"),
         ("ray_hive", "ray-hive"),
-        ("daft_clickhouse", "daft-clickhouse"),
         ("daft_doris", "daft-doris"),
         ("ray_doris", "ray-doris"),
         ("thrift", "thrift"),
