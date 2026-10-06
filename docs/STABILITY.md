@@ -157,13 +157,15 @@ source identity reject credential material rather than persist it.
 | Module | Level | Notes |
 |--------|-------|-------|
 | `tributo.exporting.service` — `BundleExportService` | `beta` | Primary export orchestration |
-| `tributo.exporting.models` — all public models | `beta` | Configuration, artifact, canonical Bundle reference, and exact publication result models |
+| `tributo.exporting.models` — core storage values | `stable` | AliasConfig, artifact/producer/reference/validation values, execution/failure results, BundleResult, BundleRef, ResolvedArtifact, and PublishedBundle |
+| `tributo.exporting.models` — export configuration, Hook and plugin values | `beta` | Exporter orchestration and Hook payloads retain independent contracts |
 | `tributo.exporting.protocols` — all protocols | `beta` | Exporter/Validator/SourceProvider contracts |
-| `tributo.exporting.manifest` — `ExportManifest` | `beta` | Bundle manifest (schema v1) |
-| `tributo.exporting.bundle_reader` — `BundleReader` | `beta` | Repository-routed Bundle consumption with exact manifest-byte and artifact verification |
+| `tributo.exporting.manifest` — schema-v1 models and registry | `stable` | Source info, typed signatures, execution records, ExportManifest, and schema reader registration |
+| `tributo.exporting.manifest` — `ExportManifestV2` and `compute_bundle_digest` | `beta` | Explainability extension and compatibility digest helper |
+| `tributo.exporting.bundle_reader` — `BundleReader` | `stable` | Repository-routed Bundle consumption with exact manifest-byte and artifact verification |
 | `tributo.exporting.planner` | `beta` | Export plan builder |
 | `tributo.exporting.executor` | `beta` | Export executor |
-| `tributo.exporting.publisher` | `beta` | Bundle publisher |
+| `tributo.exporting.publisher` | `stable` | Local/file/S3 core publication; the optional Explainability parameter remains Alpha |
 | `tributo.exporting.validators` | `beta` | Artifact validator runner |
 | `tributo.exporting.registries` | `beta` | Exporter/validator registries |
 | `tributo.exporting.options` | `beta` | Compatibility re-exports; schemas are owned by integration exporters |
@@ -173,9 +175,32 @@ source identity reject credential material rather than persist it.
 | `tributo.exporting.hooks` | `beta` | Adapter and committed-artifact access contracts |
 | `tributo.exporting.dispatch` | `beta` | Inline Hook dispatch policy |
 | `tributo.exporting.capabilities` | `beta` | Exporter/Flavor-derived capability declarations |
-| `tributo.exporting.repository` | `beta` | Bundle repository and alias store ports |
+| `tributo.exporting.repository` | `stable` | Bundle repository/alias ports and their value objects; internal routing remains DeveloperAPI |
 | `tributo.exporting.runtime` | `beta` | Bundle model runtime and Flavor protocol |
 | `tributo.exporting.conftest` | `beta` | Public plugin conformance test kit |
+
+The Stable storage model allowlist is `AliasConfig`, `ArtifactFile`,
+`ProducerInfo`, `ArtifactRef`, `LogicalArtifact`, `ResolvedArtifact`,
+`FailureInfo`, `NodeResult`, `ExportExecutionResult`, `BundleResult`, `BundleRef`,
+`PublishedBundle`, and `ValidationResult`. The Stable manifest allowlist is
+`ManifestSourceInfo`, `SignatureField`, `ManifestSignature`,
+`ManifestExecutionNode`, `ManifestExecution`, `ExportManifest`, and
+`ManifestSchemaRegistry`. `BundleCommitBusyError` and `AliasConflict` are Stable
+storage errors. The high-level `export`, `ExportSpec`, and `load_bundle`
+compatibility facade remain Beta.
+
+The Stable promise covers the core storage operation and fields. Passing Alpha
+`ExplainabilityConfig` opts into its independent contract, and
+`ExportManifestV2` remains Beta. `BundleResult.hook_receipts` keeps the Beta
+`HookReceipt` payload; Hook delivery and orchestration do not become Stable.
+Developer router/assembler injection remains an advanced extension with its
+existing constructor parameters. No signature or extension payload is removed.
+
+`ResolvedArtifact` paths are valid inside their materialization context.
+`PublishedBundle.local_dir_ephemeral` distinguishes transient S3 staging from
+persistent local publication. Ephemeral paths belong to the staging owner;
+BundleExportService guarantees their callback window. Consumers persist
+`BundleRef` or `BundleResult.canonical_uri` instead of transient local paths.
 
 ### Explainability (tributo.explainability.*)
 
@@ -288,7 +313,7 @@ source identity reject credential material rather than persist it.
 
 | Module | Level | Notes |
 |--------|-------|-------|
-| `tributo._common.storage_profiles` | `beta` | Storage profile resolution |
+| `tributo._common.storage_profiles` | `stable` | S3 profile values, named/default resolution, and credential-safe diagnostics |
 | `tributo._common.dependencies` | `beta` | Unified dependency probing layer |
 | `tributo._common` | `developer` | Internal shared package |
 | All other `tributo._common.*` | `developer` | Internal shared utilities |

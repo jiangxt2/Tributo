@@ -21,9 +21,16 @@ from tributo.exporting.repository import (
 from tributo.util.annotations import PublicAPI
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class BundleReader:
-    """Read and verify bundles through storage-independent repository ports."""
+    """Read and verify bundles through storage-independent repository ports.
+
+    Stable consumption covers local/file/S3 locations, exact manifest bytes,
+    immutable references, resource limits, and verified artifact contexts.
+    Manifest v2 remains readable, but its explainability payload keeps its
+    existing experimental contract. Custom schema readers and developer router
+    injection do not turn their extensions into stable first-party capabilities.
+    """
 
     def __init__(
         self,

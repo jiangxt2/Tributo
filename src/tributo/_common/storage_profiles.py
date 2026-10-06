@@ -15,10 +15,15 @@ from tributo.exceptions import JobConfigurationError
 from tributo.util.annotations import PublicAPI
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 @dataclass(frozen=True)
 class StorageProfile:
-    """Resolved S3-compatible storage parameters."""
+    """Resolved S3-compatible storage parameters.
+
+    Credential fields are trusted runtime data and excluded from repr.
+    Profile resolution and the existing boto3 keyword projection are stable;
+    no credentials are persisted into bundle manifests by this value object.
+    """
 
     endpoint: str | None = field(default=None, repr=False)
     region: str | None = None
@@ -54,7 +59,7 @@ class StorageProfile:
         return kwargs
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class StorageProfileResolver:
     """Resolves a profile *name* to connection parameters.
 
@@ -64,8 +69,8 @@ class StorageProfileResolver:
     2. ``boto3`` standard credential chain (env vars, ``~/.aws/credentials``,
        instance metadata).
 
-    Plugins may register additional resolvers via entry-point
-    ``tributo.storage_resolvers``.
+    Consumer constructors may receive a custom resolver. The built-in resolver
+    does not discover an additional resolver entry-point group.
     """
 
     def __init__(self) -> None:

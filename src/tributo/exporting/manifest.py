@@ -38,7 +38,7 @@ ManifestReader = Callable[[dict[str, Any], bytes], "ExportManifest"]
 # ── Manifest models ────────────────────────────────────────────────────────────
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class ManifestSourceInfo(BaseModel):
     """Stable source identification — no temp paths, credentials, or samples."""
 
@@ -52,7 +52,7 @@ class ManifestSourceInfo(BaseModel):
     task_type: str | None = None
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class SignatureField(BaseModel):
     """A single input/output field with its data type and shape.
 
@@ -87,7 +87,7 @@ class SignatureField(BaseModel):
         return v
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class ManifestSignature(BaseModel):
     """Input / output signature recorded in the manifest.
 
@@ -176,7 +176,7 @@ class ManifestSignature(BaseModel):
                     )
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class ManifestExecutionNode(BaseModel):
     """A single DAG node as recorded in the manifest.
 
@@ -196,7 +196,7 @@ class ManifestExecutionNode(BaseModel):
     duration_ms: int = 0
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class ManifestExecution(BaseModel):
     """Execution summary recorded in the manifest."""
 
@@ -206,7 +206,7 @@ class ManifestExecution(BaseModel):
     nodes: tuple[ManifestExecutionNode, ...] = ()
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class ExportManifest(BaseModel):
     """Canonical manifest for a published model bundle (schema v1).
 
@@ -291,7 +291,7 @@ _rebuild_manifest_v2()
 # ── Schema registry ────────────────────────────────────────────────────────────
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class ManifestSchemaRegistry:
     """Versioned manifest reader registry.
 
