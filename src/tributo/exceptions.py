@@ -151,7 +151,7 @@ class BundleExportError(TributoError):
         self.execution_result = execution_result
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class BundleCommitBusyError(TributoError):
     """A bundle commit is temporarily blocked by another active writer.
 
@@ -161,7 +161,7 @@ class BundleCommitBusyError(TributoError):
     retryable = True
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class AliasConflict(TributoError):
     """Alias CAS update failed — concurrent modification detected."""
 

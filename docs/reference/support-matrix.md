@@ -103,8 +103,9 @@ matrix are generated from the same Registry projection.
 
 | Capability | Status | Boundary |
 | --- | --- | --- |
-| Local and `file://` bundle publication | Beta | Manifest and digest validation |
-| S3 bundle publication | Beta | Manifest-last and alias compare-and-set |
+| Local and `file://` bundle publication | Stable | Core Publisher/repository contracts, immutable identity, manifest and digest validation; Explainability and Hook extensions retain their own levels |
+| S3 bundle publication | Stable | Core Publisher/repository contracts, manifest-last, leases, idempotency, and alias compare-and-set |
+| Bundle manifest/artifact reading and integrity | Stable | BundleReader, schema-v1 fields, exact committed bytes, digest/identity checks, bounded materialization, and context lifetime; extension payload semantics are independent |
 | HDFS bundle publication | Not implemented | Storage backend extension |
 | Ray Data batch inference | Beta | Actor-based model reuse |
 | Batch output to local/S3 Parquet | Implemented | Database sinks are separate |

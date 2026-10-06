@@ -233,6 +233,14 @@ documentation for every public stability tier.
 :no-members:
 ```
 
+```{autoclass} tributo.exporting.models.PublishedBundle
+:no-members:
+```
+
+```{autoclass} tributo.exporting.models.ResolvedArtifact
+:no-members:
+```
+
 ```{autoclass} tributo.exporting.models.SupportRequest
 :no-members:
 ```
@@ -331,6 +339,10 @@ documentation for every public stability tier.
 
 ## `tributo.exporting.repository`
 
+```{autoclass} tributo.exporting.repository.AliasUpdate
+:no-members:
+```
+
 ```{autoclass} tributo.exporting.repository.BundleAliasStore
 :no-members:
 ```
@@ -340,6 +352,14 @@ documentation for every public stability tier.
 ```
 
 ```{autoclass} tributo.exporting.repository.ReaderResourceLimits
+:no-members:
+```
+
+```{autoclass} tributo.exporting.repository.RepositoryCommit
+:no-members:
+```
+
+```{autoclass} tributo.exporting.repository.StagedBundle
 :no-members:
 ```
 

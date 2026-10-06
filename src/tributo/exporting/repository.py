@@ -19,7 +19,7 @@ from tributo.exporting.models import (
 from tributo.util.annotations import DeveloperAPI, PublicAPI
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 @dataclass(frozen=True)
 class ReaderResourceLimits:
     """Resource limits enforced before repository materialization."""
@@ -30,7 +30,7 @@ class ReaderResourceLimits:
     max_total_bytes: int = 50 * 1024 * 1024 * 1024
 
 
-@DeveloperAPI
+@PublicAPI(stability="stable")
 @dataclass(frozen=True)
 class StagedBundle:
     """Storage-neutral immutable bundle assembled before commit."""
@@ -43,7 +43,7 @@ class StagedBundle:
     staging_root: Path
 
 
-@DeveloperAPI
+@PublicAPI(stability="stable")
 @dataclass(frozen=True)
 class RepositoryCommit:
     """Repository result after an immutable bundle commit."""
@@ -55,7 +55,7 @@ class RepositoryCommit:
     local_dir_ephemeral: bool
 
 
-@DeveloperAPI
+@PublicAPI(stability="stable")
 @dataclass(frozen=True)
 class AliasUpdate:
     """Storage-level alias update result."""
@@ -66,7 +66,7 @@ class AliasUpdate:
 
 
 @runtime_checkable
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class BundleRepository(Protocol):
     """Commit, read, and materialize immutable bundles for URI schemes.
 
@@ -118,7 +118,7 @@ class BundleRepository(Protocol):
 
 
 @runtime_checkable
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class BundleAliasStore(Protocol):
     """Resolve and compare-and-set aliases in a storage namespace."""
 

@@ -30,13 +30,19 @@ from tributo.util.annotations import PublicAPI
 logger = logging.getLogger(__name__)
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class Publisher:
     """Compatibility facade over assembly and repository ports.
 
     Storage-specific atomicity, idempotency, and alias compare-and-set
     behavior belongs to repository adapters.  This facade keeps the existing
     public method stable while composing those domain contracts.
+
+    Stable publication covers local/file/S3 immutable bundles and alias results.
+    The ``explainability`` argument retains its alpha contract and produces the
+    beta Manifest v2 extension. Hook delivery and exporter orchestration are
+    separate contracts. Advanced assembler/router injection remains a developer
+    extension; existing constructor arguments are retained.
     """
 
     def __init__(
@@ -47,9 +53,9 @@ class Publisher:
         assembler: BundleAssembler | None = None,
         repository_router: BundleRepositoryRouter | None = None,
     ) -> None:
-        # Compatibility-window argument. Manifest parsing moved to
-        # BundleReader; keep accepting the old Publisher constructor surface
-        # until the documented minor-version window closes.
+        # Compatibility argument. Manifest parsing moved to BundleReader.
+        # Keep this constructor surface in the current major version;
+        # removal must follow the Stable API policy and migration guide.
         del manifest_registry
         self._assembler = assembler or BundleAssembler()
         self._repository_router = repository_router or build_default_repository_router(

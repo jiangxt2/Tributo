@@ -25,7 +25,7 @@ from pydantic import (
 )
 
 from tributo.exporting.formats import validate_format_id
-from tributo.util.annotations import DeveloperAPI, PublicAPI
+from tributo.util.annotations import PublicAPI
 
 if TYPE_CHECKING:
     from tributo.exporting.manifest import ManifestSignature
@@ -110,7 +110,7 @@ class HookReceipt(BaseModel):
     external_references: dict[str, str] = Field(default_factory=dict)
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class AliasConfig(BaseModel):
     """Optional stable alias for a published bundle."""
 
@@ -475,7 +475,7 @@ class ExportCheckpointV1(BaseModel):
 # ── Artifact models ──────────────────────────────────────────────────────────
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class ArtifactFile(BaseModel):
     """A single file within a logical artifact."""
 
@@ -511,7 +511,7 @@ class DraftFile(BaseModel):
         return _validate_posix_relative(v, "relative_path")
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class ProducerInfo(BaseModel):
     """Exporter identity and version information."""
 
@@ -525,7 +525,7 @@ class ProducerInfo(BaseModel):
     effective_options_digest: str = Field(default="", min_length=0)
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class ArtifactRef(BaseModel):
     """A reference to a published artifact by node_id and tree digest."""
 
@@ -581,7 +581,7 @@ class ArtifactDraft(BaseModel):
         return self
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class LogicalArtifact(BaseModel):
     """A verified, hash-materialized artifact ready for publishing."""
 
@@ -638,7 +638,7 @@ class LogicalArtifact(BaseModel):
         return hashlib.sha256(payload).hexdigest()
 
 
-@DeveloperAPI
+@PublicAPI(stability="stable")
 class ResolvedArtifact:
     """In-process view of an artifact with a local root directory.
 
@@ -661,7 +661,7 @@ class ResolvedArtifact:
 # ── Execution results ────────────────────────────────────────────────────────
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class FailureInfo(BaseModel):
     """Structured, sanitised failure detail — no tracebacks or credentials."""
 
@@ -675,7 +675,7 @@ class FailureInfo(BaseModel):
     retryable: bool = False
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class NodeResult(BaseModel):
     """Result of a single DAG node execution."""
 
@@ -694,7 +694,7 @@ class NodeResult(BaseModel):
     duration_ms: int = Field(default=0, ge=0)
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class ExportExecutionResult(BaseModel):
     """Complete result of an export DAG execution (before publishing)."""
 
@@ -716,9 +716,14 @@ class ExportExecutionResult(BaseModel):
         }
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class BundleResult(BaseModel):
-    """Immutable result returned to the caller after a successful publish."""
+    """Immutable result returned to the caller after a successful publish.
+
+    Core storage identity, artifact, role, and alias fields are stable.
+    ``hook_receipts`` retains the beta HookReceipt payload contract; storing a
+    receipt does not promise a hook's external delivery behavior.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -740,7 +745,7 @@ class BundleResult(BaseModel):
     hook_receipts: tuple[HookReceipt, ...] = ()
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class BundleRef(BaseModel):
     """Immutable reference to a committed bundle.
 
@@ -756,11 +761,14 @@ class BundleRef(BaseModel):
     manifest_sha256: str
 
 
-@DeveloperAPI
+@PublicAPI(stability="stable")
 class PublishedBundle:
     """Transient handle returned within BundleExportService context.
 
-    ``local_bundle_dir`` is only valid during the callback window.
+    ``local_dir_ephemeral`` distinguishes caller-owned staging (S3) from a
+    persistent local publication directory. Ephemeral files are valid only while
+    the staging owner keeps them alive; BundleExportService provides that window
+    to its callback. Persist BundleRef or the result's canonical URI instead.
     """
 
     def __init__(
@@ -779,7 +787,7 @@ class PublishedBundle:
 # ── Validation models ────────────────────────────────────────────────────────
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class ValidationResult(BaseModel):
     """Result of a single validator run."""
 
