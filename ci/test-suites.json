@@ -7,6 +7,16 @@
   },
   "path_rules": [
     {
+      "name": "dependency-closure",
+      "patterns": ["pyproject.toml", "uv.lock"],
+      "domains": ["code", "docs", "storage", "dependencies"]
+    },
+    {
+      "name": "causal-dependency-tests",
+      "patterns": ["tests/integration/test_dowhy_scipy_compat.py"],
+      "domains": ["code", "storage", "dependencies"]
+    },
+    {
       "name": "ci-policy",
       "patterns": [
         ".github/workflows/**",
@@ -188,12 +198,8 @@
       ],
       "extras": ["dev", "causal"],
       "test_paths": ["tests/integration/test_dowhy_scipy_compat.py"],
-      "trigger_domains": [],
-      "trigger_paths": [
-        "pyproject.toml",
-        "uv.lock",
-        "tests/integration/test_dowhy_scipy_compat.py"
-      ],
+      "trigger_domains": ["dependencies"],
+      "trigger_paths": [],
       "requires": [],
       "budget_seconds": 180,
       "ci_allowed": true,
