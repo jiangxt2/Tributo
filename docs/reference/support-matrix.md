@@ -107,6 +107,7 @@ matrix are generated from the same Registry projection.
 | S3 bundle publication | Stable | Core Publisher/repository contracts, manifest-last, leases, idempotency, and alias compare-and-set |
 | Bundle manifest/artifact reading and integrity | Stable | BundleReader, schema-v1 fields, exact committed bytes, digest/identity checks, bounded materialization, and context lifetime; extension payload semantics are independent |
 | HDFS bundle publication | Not implemented | Storage backend extension |
+| ONNX Bundle model loading and prediction | Stable | BundleModelLoader/Runtime and onnx-runtime-v1 only: named tensors, typed signatures, integrity/security gates, and reader-resource lifetime; transport and orchestration levels are separate |
 | Ray Data batch inference | Beta | Actor-based model reuse |
 | Batch output to local/S3 Parquet | Implemented | Database sinks are separate |
 | Batch explainability | Alpha | Optional SHAP adapter over a declared Bundle role; batch-only Ray ingestion and bounded Parquet results |

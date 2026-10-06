@@ -166,7 +166,7 @@ class AliasConflict(TributoError):
     """Alias CAS update failed — concurrent modification detected."""
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class UnsupportedArtifactFormat(TributoError):
     """Consumer does not support this artifact format or flavor.
 

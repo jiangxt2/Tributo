@@ -1,0 +1,11 @@
+{
+  "format": "onnx",
+  "ir_version": 10,
+  "opset": 18,
+  "operators": [
+    "Softmax",
+    "ArgMax"
+  ],
+  "sha256": "f8d52e8e1589c80771fd4876e501dd7db8cb628fa9821c92fe3d2e02c76fa22e",
+  "model_base64": "CAoSDXRyaWJ1dG8tdGVzdHM68gEKMgoLZmxvYXRfaW5wdXQSDXByb2JhYmlsaXRpZXMiB1NvZnRtYXgqCwoEYXhpcxgBoAECCjwKDXByb2JhYmlsaXRpZXMSBWxhYmVsIgZBcmdNYXgqCwoEYXhpcxgBoAECKg8KCGtlZXBkaW1zGACgAQISGnRyaWJ1dG8tcnVudGltZS1jbGFzc2lmaWVyWiIKC2Zsb2F0X2lucHV0EhMKEQgBEg0KBxIFYmF0Y2gKAggCYhgKBWxhYmVsEg8KDQgHEgkKBxIFYmF0Y2hiJAoNcHJvYmFiaWxpdGllcxITChEIARINCgcSBWJhdGNoCgIIAkIECgAQEg=="
+}
