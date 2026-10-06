@@ -124,7 +124,6 @@ def test_full_runtime_profile_matches_the_image_builder_contract() -> None:
     assert profile["version_contract"]["ray"] == "2.55.1"
     assert project["project"]["optional-dependencies"]["hive-ray"] == ["ray-hive==1.0"]
     for package, contract_key in {
-        "daft-clickhouse": "daft_clickhouse",
         "daft-doris": "daft_doris",
         "ray-doris": "ray_doris",
         "ray-hive": "ray_hive",

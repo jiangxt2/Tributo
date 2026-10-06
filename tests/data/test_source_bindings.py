@@ -12,7 +12,6 @@ from fsspec.implementations.webhdfs import WebHDFS as RealWebHDFS
 
 from tributo.data.bindings._postgresql import compile_table_query
 from tributo.data.bindings._sql_shared import resolve_sql_target
-from tributo.data.bindings.daft_clickhouse import DaftClickHouseBinding
 from tributo.data.bindings.daft_csv import DaftCsvBinding
 from tributo.data.bindings.daft_doris import DaftDorisBinding
 from tributo.data.bindings.daft_iceberg import DaftIcebergBinding
@@ -437,69 +436,12 @@ def test_lance_bindings_reject_iceberg_snapshot_refs(
     assert exc_info.value.diagnostic_code == "unsupported_lance_snapshot_ref"
 
 
-def test_daft_sql_default_auto_sharding_is_delegated(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[dict[str, Any]] = []
-    module = ModuleType("daft_clickhouse")
-    module.read_clickhouse = lambda **kwargs: calls.append(kwargs) or _DaftDataFrame()
-    monkeypatch.setitem(sys.modules, "daft_clickhouse", module)
-    monkeypatch.setattr(
-        "tributo.data.bindings._daft_sql.importlib.metadata.version",
-        lambda name: "0.7.23",
-    )
-    plan = SqlScan(
-        provider_id="tributo.clickhouse",
-        connector_id="clickhouse",
-        target=SqlTableRead(schema="analytics", table="events"),
-        sharding=SqlShardRequirement(mode=SqlShardMode.AUTO),
-    )
-
-    DaftClickHouseBinding().compile(
-        _request(
-            plan,
-            runtime_options={
-                "host": "db.example",
-                "port": 8123,
-                "database": "analytics",
-            },
-        )
-    )
-
-    assert calls[0]["split"] == "auto"
-
-
-def test_daft_sql_single_read_rejects_parallelism_with_actionable_modes() -> None:
-    plan = SqlScan(
-        provider_id="tributo.clickhouse",
-        connector_id="clickhouse",
-        target=SqlTableRead(schema="analytics", table="events"),
-    )
-
-    with pytest.raises(
-        BindingStageError,
-        match=("partitioning.mode to 'auto'.*remove target_parallelism"),
-    ) as exc_info:
-        DaftClickHouseBinding().compile(
-            _request(plan, read_options=ReadOptions(target_parallelism=4))
-        )
-
-    assert exc_info.value.diagnostic_code == "single_sql_read_rejects_parallelism_hint"
-
-
-@pytest.mark.parametrize(
-    ("binding", "connector_id"),
-    [(DaftClickHouseBinding(), "clickhouse"), (DaftDorisBinding(), "doris")],
-)
-def test_daft_sql_parallel_reads_fail_closed(
-    binding: EngineBinding,
-    connector_id: str,
-) -> None:
+def test_daft_sql_parallel_reads_fail_closed() -> None:
     with pytest.raises(
         BindingStageError,
         match="explicit 'parallel'.*unsupported",
     ) as exc_info:
-        binding.compile(_request(_sql_plan(connector_id)))
+        DaftDorisBinding().compile(_request(_sql_plan("doris")))
 
     assert exc_info.value.diagnostic_code == "parallel_sql_read_unsupported"
 
@@ -531,7 +473,7 @@ def _sql_plan(connector_id: str) -> SqlScan:
     )
 
 
-def _daft_auto_sql_plan(connector_id: str) -> SqlScan:
+def _auto_sql_plan(connector_id: str) -> SqlScan:
     return SqlScan(
         provider_id=f"tributo.{connector_id}",
         connector_id=connector_id,
@@ -546,13 +488,6 @@ def _daft_auto_sql_plan(connector_id: str) -> SqlScan:
 @pytest.mark.parametrize(
     ("binding", "connector_id", "reader_name", "transport_id", "protocol"),
     [
-        (
-            DaftClickHouseBinding(),
-            "clickhouse",
-            "read_clickhouse",
-            "clickhouse_native",
-            "mysql",
-        ),
         (DaftDorisBinding(), "doris", "read_doris", "mysql", "mysql"),
         (DaftDorisBinding(), "doris", "read_doris", "flight", "flight"),
     ],
@@ -582,10 +517,10 @@ def test_daft_sql_bindings_delegate_to_public_connector_facades(
 
     result = binding.compile(
         _request(
-            _daft_auto_sql_plan(connector_id),
+            _auto_sql_plan(connector_id),
             runtime_options={
                 "host": "db.example",
-                "port": 8123 if connector_id == "clickhouse" else 9030,
+                "port": 9030,
                 "database": "analytics",
                 "user": "reader",
                 "password": "secret",
@@ -600,11 +535,8 @@ def test_daft_sql_bindings_delegate_to_public_connector_facades(
     assert calls[0]["table"] == "events"
     assert calls[0]["target_tasks"] == 6
     assert calls[0]["batch_rows"] == 128
-    if connector_id == "clickhouse":
-        assert calls[0]["port"] == 8123
-    else:
-        assert calls[0]["mysql_port"] == 9030
-        assert calls[0]["transport"] == protocol
+    assert calls[0]["mysql_port"] == 9030
+    assert calls[0]["transport"] == protocol
     assert result.reader_api == f"{module_name}.{reader_name}"
     assert result.transport_id == transport_id
 
@@ -728,7 +660,7 @@ def test_ray_clickhouse_binding_maps_auto_to_partition(
 
     RayClickHouseBinding().compile(
         _request(
-            _daft_auto_sql_plan("clickhouse"),
+            _auto_sql_plan("clickhouse"),
             runtime_options={
                 "host": "clickhouse.example",
                 "port": 8123,

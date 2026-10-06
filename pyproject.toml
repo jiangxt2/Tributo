@@ -78,7 +78,6 @@ postgresql = [
 ]
 clickhouse = [
     "clickhouse-connect[arrow,async]>=1.5,<1.6",
-    "daft-clickhouse[clickhouse]==1.0",
 ]
 mysql = [
     "PyMySQL>=1.2,<1.3",

@@ -52,9 +52,16 @@ def installed_versions(monkeypatch: pytest.MonkeyPatch) -> None:
         "test-helper": "4.5.6",
         "tributo": "1.0.0",
     }
+    real_version = importlib.metadata.version
+
+    def version_for_test(name: str) -> str:
+        if name in versions:
+            return versions[name]
+        return real_version(name)
+
     monkeypatch.setattr(
         "tributo.data.engine_binding.importlib.metadata.version",
-        lambda name: versions[name],
+        version_for_test,
     )
 
 
@@ -733,19 +740,14 @@ def test_external_sql_descriptors_use_package_identity(
         builtin_bindings,
         "_distribution_version",
         lambda name: {
-            "daft-clickhouse": "1.0",
             "daft-doris": "1.0",
             "ray-clickhouse": "0.1.0",
         }.get(name),
     )
 
-    clickhouse = builtin_bindings._daft_clickhouse_descriptor()
     doris = builtin_bindings._daft_doris_descriptor()
     ray_clickhouse = builtin_bindings._ray_clickhouse_descriptor()
 
-    assert clickhouse.key.binding_id == "daft_clickhouse.daft.clickhouse"
-    assert clickhouse.distribution_name == "daft-clickhouse"
-    assert clickhouse.dependency_distributions == ("clickhouse-connect",)
     assert doris.key.binding_id == "daft_doris.daft.doris"
     assert doris.distribution_name == "daft-doris"
     assert doris.dependency_distributions == ("PyMySQL",)
@@ -778,7 +780,10 @@ def test_missing_external_sql_packages_report_install_hints(
 
     with pytest.raises(
         EngineNotAvailableError,
-        match=r"daft_clickhouse\.daft\.clickhouse.*daft-clickhouse.*tributo\[clickhouse\]",
+        match=(
+            r"No installed binding for "
+            r"tributo\.daft/sql/clickhouse/daft_clickhouse\.daft\.clickhouse"
+        ),
     ):
         bindings.resolve(
             BindingKey(

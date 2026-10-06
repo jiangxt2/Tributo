@@ -11,10 +11,6 @@ documentation for every public stability tier.
 
 ## `tributo.data.bindings._daft_sql`
 
-```{autoclass} tributo.data.bindings._daft_sql.DaftClickHouseBinding
-:no-members:
-```
-
 ```{autoclass} tributo.data.bindings._daft_sql.DaftDorisBinding
 :no-members:
 ```

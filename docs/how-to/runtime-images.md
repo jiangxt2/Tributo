@@ -60,10 +60,9 @@ The output directory contains:
 - `build.log`: the command/evidence log for this build.
 
 The builder never pushes an image. Publishing requires a separate reviewed
-workflow. The canonical configuration resolves `daft-clickhouse==1.0`,
-`daft-doris==1.0`, `ray-doris==1.0`, and `ray-hive==1.0` through the locked
-Tributo extras, so the normal image build does not require a local connector
-wheelhouse. The
+workflow. The canonical configuration resolves `daft-doris==1.0`,
+`ray-doris==1.0`, and `ray-hive==1.0` through the locked Tributo extras, so the
+normal image build does not require a local connector wheelhouse. The
 `external_wheelhouse` option remains available for packages outside the lock:
 it is copied into a named build context and installed with
 `pip --no-index --no-deps`; every wheel is recorded by filename,

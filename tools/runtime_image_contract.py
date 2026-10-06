@@ -26,7 +26,6 @@ REQUIRED_IMPORTS = (
     "mlflow",
     "grpc",
     "torch_geometric",
-    "daft_clickhouse",
     "daft_doris",
     "ray_doris",
 )
@@ -51,7 +50,6 @@ REQUIRED_DISTRIBUTIONS = (
     "dowhy",
     "econml",
     "bayesian-optimization",
-    "daft-clickhouse",
     "daft-doris",
     "ray-doris",
     "clickhouse-connect",
@@ -63,7 +61,6 @@ REQUIRED_DISTRIBUTIONS = (
 
 REQUIRED_DISTRIBUTION_VERSIONS = {
     "ray-hive": "1.0",
-    "daft-clickhouse": "1.0",
     "daft-doris": "1.0",
     "ray-doris": "1.0",
     "thrift": "0.16.0",

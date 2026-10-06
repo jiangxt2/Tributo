@@ -881,24 +881,6 @@ ray = [
 ]
 
 [[package]]
-name = "daft-clickhouse"
-version = "1.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "daft" },
-    { name = "pyarrow" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/b6/0b/4857e4746fdbe8f1cd911854e4e4821d1650b7f2c55efb558fcbad2707aa/daft_clickhouse-1.0.tar.gz", hash = "sha256:053ee0b740eb68246b48c3cf7bcce8eb8e9766e6c9530968a80f3b0fa08ce77a", size = 169506, upload-time = "2026-08-17T14:44:58.758Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/a9/b2/c32e73be7521cbd0e6eb5fbbe00114a5dcb637265a7db1e5f7a94bf6af15/daft_clickhouse-1.0-py3-none-any.whl", hash = "sha256:6b3ce6d2dc30fb0c282cfa99f14faa41887e139f31424f16ebc8b4d090ee1c7f", size = 51936, upload-time = "2026-08-17T14:44:57.553Z" },
-]
-
-[package.optional-dependencies]
-clickhouse = [
-    { name = "clickhouse-connect", extra = ["arrow", "async"] },
-]
-
-[[package]]
 name = "daft-doris"
 version = "1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -4814,7 +4796,6 @@ causal = [
 ]
 clickhouse = [
     { name = "clickhouse-connect", extra = ["arrow", "async"] },
-    { name = "daft-clickhouse", extra = ["clickhouse"] },
 ]
 data = [
     { name = "lance-ray" },
@@ -4943,7 +4924,6 @@ test-integration = [
     { name = "causal-learn" },
     { name = "clickhouse-connect", extra = ["arrow", "async"] },
     { name = "daft", extra = ["lance", "ray"] },
-    { name = "daft-clickhouse", extra = ["clickhouse"] },
     { name = "daft-doris", extra = ["doris"] },
     { name = "dowhy" },
     { name = "lance-ray" },
@@ -4971,7 +4951,6 @@ training = [
     { name = "boto3" },
     { name = "clickhouse-connect", extra = ["arrow", "async"] },
     { name = "daft", extra = ["lance", "ray"] },
-    { name = "daft-clickhouse", extra = ["clickhouse"] },
     { name = "daft-doris", extra = ["doris"] },
     { name = "lance-ray" },
     { name = "ml-dtypes" },
@@ -5029,7 +5008,6 @@ requires-dist = [
     { name = "click", specifier = ">=8.0.0" },
     { name = "clickhouse-connect", extras = ["arrow", "async"], marker = "extra == 'clickhouse'", specifier = ">=1.5,<1.6" },
     { name = "daft", extras = ["lance", "ray"], marker = "extra == 'data-daft'", specifier = ">=0.7.23,<0.7.24" },
-    { name = "daft-clickhouse", extras = ["clickhouse"], marker = "extra == 'clickhouse'", specifier = "==1.0" },
     { name = "daft-doris", extras = ["doris"], marker = "extra == 'mysql'", specifier = "==1.0" },
     { name = "daft-doris", extras = ["doris-flight"], marker = "extra == 'doris-flight'", specifier = "==1.0" },
     { name = "dowhy", marker = "extra == 'causal'", specifier = ">=0.11.0" },
