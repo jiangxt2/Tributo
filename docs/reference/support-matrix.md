@@ -42,6 +42,7 @@ endpoint.
 
 | Capability | Status | Boundary |
 | --- | --- | --- |
+| Canonical source configuration and DatasetRef identity | Stable | Existing JSON shapes, fields, defaults, projection, and identity version 1; Provider/Gateway/Binding execution and provider-private options keep their own contracts |
 | Local/S3 Parquet and CSV reads | Verified | Native Ray Data or Daft handle through one Gateway |
 | Local/S3 Iceberg reads | Verified | Built-in bindings use PyIceberg `>=0.11.1,<0.12.0` with `PyArrowFileIO`; Ray may push `row_filter` into the scan, Daft applies it as a lazy residual filter, and empty-table schema is preserved from Iceberg metadata; broader Catalog/delete-file matrix remains gated |
 | Local/S3 Lance reads | Verified | Native Ray Data or Daft table reader; numeric versions and tags are supported, Daft also supports as-of, and Iceberg snapshot references fail closed |

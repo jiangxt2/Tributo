@@ -2,6 +2,13 @@
 
 Replaces the hardcoded ``if data_type == "s3": ... elif data_type == "csv": ...``
 dispatch in ``training/data_loader.py`` and ``inference/pipeline.py``.
+
+Canonical models, projection helpers, and the ``BuiltinSourceConfig``,
+``SourceConfig``, and ``CanonicalSourceInput`` aliases are stable contracts.
+Legacy normalizers and ``RawSourceConfig`` remain beta. Configuration accepts
+trusted runtime input; raw dumps and Pydantic validation details are not safe
+public logging payloads. Provider execution and private options keep their own
+stability and capability boundaries.
 """
 
 from __future__ import annotations
@@ -34,7 +41,7 @@ logger = logging.getLogger(__name__)
 _SqlDialect = Literal["clickhouse", "doris", "postgresql", "mysql"]
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class RayReadTaskOptions(StrictConfigModel):
     """Validated Ray task options supported by the Doris read Binding.
 
@@ -63,7 +70,7 @@ class RayReadTaskOptions(StrictConfigModel):
         return value
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class ParquetSourceConfig(StrictConfigModel):
     """Parquet source (local filesystem or S3).
 
@@ -80,7 +87,7 @@ class ParquetSourceConfig(StrictConfigModel):
     s3: S3Config | None = Field(default=None, repr=False)
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class CsvSourceConfig(StrictConfigModel):
     """CSV source (local filesystem or S3).
 
@@ -97,7 +104,7 @@ class CsvSourceConfig(StrictConfigModel):
     columns: list[str] | None = None
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class SqlSourceConfig(StrictConfigModel):
     """Unified SQL data source for ClickHouse, Doris, PostgreSQL, and MySQL.
 
@@ -191,7 +198,7 @@ class SqlSourceConfig(StrictConfigModel):
 # ---------------------------------------------------------------------------
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class SqlPartitioning(BaseModel):
     """Performance hint for SQL result partitioning.
 
@@ -214,7 +221,7 @@ class SqlPartitioning(BaseModel):
         return self
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class IcebergSourceConfig(StrictConfigModel):
     """Iceberg table source.
 
@@ -253,7 +260,7 @@ BuiltinSourceConfig = Annotated[
 SourceConfig = BuiltinSourceConfig
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class ProviderSourceConfig(StrictConfigModel):
     """Target ``provider/uri`` canonical source shape.
 
@@ -264,9 +271,10 @@ class ProviderSourceConfig(StrictConfigModel):
         uri: Canonical URI of the bounded data source (``s3://``, local
             path, or a dialect-specific connection reference).
         options: Provider-validated options (format options, table
-            references, SQL query digest, etc.). May carry credentials —
-            redaction guarantees they never reach ``repr``, logs, errors,
-            ``DatasetRef`` or benchmark output.
+            references, SQL query digest, etc.). May carry runtime credentials
+            and are excluded from ``repr``. Persisted source identities are
+            credential-free; ordinary model dumps and validation details
+            must remain inside the trusted configuration boundary.
     """
 
     provider: str = Field(min_length=1)
@@ -289,7 +297,7 @@ def _provider_projection_option(source: ProviderSourceConfig) -> str | None:
     return resolve_provider(source).projection_option_name
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 def source_projection(source: CanonicalSourceInput) -> list[str] | None:
     """Return the provider-native projection configured on ``source``.
 
@@ -314,7 +322,7 @@ def source_projection(source: CanonicalSourceInput) -> list[str] | None:
     return list(value) if value else None
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 def apply_source_projection(
     source: CanonicalSourceInput, columns: list[str]
 ) -> CanonicalSourceInput:

@@ -121,6 +121,30 @@ def test_public_api_generator_change_selects_documentation_gate(
     )
 
 
+@pytest.mark.parametrize(
+    "path",
+    (
+        "pyproject.toml",
+        "uv.lock",
+        "tests/integration/test_dowhy_scipy_compat.py",
+    ),
+)
+def test_dependency_change_selects_real_causal_ci_suite(
+    manifest: ci_test_plan.Manifest, path: str
+) -> None:
+    plan = ci_test_plan.build_plan(
+        manifest, event="pull_request", mode="pr", changed_paths=[path]
+    )
+
+    assert "causal-dependency-contract" in plan["selected"]["ci_fast"]
+    assert {"suite": "causal-dependency-contract"} in plan["matrix"]["include"]
+    suite = manifest.suite("causal-dependency-contract")
+    assert suite.extras == ("dev", "causal")
+    assert suite.forbid_skips
+    assert plan["run_unit"] is True
+    assert plan["run_docs"] is (path != "tests/integration/test_dowhy_scipy_compat.py")
+
+
 def test_storage_change_selects_bounded_ci_and_reports_external_validation(
     manifest: ci_test_plan.Manifest,
 ) -> None:

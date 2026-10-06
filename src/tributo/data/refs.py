@@ -151,7 +151,7 @@ def _canonical_json(value: Any) -> str:
     )
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 def digest(value: Any) -> str:
     """SHA-256 of the canonical JSON representation of *value*.
 
@@ -162,7 +162,7 @@ def digest(value: Any) -> str:
     return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 def compute_ref_id(
     *,
     provider_id: str,
@@ -314,13 +314,15 @@ def _uri_has_credentials(uri: str) -> bool:
     return False
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 def schema_fingerprint(schema: "pa.Schema") -> str:
     """SHA-256 of the canonical Arrow schema (field structure + metadata).
 
     Used to detect schema drift between runs without embedding the full
     schema in a manifest.  Field order matters (reordering columns changes
-    the fingerprint); metadata is normalized by key order.
+    the fingerprint); schema-level metadata is normalized by key order.
+    Field metadata is not included. Type identity uses Arrow's type strings;
+    changing Arrow's type representation can therefore change the fingerprint.
     """
     import pyarrow as pa
 
@@ -347,7 +349,7 @@ def _bytes_to_str(value: bytes | str) -> str:
     return value.decode("utf-8") if isinstance(value, bytes) else str(value)
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 @dataclass(frozen=True)
 class DatasetRef:
     """Credential-free record of what data was used.

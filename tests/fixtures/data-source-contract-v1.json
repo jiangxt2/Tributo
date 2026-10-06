@@ -1,0 +1,152 @@
+{
+  "contract_version": 1,
+  "sources": [
+    {
+      "input": {
+        "type": "parquet",
+        "path": "s3://warehouse/train.parquet",
+        "columns": [
+          "x",
+          "y"
+        ],
+        "s3": {
+          "region": "us-east-1"
+        }
+      },
+      "expected": {
+        "type": "parquet",
+        "path": "s3://warehouse/train.parquet",
+        "columns": [
+          "x",
+          "y"
+        ],
+        "s3": {
+          "access_key_id": null,
+          "secret_access_key": null,
+          "endpoint": null,
+          "region": "us-east-1"
+        }
+      }
+    },
+    {
+      "input": {
+        "type": "csv",
+        "path": "/data/train.csv"
+      },
+      "expected": {
+        "type": "csv",
+        "path": "/data/train.csv",
+        "s3": null,
+        "columns": null
+      }
+    },
+    {
+      "input": {
+        "type": "sql",
+        "dialect": "doris",
+        "database": "analytics",
+        "table": "training",
+        "partitioning": {
+          "mode": "parallel",
+          "column": "id",
+          "num_partitions": 4
+        },
+        "ray_remote_args": {
+          "num_cpus": 1,
+          "scheduling_strategy": "SPREAD",
+          "max_retries": 2
+        }
+      },
+      "expected": {
+        "type": "sql",
+        "dialect": "doris",
+        "host": null,
+        "port": null,
+        "http_port": null,
+        "flight_port": null,
+        "database": "analytics",
+        "database_schema": null,
+        "user": null,
+        "password": null,
+        "sql": "",
+        "table": "training",
+        "protocol": "mysql",
+        "tablet_size": null,
+        "on_query_plan_error": null,
+        "ray_remote_args": {
+          "num_cpus": 1,
+          "scheduling_strategy": "SPREAD",
+          "max_retries": 2
+        },
+        "params": null,
+        "columns": null,
+        "partitioning": {
+          "mode": "parallel",
+          "column": "id",
+          "num_partitions": 4,
+          "bound_strategy": "min-max"
+        }
+      }
+    },
+    {
+      "input": {
+        "type": "iceberg",
+        "catalog": "warehouse",
+        "table": "analytics.training",
+        "snapshot_id": 7,
+        "selected_fields": [
+          "x",
+          "y"
+        ]
+      },
+      "expected": {
+        "type": "iceberg",
+        "catalog": "warehouse",
+        "table": "analytics.training",
+        "catalog_properties": {},
+        "s3": null,
+        "snapshot_id": 7,
+        "row_filter": null,
+        "selected_fields": [
+          "x",
+          "y"
+        ]
+      }
+    },
+    {
+      "input": {
+        "provider": "tributo.parquet",
+        "uri": "s3://warehouse/train.parquet",
+        "options": {
+          "columns": [
+            "x",
+            "y"
+          ]
+        }
+      },
+      "expected": {
+        "provider": "tributo.parquet",
+        "uri": "s3://warehouse/train.parquet",
+        "options": {
+          "columns": [
+            "x",
+            "y"
+          ]
+        }
+      }
+    }
+  ],
+  "identity": {
+    "provider_id": "tributo.parquet",
+    "canonical_uri": "s3://warehouse/train.parquet",
+    "result_affecting_options": {
+      "columns": [
+        "x",
+        "y"
+      ]
+    },
+    "version": 1
+  },
+  "ref_id": "6d1b479b80c79eb1027fb2da97a35d6e34d78de347810ac70e3a674e9586ca14",
+  "schema_fingerprint": "cf41c4b6f371f9f1783e2a3ad74a78bfa94f5aeb0e4274e215414ee2f2d14f75"
+}
