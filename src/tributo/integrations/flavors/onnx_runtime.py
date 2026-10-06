@@ -27,7 +27,7 @@ from tributo.util.annotations import PublicAPI
 __all__ = ["ONNXRuntimeFlavor"]
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class ONNXRuntimeFlavor:
     """Loads ``onnx-runtime-v1`` artifacts into an ONNX Runtime session."""
 

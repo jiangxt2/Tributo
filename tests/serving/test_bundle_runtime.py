@@ -9,8 +9,11 @@ runtime's idempotent close contract (close-after-load, exception close).
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -31,7 +34,18 @@ from tributo.exceptions import (
     UnsupportedArtifactFormat,
 )
 from tributo.exporting.bundle_reader import BundleReader
-from tributo.exporting.registries import FlavorRegistry
+from tributo.exporting.capabilities import (
+    ArtifactCapability,
+    CapabilityRegistry,
+    get_default_capability_registry,
+)
+from tributo.exporting.manifest import ExportManifest
+from tributo.exporting.models import BundleRef, PluginLoadDiagnostic, ResolvedArtifact
+from tributo.exporting.registries import (
+    ExportRegistry,
+    FlavorRegistry,
+    ModelFactoryRegistry,
+)
 from tributo.exporting.runtime import (
     DEFAULT_ROLE,
     FLAVOR_SUPPORT_MATRIX,
@@ -39,8 +53,28 @@ from tributo.exporting.runtime import (
     SECURITY_MODE_SAFE,
     SERVEABLE_FLAVOR_MATRIX,
     BundleModel,
+    BundleModelFlavor,
     BundleModelLoader,
+    BundleModelRuntime,
+    BundleReaderLike,
+    FlavorSupportEntry,
 )
+from tributo.integrations.flavors.onnx_runtime import ONNXRuntimeFlavor
+from tributo.util.annotations import get_stability
+
+_ONNX_CLASSIFIER_FIXTURE = (
+    Path(__file__).resolve().parents[1] / "fixtures" / "bundle-runtime-classifier.json"
+)
+
+
+def _write_onnx_classifier_fixture(tmp_path: Path) -> str:
+    descriptor = json.loads(_ONNX_CLASSIFIER_FIXTURE.read_text(encoding="utf-8"))
+    payload = base64.b64decode(descriptor["model_base64"], validate=True)
+    assert hashlib.sha256(payload).hexdigest() == descriptor["sha256"]
+    path = tmp_path / "runtime-classifier.onnx"
+    path.write_bytes(payload)
+    return str(path)
+
 
 # ── Fakes ──────────────────────────────────────────────────────────────────────
 
@@ -52,7 +86,7 @@ class _EchoModel:
 
     input_names = ("float_input",)
     output_names = ("label", "probabilities")
-    input_dtypes = ("float32",)
+    input_dtypes: tuple[str, ...] = ("float32",)
     output_dtypes = ("int64", "float32")
     input_shapes: tuple[tuple[int | None, ...], ...] = ((None, 2),)
     output_shapes: tuple[tuple[int | None, ...], ...] = ((None,), (None, 2))
@@ -138,7 +172,9 @@ class _FactoryRebuildFlavor(_EchoFlavor):
 
         assert architecture_id == "test-dnn-v1"
         factory_cls = build_factory_registry().get(architecture_id)
-        return factory_cls().build({})
+        model = factory_cls().build({})
+        assert isinstance(model, BundleModel)
+        return model
 
 
 def _loader(flavor: type[Any] = _EchoFlavor) -> BundleModelLoader:
@@ -175,6 +211,7 @@ class TestFlavorSupportMatrix:
 
         assert SERVEABLE_FLAVOR_MATRIX, "matrix must not be empty"
         for entry in SERVEABLE_FLAVOR_MATRIX:
+            assert entry.loader is not None
             module_name, _, attr = entry.loader.partition(":")
             module = importlib.import_module(module_name)
             cls = getattr(module, attr)
@@ -390,7 +427,7 @@ class TestActualPredictionOutputValidation:
         bundle = build_test_bundle(tmp_path)
 
         class _WrongDtype(_EchoModel):
-            def predict(self, inputs):
+            def predict(self, inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
                 outputs = super().predict(inputs)
                 outputs["probabilities"] = outputs["probabilities"].astype(np.float64)
                 return outputs
@@ -404,7 +441,7 @@ class TestActualPredictionOutputValidation:
         bundle = build_test_bundle(tmp_path)
 
         class _WrongRank(_EchoModel):
-            def predict(self, inputs):
+            def predict(self, inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
                 outputs = super().predict(inputs)
                 outputs["probabilities"] = outputs["probabilities"].reshape(-1)
                 return outputs
@@ -420,7 +457,7 @@ class TestActualPredictionOutputValidation:
         bundle = build_test_bundle(tmp_path)
 
         class _WrongShape(_EchoModel):
-            def predict(self, inputs):
+            def predict(self, inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
                 rows = inputs["float_input"].shape[0]
                 return {
                     "label": np.zeros(rows, dtype=np.int64),
@@ -436,7 +473,7 @@ class TestActualPredictionOutputValidation:
         bundle = build_test_bundle(tmp_path)
 
         class _WrongRows(_EchoModel):
-            def predict(self, inputs):
+            def predict(self, inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
                 rows = inputs["float_input"].shape[0]
                 return {
                     "label": np.zeros(max(0, rows - 1), dtype=np.int64),
@@ -533,7 +570,9 @@ class TestSignatureValidation:
         class _InvalidFormatsFlavor(_EchoFlavor):
             pass
 
-        _InvalidFormatsFlavor.supported_formats = supported_formats
+        monkeypatch.setattr(
+            _InvalidFormatsFlavor, "supported_formats", supported_formats
+        )
         entry = runtime_module.FlavorSupportEntry(
             flavor_id=_InvalidFormatsFlavor.flavor_id,
             artifact_role="model",
@@ -675,6 +714,40 @@ class TestSignatureValidation:
 # ── Runtime lifecycle ──────────────────────────────────────────────────────────
 
 
+class _RecordingReader(BundleReader):
+    """Observe actual materialization contexts without replacing artifacts."""
+
+    def __init__(self, cache_dir: Path | None = None) -> None:
+        super().__init__(cache_dir=cache_dir)
+        self.exits: list[bool] = []
+
+    @contextmanager
+    def open_artifact(
+        self,
+        manifest_or_bundle_uri: BundleRef | str,
+        *,
+        role: str | None = None,
+        artifact_name: str | None = None,
+        storage_profile: str | None = None,
+        manifest: ExportManifest | None = None,
+        manifest_bytes: bytes | None = None,
+    ) -> Iterator[ResolvedArtifact]:
+        with super().open_artifact(
+            manifest_or_bundle_uri,
+            role=role,
+            artifact_name=artifact_name,
+            storage_profile=storage_profile,
+            manifest=manifest,
+            manifest_bytes=manifest_bytes,
+        ) as artifact:
+            index = len(self.exits)
+            self.exits.append(False)
+            try:
+                yield artifact
+            finally:
+                self.exits[index] = True
+
+
 class TestRuntimeLifecycle:
     """Runtime 持有 reader context；close 幂等；异常关闭不泄漏。"""
 
@@ -709,43 +782,6 @@ class TestRuntimeLifecycle:
             ) -> BundleModel:
                 raise RuntimeError("boom")
 
-        class _RecordingReader:
-            def __init__(self) -> None:
-                self.exits: list[bool] = []
-
-            def read_manifest_with_bytes(
-                self, manifest_or_bundle_uri: str, *, storage_profile: str | None = None
-            ) -> tuple[Any, bytes]:
-                import json
-
-                from tributo.exporting.manifest import _read_manifest_v1
-
-                manifest_bytes = (tmp_path / "bundle" / "manifest.json").read_bytes()
-                raw = json.loads(manifest_bytes)
-                return _read_manifest_v1(raw, manifest_bytes), manifest_bytes
-
-            def open_artifact(
-                self,
-                manifest_or_bundle_uri: str,
-                *,
-                role: str | None = None,
-                artifact_name: str | None = None,
-                storage_profile: str | None = None,
-                manifest: Any = None,
-                manifest_bytes: bytes | None = None,
-            ) -> Any:
-                from contextlib import contextmanager
-
-                @contextmanager
-                def _cm() -> Any:
-                    self.exits.append(False)
-                    try:
-                        yield None
-                    finally:
-                        self.exits[-1] = True
-
-                return _cm()
-
         reader = _RecordingReader()
         registry = FlavorRegistry()
         registry.register(_ExplodingFlavor)
@@ -774,27 +810,62 @@ class TestOnnxRuntimeEndToEnd:
     """真实 ONNX 模型经 BundleModelLoader 加载并推理。"""
 
     def test_load_and_predict_real_onnx(self, tmp_path: Path) -> None:
-        import pytest as _pytest
-
-        onnx_path = None
-        try:
-            from tests.serving.bundle_fixtures import make_dummy_onnx
-
-            onnx_path = make_dummy_onnx(tmp_path)
-        except Exception as exc:
-            _pytest.skip(f"skl2onnx or sklearn not installed: {exc}")
-
-        bundle = build_test_bundle(tmp_path, onnx_path=onnx_path)
-        loader = BundleModelLoader()  # 默认 registry（含内置 onnx-runtime-v1）
+        bundle = build_test_bundle(
+            tmp_path, onnx_path=_write_onnx_classifier_fixture(tmp_path)
+        )
+        loader = BundleModelLoader()
+        inputs = {
+            "float_input": np.array(
+                [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float32
+            )
+        }
         runtime = loader.open(str(bundle), role="inference")
         try:
-            result = runtime.predict(
-                {"float_input": np.array([[0.5, 0.5]], dtype=np.float32)}
+            result = runtime.predict(inputs)
+            np.testing.assert_array_equal(result["label"], [0, 0, 1])
+            np.testing.assert_allclose(
+                result["probabilities"],
+                np.array(
+                    [[0.5, 0.5], [0.7310586, 0.2689414], [0.2689414, 0.7310586]],
+                    dtype=np.float32,
+                ),
+                rtol=1e-6,
+                atol=1e-6,
             )
-            assert "label" in result
-            assert "probabilities" in result
+            assert result["label"].dtype == np.int64
+            assert result["probabilities"].dtype == np.float32
+            runtime.close()
+            runtime.close()
+            assert runtime.closed
+            repeated = runtime.predict(inputs)
+            np.testing.assert_array_equal(repeated["label"], result["label"])
+            np.testing.assert_allclose(
+                repeated["probabilities"], result["probabilities"]
+            )
         finally:
             runtime.close()
+
+    @pytest.mark.parametrize("failure_kind", ("load", "signature"))
+    def test_real_onnx_failure_closes_artifact_context(
+        self, tmp_path: Path, failure_kind: str
+    ) -> None:
+        reader = _RecordingReader(cache_dir=tmp_path / "cache")
+        expected_error: type[ModelLoadError] | type[ModelSchemaMismatchError]
+        if failure_kind == "load":
+            bundle = build_test_bundle(tmp_path, model_bytes=b"invalid-onnx-model")
+            expected_error = ModelLoadError
+            expected_message = "Failed to load ONNX"
+        else:
+            bundle = build_test_bundle(
+                tmp_path,
+                onnx_path=_write_onnx_classifier_fixture(tmp_path),
+                input_field_name="unexpected_input",
+            )
+            expected_error = ModelSchemaMismatchError
+            expected_message = "input"
+        with pytest.raises(expected_error, match=expected_message):
+            BundleModelLoader(bundle_reader=reader).open(str(bundle), role="inference")
+        assert reader.exits == [True]
 
     def test_default_loader_requires_typed_signature(self, tmp_path: Path) -> None:
         """默认 loader（真实 ONNXRuntimeFlavor）拒绝空签名 bundle。"""
@@ -818,10 +889,9 @@ class TestFileUriAndE2E:
 
     def test_file_uri_real_onnx_predict(self, tmp_path: Path) -> None:
         """file:// URI + 真实 ONNX 模型端到端推理。"""
-        from tests.serving.bundle_fixtures import make_dummy_onnx
-
-        onnx_path = make_dummy_onnx(tmp_path)
-        bundle = build_test_bundle(tmp_path, onnx_path=onnx_path)
+        bundle = build_test_bundle(
+            tmp_path, onnx_path=_write_onnx_classifier_fixture(tmp_path)
+        )
         loader = BundleModelLoader()
         with loader.open("file://" + str(bundle), role="inference") as runtime:
             result = runtime.predict(
@@ -829,3 +899,25 @@ class TestFileUriAndE2E:
             )
             assert result["label"].shape == (1,)
             assert result["probabilities"].shape == (1, 2)
+
+
+def test_runtime_public_contract_stability_scope() -> None:
+
+    for obj in (
+        BundleReaderLike,
+        BundleModel,
+        BundleModelFlavor,
+        FlavorSupportEntry,
+        BundleModelLoader,
+        BundleModelRuntime,
+        ONNXRuntimeFlavor,
+        FlavorRegistry,
+        ArtifactCapability,
+        CapabilityRegistry,
+        get_default_capability_registry,
+        PluginLoadDiagnostic,
+        UnsupportedArtifactFormat,
+    ):
+        assert get_stability(obj) == "stable"
+    for beta_obj in (ExportRegistry, ModelFactoryRegistry, DependencySpec):
+        assert get_stability(beta_obj) == "beta"

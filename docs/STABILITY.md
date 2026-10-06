@@ -158,7 +158,8 @@ source identity reject credential material rather than persist it.
 |--------|-------|-------|
 | `tributo.exporting.service` — `BundleExportService` | `beta` | Primary export orchestration |
 | `tributo.exporting.models` — core storage values | `stable` | AliasConfig, artifact/producer/reference/validation values, execution/failure results, BundleResult, BundleRef, ResolvedArtifact, and PublishedBundle |
-| `tributo.exporting.models` — export configuration, Hook and plugin values | `beta` | Exporter orchestration and Hook payloads retain independent contracts |
+| `tributo.exporting.models` — `PluginLoadDiagnostic` | `stable` | Flavor/plugin discovery diagnostic value fields |
+| `tributo.exporting.models` — export configuration and Hook values | `beta` | Exporter orchestration and Hook payloads retain independent contracts |
 | `tributo.exporting.protocols` — all protocols | `beta` | Exporter/Validator/SourceProvider contracts |
 | `tributo.exporting.manifest` — schema-v1 models and registry | `stable` | Source info, typed signatures, execution records, ExportManifest, and schema reader registration |
 | `tributo.exporting.manifest` — `ExportManifestV2` and `compute_bundle_digest` | `beta` | Explainability extension and compatibility digest helper |
@@ -167,16 +168,17 @@ source identity reject credential material rather than persist it.
 | `tributo.exporting.executor` | `beta` | Export executor |
 | `tributo.exporting.publisher` | `stable` | Local/file/S3 core publication; the optional Explainability parameter remains Alpha |
 | `tributo.exporting.validators` | `beta` | Artifact validator runner |
-| `tributo.exporting.registries` | `beta` | Exporter/validator registries |
+| `tributo.exporting.registries` — `FlavorRegistry` | `stable` | Flavor registration, lookup, and diagnostics |
+| `tributo.exporting.registries` — exporter/source/validator/factory registries | `beta` | Exporter and model-factory orchestration |
 | `tributo.exporting.options` | `beta` | Compatibility re-exports; schemas are owned by integration exporters |
 | `tributo.exporting.records` | `beta` | Export record types; `PublicationAttempt` is read-only legacy compatibility and receives no new writes |
 | `tributo.exporting.gc` | `beta` | Bundle GC |
 | `tributo.exporting.events` | `beta` | Immutable publication event contract |
 | `tributo.exporting.hooks` | `beta` | Adapter and committed-artifact access contracts |
 | `tributo.exporting.dispatch` | `beta` | Inline Hook dispatch policy |
-| `tributo.exporting.capabilities` | `beta` | Exporter/Flavor-derived capability declarations |
+| `tributo.exporting.capabilities` | `stable` | Capability value structure, discovery projection, and lookup; plugin declarations do not prove execution support |
 | `tributo.exporting.repository` | `stable` | Bundle repository/alias ports and their value objects; internal routing remains DeveloperAPI |
-| `tributo.exporting.runtime` | `beta` | Bundle model runtime and Flavor protocol |
+| `tributo.exporting.runtime` | `stable` | Bundle model protocols, loader/runtime, and support entries; first-party executable guarantee is scoped to onnx-runtime-v1 |
 | `tributo.exporting.conftest` | `beta` | Public plugin conformance test kit |
 
 The Stable storage model allowlist is `AliasConfig`, `ArtifactFile`,
@@ -201,6 +203,21 @@ existing constructor parameters. No signature or extension payload is removed.
 persistent local publication. Ephemeral paths belong to the staging owner;
 BundleExportService guarantees their callback window. Consumers persist
 `BundleRef` or `BundleResult.canonical_uri` instead of transient local paths.
+
+The Stable Runtime scope includes `BundleReaderLike`, `BundleModel`,
+`BundleModelFlavor`, `FlavorSupportEntry`, `BundleModelLoader`,
+`BundleModelRuntime`, and `ONNXRuntimeFlavor`. `FlavorRegistry`,
+`ArtifactCapability`, `CapabilityRegistry`, `get_default_capability_registry`,
+`PluginLoadDiagnostic`, and `UnsupportedArtifactFormat` complete its public
+routing and diagnostic contracts. Exporter/validator/factory registries,
+optional dependency internals, other flavors, Ray Data batch orchestration,
+and HTTP/gRPC/SSE transports keep their existing levels.
+
+Runtime `close()` releases reader resources exactly once; it does not unload
+an in-memory ONNX session. ONNX prediction remains valid after close. Loading
+and signature-validation failures close the artifact context before propagating.
+The loaded Runtime keeps the validated manifest bytes and role-bound artifact;
+custom Flavor execution follows its own declared contract.
 
 ### Explainability (tributo.explainability.*)
 
@@ -231,7 +248,7 @@ BundleExportService guarantees their callback window. Consumers persist
 | `tributo.integrations.exporters.*` | `beta` | Built-in exporter implementations |
 | `tributo.integrations.exporters.x_learner` | `alpha` | Fixed X-Learner model and causal-report exporter adapters |
 | `tributo.integrations.flavors` | `beta` | Built-in runtime flavor package |
-| `tributo.integrations.flavors.onnx_runtime` | `beta` | ONNX Runtime flavor implementation |
+| `tributo.integrations.flavors.onnx_runtime` | `stable` | onnx-runtime-v1 named-tensor loading, prediction, and reader-resource lifetime |
 | `tributo.integrations.validators` | `beta` | Built-in validator package |
 | `tributo.integrations.validators.*` | `beta` | Built-in validator implementations |
 | `tributo.integrations.sources` | `beta` | Built-in source provider package |

@@ -919,7 +919,7 @@ class ExportSource(BaseModel):
 # ── Plugin diagnostics ───────────────────────────────────────────────────────
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class PluginLoadDiagnostic(BaseModel):
     """Non-fatal plugin loading issue."""
 

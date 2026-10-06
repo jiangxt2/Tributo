@@ -323,7 +323,7 @@ class ValidatorRegistry:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class FlavorRegistry:
     """Registry of ``ModelFlavor`` classes keyed by ``flavor_id``.
 

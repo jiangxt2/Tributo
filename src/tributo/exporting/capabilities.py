@@ -10,7 +10,7 @@ from tributo.exporting.formats import validate_format_id
 from tributo.util.annotations import PublicAPI
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 @dataclass(frozen=True)
 class ArtifactCapability:
     """Capabilities for one immutable artifact flavor.
@@ -36,7 +36,7 @@ class ArtifactCapability:
     conditional_operations: tuple[str, ...] = ()
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class CapabilityRegistry:
     """Immutable registry derived from exporter and flavor descriptors."""
 
@@ -254,7 +254,7 @@ def _build_default_capability_registry() -> CapabilityRegistry:
 _DEFAULT_CAPABILITY_REGISTRY: CapabilityRegistry | None = None
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 def get_default_capability_registry() -> CapabilityRegistry:
     """Return the lazily composed first-party capability registry.
 

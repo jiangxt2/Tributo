@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from contextlib import ExitStack
+from contextlib import AbstractContextManager, ExitStack
 from dataclasses import dataclass
 from typing import Any, ClassVar, Literal, Protocol, runtime_checkable
 
@@ -75,7 +75,7 @@ DEFAULT_ROLE = "inference"
 
 
 @runtime_checkable
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class BundleReaderLike(Protocol):
     """Structural reader contract — satisfied by ``BundleReader``.
 
@@ -100,17 +100,18 @@ class BundleReaderLike(Protocol):
         storage_profile: str | None = None,
         manifest: ExportManifest | None = None,
         manifest_bytes: bytes | None = None,
-    ) -> Any: ...
+    ) -> AbstractContextManager[ResolvedArtifact]: ...
 
 
 @runtime_checkable
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class BundleModel(Protocol):
     """A loaded, in-memory model ready for prediction.
 
-    After loading, the model must not depend on the bundle's temporary
-    files — the runtime closes the artifact context as soon as loading
-    completes, so ``predict`` must work purely in memory.
+    The runtime retains its artifact context until explicit ``close``; it
+    does not close it as soon as loading completes. In-memory models, including
+    the Stable ONNX flavor, must remain usable after those reader resources
+    close. Other flavors keep their declared loading and execution contracts.
     """
 
     @property
@@ -150,7 +151,7 @@ class BundleModel(Protocol):
 
 
 @runtime_checkable
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class BundleModelFlavor(Protocol):
     """Loads a ``BundleModel`` from a verified bundle artifact.
 
@@ -200,7 +201,7 @@ class BundleModelFlavor(Protocol):
 # ── Serveable flavor support matrix ───────────────────────────────────────────
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 @dataclass(frozen=True)
 class FlavorSupportEntry:
     """One row of the model-artifact capability support matrix.
@@ -324,9 +325,14 @@ SERVEABLE_FLAVOR_MATRIX: tuple[FlavorSupportEntry, ...] = tuple(
 # ── Loader ────────────────────────────────────────────────────────────────────
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class BundleModelLoader:
     """Opens a published bundle as a serveable model runtime.
+
+    The Stable first-party execution scope is ``onnx-runtime-v1`` with named
+    tensors, integrity/security gates, typed signatures, and reader lifetime.
+    Registry routing and rejection contracts are stable; registering a plugin
+    does not promote that plugin's execution or model semantics.
 
     Args:
         bundle_reader: Reader for manifest + artifacts; defaults to a
@@ -519,7 +525,7 @@ class BundleModelLoader:
 # ── Runtime ───────────────────────────────────────────────────────────────────
 
 
-@PublicAPI(stability="beta")
+@PublicAPI(stability="stable")
 class BundleModelRuntime:
     """A loaded model plus the reader resources it was loaded from.
 
