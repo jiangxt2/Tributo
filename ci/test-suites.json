@@ -172,6 +172,37 @@
       "rationale": "Dedicated bounded shard for integration-named modules that exercise local contracts without external infrastructure."
     },
     {
+      "id": "causal-dependency-contract",
+      "owner": "training",
+      "domain": "dependencies",
+      "tier": "ci_fast",
+      "workflow": "matrix",
+      "owns_tests": true,
+      "entrypoint": ["python", "-m", "pytest"],
+      "args": [
+        "tests/integration/test_dowhy_scipy_compat.py",
+        "-o",
+        "addopts=",
+        "-q",
+        "--tb=short"
+      ],
+      "extras": ["dev", "causal"],
+      "test_paths": ["tests/integration/test_dowhy_scipy_compat.py"],
+      "trigger_domains": [],
+      "trigger_paths": [
+        "pyproject.toml",
+        "uv.lock",
+        "tests/integration/test_dowhy_scipy_compat.py"
+      ],
+      "requires": [],
+      "budget_seconds": 180,
+      "ci_allowed": true,
+      "forbid_skips": true,
+      "markers": ["ci_safe"],
+      "log_contract": "pytest output and JUnit evidence with no dependency skips",
+      "rationale": "Bounded real DoWhy estimation, refutation, and GCM calls validate the locked SciPy closure without services."
+    },
+    {
       "id": "runtime-image",
       "owner": "core",
       "domain": "runtime-image",

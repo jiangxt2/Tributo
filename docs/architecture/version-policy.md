@@ -36,8 +36,10 @@ Every public symbol falls into one of these tiers. The canonical inventory is
 
 - `alpha` → `beta`: The API has been used in at least one real workload and
   the interface is unlikely to change significantly.
-- `beta` → `stable`: The API has been stable for ≥ 2 minor versions with no
-  reported interface issues.
+- `beta` → `stable`: The public contract, supported scope, and limitations are
+  documented; compatibility and relevant functional validation pass; no known
+  unresolved interface issues affect that scope. There is no minimum release
+  count or waiting period.
 - `stable` → `deprecated`: A replacement exists, the deprecation window has
   started, and the migration guide is published.
 

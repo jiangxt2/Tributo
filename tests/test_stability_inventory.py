@@ -83,14 +83,14 @@ STABILITY_MAP: dict[str, str] = {
     # Data — beta
     "tributo.data.source_config": "beta",
     "tributo.data.provider_registry": "beta",
-    "tributo.data.refs": "beta",
+    "tributo.data.refs": "stable",
     # Data — alpha candidate ingestion contract
     "tributo.data.scan_plan": "developer",
     "tributo.data.ingestion": "alpha",
     "tributo.data.handle_adapters": "alpha",
     "tributo.data.contracts.handles": "alpha",
     "tributo.data.contracts.modes": "beta",
-    "tributo.data.contracts.storage": "beta",
+    "tributo.data.contracts.storage": "stable",
     "tributo.data.transform_ir": "alpha",
     # Data — beta
     "tributo.data.provider": "beta",
@@ -209,6 +209,15 @@ STABILITY_MAP: dict[str, str] = {
 #: list the exceptions here.  Keys are ``module.symbol``, values are the
 #: symbol-specific stability.
 _SYMBOL_OVERRIDES: dict[str, str] = {
+    "tributo.data.source_config.RayReadTaskOptions": "stable",
+    "tributo.data.source_config.ParquetSourceConfig": "stable",
+    "tributo.data.source_config.CsvSourceConfig": "stable",
+    "tributo.data.source_config.SqlSourceConfig": "stable",
+    "tributo.data.source_config.SqlPartitioning": "stable",
+    "tributo.data.source_config.IcebergSourceConfig": "stable",
+    "tributo.data.source_config.ProviderSourceConfig": "stable",
+    "tributo.data.source_config.source_projection": "stable",
+    "tributo.data.source_config.apply_source_projection": "stable",
     "tributo.plugin.validate_distributed_algorithm_descriptor": "alpha",
     "tributo.config.AlgorithmExecutionConfig": "alpha",
     "tributo.config.AlgorithmInputConfig": "alpha",

@@ -112,7 +112,8 @@ from the legacy setup-only propagation rule.
 
 | Module | Level | Notes |
 |--------|-------|-------|
-| `tributo.data.source_config` — `SourceConfig` | `beta` | Strict in-memory contract; JSON is the built-in persisted format |
+| `tributo.data.source_config` — canonical models and projection helpers | `stable` | Stable fields, defaults, JSON shapes, and projection semantics; `BuiltinSourceConfig`, `SourceConfig`, and `CanonicalSourceInput` use the same stable members |
+| `tributo.data.source_config` — legacy conversion and `RawSourceConfig` | `beta` | Compatibility input conversion and unknown-source passthrough |
 | `tributo.data.provider` — `DataSourceProvider` | `beta` | Logical normalization/planning contract; `normalize()` and `plan()` drive canonical ingestion, while `open()`/`DatasetHandle` remain an independent Provider SPI |
 | `tributo.data.transform_ir` | `alpha` | Versioned engine-neutral ETL contract |
 | `tributo.data.transform_compiler` | `developer` | Internal Ray/Daft expression translation |
@@ -121,7 +122,7 @@ from the legacy setup-only propagation rule.
 | `tributo.data.handle_adapters` | `alpha` | Explicit native-handle conversions with conversion evidence; never a routing fallback |
 | `tributo.data.contracts.handles` | `alpha` | Typed Ray and Daft handle contracts shared by ingestion and writing |
 | `tributo.data.contracts.modes` | `beta` | Canonical shared `WriteMode` contract; `tributo.data.base` remains a narrow re-export |
-| `tributo.data.contracts.storage` | `beta` | Canonical shared `S3Config` contract; credentials are hidden from repr and identity material |
+| `tributo.data.contracts.storage` | `stable` | Canonical shared `S3Config` contract; credentials are hidden from repr and identity material |
 | `tributo.data.writing` | `alpha` | Unified bounded-write Gateway package |
 | `tributo.data.writing.capabilities` | `alpha` | Native writer capability declarations |
 | `tributo.data.writing.contracts` | `alpha` | Credential-safe write requests, descriptors, receipts, and errors |
@@ -133,7 +134,14 @@ from the legacy setup-only propagation rule.
 | `tributo.data.graph` | `beta` | Graph data abstraction (GNN; @PublicAPI says beta) |
 | `tributo.data.base` | `legacy` | Narrow compatibility re-export for `S3Config` and `WriteMode`; no reader, writer, registry, or Connector class |
 | `tributo.data.provider_registry` | `beta` | Data source provider registry |
-| `tributo.data.refs` | `beta` | Data reference value objects |
+| `tributo.data.refs` | `stable` | DatasetRef fields, canonical JSON digest, version-1 source identity, and Arrow schema fingerprint |
+
+Canonical configuration stability does not imply that a Provider, Gateway,
+Binding, database, or engine combination is stable or supported. Provider
+options retain their provider-owned meaning. Credentials belong to trusted
+configuration only: repr hides designated credential fields, while model dumps
+and validation details must be sanitized before public logging. DatasetRef and
+source identity reject credential material rather than persist it.
 
 ### Distributed Lance vector indexing (tributo.vector_index.*)
 
