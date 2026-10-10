@@ -741,7 +741,7 @@ def test_external_sql_descriptors_use_package_identity(
         "_distribution_version",
         lambda name: {
             "daft-doris": "1.0",
-            "ray-clickhouse": "0.1.0",
+            "ray-clickhouse": "1.0",
         }.get(name),
     )
 
@@ -795,7 +795,7 @@ def test_missing_external_sql_packages_report_install_hints(
         )
     with pytest.raises(
         EngineNotAvailableError,
-        match=r"ray_clickhouse\.ray\.clickhouse.*ray-clickhouse.*wheel",
+        match=r"ray_clickhouse\.ray\.clickhouse.*ray-clickhouse==1\.0",
     ):
         bindings.resolve(
             BindingKey(
@@ -827,7 +827,7 @@ def test_installed_ray_clickhouse_registers_default_ray_binding(
         "clickhouse-connect": "1.5.0",
         "pyarrow": "19.0.1",
         "ray": "2.55.1",
-        "ray-clickhouse": "0.1.0",
+        "ray-clickhouse": "1.0",
         "tributo": "1.0.0",
     }
     monkeypatch.setattr(
@@ -849,7 +849,7 @@ def test_installed_ray_clickhouse_registers_default_ray_binding(
     )
 
     assert descriptor.distribution_name == "ray-clickhouse"
-    assert descriptor.distribution_version == "0.1.0"
+    assert descriptor.distribution_version == "1.0"
 
 
 def test_incompatible_optional_daft_does_not_disable_ray(

@@ -1,38 +1,87 @@
 # Contributing to Tributo
 
-Thank you for contributing! Tributo is a telecom-native ML framework built on
-Ray for PU Learning, behavioral sequence pre-training, and billion-scale
-user look-alike.
+Thank you for contributing! Tributo is a Ray-native machine learning SDK.
+Core owns execution and model delivery; algorithm implementations are
+maintained as independently installable packages.
 
-## Getting Started
+## Getting started
 
-- **Python**: 3.10+
+- **Python**: 3.12 or 3.13 (`>=3.12,<3.14`)
 - **Package manager**: uv (see `pyproject.toml`)
 
 ```bash
-git clone https://github.com/jiangxt2/tributo.git
-cd tributo
-uv sync --extra dev --locked
+git clone https://github.com/jiangxt2/Tributo.git
+cd Tributo
+uv sync --locked --extra dev
+uv run --locked --no-sync pre-commit install --hook-type pre-commit
 ```
 
 The first `uv sync` may need access to the configured package index. Once the
 environment is provisioned, repository checks use only the locked project
 environment and do not install tools implicitly.
 
-## Development Workflow
+This prepares Core development dependencies. It does not install an official
+algorithm Wheel. Use the [algorithm installation guide](docs/algorithms/getting-started.md)
+when your change requires one. Follow the [installation guide](docs/getting-started/installation.md)
+to select runtime extras, and retain all required extras when syncing an
+environment.
+
+## Development workflow
 
 1. Fork the repository and create a feature branch from `master`.
 2. Make your changes, including tests for new functionality.
-3. Run the repository precheck: `uv run --locked --no-sync python scripts/pr-precheck.py --skip-tests`
-4. Run unit tests: `uv run --locked --no-sync pytest tests/ -m "not integration and not slow and not minio_compat and not ray_runtime_env"`
-5. Run the MinIO compatibility gate when Docker is available:
-   `uv run --locked --no-sync pytest tests/integration/test_minio_compat.py -m minio_compat`
-6. Run the Ray runtime-environment gate:
-   `RAY_ENABLE_UV_RUN_RUNTIME_ENV=1 uv run --locked --no-sync pytest tests/integration/test_ray_runtime_env.py -m ray_runtime_env`
-7. Commit with a clear message and `Signed-off-by` line.
-8. Open a pull request against `master`.
+3. Audit the test inventory and inspect the plan for your changed paths.
+4. Run the selected bounded suites and any applicable external validation.
+5. Run the repository precheck before review or push.
+6. Commit with a clear message and `Signed-off-by` line.
+7. Open a pull request against `master`.
 
-## Pull Request Guidelines
+Use `ci/test-suites.json` and `scripts/ci_test_plan.py` as the test-policy
+source of truth. For example, inspect an installation-guide change:
+
+```bash
+python3 scripts/ci_test_plan.py audit
+python3 scripts/ci_test_plan.py plan --event pull_request --mode pr \
+  --changed-path docs/getting-started/installation.md
+```
+
+Pass each changed path separately. An unmatched path deliberately selects the
+full fast matrix and reports external and quarantined suites for review.
+The report is not authorization to run those suites.
+
+Run a CI-authorized suite through the controlled runner:
+
+```bash
+python3 scripts/ci_test_plan.py run --suite policy --prepare
+```
+
+Replace `policy` with a selected `ci_fast` or applicable `ci_scheduled`
+suite. The runner prepares its declared extras and enforces its budget.
+Some suites also consume artifacts from their workflow's preceding steps.
+For `documentation-api`, prepare the documentation dependencies and
+real-import Sphinx site before running the suite. Follow the
+[documentation guide](docs/developer/documentation.md) and the corresponding
+[CI steps](.github/workflows/pr-test-suite.yml); `--prepare` does not build
+that HTML artifact.
+Do not use it for `manual_external` or `quarantine` suites. Docker,
+databases, Ray Jobs, and multi-worker validation use their owned external
+entry points after the environment, execution scope, logs, and cleanup are
+agreed. A semantic pytest marker alone does not select or authorize a Gate.
+See the [test execution policy](docs/developer/testing.md).
+
+The full repository precheck is:
+
+```bash
+uv run --locked --no-sync python scripts/pr-precheck.py
+```
+
+It uses the existing checks, including the CI Python matrix and applicable
+documentation gates. Its default is offline: prepare the declared
+interpreters and locked dependencies first. Use `--allow-network` only when
+you intend to permit its dependency resolution and environment preparation.
+`--skip-tests` skips only the changed-test layer and is not the full precheck.
+
+## Pull request guidelines
 
 - Keep PRs focused — one issue per PR.
 - All new features must include tests.
@@ -67,10 +116,10 @@ local refactor, test addition, or documentation correction. See
 [`design-docs/README.md`](design-docs/README.md) for the complete lifecycle,
 status rules, review criteria, and document responsibilities.
 
-## Code Style
+## Code style
 
 We use [ruff](https://docs.astral.sh/ruff/) for linting and formatting. Run
-`uv run --locked --no-sync python scripts/pr-precheck.py --skip-tests` before
+`uv run --locked --no-sync python scripts/pr-precheck.py` before
 pushing. The precheck is repository-owned so local and CI checks use the same
 implementation and locked dependencies.
 
@@ -78,12 +127,12 @@ implementation and locked dependencies.
 - Docstrings: Google-style
 - Type annotations required on all public functions
 
-## Reporting Bugs
+## Reporting bugs
 
 Use the Bug Report template (`.github/ISSUE_TEMPLATE/bug_report.yml`).
 Include: Tributo version, Python version, Ray version, and steps to reproduce.
 
-## Feature Requests
+## Feature requests
 
 Use the Feature Request template
 (`.github/ISSUE_TEMPLATE/feature_request.yml`).
