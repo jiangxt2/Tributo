@@ -14,6 +14,7 @@ from tributo.data.writing.native_bindings import (
     DaftIcebergWriteBinding,
     DaftLanceWriteBinding,
     DaftParquetWriteBinding,
+    RayClickHouseWriteBinding,
     RayCsvWriteBinding,
     RayIcebergWriteBinding,
     RayLanceWriteBinding,
@@ -40,6 +41,7 @@ def default_write_gateway() -> WriteGateway:
             _register_if_available(registry, RayCsvWriteBinding)
             _register_if_available(registry, RayIcebergWriteBinding)
             _register_if_available(registry, RayLanceWriteBinding)
+            _register_if_available(registry, RayClickHouseWriteBinding)
             _register_if_available(registry, DaftParquetWriteBinding)
             _register_if_available(registry, DaftCsvWriteBinding)
             _register_if_available(registry, DaftIcebergWriteBinding)

@@ -11,7 +11,7 @@ from tributo.data.contracts.modes import WriteMode
 from tributo.data.engine_ids import normalize_engine_id
 from tributo.data.refs import _credential_paths
 from tributo.data.runtime_credentials import credential_free_runtime_value
-from tributo.data.writing.contracts import WriteRequest
+from tributo.data.writing.contracts import WriteRequest, _validate_runtime_options
 from tributo.util.annotations import DeveloperAPI
 
 
@@ -46,12 +46,12 @@ class LogicalWritePlan:
             "runtime_options",
             MappingProxyType(credential_free_runtime_value(self.runtime_options)),
         )
+        _validate_runtime_options(self.runtime_options)
         if _credential_paths(
             {
                 "provider_id": self.provider_id,
                 "target": self.target,
                 "options": self.options,
-                "runtime_options": self.runtime_options,
             }
         ):
             raise ValueError("LogicalWritePlan must be credential-free")

@@ -8,7 +8,12 @@ manifest, or snapshot data-plane logic itself.
 
 from __future__ import annotations
 
+import importlib.metadata
+import os
+import re
+from collections.abc import Mapping
 from typing import Any, Literal, cast
+from urllib.parse import unquote, urlsplit
 
 from tributo.data.contracts.handles import DaftDataFrameHandle, RayDataHandle
 from tributo.data.contracts.modes import WriteMode
@@ -47,6 +52,8 @@ def _ray_descriptor(
         if target_kind == "iceberg"
         else ("lance-ray", "pylance")
         if target_kind == "lance"
+        else ("ray-clickhouse",)
+        if target_kind == "clickhouse"
         else ()
     )
     return descriptor(
@@ -56,6 +63,11 @@ def _ray_descriptor(
         engine_version=RAY_ENGINE_VERSION,
         dependency_distributions=dependencies,
         capabilities=capabilities,
+        installation_hint=(
+            "Install the ray-clickhouse==0.1.0 wheel"
+            if target_kind == "clickhouse"
+            else None
+        ),
     )
 
 
@@ -81,11 +93,25 @@ def _daft_descriptor(
 
 _FILE_MODES = frozenset({WriteMode.APPEND, WriteMode.OVERWRITE})
 _LANCE_MODES = frozenset({WriteMode.CREATE, WriteMode.APPEND, WriteMode.OVERWRITE})
+_CLICKHOUSE_MODES = frozenset({WriteMode.APPEND})
 _PARQUET_OPTIONS = frozenset({"compression", "min_rows_per_file"})
 _ICEBERG_OPTIONS = frozenset({"snapshot_properties"})
 _LANCE_OPTIONS = frozenset(
     {"min_rows_per_file", "max_rows_per_file", "data_storage_version"}
 )
+_CLICKHOUSE_OPTIONS = frozenset(
+    {
+        "batch_bytes",
+        "batch_rows",
+        "columns",
+        "concurrency",
+        "connect_timeout_seconds",
+        "insert_mode",
+        "query_timeout_seconds",
+        "secure",
+    }
+)
+_ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class RayParquetWriteBinding:
@@ -287,6 +313,89 @@ class RayLanceWriteBinding:
         )
 
 
+class RayClickHouseWriteBinding:
+    """Delegate append-only table writes to the public ray-clickhouse facade."""
+
+    binding_id = "tributo.ray.clickhouse"
+    _descriptor = _ray_descriptor(
+        "clickhouse",
+        binding_id,
+        WriteCapability(
+            supported_modes=_CLICKHOUSE_MODES,
+            supported_options=_CLICKHOUSE_OPTIONS,
+            distributed=True,
+            native_metrics=True,
+            requires_existing_target=True,
+            can_create_target=False,
+            supports_empty_input=True,
+        ),
+    )
+
+    @staticmethod
+    def is_available() -> bool:
+        try:
+            return importlib.metadata.version("ray-clickhouse") == "0.1.0"
+        except importlib.metadata.PackageNotFoundError:
+            return False
+
+    def describe(
+        self, plan: LogicalWritePlan, input_handle: WriteHandle
+    ) -> WriteDescriptor:
+        _require_ray(plan, input_handle, "clickhouse")
+        _clickhouse_target(plan.target)
+        _clickhouse_username(plan.runtime_options)
+        _clickhouse_password_env(plan.runtime_options)
+        return self._descriptor.model_copy(deep=True)
+
+    def execute(
+        self,
+        plan: LogicalWritePlan,
+        input_handle: WriteHandle,
+        context: WriteExecutionContext,
+    ) -> WriteReceipt:
+        input_handle = _require_ray(plan, input_handle, "clickhouse")
+        host, port, database, table = _clickhouse_target(plan.target)
+        password_env = _clickhouse_password_env(context.runtime_options)
+        username = _clickhouse_username(context.runtime_options)
+
+        from ray_clickhouse import write_clickhouse
+
+        kwargs: dict[str, Any] = {
+            "host": host,
+            "port": port,
+            "database": database,
+            "table": table,
+            "username": username,
+            "password_env": password_env,
+            "write_mode": "append",
+        }
+        for name in _CLICKHOUSE_OPTIONS:
+            if name in plan.options:
+                kwargs[name] = plan.options[name]
+        native = write_clickhouse(input_handle.dataset, **kwargs)
+        if str(native.status) != "confirmed" or int(native.ambiguous_batches) != 0:
+            raise WriteCapabilityError(
+                "ray-clickhouse write completed without an unambiguous confirmation"
+            )
+        return WriteReceipt(
+            request_digest=plan.request_digest,
+            engine_id=plan.engine_id,
+            binding_id=self.binding_id,
+            target_kind=plan.target_kind,
+            target_ref=plan.target,
+            mode=plan.mode,
+            committed=True,
+            rows_written=int(native.rows_written),
+            bytes_written=int(native.bytes_written),
+            diagnostics=("ray_clickhouse.write_clickhouse",),
+            metadata={
+                "batches_written": int(native.batches_written),
+                "ambiguous_batches": int(native.ambiguous_batches),
+                "native_status": str(native.status),
+            },
+        )
+
+
 class DaftParquetWriteBinding:
     """Delegate Parquet writes to ``daft.DataFrame.write_parquet``."""
 
@@ -467,6 +576,69 @@ class DaftLanceWriteBinding:
             binding_id=self.binding_id,
             native_api="daft.DataFrame.write_lance",
         )
+
+
+def _clickhouse_target(target: str) -> tuple[str, int, str, str]:
+    parsed = urlsplit(target)
+    if (
+        parsed.scheme.lower() != "clickhouse"
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.hostname is None
+    ):
+        raise WriteCapabilityError(
+            "ClickHouse write target must be clickhouse://host:port/database/table "
+            "without credentials, query, or fragment"
+        )
+    try:
+        parsed_port = parsed.port
+    except ValueError:
+        raise WriteCapabilityError("ClickHouse write target port is invalid") from None
+    port = 8123 if parsed_port is None else parsed_port
+    if port < 1 or port > 65_535:
+        raise WriteCapabilityError("ClickHouse write target port is invalid")
+    raw_path = parsed.path.split("/")
+    if len(raw_path) != 3 or raw_path[0] or not raw_path[1] or not raw_path[2]:
+        raise WriteCapabilityError(
+            "ClickHouse write target must contain exactly database/table"
+        )
+    path = tuple(unquote(value) for value in raw_path[1:])
+    if any("/" in value for value in path):
+        raise WriteCapabilityError(
+            "ClickHouse write target database/table must be path segments"
+        )
+    return parsed.hostname, port, path[0], path[1]
+
+
+def _clickhouse_password_env(runtime_options: Mapping[str, Any]) -> str | None:
+    reference = runtime_options.get("credential_ref")
+    if reference is None:
+        return (
+            "TRIBUTO_CLICKHOUSE_PASSWORD"
+            if "TRIBUTO_CLICKHOUSE_PASSWORD" in os.environ
+            else None
+        )
+    if not isinstance(reference, str) or not reference.startswith("env://"):
+        raise WriteCapabilityError(
+            "ClickHouse write credential_ref must use env://VARIABLE"
+        )
+    name = reference.removeprefix("env://")
+    if _ENV_NAME.fullmatch(name) is None:
+        raise WriteCapabilityError(
+            "ClickHouse write credential_ref must name a portable environment variable"
+        )
+    return name
+
+
+def _clickhouse_username(runtime_options: Mapping[str, Any]) -> str:
+    configured = runtime_options.get("user")
+    if configured is None:
+        configured = os.getenv("TRIBUTO_CLICKHOUSE_USER", "default")
+    if not isinstance(configured, str) or not configured:
+        raise WriteCapabilityError("ClickHouse write user must be a non-empty string")
+    return configured
 
 
 def _require_ray(
