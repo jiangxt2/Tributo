@@ -123,9 +123,9 @@ is satisfied.
 
 ## Read a ClickHouse table with Ray Data
 
-Install the `ray-clickhouse==0.1.0` wheel from its GitHub Release in the same
-environment as `tributo[clickhouse]`, then select Ray explicitly. The wheel is
-not yet part of the Tributo lockfile or canonical full image.
+Install `ray-clickhouse==1.0` from PyPI in the same environment as
+`tributo[clickhouse]`, then select Ray explicitly. The package is not part of
+the Tributo lockfile or canonical full image.
 
 ```python
 from tributo.data import (

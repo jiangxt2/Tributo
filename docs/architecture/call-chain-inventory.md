@@ -300,13 +300,13 @@ credential-safe descriptor validation and atomic registration
 WriteBinding selection; native dependency import occurs at factory/execute
 ```
 
-Selected optional integrations (`ray-clickhouse==0.1.0`, `ray-doris==1.0`,
+Selected optional integrations (`ray-clickhouse==1.0`, `ray-doris==1.0`,
 `daft-doris==1.0`) also have thin built-in descriptors and explicit install
 diagnostics. The canonical full runtime locks the v1.0 Doris packages into the
-image; `ray-clickhouse` remains an external-wheelhouse input
-until PyPI publication. These adapters are not support claims until database
-infrastructure gates pass. Ray and Daft routes remain explicit and are not
-interchangeable.
+image; `ray-clickhouse` is separately installed from PyPI or supplied through
+the external wheelhouse for an image build. These adapters are not support
+claims until database infrastructure gates pass. Ray and Daft routes remain
+explicit and are not interchangeable.
 
 ---
 

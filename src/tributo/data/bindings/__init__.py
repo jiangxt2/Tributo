@@ -28,7 +28,7 @@ _DAFT_INSTALL_HINT = "pip install 'tributo[data-daft]'"
 _DAFT_LANCE_INSTALL_HINT = "pip install 'tributo[data,data-daft]'"
 _DATA_INSTALL_HINT = "pip install 'tributo[data]'"
 _RAY_CLICKHOUSE_INSTALL_HINT = (
-    "Install the ray-clickhouse==0.1.0 wheel, then install Tributo's "
+    "Install ray-clickhouse==1.0, then install Tributo's "
     "ClickHouse dependencies with pip install 'tributo[clickhouse]'"
 )
 _DAFT_DORIS_INSTALL_HINT = (
@@ -290,7 +290,7 @@ def _ray_clickhouse_descriptor() -> BindingDescriptor:
         factory=RayClickHouseBinding,
         capabilities=frozenset({SourceCapability.PROJECTION}),
         distribution_name="ray-clickhouse",
-        distribution_version=_distribution_version("ray-clickhouse") or "0.1.0",
+        distribution_version=_distribution_version("ray-clickhouse") or "1.0",
         engine_version_spec=_RAY_VERSION_SPEC,
         dependency_distributions=("clickhouse-connect", "pyarrow"),
         supported_read_hints=frozenset(
@@ -659,7 +659,7 @@ def default_engine_bindings() -> EngineBindings:
                 _RAY_CLICKHOUSE_INSTALL_HINT,
                 None,
                 (
-                    ("ray-clickhouse", "==0.1.0"),
+                    ("ray-clickhouse", "==1.0"),
                     ("clickhouse-connect", ">=1.5,<1.6"),
                     ("pyarrow", ">=19,<20"),
                 ),

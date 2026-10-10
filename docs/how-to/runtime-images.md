@@ -68,10 +68,10 @@ it is copied into a named build context and installed with
 `pip --no-index --no-deps`; every wheel is recorded by filename,
 package/version, size, and SHA-256. Such a variant is an attested,
 image-specific extension and does not change the Tributo lockfile.
-The Ray ClickHouse Binding uses this path for the
-`ray_clickhouse-0.1.0-py3-none-any.whl` GitHub Release artifact until the
-distribution is published to PyPI. The wheel must be supplied unchanged; the
-image manifest records its filename, version, size, and SHA-256.
+The Ray ClickHouse Binding uses this path when adding the separately released
+`ray_clickhouse-1.0-py3-none-any.whl` to an image. The package is also available
+on PyPI, but remains outside the Tributo lockfile. The wheel must be supplied
+unchanged; the image manifest records its filename, version, size, and SHA-256.
 
 The connector extras can also be installed from the source checkout outside
 Docker. These commands are alternatives; run the single profile you need. To
@@ -80,7 +80,7 @@ each sync reconciles the environment to its selected extras:
 
 ```bash
 uv sync --locked --no-dev --extra clickhouse
-# Ray ClickHouse additionally requires the external ray-clickhouse 0.1.0 wheel.
+# Ray ClickHouse additionally requires ray-clickhouse==1.0.
 uv sync --locked --no-dev --extra mysql          # Daft Doris + Ray Doris over MySQL
 uv sync --locked --no-dev --extra doris-flight   # Daft/Ray Doris Flight dependencies
 uv sync --locked --no-dev --extra hive-ray       # Ray HiveServer2 connector package
@@ -90,7 +90,7 @@ A Doris test that selects
 `engine="tributo.daft"` needs `daft-doris`; a Ray Doris or generic training
 path that selects `engine="tributo.ray_data"` needs `ray-doris`.
 The Ray ClickHouse route similarly needs the separately installed
-`ray-clickhouse==0.1.0` wheel; installing only `tributo[clickhouse]` leaves the
+`ray-clickhouse==1.0` package; installing only `tributo[clickhouse]` leaves the
 Daft route available and the Ray route unavailable rather than falling back.
 `ray-hive` backs the built-in `tributo.hive` to `tributo.ray.hive` route. The
 request must still select Ray explicitly; no Daft, native ORC/HDFS, or automatic
