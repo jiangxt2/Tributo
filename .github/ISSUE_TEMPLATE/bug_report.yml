@@ -1,60 +1,53 @@
-name: Bug Report
-description: File a bug report
-title: "[Bug] "
-labels: ["bug", "triage"]
+name: Bug report
+description: Report a problem with Tributo
+title: "[<Tributo component: Core|Training|Data|Exporting|Registry|Inference|Serving|Integrations|CLI|Docs|etc...>] "
+labels: [bug]
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for taking the time to fill out this bug report!
+        Thank you for reporting a problem!
+        Please provide reproducible steps. For questions or ideas, use the
+        [GitHub Discussions page](https://github.com/jiangxt2/Tributo/discussions).
+
   - type: textarea
-    id: description
     attributes:
-      label: Describe the bug
-      description: A clear and concise description of what the bug is.
+      label: What happened + What you expected to happen
+      description: >
+        Describe the bug, the expected behavior, and useful information such as logs.
+      placeholder: >
+        Explain what happened, what you expected, and why the behavior appears incorrect.
+        Paste relevant error text rather than screenshots.
     validations:
       required: true
+
   - type: textarea
-    id: reproduction
     attributes:
-      label: Steps to reproduce
-      description: |
-        Minimal code or commands to reproduce the issue.
-        Prefer a self-contained script we can run.
-      render: python
+      label: Versions / Dependencies
+      description: >
+        Specify the Tributo, Python, Ray, operating system, and other relevant dependency versions.
+      placeholder: List the versions and environment details needed to reproduce the problem.
     validations:
       required: true
+
   - type: textarea
-    id: expected
     attributes:
-      label: Expected behavior
-      description: What you expected to happen.
+      label: Reproduction script
+      description: >
+        Provide a narrow, reproducible script or command sequence. A minimal example makes the
+        issue easier to investigate.
+      placeholder: Include any setup steps or fixtures needed to reproduce the issue.
     validations:
       required: true
-  - type: input
-    id: tributo-version
+
+  - type: dropdown
     attributes:
-      label: Tributo version
-      placeholder: e.g. 1.1.0
+      label: Issue Severity
+      description: How does this issue affect your experience as a Tributo user?
+      multiple: false
+      options:
+        - "Low: It annoys or frustrates me."
+        - "Medium: It is a significant difficulty but I can work around it."
+        - "High: It blocks me from completing my task."
     validations:
-      required: true
-  - type: input
-    id: python-version
-    attributes:
-      label: Python version
-      placeholder: e.g. 3.12.4
-    validations:
-      required: true
-  - type: input
-    id: ray-version
-    attributes:
-      label: Ray version
-      placeholder: e.g. 2.55.1
-    validations:
-      required: true
-  - type: textarea
-    id: logs
-    attributes:
-      label: Relevant logs or output
-      description: Paste any relevant logs, tracebacks, or error messages.
-      render: shell
+      required: false

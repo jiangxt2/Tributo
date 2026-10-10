@@ -1,46 +1,22 @@
-name: Feature Request
-description: Suggest a new feature
-title: "[Feature] "
-labels: ["feature", "triage"]
+name: Feature request
+description: Suggest an idea for Tributo
+title: "[<Tributo component: Core|Training|Data|Exporting|Registry|Inference|Serving|Integrations|CLI|Docs|etc...>] "
+labels: [enhancement]
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for the feature suggestion! Please check existing issues
-        to avoid duplicates before submitting.
+        Thank you for taking the time to propose a new feature!
+        We appreciate your contribution to Tributo.
+
   - type: textarea
-    id: problem
     attributes:
-      label: Problem statement
-      description: |
-        What problem are you trying to solve? Describe your use case.
-    validations:
-      required: true
+      label: Description
+      description: A short description of the feature.
+      placeholder: What should Tributo support?
+
   - type: textarea
-    id: proposal
     attributes:
-      label: Proposed solution
-      description: |
-        How would you like Tributo to address this? Be as specific as
-        possible (API shape, CLI command, config option, etc.).
-    validations:
-      required: true
-  - type: textarea
-    id: alternatives
-    attributes:
-      label: Alternatives considered
-      description: Any workarounds or alternative approaches you've tried.
-  - type: checkboxes
-    id: scope
-    attributes:
-      label: Affected modules
-      description: Which Tributo modules would this touch?
-      options:
-        - label: Training
-        - label: Custom inference or vector data
-        - label: Serving / Inference
-        - label: Data / Storage
-        - label: Registry / MLflow
-        - label: Backend integration
-        - label: CLI
-        - label: Documentation
+      label: Use case
+      description: Describe the use case for this feature. It will help us understand and prioritize the request.
+      placeholder: Rather than focusing on implementation details, describe what you are trying to accomplish.
