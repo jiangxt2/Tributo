@@ -14,9 +14,13 @@ body:
       label: Description
       description: A short description of the feature.
       placeholder: What should Tributo support?
+    validations:
+      required: true
 
   - type: textarea
     attributes:
       label: Use case
       description: Describe the use case for this feature. It will help us understand and prioritize the request.
       placeholder: Rather than focusing on implementation details, describe what you are trying to accomplish.
+    validations:
+      required: true
