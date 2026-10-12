@@ -348,6 +348,13 @@ def _normalized_requirements(dependencies: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(sorted(normalized))
 
 
+def _requirement_version_matches(requirement: Requirement, version: str) -> bool:
+    """Apply the Core version policy only to dependencies on Tributo itself."""
+    if canonicalize_name(requirement.name) == "tributo":
+        return tributo_version_matches(version, str(requirement.specifier))
+    return Version(version) in requirement.specifier
+
+
 def _profile_distribution(
     profile: ImageProfile,
     requirement: Requirement,
@@ -355,7 +362,7 @@ def _profile_distribution(
     version = profile.installed_distributions.get(canonicalize_name(requirement.name))
     if version is None:
         return False
-    return Version(version) in requirement.specifier
+    return _requirement_version_matches(requirement, version)
 
 
 def _local_source_path(artifact: AlgorithmArtifact) -> Path | None:
@@ -420,7 +427,7 @@ def _validate_declared_requirement(
     name = canonicalize_name(requirement.name)
     local = local_wheels.get(name)
     if local is not None:
-        if Version(local.package_version) not in requirement.specifier:
+        if not _requirement_version_matches(requirement, local.package_version):
             raise _configuration_error(
                 f"local Wheel {local.package_name}=={local.package_version} does not "
                 f"satisfy {dependency!r}"
