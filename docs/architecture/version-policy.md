@@ -13,7 +13,7 @@ Tributo follows [Semantic Versioning 2.0.0](https://semver.org/).
 | **Minor** (0.X.0) | New `stable` or `beta` feature; `beta` API change with deprecation notice; new optional dependency |
 | **Patch** (0.0.X) | Bug fix; internal refactor with no API change; dependency version bump within declared range |
 
-Current version: **1.2.0.dev0** (as declared in `pyproject.toml`).
+Current version: **1.1.0** (as declared in `pyproject.toml`).
 
 `pyproject.toml` is the authoritative source. README, Docker, CI, and lock
 files must be verified against it whenever the version changes.

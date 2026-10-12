@@ -5,11 +5,11 @@ your workload.
 
 ## Choose a source revision
 
-Tributo 1.0.0 is distributed as a source-only GitHub Release. To install that
+Tributo 1.1.0 is distributed as a source-only GitHub Release. To install that
 release, clone its tag and use its committed lock file:
 
 ```bash
-git clone --branch tributo-1.0.0 --depth 1 https://github.com/jiangxt2/Tributo.git
+git clone --branch tributo-1.1.0 --depth 1 https://github.com/jiangxt2/Tributo.git
 cd Tributo
 ```
 

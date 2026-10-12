@@ -17,7 +17,7 @@ spec:
         spec:
           containers:
             - name: ray-head
-              image: your-registry/tributo-ray:1.2.0.dev0
+              image: your-registry/tributo-ray:1.1.0
               resources:
                 requests:
                   cpu: "1"
@@ -36,7 +36,7 @@ spec:
           spec:
             containers:
               - name: ray-worker
-                image: your-registry/tributo-ray:1.2.0.dev0
+                image: your-registry/tributo-ray:1.1.0
                 resources:
                   requests:
                     cpu: "2"
