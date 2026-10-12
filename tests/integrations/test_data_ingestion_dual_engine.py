@@ -674,8 +674,71 @@ def test_hive_server2_projection_on_worker() -> None:
         assert set(evidence["ray-hive"].worker_versions) == {"1.0"}
 
 
+def test_clickhouse_append_round_trip_and_native_receipt() -> None:
+    """Append through Tributo in Docker Ray, then read the real ClickHouse table."""
+    import clickhouse_connect
+    from ray_clickhouse import read_clickhouse
+
+    _configure_cluster()
+    table = f"tributo_write_it_{uuid.uuid4().hex}"
+    password = os.environ["TRIBUTO_CLICKHOUSE_PASSWORD"]
+    client = clickhouse_connect.get_client(
+        host="clickhouse",
+        port=8123,
+        database="tributo",
+        username="tributo",
+        password=password,
+    )
+    client.command(
+        f"CREATE TABLE {table} (id Int64, label String) ENGINE = MergeTree ORDER BY id"
+    )
+    try:
+        dataset = ray.data.from_items(
+            [{"id": 1, "label": "one"}, {"id": 2, "label": "two"}],
+            override_num_blocks=2,
+        )
+        request = WriteRequest(
+            engine="ray",
+            target_kind="clickhouse",
+            target=f"clickhouse://clickhouse:8123/tributo/{table}",
+            binding_id="tributo.ray.clickhouse",
+            mode=WriteMode.APPEND,
+            runtime_options={
+                "user": "tributo",
+                "credential_ref": "env://TRIBUTO_CLICKHOUSE_PASSWORD",
+            },
+        )
+        receipt = default_write_gateway().execute(request, RayDataHandle(dataset))
+
+        assert receipt.committed is True
+        assert receipt.binding_id == "tributo.ray.clickhouse"
+        assert receipt.rows_written == 2
+        assert receipt.bytes_written is not None and receipt.bytes_written > 0
+        assert receipt.metadata["native_status"] == "confirmed"
+        assert receipt.metadata["ambiguous_batches"] == 0
+        assert password not in receipt.model_dump_json()
+
+        rows = read_clickhouse(
+            host="clickhouse",
+            port=8123,
+            database="tributo",
+            table=table,
+            username="tributo",
+            password_env="TRIBUTO_CLICKHOUSE_PASSWORD",
+            split="single",
+        ).take_all()
+        assert sorted(rows, key=lambda row: row["id"]) == [
+            {"id": 1, "label": "one"},
+            {"id": 2, "label": "two"},
+        ]
+    finally:
+        client.command(f"DROP TABLE IF EXISTS {table}")
+        client.close()
+
+
 if __name__ == "__main__":
     test_local_parquet_conformance_on_ray_cluster()
     test_s3_parquet_conformance_on_ray_cluster_and_minio()
     test_hive_server2_projection_on_worker()
+    test_clickhouse_append_round_trip_and_native_receipt()
     print("dual-engine ingestion conformance passed")

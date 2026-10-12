@@ -179,6 +179,11 @@ class RuntimeProfile:
         return str(value) if value is not None else None
 
     @property
+    def clickhouse_image(self) -> str | None:
+        value = self.definition.get("clickhouse_image")
+        return str(value) if value is not None else None
+
+    @property
     def hdfs_image(self) -> str | None:
         value = self.definition.get("hdfs_image")
         return str(value) if value is not None else None
@@ -336,6 +341,7 @@ def load_profile(
     for optional_image in (
         "hive_image",
         "postgres_image",
+        "clickhouse_image",
         "hdfs_image",
         "tool_image",
         "uv_image",
@@ -582,6 +588,7 @@ def _version_check_code(identity: RuntimeIdentity) -> str:
         ("lance_ray", "lance-ray"),
         ("pyarrow", "pyarrow"),
         ("ray_hive", "ray-hive"),
+        ("ray_clickhouse", "ray-clickhouse"),
         ("daft_doris", "daft-doris"),
         ("ray_doris", "ray-doris"),
         ("thrift", "thrift"),
@@ -1424,6 +1431,7 @@ def _compose_environment(
     minio_image: str,
     hive_image: str | None,
     postgres_image: str | None,
+    clickhouse_image: str | None,
     hdfs_image: str | None,
 ) -> dict[str, str]:
     env = os.environ.copy()
@@ -1456,6 +1464,9 @@ def _compose_environment(
     if postgres_image is not None:
         env["TRIBUTO_IT_POSTGRES_IMAGE"] = postgres_image
         profiles.append("postgres-ingestion")
+    if clickhouse_image is not None:
+        env["TRIBUTO_IT_CLICKHOUSE_IMAGE"] = clickhouse_image
+        profiles.append("clickhouse-write")
     if hdfs_image is not None:
         env["TRIBUTO_IT_HDFS_IMAGE"] = hdfs_image
         profiles.append("hdfs-ingestion")
@@ -1491,6 +1502,7 @@ def validate_compose_contract(
     minio_image: str | None = None,
     hive_image: str | None = None,
     postgres_image: str | None = None,
+    clickhouse_image: str | None = None,
     hdfs_image: str | None = None,
 ) -> None:
     """Validate the resolved config rather than trusting YAML inheritance."""
@@ -1576,6 +1588,13 @@ def validate_compose_contract(
         ) or {}
         if dependency.get("condition") != "service_healthy":
             raise TributoITError("postgres-test must depend on healthy PostgreSQL")
+    if "clickhouse" in services:
+        if clickhouse_image is None:
+            raise TributoITError(
+                "active ClickHouse profile requires a prepared ClickHouse image"
+            )
+        if services["clickhouse"].get("image") != clickhouse_image:
+            raise TributoITError("clickhouse must use the pinned ClickHouse image")
     hdfs_services = {"hdfs", "hdfs-init"}.intersection(services)
     if hdfs_services and hdfs_services != {"hdfs", "hdfs-init"}:
         raise TributoITError("resolved Compose config has an incomplete HDFS profile")
@@ -1848,6 +1867,8 @@ def _service_ids(env: dict[str, str]) -> dict[str, str]:
         services.append("hiveserver2")
     if "postgres-ingestion" in profiles:
         services.append("postgres")
+    if "clickhouse-write" in profiles:
+        services.append("clickhouse")
     for service in services:
         result = _run(_compose_args("ps", "--quiet", service), env=env)
         values = [line for line in result.stdout.splitlines() if line]
@@ -1905,20 +1926,41 @@ def _wait_for_services(env: dict[str, str], timeout_seconds: float = 180.0) -> N
                 env=env,
                 check=False,
             )
+        clickhouse_result = subprocess.CompletedProcess([], 0)
+        if "clickhouse-write" in env.get("COMPOSE_PROFILES", "").split(","):
+            clickhouse_result = _run(
+                _compose_args(
+                    "exec",
+                    "-T",
+                    "clickhouse",
+                    "clickhouse-client",
+                    "--user=tributo",
+                    "--password=tributo-test",
+                    "--query=SELECT 1",
+                ),
+                env=env,
+                check=False,
+            )
         if (
             ray_result.returncode == 0
             and minio_result.returncode == 0
             and postgres_result.returncode == 0
+            and clickhouse_result.returncode == 0
         ):
             return
         last_output = "\n".join(
             part.strip()
-            for part in (ray_result.stderr, minio_result.stderr)
+            for part in (
+                ray_result.stderr,
+                minio_result.stderr,
+                postgres_result.stderr,
+                clickhouse_result.stderr,
+            )
             if part.strip()
         )
         time.sleep(2)
     raise TributoITError(
-        f"Ray and MinIO were not ready within {timeout_seconds:.0f}s: {last_output}"
+        f"Docker Ray services were not ready within {timeout_seconds:.0f}s: {last_output}"
     )
 
 
@@ -2052,6 +2094,7 @@ def _run_docker_ray_suite(
     display_name: str,
     enable_hive: bool = False,
     enable_postgresql: bool = False,
+    enable_clickhouse: bool = False,
     enable_hdfs: bool = False,
 ) -> None:
     """Run one module on the shared isolated Ray/MinIO lifecycle."""
@@ -2121,6 +2164,14 @@ def _run_docker_ray_suite(
                 )
             ensure_digest_image(profile.postgres_image)
             postgres_image = _local_digest_reference(profile.postgres_image)
+        clickhouse_image: str | None = None
+        if enable_clickhouse:
+            if profile.clickhouse_image is None:
+                raise TributoITError(
+                    f"runtime profile {profile.name!r} does not define clickhouse_image"
+                )
+            ensure_digest_image(profile.clickhouse_image)
+            clickhouse_image = _local_digest_reference(profile.clickhouse_image)
         hdfs_image: str | None = None
         if enable_hdfs:
             if profile.hdfs_image is None:
@@ -2135,6 +2186,7 @@ def _run_docker_ray_suite(
             minio_image=minio_image,
             hive_image=hive_image,
             postgres_image=postgres_image,
+            clickhouse_image=clickhouse_image,
             hdfs_image=hdfs_image,
         )
         config = resolved_compose_config(env)
@@ -2145,6 +2197,7 @@ def _run_docker_ray_suite(
             minio_image=minio_image,
             hive_image=hive_image,
             postgres_image=postgres_image,
+            clickhouse_image=clickhouse_image,
             hdfs_image=hdfs_image,
         )
         _run(
@@ -2270,6 +2323,7 @@ def run_data_ingestion(profile: RuntimeProfile) -> None:
         display_name="Data Ingestion",
         enable_hive=True,
         enable_postgresql=True,
+        enable_clickhouse=True,
     )
 
 

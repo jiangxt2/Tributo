@@ -36,7 +36,7 @@ class WriteTargetRegistry:
         self._targets: dict[str, RegisteredWriteTarget] = {}
         self._lock = threading.RLock()
         if register_builtin_formats:
-            for target_kind in ("parquet", "csv", "iceberg", "lance"):
+            for target_kind in ("parquet", "csv", "iceberg", "lance", "clickhouse"):
                 self.register(
                     target_kind,
                     _make_builtin_factory(target_kind),

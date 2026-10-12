@@ -76,6 +76,7 @@ def test_vector_runtime_is_exactly_versioned_in_the_shared_profile() -> None:
         "ray": "2.55.1",
         "ray_doris": "1.0",
         "ray_hive": "1.0",
+        "ray_clickhouse": "1.0",
         "thrift": "0.16.0",
     }
     assert profile["dependency_mode"] == "host-uv-export"
@@ -87,6 +88,7 @@ def test_vector_runtime_is_exactly_versioned_in_the_shared_profile() -> None:
     assert "m.version('daft-doris') == '1.0'" in dockerfile
     assert "m.version('ray-doris') == '1.0'" in dockerfile
     assert "m.version('ray-hive') == '1.0'" in dockerfile
+    assert "m.version('ray-clickhouse') == '1.0'" in dockerfile
     assert "m.version('thrift') == '0.16.0'" in dockerfile
 
 

@@ -13,7 +13,8 @@ and `ray-hive==1.0` are resolved by
 Provider/Binding separately from the canonical full-runtime package-presence
 gate. The Ray ClickHouse Binding requires separately installed
 `ray-clickhouse==1.0`, which is available on PyPI but remains outside the
-Tributo lockfile. The wheelhouse path can supply it to runtime images.
+Tributo lockfile. The data-ingestion image installs its hash-pinned wheel for
+the real-database write gate. Other runtime images can use the wheelhouse path.
 
 ---
 
@@ -26,7 +27,7 @@ Tributo lockfile. The wheelhouse path can supply it to runtime images.
 | S3/MinIO contract | `../integration/test_export_s3.py`, `../integration/test_minio_compat.py` | `ci_fast` Moto / `manual_external` MinIO | Manifest-last publication, Lease/CAS, alias, GC, path-style access, and conditional writes | Ephemeral Moto in CI; run-owned MinIO externally |
 | Runtime image gate | `../../scripts/run_runtime_image_it.sh`, `jobs/runtime_image_gate_job.py` | `manual_external` | Pinned full image, first-party and Alpha imports on driver/worker, Ray Data, Ray Jobs, and image attestations | Docker Buildx + two-node Ray cluster on a matching native host architecture |
 | MLflow Hook | `test_e2e_mlflow.py` | `manual_external` | Committed Bundle upload, replay deduplication, explicit run reuse, and failure semantics | Isolated model-export runner |
-| Data Ingestion Docker | `test_data_ingestion_dual_engine.py` | `manual_external` | Local/S3 Parquet, Iceberg-on-MinIO Ray/Daft reads, native writes, Ray HiveServer2 structured projection, typed handles, and worker-version evidence | Docker Ray cluster + Daft + MinIO + Hive 4.2.0 |
+| Data Ingestion Docker | `test_data_ingestion_dual_engine.py` | `manual_external` | Local/S3 Parquet, Iceberg-on-MinIO Ray/Daft reads, native writes, Ray HiveServer2 structured projection, and ClickHouse append/receipt/readback | Docker Ray cluster + Daft + MinIO + Hive 4.2.0 + ClickHouse 26.8.1.2041 |
 | Lance vector index | `test_lance_vector_index.py` | `manual_external` | Distributed IVF_FLAT/IVF_PQ build, append coverage, global Top-K, fallback, optimization, compaction, Ray Jobs, and S3 result delivery | Docker Ray cluster + Lance-Ray + MinIO |
 | File conformance | `../integration/test_data_ingestion_conformance.py` | `manual_external` | Local/MinIO Parquet and CSV through Ray Data and Daft | Local Ray runtime + MinIO |
 | Table conformance | `../integration/test_table_format_ingestion.py` | `manual_external` | Local/MinIO Iceberg and Lance through Ray Data and Daft | Local Ray runtime + MinIO |
@@ -248,7 +249,7 @@ when missing, exactly one process builds it through a profile/key/platform/
 daemon-scoped file lock and a single `docker buildx build --load` output.
 
 Compose never builds or implicitly pulls an image. The runner explicitly
-prepares digest-pinned Ray, MinIO, and Hive images. `source-init` and
+prepares digest-pinned Ray, MinIO, Hive, PostgreSQL, and ClickHouse images. `source-init` and
 `workspace-init` reuse the already prepared Tributo Runtime; there is no
 standalone Python tool image. The checkout is copied once into a run-scoped
 source volume and mounted read-only on the Ray head and worker. The snapshot

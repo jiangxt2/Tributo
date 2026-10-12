@@ -28,6 +28,7 @@ x-ray-common: &ray-common
     TRIBUTO_POSTGRESQL_DB: tributo
     TRIBUTO_POSTGRESQL_USER: tributo
     TRIBUTO_POSTGRESQL_PASSWORD: tributo-test
+    TRIBUTO_CLICKHOUSE_PASSWORD: tributo-test
     JAVA_HOME: /opt/java/openjdk
     HADOOP_HOME: /opt/hadoop
     HADOOP_USER_NAME: ray
@@ -251,6 +252,24 @@ services:
       timeout: 5s
       retries: 24
       start_period: 5s
+
+  clickhouse:
+    image: ${TRIBUTO_IT_CLICKHOUSE_IMAGE:-clickhouse/clickhouse-server:26.8.1.2041}
+    pull_policy: never
+    profiles: ["clickhouse-write"]
+    environment:
+      CLICKHOUSE_DB: tributo
+      CLICKHOUSE_USER: tributo
+      CLICKHOUSE_PASSWORD: tributo-test
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - clickhouse-client --user=tributo --password=tributo-test --query='SELECT 1' >/dev/null
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
 
   postgres-test:
     <<: *ray-common
