@@ -10,7 +10,9 @@ import zipfile
 from pathlib import Path
 
 import pytest
+from packaging.version import Version
 
+import tributo._common.algorithm_distribution as distribution_module
 from tributo._common.algorithm_distribution import (
     algorithm_runtime_env_patch,
     prepare_algorithm_distribution,
@@ -90,6 +92,7 @@ def _bundle(
     algorithm_requires: tuple[str, ...] = (),
     requirements: str | None = None,
     include_dependency: bool = True,
+    extra_wheels: tuple[tuple[str, str], ...] = (),
 ) -> Path:
     wheelhouse = root / "wheelhouse"
     algorithm = _write_wheel(
@@ -102,6 +105,9 @@ def _bundle(
     if include_dependency and algorithm_requires:
         dependency = _write_wheel(wheelhouse, "dep-a", requires=("dep-b==1.0.0",))
         _write_wheel(wheelhouse, "dep-b")
+    extra_wheel_paths = tuple(
+        _write_wheel(wheelhouse, name, version) for name, version in extra_wheels
+    )
     requirements_path = root / "requirements.lock"
     requirements_path.parent.mkdir(parents=True, exist_ok=True)
     requirements_path.write_text(
@@ -121,6 +127,7 @@ def _bundle(
         algorithm,
         dependency,
         *(wheelhouse.glob("dep_b-*.whl")),
+        *extra_wheel_paths,
         requirements_path,
     ):
         if path is None:
@@ -491,6 +498,104 @@ def test_bundle_compatibility_checks_tributo_and_profile_algorithm_id(
             AlgorithmArtifact(source=str(root), mode="offline_wheelhouse"),
             profile,
         )
+
+
+@pytest.mark.parametrize(
+    ("core_version", "version_spec", "accepted"),
+    [
+        ("1.1.0", ">=1,<2", True),
+        ("1.2.0.dev0", ">=1,<2", True),
+        ("1.2.0.dev0", ">=1,<1.2", False),
+        ("1.2.0.dev0", ">=1.2", False),
+        ("1.2.0.dev0", "==1.1.0", False),
+        ("1.2.0.dev0", ">=1,<2,!=1.2.*", False),
+        ("1.2.0rc1", ">=1,<2", False),
+        ("2.0.0.dev0", ">=1,<2", False),
+    ],
+)
+def test_offline_bundle_core_development_version_range(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    core_version: str,
+    version_spec: str,
+    accepted: bool,
+) -> None:
+    root = _bundle(tmp_path / "bundle")
+    manifest_path = root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["tributo_version_spec"] = version_spec
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    monkeypatch.setattr(
+        distribution_module, "_current_tributo_version", lambda: Version(core_version)
+    )
+    artifact = AlgorithmArtifact(source=str(root), mode="offline_wheelhouse")
+
+    if accepted:
+        prepared = prepare_algorithm_distribution(artifact, _profile())
+        assert prepared.package_name == "demo-algorithm"
+    else:
+        with pytest.raises(JobConfigurationError, match="Bundle Tributo version"):
+            prepare_algorithm_distribution(artifact, _profile())
+
+
+@pytest.mark.parametrize("dependency_source", ["image", "local_wheel"])
+@pytest.mark.parametrize(
+    ("dependency_name", "dependency_version", "version_spec", "accepted"),
+    [
+        ("Tributo", "1.1.0", ">=1,<2", True),
+        ("Tributo", "1.2.0.dev0", ">=1,<2", True),
+        ("Tributo", "1.2.0.dev0", "", True),
+        ("Tributo", "1.2.0.dev0", ">=1,<1.2", False),
+        ("Tributo", "1.2.0.dev0", ">=1.2", False),
+        ("Tributo", "1.2.0.dev0", "==1.1.0", False),
+        ("Tributo", "1.2.0.dev0", ">=1,<2,!=1.2.*", False),
+        ("Tributo", "1.2.0.dev0", "==1.2.0.dev0", True),
+        ("Tributo", "1.2.0rc1", ">=1,<2", False),
+        ("Tributo", "1.2.0b1", ">=1,<2", False),
+        ("Tributo", "1.2.0rc1", ">=1.2.0rc1,<2", True),
+        ("Tributo", "2.0.0.dev0", ">=1,<2", False),
+        ("Tributo", "0.9.0", ">=1,<2", False),
+        ("tributo-helper", "1.2.0", ">=1,<2", True),
+        ("tributo-helper", "1.2.0.dev0", ">=1,<2", False),
+        ("tributo-helper", "1.2.0rc1", ">=1,<2", False),
+    ],
+)
+def test_offline_bundle_requires_dist_version_policy(
+    tmp_path: Path,
+    dependency_source: str,
+    dependency_name: str,
+    dependency_version: str,
+    version_spec: str,
+    accepted: bool,
+) -> None:
+    installed = {"pip": "24.3.1"}
+    extra_wheels: tuple[tuple[str, str], ...] = ()
+    if dependency_source == "image":
+        installed[dependency_name] = dependency_version
+    else:
+        extra_wheels = ((dependency_name, dependency_version),)
+    root = _bundle(
+        tmp_path / "bundle",
+        algorithm_requires=(f"{dependency_name}{version_spec}",),
+        include_dependency=False,
+        extra_wheels=extra_wheels,
+    )
+    artifact = AlgorithmArtifact(source=str(root), mode="offline_wheelhouse")
+    profile = _profile(installed)
+
+    if accepted:
+        prepared = prepare_algorithm_distribution(artifact, profile)
+        assert prepared.package_name == "demo-algorithm"
+        assert prepared.package_version == "1.0.0"
+        assert "dependency_closure" in prepared.receipt.checks
+    else:
+        message = (
+            "is absent from the image Profile"
+            if dependency_source == "image"
+            else "local Wheel .* does not satisfy"
+        )
+        with pytest.raises(JobConfigurationError, match=message):
+            prepare_algorithm_distribution(artifact, profile)
 
 
 def test_profile_wheel_tags_are_required(tmp_path: Path) -> None:

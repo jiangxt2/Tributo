@@ -8,6 +8,8 @@ import json
 import os
 import platform
 import sys
+import tomllib
+from pathlib import Path
 
 import ray
 
@@ -40,6 +42,10 @@ def worker_probe() -> dict[str, object]:
 
 
 def main() -> None:
+    source_root = Path(__file__).resolve().parents[3]
+    expected_tributo_version = tomllib.loads(
+        (source_root / "pyproject.toml").read_text(encoding="utf-8")
+    )["project"]["version"]
     assert sys.version_info[:2] == (3, 12)
     expected_machine = {
         "linux/amd64": "x86_64",
@@ -47,7 +53,7 @@ def main() -> None:
     }[os.environ["TRIBUTO_RUNTIME_PLATFORM"]]
     assert platform.machine() == expected_machine
     assert importlib.metadata.version("ray") == "2.55.1"
-    assert importlib.metadata.version("tributo") == "1.0.0"
+    assert importlib.metadata.version("tributo") == expected_tributo_version
     for name in REQUIRED_DISTRIBUTIONS:
         importlib.metadata.version(name)
     for name, version in REQUIRED_DISTRIBUTION_VERSIONS.items():
@@ -62,7 +68,7 @@ def main() -> None:
             "python": "3.12",
             "machine": expected_machine,
             "ray": "2.55.1",
-            "tributo": "1.0.0",
+            "tributo": expected_tributo_version,
             "ray-hive": "1.0",
             "daft-doris": "1.0",
             "ray-doris": "1.0",

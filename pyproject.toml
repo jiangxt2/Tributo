@@ -1,6 +1,6 @@
 [project]
 name = "tributo"
-version = "1.0.0"
+version = "1.2.0.dev0"
 description = "Ray-native machine learning SDK for distributed data, training, model bundles, and inference"
 readme = "README.md"
 requires-python = ">=3.12,<3.14"

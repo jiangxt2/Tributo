@@ -235,9 +235,9 @@ def validate_distributed_algorithm_descriptor(
     import importlib
     import importlib.metadata
 
-    from packaging.specifiers import SpecifierSet
     from packaging.version import Version
 
+    from tributo._common.version_compatibility import tributo_version_matches
     from tributo.algorithms.api import (
         DistributedAlgorithmDescriptor,
         DistributionStrategy,
@@ -274,8 +274,8 @@ def validate_distributed_algorithm_descriptor(
     if Version(installed_package_version) != Version(descriptor.package_version):
         raise ValueError("descriptor package version does not match installed metadata")
     installed_tributo_version = importlib.metadata.version("tributo")
-    if Version(installed_tributo_version) not in SpecifierSet(
-        descriptor.tributo_version_spec
+    if not tributo_version_matches(
+        installed_tributo_version, descriptor.tributo_version_spec
     ):
         raise ValueError(
             "installed Tributo version is outside descriptor compatibility"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from importlib.metadata import version as package_version
 from types import ModuleType
 from typing import Any
 
@@ -269,7 +270,7 @@ def test_ray_hive_registration_rejects_missing_or_incompatible_distribution(
         "ray": "2.55.1",
         "ray-hive": ray_hive_version,
         "thrift": "0.16.0",
-        "tributo": "1.0.0",
+        "tributo": package_version("tributo"),
     }
     monkeypatch.setattr(builtin_bindings, "_DEFAULT_BINDINGS", None)
     monkeypatch.setattr(

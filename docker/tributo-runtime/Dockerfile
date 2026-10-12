@@ -9,7 +9,7 @@ ARG TRIBUTO_BASE_IMAGE
 ARG TRIBUTO_PLATFORM
 ARG TRIBUTO_MANIFEST_SHA256=unsealed
 ARG TRIBUTO_RUNTIME_EXTRAS
-ARG TRIBUTO_VERSION=1.0.0
+ARG TRIBUTO_VERSION=1.2.0.dev0
 
 LABEL org.opencontainers.image.title="tributo-runtime-full" \
       org.opencontainers.image.version="${TRIBUTO_VERSION}" \

@@ -2,9 +2,9 @@ name: PR Test Suite
 
 on:
   pull_request:
-    branches: [master]
+    branches: [master, "release-*"]
   push:
-    branches: [master]
+    branches: [master, "release-*"]
   merge_group:
     types: [checks_requested]
 

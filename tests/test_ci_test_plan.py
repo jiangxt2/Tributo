@@ -5,13 +5,38 @@ from __future__ import annotations
 import json
 import subprocess
 from dataclasses import replace
+from fnmatch import fnmatchcase
 from pathlib import Path
 
 import pytest
+import yaml
 
 from scripts import ci_test_plan
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.mark.parametrize("event", ["pull_request", "push"])
+@pytest.mark.parametrize(
+    ("branch", "accepted"),
+    [
+        ("master", True),
+        ("release-1.1.0", True),
+        ("release-1.1.1", True),
+        ("version-policy", False),
+        ("feature/example", False),
+    ],
+)
+def test_release_branch_uses_existing_ci_workflow(
+    event: str, branch: str, accepted: bool
+) -> None:
+    workflow = yaml.load(
+        (ROOT / ".github/workflows/pr-test-suite.yml").read_text(encoding="utf-8"),
+        Loader=yaml.BaseLoader,
+    )
+    patterns = workflow["on"][event]["branches"]
+
+    assert any(fnmatchcase(branch, pattern) for pattern in patterns) is accepted
 
 
 @pytest.fixture(scope="module")

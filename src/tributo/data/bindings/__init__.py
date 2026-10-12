@@ -70,7 +70,7 @@ def _ray_parquet_descriptor() -> BindingDescriptor:
         factory=RayParquetBinding,
         capabilities=frozenset({SourceCapability.PROJECTION}),
         distribution_name="tributo",
-        distribution_version=_distribution_version("tributo") or "1.0.0",
+        distribution_version=_distribution_version("tributo") or "1.2.0.dev0",
         engine_version_spec=_RAY_VERSION_SPEC,
         constraints=BindingPlanConstraints(
             filesystem_ids=frozenset({"local", "file", "s3"})
@@ -99,7 +99,7 @@ def _daft_parquet_descriptor() -> BindingDescriptor:
         factory=DaftParquetBinding,
         capabilities=frozenset({SourceCapability.PROJECTION}),
         distribution_name="tributo",
-        distribution_version=_distribution_version("tributo") or "1.0.0",
+        distribution_version=_distribution_version("tributo") or "1.2.0.dev0",
         engine_version_spec=_DAFT_VERSION_SPEC,
         constraints=BindingPlanConstraints(
             filesystem_ids=frozenset({"local", "file", "s3"})
@@ -116,7 +116,7 @@ def _ray_csv_descriptor() -> BindingDescriptor:
         factory=RayCsvBinding,
         capabilities=frozenset({SourceCapability.PROJECTION}),
         distribution_name="tributo",
-        distribution_version=_distribution_version("tributo") or "1.0.0",
+        distribution_version=_distribution_version("tributo") or "1.2.0.dev0",
         engine_version_spec=_RAY_VERSION_SPEC,
         constraints=BindingPlanConstraints(
             filesystem_ids=frozenset({"local", "file", "s3"})
@@ -136,7 +136,7 @@ def _daft_csv_descriptor() -> BindingDescriptor:
         factory=DaftCsvBinding,
         capabilities=frozenset({SourceCapability.PROJECTION}),
         distribution_name="tributo",
-        distribution_version=_distribution_version("tributo") or "1.0.0",
+        distribution_version=_distribution_version("tributo") or "1.2.0.dev0",
         engine_version_spec=_DAFT_VERSION_SPEC,
         constraints=BindingPlanConstraints(
             filesystem_ids=frozenset({"local", "file", "s3"})
@@ -165,7 +165,7 @@ def _ray_hdfs_descriptor(connector_id: str) -> BindingDescriptor:
         factory=factory,
         capabilities=frozenset({SourceCapability.PROJECTION}),
         distribution_name="tributo",
-        distribution_version=_distribution_version("tributo") or "1.0.0",
+        distribution_version=_distribution_version("tributo") or "1.2.0.dev0",
         engine_version_spec=_RAY_VERSION_SPEC,
         dependency_distributions=("pyarrow",),
         constraints=BindingPlanConstraints(filesystem_ids=frozenset({"hdfs"})),
@@ -195,7 +195,7 @@ def _ray_iceberg_descriptor() -> BindingDescriptor:
             }
         ),
         distribution_name="tributo",
-        distribution_version=_distribution_version("tributo") or "1.0.0",
+        distribution_version=_distribution_version("tributo") or "1.2.0.dev0",
         engine_version_spec=_RAY_VERSION_SPEC,
         dependency_distributions=("pyiceberg",),
         supported_read_hints=frozenset({ReadHint.TARGET_PARALLELISM}),
@@ -223,7 +223,7 @@ def _daft_iceberg_descriptor() -> BindingDescriptor:
             }
         ),
         distribution_name="tributo",
-        distribution_version=_distribution_version("tributo") or "1.0.0",
+        distribution_version=_distribution_version("tributo") or "1.2.0.dev0",
         engine_version_spec=_DAFT_VERSION_SPEC,
         dependency_distributions=("pyiceberg",),
         install_hint=_DATA_INSTALL_HINT,
@@ -246,7 +246,7 @@ def _ray_lance_descriptor() -> BindingDescriptor:
             }
         ),
         distribution_name="tributo",
-        distribution_version=_distribution_version("tributo") or "1.0.0",
+        distribution_version=_distribution_version("tributo") or "1.2.0.dev0",
         engine_version_spec=_RAY_VERSION_SPEC,
         dependency_distributions=("pylance",),
         supported_read_hints=frozenset(
@@ -270,7 +270,7 @@ def _daft_lance_descriptor() -> BindingDescriptor:
             }
         ),
         distribution_name="tributo",
-        distribution_version=_distribution_version("tributo") or "1.0.0",
+        distribution_version=_distribution_version("tributo") or "1.2.0.dev0",
         engine_version_spec=_DAFT_VERSION_SPEC,
         dependency_distributions=("pylance", "daft-lance"),
         install_hint=_DAFT_LANCE_INSTALL_HINT,
@@ -388,7 +388,7 @@ def _ray_postgresql_descriptor() -> BindingDescriptor:
         factory=RayPostgreSqlBinding,
         capabilities=frozenset({SourceCapability.PROJECTION}),
         distribution_name="tributo",
-        distribution_version=_distribution_version("tributo") or "1.0.0",
+        distribution_version=_distribution_version("tributo") or "1.2.0.dev0",
         engine_version_spec=_RAY_VERSION_SPEC,
         dependency_distributions=("psycopg", "psycopg-binary"),
         supported_read_hints=frozenset({ReadHint.CONCURRENCY}),
@@ -409,7 +409,7 @@ def _daft_postgresql_descriptor() -> BindingDescriptor:
         factory=DaftPostgreSqlBinding,
         capabilities=frozenset({SourceCapability.PROJECTION}),
         distribution_name="tributo",
-        distribution_version=_distribution_version("tributo") or "1.0.0",
+        distribution_version=_distribution_version("tributo") or "1.2.0.dev0",
         engine_version_spec=_DAFT_VERSION_SPEC,
         dependency_distributions=(
             "psycopg",

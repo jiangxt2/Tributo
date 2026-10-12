@@ -13,6 +13,7 @@ from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.version import InvalidVersion, Version
 
 from tributo import __version__ as tributo_version
+from tributo._common.version_compatibility import tributo_version_matches
 from tributo.data.provider import DataSourceProvider
 from tributo.data.provider_registry import ProviderRegistry
 from tributo.exceptions import EngineNotAvailableError
@@ -93,8 +94,8 @@ def _validate_installed_versions(descriptor: ProviderDescriptor) -> None:
         distribution_matches = Version(installed_distribution) == Version(
             descriptor.distribution_version
         )
-        tributo_matches = Version(tributo_version) in SpecifierSet(
-            descriptor.tributo_version_spec
+        tributo_matches = tributo_version_matches(
+            tributo_version, descriptor.tributo_version_spec
         )
     except InvalidVersion as exc:
         raise EngineNotAvailableError(

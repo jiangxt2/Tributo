@@ -13,10 +13,30 @@ Tributo follows [Semantic Versioning 2.0.0](https://semver.org/).
 | **Minor** (0.X.0) | New `stable` or `beta` feature; `beta` API change with deprecation notice; new optional dependency |
 | **Patch** (0.0.X) | Bug fix; internal refactor with no API change; dependency version bump within declared range |
 
-Current version: **1.0.0** (as declared in `pyproject.toml`).
+Current version: **1.2.0.dev0** (as declared in `pyproject.toml`).
 
 `pyproject.toml` is the authoritative source. README, Docker, CI, and lock
 files must be verified against it whenever the version changes.
+
+### Development and release branches
+
+Formal releases use SemVer numbers. Python development versions use the
+[PEP 440 development-release format](https://packaging.python.org/en/latest/specifications/version-specifiers/#developmental-releases).
+`master` declares `1.2.0.dev0` for ongoing development. The `release-1.1.0`
+branch declares `1.1.0`, and the `tributo-1.1.0` tag must identify its exact
+validated commit. A development version does not determine whether the next
+published release is a patch or a minor version.
+
+Release branches start from an explicitly reviewed commit. Their formal-version
+changes are not merged back into `master`. Patch releases start from the
+appropriate release snapshot and receive selected fixes rather than all new
+master features. Beta compatibility windows count published minor releases;
+development versions do not consume those windows. Manifest schema and Plugin
+API versions keep their independent identities.
+
+README and installation examples distinguish the published source tag from
+the development checkout. Update the mainline's published installation entry
+only after the corresponding GitHub source release exists.
 
 ## API Stability Tiers
 
@@ -86,7 +106,7 @@ version and the Manifest schema version.
 | `ModelFlavor` | 1 | `integrations/` |
 | Bounded-ingestion Provider descriptor | 1 | `data/provider_plugins.py` |
 | Bounded-ingestion Binding descriptor | 1 | `data/binding_plugins.py` |
-| Distributed algorithm descriptor | 1 | `algorithms/api/descriptor.py` |
+| Distributed algorithm descriptor | 1, 2 | `algorithms/api/descriptor.py`; v2 requires explicit contract bindings |
 | DistributionSpec | 1 | `algorithms/api/distribution.py` |
 | ExecutionReceipt | 1 | `algorithms/api/execution.py` |
 | Trainer entry points | N/A (not versioned) | `plugin.py` |
@@ -101,10 +121,11 @@ version and the Manifest schema version.
 - The framework MAY support multiple `api_version` values concurrently during
   a transition period (e.g., accept both v1 and v2 plugins). This requires
   explicit code — the default is single-version.
-- Bounded-ingestion Provider and Binding descriptors declare an exact plugin
-  distribution version plus a Tributo version specifier. Discovery rejects a
-  descriptor when either installed version disagrees, isolates the bad entry
-  point, and never replaces an already registered route.
+- Bounded-ingestion Provider descriptors declare an exact plugin distribution
+  version plus a Tributo version specifier. Binding descriptors declare an exact
+  plugin distribution version and an engine version specifier. Discovery
+  rejects incompatible descriptors, isolates the bad entry point, and never
+  replaces an already registered route.
 - Distributed algorithm descriptors declare an exact installed package version,
   a Tributo package compatibility range, and an exact descriptor API version.
   Discovery also verifies inheritance from the strategy named by
@@ -113,6 +134,28 @@ version and the Manifest schema version.
 - Older unversioned plugin groups retain their existing behavior. They do not
   inherit the stronger guarantees of bounded-ingestion or distributed-algorithm
   descriptor discovery.
+
+### Core development-version matching
+
+Provider registration, distributed algorithm descriptor validation, offline
+algorithm Bundle validation, and support-evidence matching share one Core
+version rule. An explicitly selected Core development version may match its
+declared range. The full version remains subject
+to PEP 440 bounds, exact pins, and exclusions; it is not converted into the
+corresponding formal release.
+
+For `1.2.0.dev0`, `>=1,<2` matches, while `<1.2`, `>=1.2`, `==1.1.0`, and
+`!=1.2.*` do not. Formal versions retain the default matching behavior.
+Release candidates and beta versions require permission in their version
+specifier; this rule does not automatically admit them.
+
+Plugin package versions, descriptor API versions, Wheel digests, and support
+evidence identity remain strict. Matching a development version does not award
+execution support, change the version recorded in evidence, or certify a
+different Core/Wheel combination. Ray, Daft, and Python version checks retain
+their independent policies. Development installations must select Core source
+or a Core Wheel explicitly; this runtime rule does not change package-index
+resolution.
 
 ### Plugin lifecycle before PL1 and PL2
 

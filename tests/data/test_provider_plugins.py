@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import pytest
@@ -122,6 +122,44 @@ def test_plugin_registration_never_overrides_an_existing_provider(
 
     assert registry.list_providers() == ["example.hive"]
     assert "JobConfigurationError" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("core_version", "version_spec", "accepted"),
+    [
+        ("1.1.0", ">=1,<2", True),
+        ("1.2.0.dev0", ">=1,<2", True),
+        ("1.2.0.dev0", ">=1,<1.2", False),
+        ("1.2.0.dev0", ">=1.2", False),
+        ("1.2.0.dev0", "==1.1.0", False),
+        ("1.2.0.dev0", ">=1,<2,!=1.2.*", False),
+        ("1.2.0rc1", ">=1,<2", False),
+        ("2.0.0.dev0", ">=1,<2", False),
+    ],
+)
+def test_provider_core_development_version_range(
+    monkeypatch: pytest.MonkeyPatch,
+    core_version: str,
+    version_spec: str,
+    accepted: bool,
+) -> None:
+    descriptor = replace(
+        _descriptor("example.development"), tributo_version_spec=version_spec
+    )
+    registry = ProviderRegistry()
+    monkeypatch.setattr("tributo.data.provider_plugins.tributo_version", core_version)
+    monkeypatch.setattr(
+        "tributo.data.provider_plugins.discover_provider_descriptors",
+        lambda: (descriptor,),
+    )
+    monkeypatch.setattr(
+        "tributo.data.provider_plugins.importlib.metadata.version",
+        lambda name: "1.2.3",
+    )
+
+    register_discovered_providers(registry)
+
+    assert registry.list_providers() == (["example.development"] if accepted else [])
 
 
 def test_incompatible_plugin_is_isolated_from_other_providers(

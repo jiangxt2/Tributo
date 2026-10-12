@@ -424,6 +424,59 @@ def test_independent_torch_recipe_package_passes_narrow_conformance(
     )
 
 
+@pytest.mark.parametrize(
+    ("core_version", "version_spec", "accepted"),
+    [
+        ("1.1.0", ">=1,<2", True),
+        ("1.2.0.dev0", ">=1,<2", True),
+        ("1.2.0.dev0", ">=1,<1.2", False),
+        ("1.2.0.dev0", ">=1.2", False),
+        ("1.2.0.dev0", "==1.1.0", False),
+        ("1.2.0.dev0", ">=1,<2,!=1.2.*", False),
+        ("1.2.0rc1", ">=1,<2", False),
+        ("2.0.0.dev0", ">=1,<2", False),
+    ],
+)
+def test_algorithm_descriptor_core_development_version_range(
+    monkeypatch: pytest.MonkeyPatch,
+    core_version: str,
+    version_spec: str,
+    accepted: bool,
+) -> None:
+    fixture_src = (
+        Path(__file__).parent / "fixtures" / "distributed_algorithm_plugin" / "src"
+    )
+    monkeypatch.syspath_prepend(str(fixture_src))
+    fixture = importlib.import_module("tributo_test_distributed_algorithm")
+    descriptor = replace(fixture.DESCRIPTOR, tributo_version_spec=version_spec)
+    real_version = importlib.metadata.version
+
+    def package_version(name: str) -> str:
+        if name == "tributo":
+            return core_version
+        if name == "tributo-test-distributed-algorithm":
+            return "0.1.0"
+        return real_version(name)
+
+    monkeypatch.setattr(importlib.metadata, "version", package_version)
+    if accepted:
+        assert (
+            plugin.validate_distributed_algorithm_descriptor(
+                descriptor,
+                entry_point_name=descriptor.name,
+                load_implementation=False,
+            )
+            is descriptor
+        )
+    else:
+        with pytest.raises(ValueError, match="outside descriptor compatibility"):
+            plugin.validate_distributed_algorithm_descriptor(
+                descriptor,
+                entry_point_name=descriptor.name,
+                load_implementation=False,
+            )
+
+
 def test_algorithm_artifact_plugin_filter_loads_only_the_selected_entry_point(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
