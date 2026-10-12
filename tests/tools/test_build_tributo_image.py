@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -167,6 +168,13 @@ def test_build_command_is_shell_free_and_uses_named_context() -> None:
     assert f"TRIBUTO_BASE_IMAGE={BASE_IMAGE}" in command
     assert f"TRIBUTO_PLATFORM={config.platform}" in command
     assert f"TRIBUTO_RUNTIME_EXTRAS={','.join(RUNTIME_EXTRAS)}" in command
+    expected_version = tomllib.loads(
+        (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )["project"]["version"]
+    assert f"TRIBUTO_VERSION={expected_version}" in command
+    assert f"ARG TRIBUTO_VERSION={expected_version}" in DOCKERFILE.read_text(
+        encoding="utf-8"
+    )
 
 
 def test_runtime_image_contract_is_shared_with_the_gate_job() -> None:

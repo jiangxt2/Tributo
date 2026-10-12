@@ -14,8 +14,11 @@ cd Tributo
 ```
 
 The tag and a development checkout can declare the same package version while
-containing different APIs. Select the checkout before preparing dependencies,
-and use the documentation, metadata, and lock file from that revision.
+containing different APIs in historical snapshots. Current `master` declares
+`1.2.0.dev0`, while release branches use their selected formal version. Select
+the checkout before preparing dependencies, and use the documentation,
+metadata, and lock file from that revision. The development version does not
+determine which patch or minor release will be published next.
 The optional profiles below describe this documentation's source tree.
 
 For an independently built algorithm package, use a reviewed Core/Wheel

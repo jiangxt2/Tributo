@@ -53,6 +53,7 @@ def installed_versions(monkeypatch: pytest.MonkeyPatch) -> None:
         "tributo": "1.0.0",
     }
     real_version = importlib.metadata.version
+    monkeypatch.setattr("tributo.__version__", versions["tributo"])
 
     def version_for_test(name: str) -> str:
         if name in versions:
@@ -1101,3 +1102,4 @@ def test_builtin_descriptor_uses_loaded_tributo_version(
     monkeypatch.setattr("tributo.__version__", "7.8.9")
 
     assert builtin_bindings._distribution_version("tributo") == "7.8.9"
+    assert builtin_bindings._ray_parquet_descriptor().distribution_version == "7.8.9"

@@ -10,7 +10,9 @@ import zipfile
 from pathlib import Path
 
 import pytest
+from packaging.version import Version
 
+import tributo._common.algorithm_distribution as distribution_module
 from tributo._common.algorithm_distribution import (
     algorithm_runtime_env_patch,
     prepare_algorithm_distribution,
@@ -491,6 +493,44 @@ def test_bundle_compatibility_checks_tributo_and_profile_algorithm_id(
             AlgorithmArtifact(source=str(root), mode="offline_wheelhouse"),
             profile,
         )
+
+
+@pytest.mark.parametrize(
+    ("core_version", "version_spec", "accepted"),
+    [
+        ("1.1.0", ">=1,<2", True),
+        ("1.2.0.dev0", ">=1,<2", True),
+        ("1.2.0.dev0", ">=1,<1.2", False),
+        ("1.2.0.dev0", ">=1.2", False),
+        ("1.2.0.dev0", "==1.1.0", False),
+        ("1.2.0.dev0", ">=1,<2,!=1.2.*", False),
+        ("1.2.0rc1", ">=1,<2", False),
+        ("2.0.0.dev0", ">=1,<2", False),
+    ],
+)
+def test_offline_bundle_core_development_version_range(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    core_version: str,
+    version_spec: str,
+    accepted: bool,
+) -> None:
+    root = _bundle(tmp_path / "bundle")
+    manifest_path = root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["tributo_version_spec"] = version_spec
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    monkeypatch.setattr(
+        distribution_module, "_current_tributo_version", lambda: Version(core_version)
+    )
+    artifact = AlgorithmArtifact(source=str(root), mode="offline_wheelhouse")
+
+    if accepted:
+        prepared = prepare_algorithm_distribution(artifact, _profile())
+        assert prepared.package_name == "demo-algorithm"
+    else:
+        with pytest.raises(JobConfigurationError, match="Bundle Tributo version"):
+            prepare_algorithm_distribution(artifact, _profile())
 
 
 def test_profile_wheel_tags_are_required(tmp_path: Path) -> None:

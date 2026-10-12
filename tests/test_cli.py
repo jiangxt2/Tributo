@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from importlib.metadata import version as package_version
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -448,7 +449,7 @@ def test_version(runner):
     """--version should print the version."""
     result = runner.invoke(main, ["--version"])
     assert result.exit_code == 0
-    assert "1.0" in result.output
+    assert result.output.strip() == f"{main.name}, version {package_version('tributo')}"
 
 
 if __name__ == "__main__":

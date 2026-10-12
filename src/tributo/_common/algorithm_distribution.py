@@ -27,6 +27,7 @@ from packaging.utils import (
 )
 from packaging.version import InvalidVersion, Version
 
+from tributo._common.version_compatibility import tributo_version_matches
 from tributo.algorithms.api.artifacts import (
     AlgorithmArtifact,
     AlgorithmBundleManifest,
@@ -312,7 +313,9 @@ def _validate_bundle_compatibility(
             f"Bundle algorithm {manifest.algorithm_id!r} is not allowed by image "
             f"Profile {profile.profile_id!r}"
         )
-    if _current_tributo_version() not in SpecifierSet(manifest.tributo_version_spec):
+    if not tributo_version_matches(
+        _current_tributo_version(), manifest.tributo_version_spec
+    ):
         raise _configuration_error(
             "Bundle Tributo version constraint excludes the running Tributo version"
         )
