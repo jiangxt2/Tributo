@@ -3,28 +3,425 @@ name: Publish to PyPI
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing tributo-X.Y.Z tag to build and publish
+        required: true
+        type: string
+      formal_publish:
+        description: Publish to PyPI after the TestPyPI smoke test succeeds
+        required: false
+        default: false
+        type: boolean
 
 permissions:
-  id-token: write
   contents: read
 
+concurrency:
+  group: publish-tributo-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
-  publish:
-    name: Build and publish
+  build:
+    name: Build and verify distributions
     runs-on: ubuntu-latest
-    environment: release
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      artifact_name: ${{ steps.release.outputs.artifact_name }}
 
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          persist-credentials: false
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
 
       - uses: astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5
         with:
           python-version: "3.12"
+          enable-cache: true
+
+      - name: Validate release tag and package version
+        id: release
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+          PACKAGE_METADATA_PATH: pyproject.toml
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          import subprocess
+          import tomllib
+          from pathlib import Path
+
+          tag = os.environ["RELEASE_TAG"]
+          match = re.fullmatch(r"tributo-(\d+\.\d+\.\d+)", tag)
+          if match is None:
+              raise SystemExit(f"Ref must name a tributo-X.Y.Z tag, got {tag!r}")
+
+          tag_type = subprocess.check_output(
+              ["git", "cat-file", "-t", f"refs/tags/{tag}"], text=True
+          ).strip()
+          if tag_type != "tag":
+              raise SystemExit(f"Release ref {tag!r} must be an annotated Git tag")
+          subprocess.run(
+              ["git", "rev-parse", "--verify", f"refs/tags/{tag}^{{commit}}"],
+              check=True,
+              stdout=subprocess.DEVNULL,
+          )
+          with Path(os.environ["PACKAGE_METADATA_PATH"]).open("rb") as project_file:
+              project_version = tomllib.load(project_file)["project"]["version"]
+          if match.group(1) != project_version:
+              raise SystemExit(
+                  f"Tag version {match.group(1)} does not match package version "
+                  f"{project_version}"
+              )
+          print(f"Validated {tag} for Tributo {project_version}")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write(f"version={project_version}\n")
+              output.write(f"artifact_name=tributo-distributions-{project_version}\n")
+          PY
+
+      - name: Install build tools
+        run: |
+          uv venv --python 3.12
+          uv pip install --python .venv/bin/python "build==1.3.0" "twine==6.2.0" "hatchling==1.29.0"
 
       - name: Build wheel and sdist
-        run: uv build
+        run: .venv/bin/python -m build --no-isolation --outdir release-artifacts/packages
 
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247
+      - name: Validate distributions and create SHA256 manifest
+        run: |
+          .venv/bin/twine check release-artifacts/packages/*
+          python3 - <<'PY'
+          import hashlib
+          from pathlib import Path
+
+          package_dir = Path("release-artifacts/packages")
+          wheels = sorted(package_dir.glob("*.whl"))
+          sdists = sorted(package_dir.glob("*.tar.gz"))
+          if len(wheels) != 1 or len(sdists) != 1:
+              raise SystemExit(
+                  f"Expected one wheel and one sdist, found {len(wheels)} and {len(sdists)}"
+              )
+
+          manifest = Path("release-artifacts/SHA256SUMS")
+          manifest.write_text(
+              "".join(
+                  f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n"
+                  for path in wheels + sdists
+              ),
+              encoding="utf-8",
+          )
+          PY
+          (cd release-artifacts/packages && sha256sum --check ../SHA256SUMS)
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          packages-dir: dist/
+          name: ${{ steps.release.outputs.artifact_name }}
+          path: release-artifacts/
+          if-no-files-found: error
+          retention-days: 90
+
+  testpypi_publish:
+    name: Publish to TestPyPI
+    if: >-
+      always() &&
+      needs.build.result == 'success' &&
+      (
+        github.event_name == 'release' ||
+        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master')
+      )
+    needs: [build]
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.build.outputs.artifact_name }}
+          path: release-artifacts
+          digest-mismatch: error
+      - name: Verify downloaded distributions
+        run: (cd release-artifacts/packages && sha256sum --check ../SHA256SUMS)
+      - name: Check TestPyPI state
+        id: state
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          code=$(curl -sS -o testpypi.json -w '%{http_code}' \
+            "https://test.pypi.org/pypi/tributo/${VERSION}/json")
+          if [[ "${code}" == "404" ]]; then
+            echo "publish=true" >> "${GITHUB_OUTPUT}"
+            echo "skip_existing=false" >> "${GITHUB_OUTPUT}"
+          elif [[ "${code}" == "200" ]]; then
+            python3 - testpypi.json release-artifacts/SHA256SUMS <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          index = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          expected = {}
+          for line in Path(sys.argv[2]).read_text(encoding="utf-8").splitlines():
+              digest, filename = line.split(maxsplit=1)
+              expected[Path(filename.lstrip("*")).name] = digest
+          actual = {
+              item["filename"]: item["digests"]["sha256"] for item in index["urls"]
+          }
+          if any(expected.get(filename) != digest for filename, digest in actual.items()):
+              raise SystemExit("Existing TestPyPI files conflict with the release artifact")
+          missing = expected.keys() - actual.keys()
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write(f"publish={'true' if missing else 'false'}\n")
+              output.write(
+                  f"skip_existing={'true' if actual and missing else 'false'}\n"
+              )
+          PY
+          else
+            echo "TestPyPI returned HTTP ${code}" >&2
+            exit 1
+          fi
+      - name: Publish package distributions to TestPyPI
+        if: steps.state.outputs.publish == 'true'
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: release-artifacts/packages/
+          repository-url: https://test.pypi.org/legacy/
+          attestations: true
+          skip-existing: ${{ steps.state.outputs.skip_existing == 'true' }}
+      - name: Verify TestPyPI files
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          for attempt in {1..12}; do
+            code=$(curl -sS -o testpypi.json -w '%{http_code}' \
+              "https://test.pypi.org/pypi/tributo/${VERSION}/json")
+            if [[ "${code}" == "200" ]]; then
+              python3 - testpypi.json release-artifacts/SHA256SUMS <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          index = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          expected = {}
+          for line in Path(sys.argv[2]).read_text(encoding="utf-8").splitlines():
+              digest, filename = line.split(maxsplit=1)
+              expected[Path(filename.lstrip("*")).name] = digest
+          actual = {
+              item["filename"]: item["digests"]["sha256"] for item in index["urls"]
+          }
+          if actual != expected:
+              raise SystemExit("TestPyPI files do not match the release artifact")
+          PY
+              exit 0
+            fi
+            if [[ "${code}" != "404" ]]; then
+              echo "TestPyPI returned HTTP ${code}" >&2
+              exit 1
+            fi
+            test "${attempt}" -lt 12
+            sleep 5
+          done
+
+  testpypi_smoke:
+    name: Smoke install from TestPyPI
+    needs: [build, testpypi_publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Resolve TestPyPI wheel URL
+        id: testpypi-wheel
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
+          from pathlib import Path
+          from urllib.parse import urlparse
+
+          version = os.environ["VERSION"]
+          request = urllib.request.Request(
+              f"https://test.pypi.org/pypi/tributo/{version}/json",
+              headers={"Accept": "application/json"},
+          )
+          with urllib.request.urlopen(request, timeout=30) as response:
+              index = json.load(response)
+          wheels = [item for item in index["urls"] if item["filename"].endswith(".whl")]
+          if len(wheels) != 1:
+              raise SystemExit(f"Expected one TestPyPI wheel, found {len(wheels)}")
+
+          wheel_url = wheels[0]["url"]
+          parsed_url = urlparse(wheel_url)
+          if (
+              parsed_url.scheme != "https"
+              or parsed_url.hostname is None
+              or not parsed_url.hostname.endswith(".pythonhosted.org")
+              or "\n" in wheel_url
+              or "\r" in wheel_url
+          ):
+              raise SystemExit("TestPyPI returned an unexpected wheel URL")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write(f"wheel_url={wheel_url}\n")
+          PY
+      - name: Install TestPyPI wheel and resolve dependencies from PyPI
+        env:
+          TESTPYPI_WHEEL_URL: ${{ steps.testpypi-wheel.outputs.wheel_url }}
+        run: python -m pip install --index-url https://pypi.org/simple/ "$TESTPYPI_WHEEL_URL"
+      - name: Verify installed package
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          python - <<'PY'
+          import importlib.metadata
+          import os
+          import tributo
+
+          version = importlib.metadata.version("tributo")
+          assert version == os.environ["VERSION"], version
+          print(f"Installed Tributo {version}")
+          PY
+
+  publish_pypi:
+    name: Publish to PyPI
+    if: >-
+      always() &&
+      needs.build.result == 'success' &&
+      needs.testpypi_publish.result == 'success' &&
+      needs.testpypi_smoke.result == 'success' &&
+      (
+        github.event_name == 'release' ||
+        (github.event_name == 'workflow_dispatch' && inputs.formal_publish == true && github.ref == 'refs/heads/master')
+      )
+    needs: [build, testpypi_publish, testpypi_smoke]
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.build.outputs.artifact_name }}
+          path: release-artifacts
+          digest-mismatch: error
+      - name: Verify downloaded distributions
+        run: (cd release-artifacts/packages && sha256sum --check ../SHA256SUMS)
+      - name: Check PyPI state
+        id: state
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          code=$(curl -sS -o pypi.json -w '%{http_code}' \
+            "https://pypi.org/pypi/tributo/${VERSION}/json")
+          if [[ "${code}" == "404" ]]; then
+            echo "publish=true" >> "${GITHUB_OUTPUT}"
+            echo "skip_existing=false" >> "${GITHUB_OUTPUT}"
+          elif [[ "${code}" == "200" ]]; then
+            python3 - pypi.json release-artifacts/SHA256SUMS <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+
+          index = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          expected = {}
+          for line in Path(sys.argv[2]).read_text(encoding="utf-8").splitlines():
+              digest, filename = line.split(maxsplit=1)
+              expected[Path(filename.lstrip("*")).name] = digest
+          actual = {
+              item["filename"]: item["digests"]["sha256"] for item in index["urls"]
+          }
+          if any(expected.get(filename) != digest for filename, digest in actual.items()):
+              raise SystemExit("Existing PyPI files conflict with the release artifact")
+          missing = expected.keys() - actual.keys()
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write(f"publish={'true' if missing else 'false'}\n")
+              output.write(
+                  f"skip_existing={'true' if actual and missing else 'false'}\n"
+              )
+          PY
+          else
+            echo "PyPI returned HTTP ${code}" >&2
+            exit 1
+          fi
+      - name: Publish package distributions to PyPI
+        if: steps.state.outputs.publish == 'true'
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: release-artifacts/packages/
+          attestations: true
+          skip-existing: ${{ steps.state.outputs.skip_existing == 'true' }}
+      - name: Verify PyPI files
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          for attempt in {1..12}; do
+            code=$(curl -sS -o pypi.json -w '%{http_code}' \
+              "https://pypi.org/pypi/tributo/${VERSION}/json")
+            if [[ "${code}" == "200" ]]; then
+              python3 - pypi.json release-artifacts/SHA256SUMS <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          index = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          expected = {}
+          for line in Path(sys.argv[2]).read_text(encoding="utf-8").splitlines():
+              digest, filename = line.split(maxsplit=1)
+              expected[Path(filename.lstrip("*")).name] = digest
+          actual = {
+              item["filename"]: item["digests"]["sha256"] for item in index["urls"]
+          }
+          if actual != expected:
+              raise SystemExit("PyPI files do not match the release artifact")
+          PY
+              exit 0
+            fi
+            if [[ "${code}" != "404" ]]; then
+              echo "PyPI returned HTTP ${code}" >&2
+              exit 1
+            fi
+            test "${attempt}" -lt 12
+            sleep 5
+          done
+
+  pypi_smoke:
+    name: Smoke install from PyPI
+    needs: [build, publish_pypi]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install from PyPI
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: python -m pip install "tributo==${VERSION}"
+      - name: Verify installed package
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          python - <<'PY'
+          import importlib.metadata
+          import os
+          import tributo
+
+          version = importlib.metadata.version("tributo")
+          assert version == os.environ["VERSION"], version
+          print(f"Installed Tributo {version}")
+          PY
