@@ -135,7 +135,7 @@ def _algorithm_image_profile() -> ImageProfile:
         digest = digest.removeprefix("sha256:")
     return ImageProfile(
         profile_id="data-ingestion.cpu.v1",
-        image_uri=os.environ.get("TRIBUTO_IT_RUNTIME_IMAGE", "ray:2.55.1"),
+        image_uri=os.environ.get("TRIBUTO_IT_RUNTIME_IMAGE", "ray:2.59.0"),
         image_digest=digest,
         wheel_tags=("py3-none-any",),
         installed_distributions={"pip": "24.3.1"},

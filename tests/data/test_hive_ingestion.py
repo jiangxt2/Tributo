@@ -206,7 +206,7 @@ def test_ray_hive_binding_delegates_to_public_reader(
     monkeypatch.setitem(sys.modules, "ray_hive", module)
     monkeypatch.setattr(
         "tributo.data.bindings.ray_hive.importlib.metadata.version",
-        lambda name: "2.55.1" if name == "ray" else "1.0",
+        lambda name: "2.59.0" if name == "ray" else "1.2",
     )
 
     plan = SqlScan(
@@ -251,25 +251,26 @@ def test_ray_hive_binding_delegates_to_public_reader(
     assert calls["reader"]["connection"].transport == "binary"
 
 
-def test_ray_hive_descriptor_is_optional_and_versioned() -> None:
+def test_ray_hive_descriptor_records_installed_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(builtin_bindings, "_distribution_version", lambda _name: "1.4")
     descriptor = _ray_hive_descriptor()
     assert descriptor.key.scan_kind is ScanKind.SQL
     assert descriptor.key.connector_id == "hive"
     assert descriptor.key.binding_id == "tributo.ray.hive"
     assert descriptor.distribution_name == "ray-hive"
-    assert descriptor.distribution_version == "1.0"
+    assert descriptor.distribution_version == "1.4"
     assert descriptor.dependency_distributions == ("thrift",)
 
 
-@pytest.mark.parametrize("ray_hive_version", [None, "0.9", "1.1"])
-def test_ray_hive_registration_rejects_missing_or_incompatible_distribution(
+def test_ray_hive_registration_rejects_missing_distribution(
     monkeypatch: pytest.MonkeyPatch,
-    ray_hive_version: str | None,
 ) -> None:
     versions = {
-        "ray": "2.55.1",
-        "ray-hive": ray_hive_version,
-        "thrift": "0.16.0",
+        "ray": "2.59.0",
+        "ray-hive": None,
+        "thrift": "0.22.0",
         "tributo": package_version("tributo"),
     }
     monkeypatch.setattr(builtin_bindings, "_DEFAULT_BINDINGS", None)
@@ -292,13 +293,15 @@ def test_ray_hive_registration_rejects_missing_or_incompatible_distribution(
         )
 
 
-def test_ray_hive_registration_accepts_exact_distribution(
+@pytest.mark.parametrize("ray_hive_version", ["1.0", "1.4", "1.4.dev0"])
+def test_ray_hive_registration_accepts_installed_versions(
     monkeypatch: pytest.MonkeyPatch,
+    ray_hive_version: str,
 ) -> None:
     versions = {
-        "ray": "2.55.1",
-        "ray-hive": "1.0",
-        "thrift": "0.16.0",
+        "ray": "2.59.0",
+        "ray-hive": ray_hive_version,
+        "thrift": "0.22.0",
         "tributo": "1.0.0",
     }
     monkeypatch.setattr(builtin_bindings, "_DEFAULT_BINDINGS", None)
@@ -321,4 +324,4 @@ def test_ray_hive_registration_accepts_exact_distribution(
         )
     )
 
-    assert descriptor.distribution_version == "1.0"
+    assert descriptor.distribution_version == ray_hive_version

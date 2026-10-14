@@ -119,7 +119,8 @@ def test_doris_requires_independent_ray_doris_binding(
         lambda name: None if name == "ray-doris" else installed_version(name),
     )
     with pytest.raises(
-        EngineNotAvailableError, match=r"ray-doris==1\.0.*tributo\[mysql\]"
+        EngineNotAvailableError,
+        match=r"ray-doris.*uv sync --locked --extra mysql",
     ):
         load_ray_dataset_from_source(
             {

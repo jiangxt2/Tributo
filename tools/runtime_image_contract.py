@@ -14,11 +14,11 @@ REQUIRED_IMPORTS = (
     "tributo.registry",
     "daft",
     "ray_hive",
+    "ray_clickhouse",
     "lance_ray",
     "lance",
     "pyiceberg",
     "torch",
-    "xgboost",
     "onnx",
     "onnxruntime",
     "transformers",
@@ -33,13 +33,13 @@ REQUIRED_IMPORTS = (
 REQUIRED_DISTRIBUTIONS = (
     "ray",
     "ray-hive",
+    "ray-clickhouse",
     "tributo",
     "daft",
     "lance-ray",
     "pylance",
     "pyiceberg",
     "torch",
-    "xgboost",
     "onnx",
     "onnxruntime",
     "transformers",
@@ -60,8 +60,9 @@ REQUIRED_DISTRIBUTIONS = (
 )
 
 REQUIRED_DISTRIBUTION_VERSIONS = {
-    "ray-hive": "1.0",
-    "daft-doris": "1.0",
-    "ray-doris": "1.0",
-    "thrift": "0.16.0",
+    "ray-hive": "1.2",
+    "ray-clickhouse": "1.1",
+    "daft-doris": "1.1",
+    "ray-doris": "1.3",
+    "thrift": "0.22.0",
 }

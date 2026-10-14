@@ -261,7 +261,7 @@ class AlgorithmSupportEvidence:
             if canonicalize_name(Requirement(requirement).name) == "ray"
         ]
         ray_matches = (
-            self.ray_version == "2.55.1"
+            self.ray_version == "2.59.0"
             if not ray_requirements
             else any(
                 Version(self.ray_version) in Requirement(requirement).specifier

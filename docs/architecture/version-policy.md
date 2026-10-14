@@ -179,7 +179,7 @@ resolution.
 
 ## Dependency Version Policy
 
-- **Ray**: Pinned to exact version (`==2.55.1`). Ray's own SemVer does not
+- **Ray**: Pinned to exact version (`==2.59.0`). Ray's own SemVer does not
   guarantee Train/Data/Serve API stability across minor versions.
 - **PyIceberg**: Constrained to `>=0.11.1,<0.12.0`. Built-in Iceberg bindings
   select `PyArrowFileIO`; named profiles are materialized into its public S3
@@ -195,16 +195,24 @@ resolution.
 
 ### Data dependency upgrade gates
 
-- Ray 2.55.1 still accepts Iceberg `row_filter` and `selected_fields`, but both
-  reader arguments are deprecated. A Ray upgrade must first move filtering and
-  projection to the replacement public Dataset APIs, then rerun local/S3,
+- Ray 2.59.0 still accepts Iceberg `row_filter` and `selected_fields`, but both
+  reader arguments are deprecated. Before adopting a Ray release that removes these arguments, move filtering and
+  projection to the replacement public Dataset APIs and rerun local/S3,
   empty-table, and dual-engine Iceberg Conformance before widening the pin.
 - A PyIceberg range change must rerun named-profile, session-token, path-style,
   FileIO rejection, empty-table, and MinIO Iceberg tests. Tributo must not
   support a second FileIO by inheriting backend-specific string semantics;
   that requires a separately declared and tested Connector/Binding.
-- `ray-hive` is pinned to `==1.0`. Any version change must rerun Provider and
-  Binding contracts plus the Hive 4.2.0 Data Ingestion Gate, including worker
-  execution, projection, schema, receipt, and credential-boundary evidence.
+- Connector extras declare minimum stable versions: `daft-doris>=1.1`,
+  `ray-hive>=1.2`, `ray-doris>=1.3`, and `ray-clickhouse>=1.1`. These minimums
+  apply to master and release branches and increase only when required APIs or
+  fixes justify a change. SDK bindings record installed versions and retain
+  driver/worker consistency checks; exact versions and hashes belong to the
+  locked test/image environment. A lower bound does not certify every future
+  release. Known incompatible versions require an evidence-based exclusion or
+  upper bound. Changes to the Hive adapter or connector behavior require
+  affected Provider/Binding tests and the
+  Hive Data Ingestion Gate for worker execution, projection, schema, receipt,
+  and credential boundaries.
 
 <!-- END -->

@@ -602,7 +602,7 @@ def _ingestion_receipt() -> IngestionPlanReceipt:
     return IngestionPlanReceipt(
         request_digest="1" * 64,
         engine_id="tributo.ray_data",
-        engine_version="2.55.1",
+        engine_version="2.59.0",
         provider_id="tributo.parquet",
         connector_id="parquet",
         binding_id="tributo.ray.parquet",

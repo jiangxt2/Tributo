@@ -342,7 +342,7 @@ def _run_sklearn(*, production_input: bool = False) -> dict[str, Any]:
         estimator_factory=f"{_USER_MODULE}:logistic_pipeline_factory",
         environment=EnvironmentSpec(
             environment_id="jobs.sklearn",
-            dependencies=("ray==2.55.1", "scikit-learn>=1.4,<2"),
+            dependencies=("ray==2.59.0", "scikit-learn>=1.4,<2"),
         ),
         runtime=None if production_input else _runtime_binding(),
         input_compatibility=(
@@ -425,7 +425,7 @@ def _run_distributed_sklearn() -> dict[str, Any]:
         estimator_factory=f"{_USER_MODULE}:ray_joblib_probe_factory",
         environment=EnvironmentSpec(
             environment_id="jobs.sklearn_ray_joblib",
-            dependencies=("ray==2.55.1", "scikit-learn>=1.4,<2"),
+            dependencies=("ray==2.59.0", "scikit-learn>=1.4,<2"),
         ),
         runtime=_runtime_binding(
             topology=RuntimeTopology.FRAMEWORK_MANAGED,
@@ -498,7 +498,7 @@ def _run_legacy_trainer_adapter() -> dict[str, Any]:
         ),
         environment=EnvironmentSpec(
             environment_id="jobs.legacy_trainer",
-            dependencies=("ray==2.55.1",),
+            dependencies=("ray==2.59.0",),
         ),
         runtime=RuntimeBinding(
             runtime_id="tributo.ray_task",
@@ -570,7 +570,7 @@ def _run_function(
         ),
         environment=EnvironmentSpec(
             environment_id="jobs.user_function",
-            dependencies=("ray==2.55.1",),
+            dependencies=("ray==2.59.0",),
         ),
         runtime=explicit_runtime,
         input_compatibility=(

@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=rayproject/ray:2.55.1-py312@sha256:911245f2478ad2e9f67ac13978dc2a75bcae0498b9f188b10bba703324b78379
+ARG BASE_IMAGE=rayproject/ray:2.59.0-py312@sha256:0ffca209fb4c984d648db550b8dbe7879bdba3bbb5d96ee5894843cf6ac12eb5
 
 FROM ${BASE_IMAGE}
 
@@ -18,12 +18,9 @@ COPY --from=locked-requirements --chown=1000:100 /requirements.txt /opt/tributo/
 WORKDIR /opt/tributo
 
 RUN --mount=type=cache,target=/home/ray/.cache/pip,uid=1000,gid=100 \
-    python -m pip install --require-hashes -r /opt/tributo/requirements.txt
+    python -m pip install --require-hashes -r /opt/tributo/requirements.txt && \
+    python -m pip check
 
-# Optional connector under test; its wheel is outside Tributo's lockfile.
-RUN printf '%s\n' 'ray-clickhouse==1.0 --hash=sha256:5ac258dd425ea9fa879b3429c57755f7948c1541bda5fc6f57f2c9605e3c63cb' \
-    | python -m pip install --no-deps --require-hashes -r /dev/stdin
-
-RUN python -c "import importlib.metadata as m, sys; assert sys.version_info[:2] == (3, 12); assert m.version('pip'); assert m.version('ray') == '2.55.1'; assert m.version('daft').startswith('0.7.'); assert m.version('pylance') == '9.0.0'; assert m.version('lance-ray') == '0.5.0'; assert m.version('pyarrow') == '19.0.1'; assert m.version('daft-doris') == '1.0'; assert m.version('ray-doris') == '1.0'; assert m.version('ray-hive') == '1.0'; assert m.version('ray-clickhouse') == '1.0'; assert m.version('thrift') == '0.16.0'"
+RUN python -c "import importlib.metadata as m, sys; assert sys.version_info[:2] == (3, 12); assert m.version('pip'); assert m.version('ray') == '2.59.0'; assert m.version('daft').startswith('0.7.'); assert m.version('pylance') == '9.0.0'; assert m.version('lance-ray') == '0.5.0'; assert m.version('pyarrow') == '19.0.1'; assert m.version('daft-doris') == '1.1'; assert m.version('ray-doris') == '1.3'; assert m.version('ray-hive') == '1.2'; assert m.version('ray-clickhouse') == '1.1'; assert m.version('thrift') == '0.22.0'"
 
 WORKDIR /workspace/tributo-src

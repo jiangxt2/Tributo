@@ -219,7 +219,7 @@ class ImageProfile(StrictConfigModel):
     profile_id: str = Field(..., min_length=1)
     image_uri: str = Field(..., min_length=1)
     image_digest: str
-    ray_version: str = "2.55.1"
+    ray_version: str = "2.59.0"
     python_spec: str = ">=3.12,<3.14"
     python_version: str = "3.12"
     sys_platform: str = "linux"
@@ -353,7 +353,7 @@ class AlgorithmBundleManifest(StrictConfigModel):
     plugin_names: tuple[str, ...] = ()
     wheel_entry_points: tuple[str, ...] = ()
     python_spec: str = ">=3.12,<3.14"
-    ray_version: str = "2.55.1"
+    ray_version: str = "2.59.0"
     tributo_version_spec: str = ">=1,<2"
     profile_ids: tuple[str, ...] = ()
     network: bool = False

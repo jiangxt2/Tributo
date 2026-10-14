@@ -113,7 +113,7 @@ def build_bundle(
     plugin_names: tuple[str, ...] = (),
     profile_ids: tuple[str, ...] = (),
     python_spec: str = ">=3.12,<3.14",
-    ray_version: str = "2.55.1",
+    ray_version: str = "2.59.0",
     tributo_version_spec: str = ">=1,<2",
     max_bundle_size: int = 4 * 1024 * 1024 * 1024,
 ) -> Path:
@@ -225,7 +225,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--plugin-name", action="append", default=[])
     parser.add_argument("--profile-id", action="append", default=[])
     parser.add_argument("--python-spec", default=">=3.12,<3.14")
-    parser.add_argument("--ray-version", default="2.55.1")
+    parser.add_argument("--ray-version", default="2.59.0")
     parser.add_argument("--tributo-version-spec", default=">=1,<2")
     parser.add_argument("--max-bundle-size", type=int, default=4 * 1024 * 1024 * 1024)
     return parser

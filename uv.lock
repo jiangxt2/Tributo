@@ -856,20 +856,20 @@ wheels = [
 
 [[package]]
 name = "daft"
-version = "0.7.23"
+version = "0.7.26"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "fsspec" },
     { name = "packaging" },
     { name = "pyarrow" },
     { name = "tqdm" },
 ]
+sdist = { url = "https://files.pythonhosted.org/packages/0d/91/f5e6aa0e441a4e1caefa2d15fc649e6206982d4b320ceaee6dade290de4e/daft-0.7.26.tar.gz", hash = "sha256:ec9034fecd87a76ed1dfb6bba059f81f60a4a363dc6a743ab616175d10ffd3b4", size = 3389855, upload-time = "2026-10-06T19:51:17.379Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ea/3d/19621ac6b75b0a05860f1300bbf51f0afab77d6fa89eee33d863522ce996/daft-0.7.23-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:2e0401ab2b6aba0c44356e80898522d81570c5e923a721a720c4d16f559c1098", size = 55747933, upload-time = "2026-08-05T21:58:19.94Z" },
-    { url = "https://files.pythonhosted.org/packages/3a/a7/68d72113e10b32068675b22e75d2d76ce947fa8317a3e13af5ff3161db3b/daft-0.7.23-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:2884b0e15f31107edf745e4cd58fef3fc083face532f52120f97dfd3669cc552", size = 51602439, upload-time = "2026-08-05T21:58:23.112Z" },
-    { url = "https://files.pythonhosted.org/packages/5e/82/e004e73e781fa2e7da6362531bbbd305f0d04d10ee61a1f2cb6c5a6b5b35/daft-0.7.23-cp310-abi3-manylinux_2_24_aarch64.whl", hash = "sha256:bb73eaa39c317284e1e8cbfb85dc71bbb9e6de400455e865e1bff92dd721e949", size = 53911416, upload-time = "2026-08-05T21:58:26.246Z" },
-    { url = "https://files.pythonhosted.org/packages/98/7a/3b52af66b5cc1be79cf15403b9db2677f14e76fa637844bfa6d85ce5d78e/daft-0.7.23-cp310-abi3-manylinux_2_24_x86_64.whl", hash = "sha256:4fd93b1d39308f7e06dd56cd92abbcf0bc0d13cedc51f189bf9a7ca1074945be", size = 56126245, upload-time = "2026-08-05T21:58:29.964Z" },
-    { url = "https://files.pythonhosted.org/packages/40/f2/9fdbe7132e63d69a6906b04524b927b96581e0436d8b74e91d3f176e0710/daft-0.7.23-cp310-abi3-win_amd64.whl", hash = "sha256:d90e2c4832ec2df622109a43884055187ad1fd8de3cdd77fe7abcd47f4fbc36b", size = 55232502, upload-time = "2026-08-05T21:58:32.997Z" },
+    { url = "https://files.pythonhosted.org/packages/69/53/041db3eba4fc5c2e59fec49b04dc95d99e02024b648f91cfdbaeb6ea8684/daft-0.7.26-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:57e08253601ebf5aa3da9931306dc059af2dc91de9dcccc279293a0fbf88ac64", size = 55733536, upload-time = "2026-10-06T19:50:36.186Z" },
+    { url = "https://files.pythonhosted.org/packages/1f/f0/0afab885023a205e13ea981613c966ed17bfdb7f107281d32d9d84caba6c/daft-0.7.26-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:8b6e7b8d4e802f15e0f5facb9e019723837d970fa6271449537fe0d594c7aea7", size = 51601501, upload-time = "2026-10-06T19:50:40.887Z" },
+    { url = "https://files.pythonhosted.org/packages/c1/70/194f3b32d9dd949fc1fc9e44c72b4344b68cd560661c9fdb905bf5a1903c/daft-0.7.26-cp310-abi3-manylinux_2_24_aarch64.whl", hash = "sha256:a57d2db079a9736acd65fdff8951ea31d9626f4cb0fa70caec5e298c63005f85", size = 54127726, upload-time = "2026-10-06T19:50:46.489Z" },
+    { url = "https://files.pythonhosted.org/packages/51/b3/b569a3806e64b23d1377adabb7520f0ee91f74cced28f3f244a29eac2cf9/daft-0.7.26-cp310-abi3-manylinux_2_24_x86_64.whl", hash = "sha256:c4e47f5c2bd4d24183c79bee2d8ce340bed0478c6095cd493325d476c02cb01c", size = 56333298, upload-time = "2026-10-06T19:50:51.58Z" },
+    { url = "https://files.pythonhosted.org/packages/0c/82/6b2b09aaf5bc424b0abc720ac0905900105cc09a834bc67f36d5440a9a0b/daft-0.7.26-cp310-abi3-win_amd64.whl", hash = "sha256:dc629070c275f25bbabb07d21efcaa1b35cbdf57ed618c5d0b3bf50ae63f44ab", size = 55046619, upload-time = "2026-10-06T19:50:56.935Z" },
 ]
 
 [package.optional-dependencies]
@@ -882,15 +882,15 @@ ray = [
 
 [[package]]
 name = "daft-doris"
-version = "1.0"
+version = "1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "daft" },
     { name = "pyarrow" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3e/cd/b8f2453d39f5af496c66c16d23baa59be82eb1b815726696db7f39495086/daft_doris-1.0.tar.gz", hash = "sha256:43450c9088c5f25ac25934ac896b4c4c8a1c7df15e6680559b299d668fd3cf4a", size = 88745, upload-time = "2026-08-17T15:05:54.317Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d8/e5/e9725f04e5a0121b9ed2946bca0e21a36001d19816d0a861172bf6aef198/daft_doris-1.1.tar.gz", hash = "sha256:538e3e915f3c7393ecc86434bbe97075391650e3c8cef740ae4e231b5a6f19d8", size = 93814, upload-time = "2026-10-14T14:42:25.522Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/bd/2b/78c76b5fd313051841b4cc800f7495e01a4c123963f9eeb2c2d0dc57e474/daft_doris-1.0-py3-none-any.whl", hash = "sha256:72a19e2f300a955ac7a12a263ae9a0a332019126c9efa7b04800575e96b51593", size = 66653, upload-time = "2026-08-17T15:05:52.826Z" },
+    { url = "https://files.pythonhosted.org/packages/4e/41/4f61b794139f9d68622ed27e24990cb18cca9d96ef35aa5557b1b720a05c/daft_doris-1.1-py3-none-any.whl", hash = "sha256:5d9809fd15af871c7a4dc5e1ca6c1aa4c280fdc5b6dfdd893b27e2320274b90f", size = 69794, upload-time = "2026-10-14T14:42:24.02Z" },
 ]
 
 [package.optional-dependencies]
@@ -3827,7 +3827,7 @@ wheels = [
 
 [[package]]
 name = "ray"
-version = "2.55.1"
+version = "2.59.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
@@ -3840,13 +3840,14 @@ dependencies = [
     { name = "requests" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ac/3a/4d34f471a68b958b7f94c974c19ad6836a61a2dc16393df4294169a2e4b0/ray-2.55.1-cp312-cp312-macosx_12_0_arm64.whl", hash = "sha256:137f9006eee28caab8260803cca314f37bbda3fc94fdfa31c770b5d019626ad8", size = 65822379, upload-time = "2026-04-22T20:09:58.064Z" },
-    { url = "https://files.pythonhosted.org/packages/f1/13/0db535102d0256b350ca116d8987588aca1a1f9ebb4638e1e1ff88bbcef8/ray-2.55.1-cp312-cp312-manylinux2014_aarch64.whl", hash = "sha256:26541f69bb55607ef8335baac75b2ed12ff2ce02d56313219b29eda003039221", size = 72910802, upload-time = "2026-04-22T20:10:04.382Z" },
-    { url = "https://files.pythonhosted.org/packages/4c/f8/fffadf3f4285eebd460e4d7f2ed1c0cd641ed89613c3f49eb881ee9fa7e2/ray-2.55.1-cp312-cp312-manylinux2014_x86_64.whl", hash = "sha256:263705f6bab29e7622a94f82da25fd7f9cead76cdf89a07aab28f79cdf8f9d95", size = 73765203, upload-time = "2026-04-22T20:10:10.495Z" },
-    { url = "https://files.pythonhosted.org/packages/10/f7/5acb86fc9625a0e6bbc40e1c7d42c60770e78585439a921c32738b6d675a/ray-2.55.1-cp312-cp312-win_amd64.whl", hash = "sha256:9ad56704c8bd7e92130162f9c58e4ef473609515637673d5a36e761f95335206", size = 27865547, upload-time = "2026-04-22T20:10:15.364Z" },
-    { url = "https://files.pythonhosted.org/packages/d5/95/898699cc1a6a5f304ea95376d079843b5c05f4c8c1ec7e55a5cc7ffcea50/ray-2.55.1-cp313-cp313-macosx_12_0_arm64.whl", hash = "sha256:f9844a9272ef2e6eb5771025866072cf4234cf4c7cc1a31e235b7de7111864be", size = 65766823, upload-time = "2026-04-22T20:10:20.786Z" },
-    { url = "https://files.pythonhosted.org/packages/c9/13/87deecc090c672e45a0cf6f5eef511de448b93f37ef18fd10eb8e8557a0d/ray-2.55.1-cp313-cp313-manylinux2014_aarch64.whl", hash = "sha256:b415d590e062f248907e0fe42994943f11726b7178fcf4b1cf5546721fb1a5f8", size = 72818676, upload-time = "2026-04-22T20:10:26.705Z" },
-    { url = "https://files.pythonhosted.org/packages/71/d7/fc95d3b8824c62105c64aa1b59c59600b581f608d78a2af753e010936dc9/ray-2.55.1-cp313-cp313-manylinux2014_x86_64.whl", hash = "sha256:1380e043eb57cde69b7e9199c6f2558ceeb8f0fc41c97d1d5e50ea042115f302", size = 73678908, upload-time = "2026-04-22T20:10:32.795Z" },
+    { url = "https://files.pythonhosted.org/packages/21/62/990cf9605814b8b29bdfefa5f009ae5c078b4746acbf39586030178ac8b6/ray-2.59.0-cp312-cp312-macosx_12_0_arm64.whl", hash = "sha256:6a240b393819c0c8c03940d16faf952223003ab1d9736d5328cc5a5f71c95e1c", size = 67414852, upload-time = "2026-10-02T07:03:06.647Z" },
+    { url = "https://files.pythonhosted.org/packages/15/dd/fd8d8e727241f809977c5f813ded0227c39cc59848b4a2db55c7db8cf310/ray-2.59.0-cp312-cp312-manylinux2014_aarch64.whl", hash = "sha256:09e2dd8ba367f07f1829fc2e35f41e9c3fa9f6ec0babace13d70ebe14e8cf662", size = 77850115, upload-time = "2026-10-02T07:03:12.253Z" },
+    { url = "https://files.pythonhosted.org/packages/47/09/914175e40868edbc2e5fddcb7ec9a85b755d2266a70d86ceee2effa09fa6/ray-2.59.0-cp312-cp312-manylinux2014_x86_64.whl", hash = "sha256:4055a7a60293ffee41005ab9b3ed9933e0f9b5d8450b214f3c0a7b1de5503f0e", size = 78870190, upload-time = "2026-10-02T07:03:17.912Z" },
+    { url = "https://files.pythonhosted.org/packages/68/73/1de47f6dba02a1f203e0c5697697003e95d4313836b52dbbd340de2906a5/ray-2.59.0-cp312-cp312-win_amd64.whl", hash = "sha256:71a8ff087739044a0d596daeccde33da02afd6d0dacfecae962c395cb3e90d78", size = 29057753, upload-time = "2026-10-02T07:03:22.679Z" },
+    { url = "https://files.pythonhosted.org/packages/fa/b8/6a82f95c7987f6f660a35b73d5fdb28521cf2e3e3b680a777ef838c6b248/ray-2.59.0-cp313-cp313-macosx_12_0_arm64.whl", hash = "sha256:843bf48f42722e0c143eba6846b5819716bb7e5e044b9e4779b1d3ac5933040b", size = 67360214, upload-time = "2026-10-02T07:03:27.329Z" },
+    { url = "https://files.pythonhosted.org/packages/ef/d4/2b0dd44bd0c2e7f3350aad98731ab9aadb4d41f02819d872e058a75210a4/ray-2.59.0-cp313-cp313-manylinux2014_aarch64.whl", hash = "sha256:583f26e1f1a04aefd230b908621dc3f3e1ca5e0d201ee09d5f040ca4b824e800", size = 77770538, upload-time = "2026-10-02T07:03:33.59Z" },
+    { url = "https://files.pythonhosted.org/packages/ce/e2/e737527a7f9b16f2c890cf6f6582542e5f6ddb1608fa2390ea485a50d0dd/ray-2.59.0-cp313-cp313-manylinux2014_x86_64.whl", hash = "sha256:70fdc5bec47cc33a4f4e0d9b081f66505e119abd8a8bc6cb2c5d4926427fce6d", size = 78796343, upload-time = "2026-10-02T07:03:39.276Z" },
+    { url = "https://files.pythonhosted.org/packages/5a/60/32259117d228f5a6e740e0103d3f7ce6e2f2122cf9e562d4785d22aeb4d3/ray-2.59.0-cp313-cp313-win_amd64.whl", hash = "sha256:65288d38b5107a76f36965be1e9d7830613356e0c32d675a44410c30c714f495", size = 29009537, upload-time = "2026-10-02T07:03:43.735Z" },
 ]
 
 [package.optional-dependencies]
@@ -3882,6 +3883,8 @@ serve = [
     { name = "colorful" },
     { name = "fastapi" },
     { name = "grpcio" },
+    { name = "jinja2" },
+    { name = "mmh3" },
     { name = "opencensus" },
     { name = "opentelemetry-exporter-prometheus" },
     { name = "opentelemetry-proto" },
@@ -3889,6 +3892,7 @@ serve = [
     { name = "prometheus-client" },
     { name = "py-spy" },
     { name = "pydantic" },
+    { name = "ray-haproxy", marker = "sys_platform == 'linux'" },
     { name = "requests" },
     { name = "smart-open" },
     { name = "starlette" },
@@ -3906,16 +3910,32 @@ tune = [
 ]
 
 [[package]]
+name = "ray-clickhouse"
+version = "1.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "clickhouse-connect", extra = ["arrow"] },
+    { name = "pyarrow" },
+    { name = "ray", extra = ["data"] },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a8/7b/0df9ebf1af3b1e6a6e8db8f038cbe44e94f1d522411752fa9d0434c51575/ray_clickhouse-1.1.tar.gz", hash = "sha256:79b31235704cac9705eaad45c023ea585d02e8bb63b9ec7431600430e4979c61", size = 244075, upload-time = "2026-10-14T14:46:46.295Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2c/a3/9796c1a0c227808e2dea2338baa977639aeb4b834fdb887c32b54db53140/ray_clickhouse-1.1-py3-none-any.whl", hash = "sha256:5ec7aa09a92de8a6a551e0cbeafccf84a74b6e3a2c032e7cf371d89b24dff82a", size = 45238, upload-time = "2026-10-14T14:46:44.975Z" },
+]
+
+[[package]]
 name = "ray-doris"
-version = "1.0"
+version = "1.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pymysql" },
     { name = "ray", extra = ["data"] },
+    { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c0/9e/e254d027970f261075d2687181381bebd379d7f12cbd34d90549a4dda402/ray_doris-1.0.tar.gz", hash = "sha256:898bed3d511089a1166f0f793fde7e4c12450fe303ce2732bb722312f22de3bd", size = 127207, upload-time = "2026-08-17T14:44:45.409Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/8b/56/5af5a9fd5f6ff859d90522e8dba6514c6d03d1561505a2263d229760d0b3/ray_doris-1.3.tar.gz", hash = "sha256:bd75c0aa69c9fadb87c4e98dc2cee25a8397447a65d5f3ec642bf6fdf95c1dc1", size = 149378, upload-time = "2026-10-14T14:39:32.742Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/59/ca/bb18462b40f9a42f8c2c57b65062c346225c7695ba45c1838673c6089f7b/ray_doris-1.0-py3-none-any.whl", hash = "sha256:055c8e08fdd7b2903d5e88ccd0e78660e3f74095ce6b88ae46b38bac3330df5b", size = 51323, upload-time = "2026-08-17T14:44:44.319Z" },
+    { url = "https://files.pythonhosted.org/packages/11/ce/d9e6ec8f1f615e209067bb6e7299dbd40e99acea638ffa025bdd56484a87/ray_doris-1.3-py3-none-any.whl", hash = "sha256:4021a214ba3aaba8759beb1b847ee52a7b7cd20f781f3b7687037c027c619011", size = 51841, upload-time = "2026-10-14T14:39:30.35Z" },
 ]
 
 [package.optional-dependencies]
@@ -3924,8 +3944,17 @@ flight = [
 ]
 
 [[package]]
+name = "ray-haproxy"
+version = "2.8.25"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/31/78/4cdca49514f94ced71525c5662e0b62fc64d625f4536910304dc71c680e9/ray_haproxy-2.8.25-py3-none-manylinux_2_17_aarch64.whl", hash = "sha256:a63902c2fe7eb51fbcb502980228d743b79da6cecab230c4c24674517b1ac3ac", size = 3962434, upload-time = "2026-06-29T21:49:54.611Z" },
+    { url = "https://files.pythonhosted.org/packages/b7/48/bef71a3bd4fa4b467299a9b859fac0a7660eefbc56d47b4b0f2b7c34491a/ray_haproxy-2.8.25-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:51671f11afb571ed5b37042f9287daf48de235f2d32ad18b732ee9587e9ad076", size = 4115278, upload-time = "2026-06-29T21:49:56.244Z" },
+]
+
+[[package]]
 name = "ray-hive"
-version = "1.0"
+version = "1.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pyarrow" },
@@ -3933,9 +3962,9 @@ dependencies = [
     { name = "thrift" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c3/60/5eac14fb14974ce76c1db585f2794fc9753101acc9e26d7c667f2deda8e1/ray_hive-1.0.tar.gz", hash = "sha256:9e97902a5f5ddc67573041ad58fe65b7b9390cd7a1565e38133834cac38726dd", size = 168820, upload-time = "2026-08-18T15:12:59.813Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e0/67/77476c6b0e039e83e3255b4b84916b5ab2246de1696b7430293ffae38ebe/ray_hive-1.2.tar.gz", hash = "sha256:4dbc06ce2d286cd8c5ea5c85d7a7d5f00c92011e192ea09cd563b7aed0620d1c", size = 210020, upload-time = "2026-10-14T14:39:33.829Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/47/16/4cf49f8e1a9b588d555ec9f105f2c3a964cb22721cd4bec735d20e8653d4/ray_hive-1.0-py3-none-any.whl", hash = "sha256:a2ca53181046febb3047529359391e3b2c9f651109b869fc2c0e42fa2ffe60ae", size = 89194, upload-time = "2026-08-18T15:12:58.235Z" },
+    { url = "https://files.pythonhosted.org/packages/6a/8c/29e4fc2f7848ab2ae8aff9bc8b9dff812cfa8d2a763ac2e1a3c729443c37/ray_hive-1.2-py3-none-any.whl", hash = "sha256:462dbb7b0bc0ea4af824c800c2f121dc71119b568b3c76288081ddd6ca29b4ae", size = 91536, upload-time = "2026-10-14T14:39:32.254Z" },
 ]
 
 [[package]]
@@ -4653,12 +4682,9 @@ wheels = [
 
 [[package]]
 name = "thrift"
-version = "0.16.0"
+version = "0.22.0"
 source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "six" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/e4/23/dd951c9883cb49a73b750bdfe91e39d78e8a3f1f7175608634f381a197d5/thrift-0.16.0.tar.gz", hash = "sha256:2b5b6488fcded21f9d312aa23c9ff6a0195d0f6ae26ddbd5ad9e3e25dfc14408", size = 59605, upload-time = "2022-03-31T14:54:06.866Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b2/c2/db648cc10dd7d15560f2eafd92a27cd280811924696e0b4a87175fb28c94/thrift-0.22.0.tar.gz", hash = "sha256:42e8276afbd5f54fe1d364858b6877bc5e5a4a5ed69f6a005b94ca4918fe1466", size = 62303, upload-time = "2025-05-23T20:49:33.309Z" }
 
 [[package]]
 name = "tokenizers"
@@ -4796,6 +4822,7 @@ causal = [
 ]
 clickhouse = [
     { name = "clickhouse-connect", extra = ["arrow", "async"] },
+    { name = "ray-clickhouse" },
 ]
 data = [
     { name = "lance-ray" },
@@ -4939,6 +4966,7 @@ test-integration = [
     { name = "pylance" },
     { name = "pymysql" },
     { name = "pytest" },
+    { name = "ray-clickhouse" },
     { name = "ray-doris" },
     { name = "requests" },
     { name = "scikit-learn" },
@@ -4961,6 +4989,7 @@ training = [
     { name = "pyiceberg" },
     { name = "pylance" },
     { name = "pymysql" },
+    { name = "ray-clickhouse" },
     { name = "ray-doris" },
     { name = "sqlalchemy" },
     { name = "sqlglot" },
@@ -5007,9 +5036,9 @@ requires-dist = [
     { name = "causal-learn", marker = "extra == 'test-integration'", specifier = "==0.1.4.8" },
     { name = "click", specifier = ">=8.0.0" },
     { name = "clickhouse-connect", extras = ["arrow", "async"], marker = "extra == 'clickhouse'", specifier = ">=1.5,<1.6" },
-    { name = "daft", extras = ["lance", "ray"], marker = "extra == 'data-daft'", specifier = ">=0.7.23,<0.7.24" },
-    { name = "daft-doris", extras = ["doris"], marker = "extra == 'mysql'", specifier = "==1.0" },
-    { name = "daft-doris", extras = ["doris-flight"], marker = "extra == 'doris-flight'", specifier = "==1.0" },
+    { name = "daft", extras = ["lance", "ray"], marker = "extra == 'data-daft'", specifier = ">=0.7.26,<0.7.27" },
+    { name = "daft-doris", extras = ["doris"], marker = "extra == 'mysql'", specifier = ">=1.1" },
+    { name = "daft-doris", extras = ["doris-flight"], marker = "extra == 'doris-flight'", specifier = ">=1.1" },
     { name = "dowhy", marker = "extra == 'causal'", specifier = ">=0.11.0" },
     { name = "dowhy", marker = "extra == 'test-integration'", specifier = "==0.14" },
     { name = "econml", marker = "extra == 'causal'", specifier = ">=0.15.0" },
@@ -5045,10 +5074,11 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'test-integration'", specifier = ">=7.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
     { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.1.0" },
-    { name = "ray", extras = ["default", "serve", "tune"], specifier = "==2.55.1" },
-    { name = "ray-doris", marker = "extra == 'mysql'", specifier = "==1.0" },
-    { name = "ray-doris", extras = ["flight"], marker = "extra == 'doris-flight'", specifier = "==1.0" },
-    { name = "ray-hive", marker = "extra == 'hive-ray'", specifier = "==1.0" },
+    { name = "ray", extras = ["default", "serve", "tune"], specifier = "==2.59.0" },
+    { name = "ray-clickhouse", marker = "extra == 'clickhouse'", specifier = ">=1.1" },
+    { name = "ray-doris", marker = "extra == 'mysql'", specifier = ">=1.3" },
+    { name = "ray-doris", extras = ["flight"], marker = "extra == 'doris-flight'", specifier = ">=1.3" },
+    { name = "ray-hive", marker = "extra == 'hive-ray'", specifier = ">=1.2" },
     { name = "requests", specifier = ">=2.33.0" },
     { name = "requests", marker = "extra == 'test-integration'", specifier = ">=2.25.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6.0,<1.0" },
@@ -5083,7 +5113,7 @@ provides-extras = ["dev", "data", "data-daft", "hive-ray", "vector-index", "kube
 dev = [
     { name = "boto3", specifier = ">=1.42.91" },
     { name = "clickhouse-connect", extras = ["arrow", "async"], specifier = ">=1.5,<1.6" },
-    { name = "daft", specifier = ">=0.7.23,<0.7.24" },
+    { name = "daft", specifier = ">=0.7.26,<0.7.27" },
     { name = "grpcio-tools", specifier = ">=1.60.0" },
     { name = "ml-dtypes", specifier = ">=0.5.0" },
     { name = "moto", extras = ["server"], specifier = ">=5.1.0" },

@@ -11,7 +11,7 @@ this page as evidence that a performance comparison ran.
 | Variable | Value | Why |
 |----------|-------|-----|
 | Python | Exact major, minor, and patch | The package supports Python 3.12 and 3.13 |
-| Ray | 2.55.1 | Pinned in `pyproject.toml` |
+| Ray | 2.59.0 | Pinned in `pyproject.toml` |
 | OS | Exact OS, release, and architecture | Required for comparison |
 
 | Hardware | Record CPU model, core count, RAM | Required for cross-run comparison |
@@ -103,7 +103,7 @@ Baseline commit: <sha>
 Candidate commit: <sha>
 Environment: macOS 15.x arm64 / Linux x86_64
 Python: 3.12.x
-Ray: 2.55.1
+Ray: 2.59.0
 """
 
 import time

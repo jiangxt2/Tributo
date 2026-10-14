@@ -61,7 +61,7 @@ def _build_job(tmp_path) -> VectorBuildJobRequest:
 
 def _runtime() -> RuntimeVersionEvidence:
     return RuntimeVersionEvidence(
-        ray="2.55.1",
+        ray="2.59.0",
         pylance="9.0.0",
         lance_ray="0.5.0",
         pyarrow="19.0.1",

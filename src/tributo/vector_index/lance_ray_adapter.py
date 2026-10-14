@@ -34,7 +34,7 @@ from tributo.vector_index.errors import (
 )
 
 _EXPECTED_DISTRIBUTIONS = {
-    "ray": "2.55.1",
+    "ray": "2.59.0",
     "pylance": "9.0.0",
     "lance-ray": "0.5.0",
     "pyarrow": "19.0.1",

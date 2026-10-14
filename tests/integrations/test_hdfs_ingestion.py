@@ -59,7 +59,7 @@ def test_hdfs_parquet_runs_on_worker_and_preserves_multiple_blocks() -> None:
             item.distribution_name: item for item in result.receipt.component_versions
         }
         assert evidence["ray"].worker_validation_complete is True
-        assert set(evidence["ray"].worker_versions) == {"2.55.1"}
+        assert set(evidence["ray"].worker_versions) == {"2.59.0"}
 
         def record_node(batch: pa.Table) -> pa.Table:
             node = ray.util.get_node_ip_address()

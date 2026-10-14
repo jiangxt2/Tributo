@@ -37,7 +37,7 @@ def _descriptor():
             environment_id="example.torch_recipe.v1",
             dependencies=(
                 "example-torch-recipe==1.0.0",
-                "ray==2.55.1",
+                "ray==2.59.0",
                 "torch>=2.5.0",
             ),
         ),

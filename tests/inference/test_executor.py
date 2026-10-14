@@ -51,7 +51,7 @@ def _receipt() -> IngestionPlanReceipt:
     return IngestionPlanReceipt(
         request_digest=descriptor.request_digest,
         engine_id=descriptor.engine_id,
-        engine_version="2.55.1",
+        engine_version="2.59.0",
         provider_id=descriptor.provider_id,
         connector_id=descriptor.connector_id,
         binding_id=descriptor.binding_id,

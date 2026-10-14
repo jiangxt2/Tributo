@@ -230,7 +230,7 @@ def test_code_only_wheel_is_validated_and_wired_to_py_modules(tmp_path: Path) ->
     assert patch["env_vars"]["TRIBUTO_PLUGINS"] == "distribution:demo-algorithm"
     assert "TRIBUTO_ALGORITHM_PREFLIGHT_RECEIPT" in patch["env_vars"]
     assert prepared.receipt.tributo_version
-    assert prepared.receipt.ray_version == "2.55.1"
+    assert prepared.receipt.ray_version == "2.59.0"
     assert prepared.receipt.python_version == _profile().python_version
 
 

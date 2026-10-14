@@ -74,7 +74,7 @@ The current alpha implementation has real dual-engine Conformance evidence for
 Local/S3 Parquet and CSV, Local/S3 Iceberg and Lance, PostgreSQL, and structured
 Ray HiveServer2 table reads. The Hive vertical slice delegates all SQL,
 transport, ORC-backed fixture decoding, and worker execution to locked
-`ray-hive==1.0`; it does not provide native ORC/HDFS access or a Daft route.
+`ray-hive==1.2`; it does not provide native ORC/HDFS access or a Daft route.
 HDFS has a Ray Data adapter but still requires its cluster gate. ClickHouse and
 Doris have optional thin adapters for independent engine packages but remain
 unsupported until those packages pass real-infrastructure tests. A

@@ -69,15 +69,15 @@ def test_vector_runtime_is_exactly_versioned_in_the_shared_profile() -> None:
     assert "vector-index" in profile["extras"]
     assert profile["version_contract"] == {
         "daft_prefix": "0.7.",
-        "daft_doris": "1.0",
+        "daft_doris": "1.1",
         "lance_ray": "0.5.0",
         "pyarrow": "19.0.1",
         "pylance": "9.0.0",
-        "ray": "2.55.1",
-        "ray_doris": "1.0",
-        "ray_hive": "1.0",
-        "ray_clickhouse": "1.0",
-        "thrift": "0.16.0",
+        "ray": "2.59.0",
+        "ray_doris": "1.3",
+        "ray_hive": "1.2",
+        "ray_clickhouse": "1.1",
+        "thrift": "0.22.0",
     }
     assert profile["dependency_mode"] == "host-uv-export"
     assert "COPY --from=locked-requirements" in dockerfile
@@ -85,11 +85,11 @@ def test_vector_runtime_is_exactly_versioned_in_the_shared_profile() -> None:
     assert "m.version('pylance') == '9.0.0'" in dockerfile
     assert "m.version('lance-ray') == '0.5.0'" in dockerfile
     assert "m.version('pyarrow') == '19.0.1'" in dockerfile
-    assert "m.version('daft-doris') == '1.0'" in dockerfile
-    assert "m.version('ray-doris') == '1.0'" in dockerfile
-    assert "m.version('ray-hive') == '1.0'" in dockerfile
-    assert "m.version('ray-clickhouse') == '1.0'" in dockerfile
-    assert "m.version('thrift') == '0.16.0'" in dockerfile
+    assert "m.version('daft-doris') == '1.1'" in dockerfile
+    assert "m.version('ray-doris') == '1.3'" in dockerfile
+    assert "m.version('ray-hive') == '1.2'" in dockerfile
+    assert "m.version('ray-clickhouse') == '1.1'" in dockerfile
+    assert "m.version('thrift') == '0.22.0'" in dockerfile
 
 
 def test_vector_project_names_are_scoped_and_cli_dispatches(monkeypatch) -> None:

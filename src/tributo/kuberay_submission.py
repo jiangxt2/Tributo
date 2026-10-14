@@ -189,7 +189,7 @@ class KubeRayDeploymentConfig(StrictConfigModel):
     namespace: str = "default"
     image: str = Field(min_length=1)
     worker_image: str | None = None
-    ray_version: str = Field(default="2.55.1", min_length=1)
+    ray_version: str = Field(default="2.59.0", min_length=1)
     head_num_cpus: float = Field(default=1, gt=0)
     head_memory_bytes: int = Field(default=_BYTES_PER_GIB, gt=0)
     head_num_gpus: float = Field(default=0, ge=0)

@@ -285,10 +285,10 @@ def test_portable_registration_rejects_legacy_trainer() -> None:
 def test_environment_normalizes_dependency_order() -> None:
     environment = EnvironmentSpec(
         environment_id="tests.environment",
-        dependencies=("ray==2.55.1", "scikit-learn>=1.4,<2"),
+        dependencies=("ray==2.59.0", "scikit-learn>=1.4,<2"),
     )
     assert environment.dependencies == (
-        "ray==2.55.1",
+        "ray==2.59.0",
         "scikit-learn<2,>=1.4",
     )
     assert json.dumps(environment.dependencies)

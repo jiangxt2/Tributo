@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "image": "tributo-runtime-full:local",
-  "base_image": "rayproject/ray:2.55.1-py312@sha256:911245f2478ad2e9f67ac13978dc2a75bcae0498b9f188b10bba703324b78379",
-  "base_image_mirror": "docker.m.daocloud.io/rayproject/ray:2.55.1-py312@sha256:911245f2478ad2e9f67ac13978dc2a75bcae0498b9f188b10bba703324b78379",
+  "base_image": "rayproject/ray:2.59.0-py312@sha256:0ffca209fb4c984d648db550b8dbe7879bdba3bbb5d96ee5894843cf6ac12eb5",
+  "base_image_mirror": "docker.m.daocloud.io/rayproject/ray:2.59.0-py312@sha256:0ffca209fb4c984d648db550b8dbe7879bdba3bbb5d96ee5894843cf6ac12eb5",
   "dependency_mode": "host-uv-export",
   "uv_version": "0.11.23",
   "platform": "auto",

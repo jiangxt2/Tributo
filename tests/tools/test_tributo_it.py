@@ -42,7 +42,7 @@ def _write_profile(root: Path) -> tributo_it.RuntimeProfile:
         "runtime_repository": "tributo-it-runtime",
         "tool_image": f"python:3@sha256:{digest_c}",
         "uv_image": f"uv:1@sha256:{digest_d}",
-        "version_contract": {"daft_prefix": "0.7.", "ray": "2.55.1"},
+        "version_contract": {"daft_prefix": "0.7.", "ray": "2.59.0"},
     }
     (integration_dir / "runtime-profiles.json").write_text(
         json.dumps({"schema_version": 1, "profiles": {"data-ingestion": definition}})
@@ -56,7 +56,7 @@ def _write_host_uv_profile(root: Path) -> tributo_it.RuntimeProfile:
     (root / "src").mkdir()
     (root / "pyproject.toml").write_text(
         "[project]\nname='example'\n"
-        "[project.optional-dependencies]\ndata-daft=['daft==0.7.23']\n"
+        "[project.optional-dependencies]\ndata-daft=['daft==0.7.26']\n"
     )
     (root / "uv.lock").write_text("version = 1\n")
     dockerfile = integration_dir / "Dockerfile.data-ingestion"
@@ -78,7 +78,7 @@ def _write_host_uv_profile(root: Path) -> tributo_it.RuntimeProfile:
         "python_version": "3.12",
         "runtime_repository": "tributo-it-runtime",
         "uv_version": "0.11.23",
-        "version_contract": {"daft_prefix": "0.7.", "ray": "2.55.1"},
+        "version_contract": {"daft_prefix": "0.7.", "ray": "2.59.0"},
     }
     (integration_dir / "runtime-profiles.json").write_text(
         json.dumps({"schema_version": 1, "profiles": {"data-ingestion": definition}})
@@ -118,7 +118,7 @@ def _fake_host_uv(
             output.write_text(
                 exported_content
                 if exported_content is not None
-                else "daft==0.7.23 --hash=sha256:" + "c" * 64 + "\n"
+                else "daft==0.7.26 --hash=sha256:" + "c" * 64 + "\n"
             )
             if mutate_lock:
                 (cwd / "uv.lock").write_text("version = 2\n")
@@ -316,13 +316,13 @@ def test_host_uv_profile_rejects_unhashed_or_local_requirements(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     profile = _write_host_uv_profile(tmp_path)
-    _fake_host_uv(monkeypatch, exported_content="daft==0.7.23\n")
+    _fake_host_uv(monkeypatch, exported_content="daft==0.7.26\n")
     with pytest.raises(tributo_it.TributoITError, match="hashed requirements"):
         tributo_it.runtime_identity(profile, "linux/amd64")
 
     local_reference = (
         "local-package @ file:///Users/collaborator/local-package\n"
-        "daft==0.7.23 --hash=sha256:" + "c" * 64 + "\n"
+        "daft==0.7.26 --hash=sha256:" + "c" * 64 + "\n"
     )
     _fake_host_uv(monkeypatch, exported_content=local_reference)
     with pytest.raises(tributo_it.TributoITError, match="host paths"):

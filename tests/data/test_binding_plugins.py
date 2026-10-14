@@ -26,7 +26,7 @@ class _PluginBinding:
     def compile(self, request: Any) -> BindingCompilation:
         return BindingCompilation(
             handle=RayDataHandle(object()),
-            engine_version="2.55.1",
+            engine_version="2.59.0",
             reader_api="plugin.read",
             transport_id="plugin",
         )
@@ -39,7 +39,7 @@ def _descriptor(binding_id: str) -> BindingDescriptor:
         capabilities=frozenset(),
         distribution_name="test-plugin",
         distribution_version="1.0.0",
-        engine_version_spec="==2.55.1",
+        engine_version_spec="==2.59.0",
     )
 
 
@@ -95,7 +95,7 @@ def test_plugin_registration_never_overrides_an_existing_binding(
     bindings = EngineBindings()
     monkeypatch.setattr(
         "tributo.data.engine_binding.importlib.metadata.version",
-        lambda name: {"ray": "2.55.1", "test-plugin": "1.0.0"}[name],
+        lambda name: {"ray": "2.59.0", "test-plugin": "1.0.0"}[name],
     )
     bindings.register(descriptor)
     monkeypatch.setattr(

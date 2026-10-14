@@ -5,7 +5,7 @@
 Tributo is a Ray-native ML Framework/SDK. It owns portable contracts for job
 submission, bounded ingestion and writing, algorithm execution, model bundles,
 inference, explainability, serving, and Lance vector-index operations. Ray
-2.55.1 remains the distributed execution runtime for Jobs, Data, Train, Tune,
+2.59.0 remains the distributed execution runtime for Jobs, Data, Train, Tune,
 Serve, tasks, actors, and scheduling.
 
 ## Reading the landscape

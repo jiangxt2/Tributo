@@ -28,7 +28,7 @@ def _descriptor(
         engine_id="ray",
         target_kind="parquet",
         binding_id=binding_id,
-        engine_version_spec="==2.55.1",
+        engine_version_spec="==2.59.0",
         binding_distribution="test-binding",
         binding_distribution_version="1.0.0",
         capabilities=WriteCapability(
@@ -50,7 +50,7 @@ def _request(**overrides: Any) -> WriteRequest:
 
 
 def _versions(name: str) -> str:
-    return {"ray": "2.55.1", "test-binding": "1.0.0"}[name]
+    return {"ray": "2.59.0", "test-binding": "1.0.0"}[name]
 
 
 def test_registry_resolves_single_matching_binding(
@@ -149,7 +149,7 @@ def test_registry_fails_closed_when_dependency_is_missing(
     def missing(name: str) -> str:
         if name == "missing-binding":
             raise importlib.metadata.PackageNotFoundError(name)
-        return {"ray": "2.55.1", "test-binding": "1.0.0"}[name]
+        return {"ray": "2.59.0", "test-binding": "1.0.0"}[name]
 
     monkeypatch.setattr(
         "tributo.data.writing.registry.importlib.metadata.version", missing

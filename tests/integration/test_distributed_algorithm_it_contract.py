@@ -226,7 +226,7 @@ def test_algorithm_gate_provenance_binds_clean_sources_wheels_and_runtime(
         runtime_image="tributo-it-runtime:test",
         runtime_image_id="sha256:" + "c" * 64,
         runtime_python_version="3.12.12",
-        runtime_ray_version="2.55.1",
+        runtime_ray_version="2.59.0",
         preflight=loaded_preflight,
         preflight_sha256=preflight_sha256,
     )
@@ -265,7 +265,7 @@ def test_algorithm_gate_provenance_binds_clean_sources_wheels_and_runtime(
         runtime_image="tributo-it-runtime:test",
         runtime_image_id="sha256:" + "c" * 64,
         runtime_python_version="3.12.12",
-        runtime_ray_version="2.55.1",
+        runtime_ray_version="2.59.0",
         preflight=loaded_another_preflight,
         preflight_sha256=another_preflight_sha256,
     )
@@ -317,7 +317,7 @@ def test_algorithm_gate_provenance_rejects_dirty_or_filtered_certification(
             runtime_image="tributo-it-runtime:test",
             runtime_image_id="sha256:" + "c" * 64,
             runtime_python_version="3.12.12",
-            runtime_ray_version="2.55.1",
+            runtime_ray_version="2.59.0",
             preflight=preflight,
             preflight_sha256="d" * 64,
         )
@@ -345,7 +345,7 @@ def test_algorithm_gate_final_provenance_rejects_preflight_source_drift() -> Non
             runtime_image="tributo-it-runtime:test",
             runtime_image_id="sha256:" + "d" * 64,
             runtime_python_version="3.12.12",
-            runtime_ray_version="2.55.1",
+            runtime_ray_version="2.59.0",
             preflight=preflight,
             preflight_sha256="e" * 64,
         )

@@ -85,7 +85,7 @@ def test_driver_runtime_mismatch_fails_closed(monkeypatch) -> None:
         module,
         "_distribution_versions",
         lambda: {
-            "ray": "2.55.1",
+            "ray": "2.59.0",
             "pylance": "10.0.0",
             "lance-ray": "0.5.0",
             "pyarrow": "19.0.1",
@@ -257,7 +257,7 @@ def test_runtime_evidence_checks_real_worker_payload(monkeypatch) -> None:
     from tributo.vector_index import lance_ray_adapter as module
 
     versions = {
-        "ray": "2.55.1",
+        "ray": "2.59.0",
         "pylance": "9.0.0",
         "lance-ray": "0.5.0",
         "pyarrow": "19.0.1",
@@ -284,7 +284,7 @@ def test_runtime_evidence_rejects_worker_mismatch(monkeypatch) -> None:
     from tributo.vector_index import lance_ray_adapter as module
 
     versions = {
-        "ray": "2.55.1",
+        "ray": "2.59.0",
         "pylance": "9.0.0",
         "lance-ray": "0.5.0",
         "pyarrow": "19.0.1",
@@ -303,7 +303,7 @@ def test_runtime_evidence_requires_initialized_ray(monkeypatch) -> None:
     from tributo.vector_index import lance_ray_adapter as module
 
     versions = {
-        "ray": "2.55.1",
+        "ray": "2.59.0",
         "pylance": "9.0.0",
         "lance-ray": "0.5.0",
         "pyarrow": "19.0.1",

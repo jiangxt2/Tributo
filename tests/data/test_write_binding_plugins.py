@@ -21,7 +21,7 @@ def _descriptor(binding_id: str) -> WriteDescriptor:
         engine_id="ray",
         target_kind="parquet",
         binding_id=binding_id,
-        engine_version_spec="==2.55.1",
+        engine_version_spec="==2.59.0",
         binding_distribution="test-plugin",
         binding_distribution_version="1.0.0",
         capabilities=WriteCapability(supported_modes=frozenset({WriteMode.OVERWRITE})),
@@ -95,7 +95,7 @@ def test_registration_skips_duplicate_plugins(
     )
     monkeypatch.setattr(
         "tributo.data.writing.registry.importlib.metadata.version",
-        lambda name: {"ray": "2.55.1", "test-plugin": "1.0.0"}[name],
+        lambda name: {"ray": "2.59.0", "test-plugin": "1.0.0"}[name],
     )
     registry = WriteBindingRegistry()
     registry.register(descriptor, lambda: object())

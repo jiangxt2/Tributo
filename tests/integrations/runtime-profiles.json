@@ -2,8 +2,8 @@
   "schema_version": 1,
   "profiles": {
     "data-ingestion": {
-      "base_image": "rayproject/ray:2.55.1-py312@sha256:911245f2478ad2e9f67ac13978dc2a75bcae0498b9f188b10bba703324b78379",
-      "base_image_mirror": "docker.m.daocloud.io/rayproject/ray:2.55.1-py312@sha256:911245f2478ad2e9f67ac13978dc2a75bcae0498b9f188b10bba703324b78379",
+      "base_image": "rayproject/ray:2.59.0-py312@sha256:0ffca209fb4c984d648db550b8dbe7879bdba3bbb5d96ee5894843cf6ac12eb5",
+      "base_image_mirror": "docker.m.daocloud.io/rayproject/ray:2.59.0-py312@sha256:0ffca209fb4c984d648db550b8dbe7879bdba3bbb5d96ee5894843cf6ac12eb5",
       "dependency_mode": "host-uv-export",
       "dockerfile": "tests/integrations/Dockerfile.data-ingestion",
       "extras": [
@@ -28,20 +28,20 @@
       "uv_version": "0.11.23",
       "version_contract": {
         "daft_prefix": "0.7.",
-        "daft_doris": "1.0",
+        "daft_doris": "1.1",
         "lance_ray": "0.5.0",
         "pyarrow": "19.0.1",
         "pylance": "9.0.0",
-        "ray": "2.55.1",
-        "ray_doris": "1.0",
-        "ray_hive": "1.0",
-        "ray_clickhouse": "1.0",
-        "thrift": "0.16.0"
+        "ray": "2.59.0",
+        "ray_doris": "1.3",
+        "ray_hive": "1.2",
+        "ray_clickhouse": "1.1",
+        "thrift": "0.22.0"
       }
     },
     "data-ingestion-hdfs": {
-      "base_image": "rayproject/ray:2.55.1-py312@sha256:911245f2478ad2e9f67ac13978dc2a75bcae0498b9f188b10bba703324b78379",
-      "base_image_mirror": "docker.m.daocloud.io/rayproject/ray:2.55.1-py312@sha256:911245f2478ad2e9f67ac13978dc2a75bcae0498b9f188b10bba703324b78379",
+      "base_image": "rayproject/ray:2.59.0-py312@sha256:0ffca209fb4c984d648db550b8dbe7879bdba3bbb5d96ee5894843cf6ac12eb5",
+      "base_image_mirror": "docker.m.daocloud.io/rayproject/ray:2.59.0-py312@sha256:0ffca209fb4c984d648db550b8dbe7879bdba3bbb5d96ee5894843cf6ac12eb5",
       "dependency_mode": "host-uv-export",
       "dockerfile": "tests/integrations/Dockerfile.data-ingestion-hdfs",
       "extras": [
@@ -59,12 +59,12 @@
         "pyarrow": "19.0.1",
         "pyiceberg": "0.11.1",
         "pylance": "9.0.0",
-        "ray": "2.55.1"
+        "ray": "2.59.0"
       }
     },
     "runtime-full": {
-      "base_image": "rayproject/ray:2.55.1-py312@sha256:911245f2478ad2e9f67ac13978dc2a75bcae0498b9f188b10bba703324b78379",
-      "base_image_mirror": "docker.m.daocloud.io/rayproject/ray:2.55.1-py312@sha256:911245f2478ad2e9f67ac13978dc2a75bcae0498b9f188b10bba703324b78379",
+      "base_image": "rayproject/ray:2.59.0-py312@sha256:0ffca209fb4c984d648db550b8dbe7879bdba3bbb5d96ee5894843cf6ac12eb5",
+      "base_image_mirror": "docker.m.daocloud.io/rayproject/ray:2.59.0-py312@sha256:0ffca209fb4c984d648db550b8dbe7879bdba3bbb5d96ee5894843cf6ac12eb5",
       "dependency_mode": "host-uv-export",
       "dockerfile": "docker/tributo-runtime/Dockerfile",
       "extras": [
@@ -97,14 +97,15 @@
       "uv_version": "0.11.23",
       "version_contract": {
         "daft_prefix": "0.7.",
-        "daft_doris": "1.0",
+        "daft_doris": "1.1",
         "lance_ray": "0.5.0",
         "pyarrow": "19.0.1",
         "pylance": "9.0.0",
-        "ray": "2.55.1",
-        "ray_doris": "1.0",
-        "ray_hive": "1.0",
-        "thrift": "0.16.0"
+        "ray": "2.59.0",
+        "ray_doris": "1.3",
+        "ray_hive": "1.2",
+        "ray_clickhouse": "1.1",
+        "thrift": "0.22.0"
       }
     }
   }

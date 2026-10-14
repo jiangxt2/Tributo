@@ -54,7 +54,7 @@ def _descriptor() -> BindingDescriptor:
         capabilities=frozenset({SourceCapability.PROJECTION}),
         distribution_name="tributo",
         distribution_version="1.0.0",
-        engine_version_spec="==2.55.1",
+        engine_version_spec="==2.59.0",
     )
 
 
@@ -74,7 +74,7 @@ class _Bindings:
         return (
             BindingCompilation(
                 handle=RayDataHandle(object()),
-                engine_version="2.55.1",
+                engine_version="2.59.0",
                 reader_api="fake.read_parquet",
                 transport_id="test",
                 transform_decisions=classify_transform_decisions(kwargs["transforms"]),
@@ -84,7 +84,7 @@ class _Bindings:
             _descriptor(),
             (
                 DistributionVersionEvidence(
-                    distribution_name="ray", driver_version="2.55.1"
+                    distribution_name="ray", driver_version="2.59.0"
                 ),
                 DistributionVersionEvidence(
                     distribution_name="tributo", driver_version="1.0.0"
@@ -446,7 +446,7 @@ def test_daft_to_ray_adapter_is_explicit_and_records_conversion(
 
     monkeypatch.setattr(
         "tributo.data.handle_adapters.importlib.metadata.version",
-        lambda name: "2.55.1",
+        lambda name: "2.59.0",
     )
     monkeypatch.setattr(
         daft,

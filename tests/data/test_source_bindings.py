@@ -103,8 +103,8 @@ def _request(
 @pytest.mark.parametrize(
     ("binding", "engine_version", "handle_type"),
     [
-        (RayCsvBinding(), "2.55.1", RayDataHandle),
-        (DaftCsvBinding(), "0.7.23", DaftDataFrameHandle),
+        (RayCsvBinding(), "2.59.0", RayDataHandle),
+        (DaftCsvBinding(), "0.7.26", DaftDataFrameHandle),
     ],
 )
 def test_csv_bindings_use_public_engine_readers(
@@ -173,7 +173,7 @@ def test_hdfs_bindings_use_pyarrow_filesystem_and_ray_reader(
     )
     monkeypatch.setattr(
         "tributo.data.bindings.ray_hdfs.importlib.metadata.version",
-        lambda name: "2.55.1",
+        lambda name: "2.59.0",
     )
     plan = FileScan(
         provider_id=f"tributo.{connector_id}",
@@ -227,7 +227,7 @@ def test_hdfs_parquet_falls_back_only_for_missing_native_library(
     )
     monkeypatch.setattr(
         "tributo.data.bindings.ray_hdfs.importlib.metadata.version",
-        lambda name: "2.55.1",
+        lambda name: "2.59.0",
     )
 
     result = RayHdfsParquetBinding().compile(
@@ -305,7 +305,7 @@ def test_ray_iceberg_binding_delegates_catalog_scan(
     )
     monkeypatch.setattr(
         "tributo.data.bindings.ray_iceberg.importlib.metadata.version",
-        lambda name: "2.55.1",
+        lambda name: "2.59.0",
     )
 
     result = RayIcebergBinding().compile(
@@ -348,7 +348,7 @@ def test_daft_iceberg_binding_delegates_catalog_and_scan(
     )
     monkeypatch.setattr(
         "tributo.data.bindings.daft_iceberg.importlib.metadata.version",
-        lambda name: "0.7.23",
+        lambda name: "0.7.26",
     )
 
     plan = _iceberg_plan()
@@ -380,8 +380,8 @@ def test_daft_iceberg_binding_delegates_catalog_and_scan(
 @pytest.mark.parametrize(
     ("binding", "engine_version", "handle_type"),
     [
-        (RayLanceBinding(), "2.55.1", RayDataHandle),
-        (DaftLanceBinding(), "0.7.23", DaftDataFrameHandle),
+        (RayLanceBinding(), "2.59.0", RayDataHandle),
+        (DaftLanceBinding(), "0.7.26", DaftDataFrameHandle),
     ],
 )
 def test_lance_bindings_use_public_engine_readers(
@@ -512,7 +512,7 @@ def test_daft_sql_bindings_delegate_to_public_connector_facades(
     monkeypatch.setitem(sys.modules, module_name, module)
     monkeypatch.setattr(
         "tributo.data.bindings._daft_sql.importlib.metadata.version",
-        lambda name: "0.7.23",
+        lambda name: "0.7.26",
     )
 
     result = binding.compile(
@@ -550,7 +550,7 @@ def test_ray_doris_binding_delegates_to_external_connector(
     monkeypatch.setitem(sys.modules, "ray_doris", module)
     monkeypatch.setattr(
         "tributo.data.bindings.ray_doris.importlib.metadata.version",
-        lambda name: "2.55.1",
+        lambda name: "2.59.0",
     )
 
     result = RayDorisBinding().compile(
@@ -599,7 +599,7 @@ def test_ray_clickhouse_binding_delegates_bounded_range_read(
     monkeypatch.setitem(sys.modules, "ray_clickhouse", module)
     monkeypatch.setattr(
         "tributo.data.bindings.ray_clickhouse.importlib.metadata.version",
-        lambda name: "2.55.1",
+        lambda name: "2.59.0",
     )
 
     result = RayClickHouseBinding().compile(
@@ -655,7 +655,7 @@ def test_ray_clickhouse_binding_maps_auto_to_partition(
     monkeypatch.setitem(sys.modules, "ray_clickhouse", module)
     monkeypatch.setattr(
         "tributo.data.bindings.ray_clickhouse.importlib.metadata.version",
-        lambda name: "2.55.1",
+        lambda name: "2.59.0",
     )
 
     RayClickHouseBinding().compile(
@@ -752,8 +752,8 @@ def test_ray_doris_binding_rejects_unvalidated_ray_remote_args(
 @pytest.mark.parametrize(
     ("binding", "engine_version", "handle_type"),
     [
-        (RayPostgreSqlBinding(), "2.55.1", RayDataHandle),
-        (DaftPostgreSqlBinding(), "0.7.23", DaftDataFrameHandle),
+        (RayPostgreSqlBinding(), "2.59.0", RayDataHandle),
+        (DaftPostgreSqlBinding(), "0.7.26", DaftDataFrameHandle),
     ],
 )
 def test_postgresql_bindings_delegate_to_public_sql_readers(

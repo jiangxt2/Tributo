@@ -40,7 +40,7 @@ from tributo.util.annotations import DeveloperAPI
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_RAY_VERSION = "2.55.1"
+SUPPORTED_RAY_VERSION = "2.59.0"
 DEFAULT_MAX_BUNDLE_SIZE = 4 * 1024 * 1024 * 1024
 _RUNTIME_WORKING_DIR = "${RAY_RUNTIME_ENV_CREATE_WORKING_DIR}"
 _ALLOWED_PIP_INSTALL_OPTIONS = (

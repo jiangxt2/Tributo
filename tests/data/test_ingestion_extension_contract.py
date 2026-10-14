@@ -126,10 +126,10 @@ class _ExternalHiveBinding:
         self.seen_plan = request.plan
         if self.engine_id == "tributo.ray_data":
             handle = RayDataHandle(object())
-            engine_version = "2.55.1"
+            engine_version = "2.59.0"
         else:
             handle = DaftDataFrameHandle(object())
-            engine_version = "0.7.23"
+            engine_version = "0.7.26"
         return BindingCompilation(
             handle=handle,
             engine_version=engine_version,
@@ -153,9 +153,9 @@ def test_new_hive_provider_and_bindings_require_no_consumer_change(
     expected_handle: type[RayDataHandle] | type[DaftDataFrameHandle],
 ) -> None:
     versions = {
-        "daft": "0.7.23",
+        "daft": "0.7.26",
         "external-hive-connector": "1.0.0",
-        "ray": "2.55.1",
+        "ray": "2.59.0",
     }
     monkeypatch.setattr(
         "tributo.data.engine_binding.importlib.metadata.version",
@@ -181,7 +181,7 @@ def test_new_hive_provider_and_bindings_require_no_consumer_change(
             distribution_name="external-hive-connector",
             distribution_version="1.0.0",
             engine_version_spec=(
-                "==2.55.1" if engine_id.endswith("ray_data") else "==0.7.23"
+                "==2.59.0" if engine_id.endswith("ray_data") else "==0.7.26"
             ),
             constraints=BindingPlanConstraints(
                 catalog_ids=frozenset({"hive"}),

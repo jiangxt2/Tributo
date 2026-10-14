@@ -6,15 +6,14 @@ project. They never reuse a host Ray runtime, an existing MLflow server, or a
 pre-existing container. `ci/test-suites.json` owns their impact rules and
 reports required evidence, but no GitHub Actions event executes these suites.
 
-The data-ingestion image installs database drivers and the v1.0 database
-connectors through Tributo extras. `daft-doris==1.0`, `ray-doris==1.0`,
-and `ray-hive==1.0` are resolved by
-`uv.lock`. The Data Ingestion Gate validates the Tributo Ray HiveServer2
-Provider/Binding separately from the canonical full-runtime package-presence
-gate. The Ray ClickHouse Binding requires separately installed
-`ray-clickhouse==1.0`, which is available on PyPI but remains outside the
-Tributo lockfile. The data-ingestion image installs its hash-pinned wheel for
-the real-database write gate. Other runtime images can use the wheelhouse path.
+The data-ingestion dependencies are declared through Tributo extras, including
+`daft-doris==1.1`, `ray-doris==1.3`, `ray-hive==1.2`, and
+`ray-clickhouse==1.1`. Ray 2.59.0 and Daft 0.7.26 are the development
+runtime baseline. All four connectors are stable PyPI packages selected by
+`uv.lock`, with their distribution hashes retained by the standard host-export
+image entry point. The full CPU image/Ray Jobs gate passed on Linux arm64. Individual
+database and algorithm suites retain their separate validation requirements;
+the stable package baseline does not imply validation of every platform.
 
 ---
 
@@ -196,7 +195,7 @@ components used by the model-export and ingestion external validations:
 | Component | Version |
 |-----------|---------|
 | Python | 3.12 |
-| Ray | 2.55.1 |
+| Ray | 2.59.0 |
 | uv | 0.11.23 |
 | MinIO | RELEASE.2025-09-07T16-13-09Z |
 | PostgreSQL | 16.14 |

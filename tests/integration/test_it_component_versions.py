@@ -7,6 +7,8 @@ import re
 import tomllib
 from pathlib import Path
 
+from packaging.requirements import Requirement
+
 from tests.support.it_versions import load_it_component_versions
 
 ROOT = Path(__file__).parents[2]
@@ -15,6 +17,25 @@ ROOT = Path(__file__).parents[2]
 def _locked_versions() -> dict[str, str]:
     lock = tomllib.loads((ROOT / "uv.lock").read_text())
     return {package["name"]: package["version"] for package in lock["package"]}
+
+
+def test_connector_extras_declare_minimum_supported_versions() -> None:
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
+    connectors = {
+        "ray-doris": ">=1.3",
+        "ray-hive": ">=1.2",
+        "ray-clickhouse": ">=1.1",
+        "daft-doris": ">=1.1",
+    }
+    seen = set()
+    for requirements in project["optional-dependencies"].values():
+        for text in requirements:
+            requirement = Requirement(text)
+            if requirement.name in connectors:
+                seen.add(requirement.name)
+                assert str(requirement.specifier) == connectors[requirement.name]
+                assert requirement.url is None
+    assert seen == set(connectors)
 
 
 def test_component_versions_match_lock_and_are_digest_pinned() -> None:
@@ -121,8 +142,8 @@ def test_full_runtime_profile_matches_the_image_builder_contract() -> None:
     )
     assert profile["extras"] == config["runtime_extras"]
     assert profile["python_version"] == "3.12"
-    assert profile["version_contract"]["ray"] == "2.55.1"
-    assert project["project"]["optional-dependencies"]["hive-ray"] == ["ray-hive==1.0"]
+    assert profile["version_contract"]["ray"] == "2.59.0"
+    assert project["project"]["optional-dependencies"]["hive-ray"] == ["ray-hive>=1.2"]
     for package, contract_key in {
         "daft-doris": "daft_doris",
         "ray-doris": "ray_doris",

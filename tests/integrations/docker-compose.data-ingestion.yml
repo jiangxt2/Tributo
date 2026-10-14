@@ -13,7 +13,7 @@ x-ray-common: &ray-common
     PYTHONDONTWRITEBYTECODE: "1"
     PYTHONPATH: /workspace/tributo-src/src:/workspace/tributo-src
     RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO: "0"
-    TMPDIR: /workspace/tributo-work/tmp
+    TMPDIR: /tmp
     TRIBUTO_MINIO_ENDPOINT: http://minio:9000
     TRIBUTO_MINIO_ACCESS_KEY: minioadmin
     TRIBUTO_MINIO_SECRET_KEY: minioadmin123
@@ -105,7 +105,7 @@ services:
       - --head
       - --port=6379
       - --dashboard-host=0.0.0.0
-      - --num-cpus=${TRIBUTO_IT_RAY_HEAD_CPUS:-1}
+      - --num-cpus=${TRIBUTO_IT_RAY_HEAD_CPUS:-0}
       - --block
     healthcheck:
       test:

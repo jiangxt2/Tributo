@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=rayproject/ray:2.55.1-py312@sha256:911245f2478ad2e9f67ac13978dc2a75bcae0498b9f188b10bba703324b78379
+ARG BASE_IMAGE=rayproject/ray:2.59.0-py312@sha256:0ffca209fb4c984d648db550b8dbe7879bdba3bbb5d96ee5894843cf6ac12eb5
 ARG HADOOP_IMAGE=apache/hive:4.2.0@sha256:b0d2842722567a89ac35da8af9002b6bba0fc2d0eb272664954a1fa46d694472
 
 FROM ${HADOOP_IMAGE} AS hadoop-runtime
@@ -33,6 +33,6 @@ WORKDIR /opt/tributo
 RUN --mount=type=cache,target=/home/ray/.cache/pip,uid=1000,gid=100 \
     python -m pip install --require-hashes -r /opt/tributo/requirements.txt
 
-RUN python -c "import importlib.metadata as m, sys; assert sys.version_info[:2] == (3, 12); assert m.version('ray') == '2.55.1'; assert m.version('pyarrow') == '19.0.1'; assert m.version('pyiceberg') == '0.11.1'; assert m.version('pylance') == '9.0.0'; assert __import__('os').path.exists('/opt/hadoop/lib/native/libhdfs.so'); assert __import__('os').path.exists('/opt/java/openjdk/lib/server/libjvm.so')"
+RUN python -c "import importlib.metadata as m, sys; assert sys.version_info[:2] == (3, 12); assert m.version('ray') == '2.59.0'; assert m.version('pyarrow') == '19.0.1'; assert m.version('pyiceberg') == '0.11.1'; assert m.version('pylance') == '9.0.0'; assert __import__('os').path.exists('/opt/hadoop/lib/native/libhdfs.so'); assert __import__('os').path.exists('/opt/java/openjdk/lib/server/libjvm.so')"
 
 WORKDIR /workspace/tributo-src

@@ -57,18 +57,18 @@ except ModuleNotFoundError:  # pragma: no cover - direct source checkout fallbac
 
 DOCKERFILE = ROOT / "docker" / "tributo-runtime" / "Dockerfile"
 BASE_IMAGE = (
-    "rayproject/ray:2.55.1-py312@"
-    "sha256:911245f2478ad2e9f67ac13978dc2a75bcae0498b9f188b10bba703324b78379"
+    "rayproject/ray:2.59.0-py312@"
+    "sha256:0ffca209fb4c984d648db550b8dbe7879bdba3bbb5d96ee5894843cf6ac12eb5"
 )
 BASE_IMAGE_MIRROR = (
-    "docker.m.daocloud.io/rayproject/ray:2.55.1-py312@"
-    "sha256:911245f2478ad2e9f67ac13978dc2a75bcae0498b9f188b10bba703324b78379"
+    "docker.m.daocloud.io/rayproject/ray:2.59.0-py312@"
+    "sha256:0ffca209fb4c984d648db550b8dbe7879bdba3bbb5d96ee5894843cf6ac12eb5"
 )
-LOCAL_BASE_IMAGE = "tributo-ray-base:2.55.1-py312"
+LOCAL_BASE_IMAGE = "tributo-ray-base:2.59.0-py312"
 UV_VERSION = "0.11.23"
 PLATFORM_AUTO = "auto"
 SUPPORTED_PLATFORMS = ("linux/amd64", "linux/arm64")
-RAY_VERSION = "2.55.1"
+RAY_VERSION = "2.59.0"
 PYTHON_VERSION = "3.12"
 PYTHON_SPEC = ">=3.12,<3.14"
 PROFILE_ID = "tributo.runtime.full"
@@ -628,7 +628,7 @@ def _prepare_pinned_images(
     *,
     log: _CommandLog | None = None,
 ) -> None:
-    """Prepare both digest-pinned image inputs without using the host proxy."""
+    """Prepare the digest-pinned Ray base image without using the host proxy."""
     _prepare_pinned_image(
         mirror=config.base_image_mirror,
         canonical=config.base_image,

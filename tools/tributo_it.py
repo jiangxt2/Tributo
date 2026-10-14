@@ -86,7 +86,7 @@ PROJECT_PREFIXES = frozenset(
     {"tributo-ingestion", "tributo-lance-vector", "tributo-hdfs-ingestion"}
 )
 DIGEST_REFERENCE_PATTERN = re.compile(r"^.+:[^/@]+@sha256:[0-9a-f]{64}$")
-LOCAL_RUNTIME_BASE_IMAGE = "tributo-ray-base:2.55.1-py312"
+LOCAL_RUNTIME_BASE_IMAGE = "tributo-ray-base:2.59.0-py312"
 LOCAL_RUNTIME_UV_IMAGE = "tributo-uv:0.11.23"
 HOST_UV_EXPORT_MODE = "host-uv-export"
 UV_IMAGE_MODE = "uv-image"

@@ -82,7 +82,7 @@ def _request(
         deployment=KubeRayDeploymentConfig(
             namespace=namespace,
             image=image,
-            ray_version="2.55.1",
+            ray_version="2.59.0",
             head_num_cpus=1,
             head_memory_bytes=4 * _BYTES_PER_GIB,
             image_pull_policy="Never",
@@ -245,7 +245,7 @@ def test_kuberay_resource_profiles_submit_xgboost_and_execute(
         result = _wait_for_result(submitter, submission)
         assert result["status"] == "succeeded"
         assert result["algorithm"] == "xgboost"
-        assert result["ray_version"] == "2.55.1"
+        assert result["ray_version"] == "2.59.0"
         assert result["node_count"] >= 2
         assert result["requested_worker_count"] == worker_count
         assert result["requested_resources_per_worker"] == {

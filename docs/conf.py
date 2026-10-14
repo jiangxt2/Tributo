@@ -92,7 +92,7 @@ intersphinx_mapping = (
         "ray": ("https://docs.ray.io/en/latest", None),
     }
 )
-intersphinx_timeout = 10
+intersphinx_timeout = 30
 
 nitpicky = True
 nitpick_ignore_regex = [

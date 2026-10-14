@@ -40,7 +40,7 @@ def _descriptor(*, binding_id: str = "test.ray.parquet") -> WriteDescriptor:
         engine_id="ray",
         target_kind="parquet",
         binding_id=binding_id,
-        engine_version_spec="==2.55.1",
+        engine_version_spec="==2.59.0",
         binding_distribution="test-write-binding",
         binding_distribution_version="1.0.0",
         capabilities=WriteCapability(supported_modes=frozenset({WriteMode.OVERWRITE})),
@@ -80,7 +80,7 @@ class _Binding:
 @pytest.fixture
 def registry(monkeypatch: pytest.MonkeyPatch) -> WriteBindingRegistry:
     versions = {
-        "ray": "2.55.1",
+        "ray": "2.59.0",
         "test-write-binding": "1.0.0",
     }
     monkeypatch.setattr(
@@ -179,7 +179,7 @@ def test_gateway_rejects_inconsistent_descriptor(
     monkeypatch.setattr(
         "tributo.data.writing.registry.importlib.metadata.version",
         lambda name: {
-            "ray": "2.55.1",
+            "ray": "2.59.0",
             "test-write-binding": "1.0.0",
         }[name],
     )
@@ -212,7 +212,7 @@ def test_gateway_rejects_inconsistent_target_plan(
     monkeypatch.setattr(
         "tributo.data.writing.registry.importlib.metadata.version",
         lambda name: {
-            "ray": "2.55.1",
+            "ray": "2.59.0",
             "test-write-binding": "1.0.0",
         }[name],
     )
@@ -250,7 +250,7 @@ def test_gateway_rejects_inconsistent_receipt_target(
     monkeypatch.setattr(
         "tributo.data.writing.registry.importlib.metadata.version",
         lambda name: {
-            "ray": "2.55.1",
+            "ray": "2.59.0",
             "test-write-binding": "1.0.0",
         }[name],
     )
@@ -284,7 +284,7 @@ def test_gateway_rejects_inconsistent_receipt_mode(
     monkeypatch.setattr(
         "tributo.data.writing.registry.importlib.metadata.version",
         lambda name: {
-            "ray": "2.55.1",
+            "ray": "2.59.0",
             "test-write-binding": "1.0.0",
         }[name],
     )
@@ -362,7 +362,7 @@ def test_gateway_sanitizes_binding_factory_exception(
     monkeypatch.setattr(
         "tributo.data.writing.registry.importlib.metadata.version",
         lambda name: {
-            "ray": "2.55.1",
+            "ray": "2.59.0",
             "test-write-binding": "1.0.0",
         }[name],
     )
@@ -419,7 +419,7 @@ def test_gateway_rejects_invalid_factory_result(
     monkeypatch.setattr(
         "tributo.data.writing.registry.importlib.metadata.version",
         lambda name: {
-            "ray": "2.55.1",
+            "ray": "2.59.0",
             "test-write-binding": "1.0.0",
         }[name],
     )

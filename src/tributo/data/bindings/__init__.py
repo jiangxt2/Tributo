@@ -17,32 +17,29 @@ from tributo.data.engine_binding import (
 )
 from tributo.data.ingestion import ReadHint
 from tributo.data.scan_plan import ScanKind, SourceCapability
+from tributo.exceptions import EngineNotAvailableError
 
 _DEFAULT_BINDINGS: EngineBindings | None = None
 _DEFAULT_BINDINGS_LOCK = threading.Lock()
-_RAY_VERSION_SPEC = "==2.55.1"
+_RAY_VERSION_SPEC = "==2.59.0"
 _DAFT_VERSION_SPEC = ">=0.7.0,<0.8.0"
-_DAFT_SQL_VERSION_SPEC = ">=0.7.23,<0.7.24"
-_RAY_INSTALL_HINT = "pip install 'ray[default,serve,tune]==2.55.1'"
+_DAFT_SQL_VERSION_SPEC = ">=0.7.26,<0.7.27"
+_RAY_INSTALL_HINT = "pip install 'ray[default,serve,tune]==2.59.0'"
 _DAFT_INSTALL_HINT = "pip install 'tributo[data-daft]'"
 _DAFT_LANCE_INSTALL_HINT = "pip install 'tributo[data,data-daft]'"
 _DATA_INSTALL_HINT = "pip install 'tributo[data]'"
 _RAY_CLICKHOUSE_INSTALL_HINT = (
-    "Install ray-clickhouse==1.0, then install Tributo's "
-    "ClickHouse dependencies with pip install 'tributo[clickhouse]'"
+    "Install ray-clickhouse: uv sync --locked --extra clickhouse"
 )
 _DAFT_DORIS_INSTALL_HINT = (
-    "Install daft-doris==1.0 with Tributo: pip install 'tributo[mysql]' "
-    "(or uv sync --extra mysql); use 'tributo[doris-flight]' for Flight"
+    "Install daft-doris: "
+    "uv sync --locked --extra mysql; use --extra doris-flight for Flight"
 )
 _RAY_DORIS_INSTALL_HINT = (
-    "Install ray-doris==1.0 with Tributo: pip install 'tributo[mysql]' "
-    "(or uv sync --extra mysql); use 'tributo[doris-flight]' for Flight"
+    "Install ray-doris: "
+    "uv sync --locked --extra mysql; use --extra doris-flight for Flight"
 )
-_RAY_HIVE_INSTALL_HINT = (
-    "Install ray-hive==1.0 with Tributo: pip install 'tributo[hive-ray]' "
-    "(or uv sync --extra hive-ray)"
-)
+_RAY_HIVE_INSTALL_HINT = "Install ray-hive: uv sync --locked --extra hive-ray"
 _POSTGRESQL_INSTALL_HINT = "pip install 'tributo[postgresql]'"
 
 
@@ -55,6 +52,15 @@ def _distribution_version(name: str) -> str | None:
         return importlib.metadata.version(name)
     except importlib.metadata.PackageNotFoundError:
         return None
+
+
+def _require_distribution_version(name: str) -> str:
+    version = _distribution_version(name)
+    if version is None:
+        raise EngineNotAvailableError(
+            f"Connector distribution {name!r} is not installed"
+        )
+    return version
 
 
 def _ray_parquet_descriptor() -> BindingDescriptor:
@@ -290,7 +296,7 @@ def _ray_clickhouse_descriptor() -> BindingDescriptor:
         factory=RayClickHouseBinding,
         capabilities=frozenset({SourceCapability.PROJECTION}),
         distribution_name="ray-clickhouse",
-        distribution_version=_distribution_version("ray-clickhouse") or "1.0",
+        distribution_version=_require_distribution_version("ray-clickhouse"),
         engine_version_spec=_RAY_VERSION_SPEC,
         dependency_distributions=("clickhouse-connect", "pyarrow"),
         supported_read_hints=frozenset(
@@ -318,7 +324,7 @@ def _daft_doris_descriptor() -> BindingDescriptor:
         factory=DaftDorisBinding,
         capabilities=frozenset({SourceCapability.PROJECTION}),
         distribution_name="daft-doris",
-        distribution_version=_distribution_version("daft-doris") or "1.0",
+        distribution_version=_require_distribution_version("daft-doris"),
         engine_version_spec=_DAFT_SQL_VERSION_SPEC,
         dependency_distributions=("PyMySQL",),
         supported_read_hints=frozenset(
@@ -341,7 +347,7 @@ def _ray_doris_descriptor() -> BindingDescriptor:
         factory=RayDorisBinding,
         capabilities=frozenset({SourceCapability.PROJECTION}),
         distribution_name="ray-doris",
-        distribution_version=_distribution_version("ray-doris") or "1.0",
+        distribution_version=_require_distribution_version("ray-doris"),
         engine_version_spec=_RAY_VERSION_SPEC,
         dependency_distributions=("PyMySQL",),
         supported_read_hints=frozenset(
@@ -368,7 +374,7 @@ def _ray_hive_descriptor() -> BindingDescriptor:
         factory=RayHiveBinding,
         capabilities=frozenset({SourceCapability.PROJECTION}),
         distribution_name="ray-hive",
-        distribution_version=_distribution_version("ray-hive") or "1.0",
+        distribution_version=_require_distribution_version("ray-hive"),
         engine_version_spec=_RAY_VERSION_SPEC,
         dependency_distributions=("thrift",),
         install_hint=_RAY_HIVE_INSTALL_HINT,
@@ -659,7 +665,7 @@ def default_engine_bindings() -> EngineBindings:
                 _RAY_CLICKHOUSE_INSTALL_HINT,
                 None,
                 (
-                    ("ray-clickhouse", "==1.0"),
+                    "ray-clickhouse",
                     ("clickhouse-connect", ">=1.5,<1.6"),
                     ("pyarrow", ">=19,<20"),
                 ),
@@ -704,7 +710,7 @@ def default_engine_bindings() -> EngineBindings:
                 _RAY_VERSION_SPEC,
                 _RAY_HIVE_INSTALL_HINT,
                 None,
-                (("ray-hive", "==1.0"), "thrift"),
+                ("ray-hive", "thrift"),
             ),
             (
                 _ray_postgresql_descriptor,
