@@ -43,7 +43,7 @@ jobs:
     steps:
       - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
 
-      - uses: astral-sh/setup-uv@cd13f9217092d43a771cf9ba7b09bdd3da8d7c4d
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
         with:
           python-version: "3.12"
 
