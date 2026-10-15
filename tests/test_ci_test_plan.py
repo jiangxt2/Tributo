@@ -595,3 +595,20 @@ def test_workflows_preserve_events_permissions_budgets_and_stable_gate() -> None
     assert "timeout-minutes: 45" not in combined
     assert "timeout-minutes: 65" not in combined
     assert "timeout-minutes: 80" not in combined
+
+
+def test_dco_check_skips_merge_commits_but_requires_signed_off_by() -> None:
+    workflow = yaml.load(
+        (ROOT / ".github/workflows/pr-test-suite.yml").read_text(encoding="utf-8"),
+        Loader=yaml.BaseLoader,
+    )
+    dco_step = next(
+        step
+        for step in workflow["jobs"]["dco"]["steps"]
+        if step.get("name") == "Check Signed-off-by"
+    )
+
+    assert (
+        "git log --no-merges --format='%H' \"$BASE_SHA..$HEAD_SHA\"" in dco_step["run"]
+    )
+    assert 'grep -qE "^Signed-off-by: [^<]+ <[^>]+>$"' in dco_step["run"]
