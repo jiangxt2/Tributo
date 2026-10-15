@@ -302,7 +302,7 @@ def test_runtime_publish_workflow_is_trusted_and_immutable() -> None:
     assert "branches: [master]" in workflow
     assert "packages: write" in workflow
     assert (
-        "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c"
+        "docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069"
         in workflow
     )
     assert "astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884" in workflow
