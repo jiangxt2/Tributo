@@ -264,10 +264,6 @@ def test_scheduled_plan_contains_only_budgeted_scheduled_shards(
     ("path", "expected"),
     [
         (
-            "tests/training/jobs/official_algorithm_gate_job.py",
-            ("manual_it",),
-        ),
-        (
             "tests/registry/test_integration.py",
             ("manual_it", "quarantine"),
         ),

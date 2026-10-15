@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping
-from pathlib import Path
+from importlib.resources import files
 
 from tributo.algorithms import (
     AlgorithmBuilder,
@@ -12,6 +12,7 @@ from tributo.algorithms import (
     TorchBatch,
     TorchBatchContext,
     TorchLossContribution,
+    TorchMetricContribution,
     TorchMetricPlan,
     TorchModuleSet,
     TorchOptimizationPlan,
@@ -32,7 +33,9 @@ from tributo.training.algorithm_spec import (
     ProblemType,
 )
 
-CODE_DIGEST = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+CODE_DIGEST = hashlib.sha256(
+    files(__package__).joinpath("__init__.py").read_bytes()
+).hexdigest()
 
 
 class ThirdPartyBinaryLinearRecipe(TorchRecipe):
@@ -78,9 +81,15 @@ class ThirdPartyBinaryLinearRecipe(TorchRecipe):
         numerator = torch.nn.functional.binary_cross_entropy_with_logits(
             predictions, batch.targets.float(), reduction="sum"
         )
+        correct = (torch.sigmoid(predictions) >= 0.5).eq(batch.targets.float())
         return TorchStepResult(
             outputs={"prediction": predictions},
             loss=TorchLossContribution(numerator, batch.local_rows),
+            metrics={
+                "accuracy": TorchMetricContribution(
+                    float(correct.sum().item()), float(batch.local_rows)
+                )
+            },
         )
 
     def validation_step(
