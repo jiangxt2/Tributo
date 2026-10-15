@@ -107,3 +107,21 @@ def test_core_graph_partition_contract_runs_on_two_workers(
     assert all(worker["batch_count"] == 4 for worker in workers)
     assert all(worker["graph"]["batch_count"] == 5 for worker in workers)
     assert all(worker["graph"]["touched_partitions"] == [0, 1] for worker in workers)
+    sampling_profiles = [worker["graph"]["sampling_profiles"] for worker in workers]
+    for profiles in sampling_profiles:
+        assert len(profiles) == 2
+        by_batch_size = {profile["seed_batch_size"]: profile for profile in profiles}
+        assert set(by_batch_size) == {1, 2}
+        training_profile = by_batch_size[2]
+        evaluation_profile = by_batch_size[1]
+        assert training_profile["fanouts"] == [2]
+        assert training_profile["direction"] == "incoming"
+        assert training_profile["request_count"] == 4
+        assert training_profile["random_seed_min"] == 17
+        assert training_profile["random_seed_max"] == 20
+        assert evaluation_profile["fanouts"] == [2]
+        assert evaluation_profile["direction"] == "incoming"
+        assert evaluation_profile["request_count"] == 1
+        assert evaluation_profile["random_seed_min"] == 21
+        assert evaluation_profile["random_seed_max"] == 21
+        assert all(len(profile["random_seed_digest"]) == 64 for profile in profiles)
