@@ -9,7 +9,7 @@ spec:
     env_vars:
       PYTHONUNBUFFERED: "1"
   rayClusterSpec:
-    rayVersion: "2.55.1"
+    rayVersion: "2.59.0"
     headGroupSpec:
       rayStartParams:
         num-cpus: "0"
