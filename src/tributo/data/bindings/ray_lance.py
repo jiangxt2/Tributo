@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.metadata
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -114,6 +115,19 @@ class RayLanceBinding:
         row_filter = plan.options.get("filter")
         if row_filter:
             options["filter"] = row_filter
+        scanner_options = request.runtime_options.get("scanner_options")
+        if scanner_options:
+            if not isinstance(scanner_options, Mapping):
+                raise JobConfigurationError(
+                    "Lance scanner_options must be a validated mapping"
+                )
+            forwarded_scanner_options = dict(scanner_options)
+            late_materialization = forwarded_scanner_options.get("late_materialization")
+            if isinstance(late_materialization, tuple):
+                forwarded_scanner_options["late_materialization"] = list(
+                    late_materialization
+                )
+            options["scanner_options"] = forwarded_scanner_options
         if plan.table.uri.lower().startswith("s3://"):
             options["storage_options"] = to_lance_storage_options(
                 runtime_s3_profile(request.runtime_options)

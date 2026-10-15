@@ -9,6 +9,7 @@ MinIO case also exercises native Parquet, CSV, Iceberg, and Lance writes over S3
 from __future__ import annotations
 
 import os
+import tempfile
 import time
 import uuid
 from contextlib import ExitStack
@@ -627,6 +628,65 @@ def test_s3_parquet_conformance_on_ray_cluster_and_minio() -> None:
         filesystem.delete_dir(bucket)
 
 
+def test_lance_scanner_options_preserve_binary_image_reads_on_ray_cluster() -> None:
+    """Ray scanner tuning must preserve every selected image byte."""
+    import lance
+
+    _configure_cluster()
+    shared_dir = Path("/workspace/tributo-work")
+    shared_dir.mkdir(parents=True, exist_ok=True)
+    payloads = [bytes([index + 1]) * (1024 * 1024 + index) for index in range(3)]
+    expected_rows = [{"id": index, "image_bytes": payloads[index]} for index in (1, 2)]
+    scanner_options = {
+        "batch_size": 1,
+        "batch_readahead": 1,
+        "fragment_readahead": 0,
+        "io_buffer_size": 32 * 1024 * 1024,
+        "late_materialization": ["image_bytes"],
+    }
+
+    with tempfile.TemporaryDirectory(
+        prefix="tributo-lance-scanner-", dir=shared_dir
+    ) as temporary_dir:
+        dataset_uri = str(Path(temporary_dir) / "images.lance")
+        lance.write_dataset(
+            pa.table(
+                {
+                    "id": [0, 1, 2],
+                    "image_bytes": pa.array(payloads, type=pa.binary()),
+                }
+            ),
+            dataset_uri,
+        )
+
+        def read_images(
+            configured_scanner_options: dict[str, Any] | None,
+        ) -> list[dict[str, Any]]:
+            source_options: dict[str, Any] = {
+                "columns": ["id", "image_bytes"],
+                "filter": "id > 0",
+            }
+            if configured_scanner_options is not None:
+                source_options["scanner_options"] = configured_scanner_options
+            source = ProviderSourceConfig(
+                provider="tributo.lance",
+                uri=dataset_uri,
+                options=source_options,
+            )
+            with open_ingestion(
+                IngestionRequest(source=source, engine="ray"),
+                IngestionRuntimeContext(),
+            ) as result:
+                assert isinstance(result.handle, RayDataHandle)
+                return result.handle.dataset.take_all()
+
+        baseline = sorted(read_images(None), key=lambda row: row["id"])
+        tuned = sorted(read_images(scanner_options), key=lambda row: row["id"])
+
+    assert baseline == expected_rows
+    assert tuned == expected_rows
+
+
 def test_hive_server2_projection_on_worker() -> None:
     _configure_cluster()
     current_node_id = ray.get_runtime_context().get_node_id()
@@ -800,6 +860,7 @@ def test_exact_coverage_and_batch_inference_on_audited_ray() -> None:
 if __name__ == "__main__":
     test_local_parquet_conformance_on_ray_cluster()
     test_s3_parquet_conformance_on_ray_cluster_and_minio()
+    test_lance_scanner_options_preserve_binary_image_reads_on_ray_cluster()
     test_hive_server2_projection_on_worker()
     test_clickhouse_append_round_trip_and_native_receipt()
     test_exact_coverage_and_batch_inference_on_audited_ray()
