@@ -41,10 +41,10 @@ for verified paths and explicit boundaries.
 
 ## Quick start
 
-Tributo 1.1.0 is a source-only GitHub Release; no PyPI distribution is
-published for this version.
+Tributo 1.1.0 is distributed through PyPI and GitHub Releases.
+The source checkout below uses its committed lockfile.
 
-Development checkouts on `master` declare `1.2.0.dev0`. This development
+Development checkouts on `master` declare `1.3.0.dev0`. This development
 version does not determine the next published patch or minor version. Use a
 release tag for a fixed source snapshot and that snapshot's documentation.
 

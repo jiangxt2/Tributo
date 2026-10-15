@@ -13,7 +13,7 @@ Tributo follows [Semantic Versioning 2.0.0](https://semver.org/).
 | **Minor** (0.X.0) | New `stable` or `beta` feature; `beta` API change with deprecation notice; new optional dependency |
 | **Patch** (0.0.X) | Bug fix; internal refactor with no API change; dependency version bump within declared range |
 
-Current version: **1.2.0.dev0** (as declared in `pyproject.toml`).
+Current version: **1.3.0.dev0** (as declared in `pyproject.toml`).
 
 `pyproject.toml` is the authoritative source. README, Docker, CI, and lock
 files must be verified against it whenever the version changes.
@@ -22,8 +22,8 @@ files must be verified against it whenever the version changes.
 
 Formal releases use SemVer numbers. Python development versions use the
 [PEP 440 development-release format](https://packaging.python.org/en/latest/specifications/version-specifiers/#developmental-releases).
-`master` declares `1.2.0.dev0` for ongoing development. The `release-1.1.0`
-branch declares `1.1.0`, and the `tributo-1.1.0` tag must identify its exact
+`master` declares `1.3.0.dev0` for ongoing development. The `release-1.2.0`
+branch declares `1.2.0`, and the `tributo-1.2.0` tag must identify its exact
 validated commit. A development version does not determine whether the next
 published release is a patch or a minor version.
 
@@ -36,7 +36,7 @@ API versions keep their independent identities.
 
 README and installation examples distinguish the published source tag from
 the development checkout. Update the mainline's published installation entry
-only after the corresponding GitHub source release exists.
+only after the corresponding GitHub source release and PyPI package exist.
 
 ## API Stability Tiers
 
@@ -144,8 +144,8 @@ declared range. The full version remains subject
 to PEP 440 bounds, exact pins, and exclusions; it is not converted into the
 corresponding formal release.
 
-For `1.2.0.dev0`, `>=1,<2` matches, while `<1.2`, `>=1.2`, `==1.1.0`, and
-`!=1.2.*` do not. Formal versions retain the default matching behavior.
+For `1.3.0.dev0`, `>=1,<2` matches, while `<1.3`, `>=1.3`, `==1.2.0`, and
+`!=1.3.*` do not. Formal versions retain the default matching behavior.
 Release candidates and beta versions require permission in their version
 specifier; this rule does not automatically admit them.
 
