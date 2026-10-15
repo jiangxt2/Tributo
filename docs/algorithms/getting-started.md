@@ -1,9 +1,10 @@
 # Install and inspect a formal algorithm
 
-Tributo Core provides the execution framework. Production algorithms are
-independently versioned Wheels from the
+Tributo Core provides the execution framework. The
 [official algorithm repository](https://github.com/jiangxt2/tributo-algorithms)
-or another trusted provider. Registry discovery does not install packages.
+publishes one independently versioned distribution, `tributo-algorithms`, with
+optional domain extras. Other trusted providers may publish their own Wheels.
+Registry discovery does not install packages.
 The Core `training` extra prepares framework dependencies; it does not
 install an algorithm implementation.
 
@@ -11,7 +12,64 @@ Use the [Core data quickstart](../getting-started/quickstart.md) for local
 Parquet read/write, or follow the installation-only recipe below to prepare
 an algorithm package.
 
-## Choose the source and package combination
+## Install the aggregate distribution
+
+The aggregate Wheel contains all 37 official algorithm entry points and their
+lightweight descriptors. The catalog groups implementations of the same
+algorithm under one logical name. Extras
+install the runtime dependencies needed for selected domains, for example
+`tributo-algorithms[boosting]` or `tributo-algorithms[causal-xlearner]`.
+Installing one extra does not remove the other descriptors from the catalog;
+executing an algorithm requires its matching extra. Current algorithms require
+Core 1.1 or newer; choose Core within the selected Wheel's declared range.
+
+Use Python 3.12 or 3.13. Once the selected aggregate version is published,
+install it from PyPI with the domain extra:
+
+```bash
+python -m pip install "tributo-algorithms[boosting]==0.1.0"
+python -m pip check
+```
+
+Before publication, build a Wheel from a reviewed aggregate source checkout.
+Set `TRIBUTO_ALGORITHMS_ROOT` to its absolute path, and run the following in
+an empty directory outside the Core and algorithm checkouts:
+
+```bash
+git -C "${TRIBUTO_ALGORITHMS_ROOT}" rev-parse HEAD
+uv build --no-sources --wheel --python 3.12 --out-dir artifacts \
+  --project "${TRIBUTO_ALGORITHMS_ROOT}"
+shasum -a 256 artifacts/*.whl
+uv venv --python 3.12 .venv
+uv pip install --python .venv/bin/python \
+  "artifacts/tributo_algorithms-0.1.0-py3-none-any.whl[boosting]"
+uv pip check --python .venv/bin/python
+```
+
+This example uses aggregate version `0.1.0`; match the Wheel filename and
+version to the selected checkout. Build from the repository root:
+`packages/boosting` contains a source domain, not an independent distribution.
+Keep the source revision, Wheel digest, and resolved environment with the
+deployment. Follow the algorithm repository's platform-specific dependency
+instructions when selecting other extras, including its SciPy Wheel guidance
+for macOS arm64/Python 3.12 with `causal-dowhy` or `all`.
+
+Use `tributo-algorithms[graph-pyg]` or the appropriate `causal-*` extra for
+official graph and causal algorithms. Core's `graph` and `causal` extras are
+separate Core integration profiles; they do not install the aggregate
+`tributo-algorithms` distribution.
+
+These commands install packages without starting Ray. Installation and
+descriptor discovery do not award a validated cluster profile; use the
+[support matrix](../reference/support-matrix.md) for execution scope.
+
+## Historical source snapshot
+
+The recipe below retains the independently packaged boosting source snapshot.
+Its commands apply to the pinned revisions, rather than the aggregate layout
+above.
+
+### Choose the source and package combination
 
 This recipe binds explicit source revisions because the Core package version
 alone does not identify its APIs. It does not certify the same algorithm
@@ -35,7 +93,7 @@ development runtime in the [support matrix](../reference/support-matrix.md).
 Use an algorithm package that explicitly declares
 a compatible Ray requirement before selecting that runtime.
 
-## Build and install the example package
+### Build and install the example package
 
 Install uv and an available Python 3.12 interpreter. Run these commands in an
 empty directory outside either source checkout. Fetch both public snapshots:
@@ -110,9 +168,10 @@ Use the isolated environment directly:
 .venv/bin/tributo algo info xgboost
 ```
 
-Before installing an algorithm Wheel, an empty catalog is expected. After
-installing this package, look for `xgboost` and `lightgbm`. An available
-entry means discovery succeeded. The `tested`, `supported`, and validated
+Before installing an algorithm Wheel, an empty catalog is expected. The
+aggregate distribution exposes 37 entry points, including implementations of `xgboost` and
+`lightgbm`; the historical boosting snapshot exposes only its own entries.
+An available entry means discovery succeeded. The `tested`, `supported`, and validated
 profile fields depend on the separate execution evidence model; installing
 or inspecting a package does not update them.
 

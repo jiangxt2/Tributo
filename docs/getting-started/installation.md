@@ -99,6 +99,12 @@ for subsequent repository commands, or repeat the reviewed Wheel installation
 after changing extras. For a separate Wheel environment, use that environment's
 Python and CLI directly, as shown in the algorithm recipe.
 
+Core's `graph` and `causal` extras install dependencies for Core-level
+integration APIs. They do not install the separate `tributo-algorithms`
+distribution. To install official algorithms, choose the matching aggregate
+extra, such as `graph-pyg` or `causal-dowhy`; see the
+[aggregate algorithm installation](../algorithms/getting-started.md#install-the-aggregate-distribution).
+
 ## Add development dependencies
 
 ```bash

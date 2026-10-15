@@ -110,7 +110,6 @@ def _execute(
             "ray": {
                 "max_failures": 0,
                 "storage_path": root,
-                "resume": {"checkpoint_interval": 1},
             },
             "output": {"bundle_uri": bundle_uri},
         }

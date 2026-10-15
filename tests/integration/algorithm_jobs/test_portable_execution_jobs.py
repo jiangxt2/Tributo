@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from collections.abc import Iterator
 from typing import Any, cast
@@ -19,7 +20,11 @@ pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
 @pytest.fixture(scope="module")
 def job_client() -> Iterator[JobSubmissionClient]:
-    """Connect to the existing Docker Ray cluster through the Jobs API."""
+    """Connect to the lifecycle-owned Docker Ray cluster through the Jobs API."""
+    if os.environ.get("TRIBUTO_DOCKER_ALGORITHM_CONTRACT_IT") != "1":
+        pytest.fail(
+            "portable plugin IT must run through its owned Docker Ray Jobs suite"
+        )
     import requests
 
     original_request = requests.api.request

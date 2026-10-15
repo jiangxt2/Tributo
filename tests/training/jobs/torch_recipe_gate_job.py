@@ -6,6 +6,7 @@ import json
 import os
 import random
 import sys
+from importlib.metadata import entry_points
 from pathlib import Path
 
 import ray
@@ -23,13 +24,40 @@ def main() -> int:
     ray.init()
     from tributo.plugin import discover_algorithm_descriptors
 
+    diagnostics = []
+    descriptors = discover_algorithm_descriptors(diagnostics)
     matches = [
         descriptor
-        for descriptor in discover_algorithm_descriptors()
+        for descriptor in descriptors
         if descriptor.name == "third_party_binary_linear"
     ]
     if len(matches) != 1:
-        raise AssertionError("Torch recipe descriptor was not isolated and discovered")
+        visible_entry_points = []
+        for entry_point in entry_points(group="tributo.algorithms"):
+            distribution = getattr(entry_point, "dist", None)
+            metadata = getattr(distribution, "metadata", None)
+            visible_entry_points.append(
+                {
+                    "distribution": metadata.get("Name", "") if metadata else "",
+                    "name": entry_point.name,
+                    "value": entry_point.value,
+                }
+            )
+        diagnostic_records = [
+            diagnostic.model_dump(mode="json") for diagnostic in diagnostics
+        ]
+        relevant_paths = [
+            path
+            for path in sys.path
+            if "_ray_pkg" in path or "tributo-test-torch-recipe-algorithm" in path
+        ]
+        raise AssertionError(
+            "Torch recipe descriptor was not isolated and discovered: "
+            f"matches={len(matches)}, selector={os.environ.get('TRIBUTO_PLUGINS')!r}, "
+            f"visible_entry_points={json.dumps(visible_entry_points, sort_keys=True)}, "
+            f"diagnostics={json.dumps(diagnostic_records, sort_keys=True)}, "
+            f"relevant_sys_path={json.dumps(relevant_paths)}"
+        )
     root = Path(os.environ["TRIBUTO_DISTRIBUTED_GATE_ROOT"])
     rng = random.Random(42)
     records = {

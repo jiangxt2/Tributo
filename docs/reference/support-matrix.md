@@ -25,7 +25,7 @@ automation eligibility.
 | Batch and online inference | Inference plans, model flavors, sinks, and serving configuration | `unit` and `unit-integration-contracts` | `inference-cluster` |
 | Lance vector index | Vector-index API, storage profiles, and Ray Jobs request contract | `unit` contracts | `lance-vector-cluster` |
 | Tune and explainability | Capability declarations and typed job configuration | `unit` contracts | `tune-cluster` and `explainability-cluster` |
-| Distributed algorithms | Algorithm descriptors, execution profiles, and portable receipts | `unit` and `unit-integration-contracts` | `distributed-algorithm-cluster` |
+| Distributed algorithms | Core descriptors, execution profiles, and portable receipts | `unit` and `unit-integration-contracts` | Official algorithm package CI; no Core-owned Wheel Gate |
 | Full runtime image for CPU validation | Pinned Ray base, host uv export, locked first-party extras, Alpha import closure, and `ImageProfile` attestation | `unit` contracts | `runtime-image` |
 
 External suite names describe required evidence, not GitHub Actions jobs.
@@ -34,17 +34,14 @@ count as capability evidence until their lifecycle and reliability conditions
 are repaired.
 
 For distributed algorithms, compatible profiles are declared by the static
-contract. Validated profiles have additionally passed the corresponding real
-environment Gate. The project-wide distributed algorithm Gate uses Ray Jobs on
-an isolated Docker cluster with two worker nodes to verify sharding, state
-coordination, cross-node receipts, and Bundle atomicity. This verifies the
-deployment-neutral `cluster` execution profile on an existing Ray cluster.
+contract. Core CI validates the open descriptor and execution contracts using
+Core-owned fixtures; the official algorithm repository runs its own package
+tests. Core CI and its manual suite manifest do not build or install the
+`tributo-algorithms` distribution. Those package tests do not by themselves
+certify a multi-node execution profile. Historical cluster evidence remains
+specific to the exact Wheel, Core version, and runtime profile that produced it.
 Kubernetes remains an external substrate managed by KubeRay or another Ray
-platform, not a Tributo profile or control plane. Tributo's distributed
-evidence is the deployment-neutral `cluster` profile on an isolated Docker Ray
-cluster. KubeRay deployment and lifecycle validation are outside the Tributo IT
-scope; users may attach the same workload to an externally provided Ray Jobs
-endpoint.
+platform, not a Tributo profile or control plane.
 
 ## Data
 
@@ -84,7 +81,9 @@ Algorithms with `native_migration_complete` set are intentionally omitted
 from this Core-generated region. Their descriptors, implementations, and
 runtime evidence are maintained and validated in the official
 [tributo-algorithms repository](https://github.com/jiangxt2/tributo-algorithms),
-which is tested locally rather than installed by Tributo's GitHub CI.
+which runs its own unit and package-conformance CI. Core CI uses fixture
+plugins for its open descriptor and execution contracts and does not install
+the aggregate distribution.
 
 ### Training infrastructure and planned capabilities
 
@@ -97,7 +96,7 @@ which is tested locally rather than installed by Tributo's GitHub CI.
 | Constrained algorithm descriptor SPI | Alpha | Trusted packages from the selected image or a validated Job artifact; no arbitrary dependency resolution, isolation, hot reload, or PluginManager lifecycle |
 | Algorithm Wheel distribution | Alpha | Image Profiles plus code-only `py_modules` Wheels by default; opt-in offline Wheelhouse installs use `--no-index`, an attested manifest, and the existing entry-point registry. No online dependency resolution or untrusted-code sandbox is provided |
 | Graph training | Alpha Core data path | Core provides partitioned Ray graph reads and seed mini-batches for static homogeneous node tasks; no built-in PyG/DGL trainer, and the external GraphSAGE/R-GCN Wheel remains full-batch until separately migrated |
-| X-Learner causal estimation | Alpha, conformance-tested | Binary treatment/outcome, numeric tabular features, deterministic 5-fold cross-fitting over five native Ray Train XGBoost stages, causal report, and batch CATE inference; priority multi-node Gate passed, while the full 27-record Gate remains pending |
+| X-Learner causal estimation | Alpha, conformance-tested | Binary treatment/outcome, numeric tabular features, deterministic 5-fold cross-fitting over five native Ray Train XGBoost stages, causal report, and batch CATE inference; the previously recorded priority multi-node result is version-specific, and Core does not maintain the aggregate Wheel Gate |
 
 The tabular DNN, PU, and XGBoost legacy Trainer implementations remain
 available to Beta compatibility APIs while their native distributed

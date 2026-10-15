@@ -13,10 +13,12 @@ owns cluster creation and cleanup. The legacy JSON value `kubernetes` remains
 an input alias for `cluster`, but new output is deployment neutral.
 `DistributionSpec.supported_execution_profiles` declares implementation
 compatibility; the separately reported validated profiles are the environments
-that have direct environment evidence. Tributo's algorithm Gate runs through
-the Ray Jobs API on an isolated Docker cluster with two worker nodes. It proves
-deployment-independent sharding, state coordination, receipt, and Bundle
-semantics without making Docker, Kubernetes, or VM providers execution profiles.
+that have direct environment evidence. Core's manual Ray Jobs contract suites
+use fixture plugins with a fixed Core Wheel to verify generic sharding, state
+coordination, receipts, and Bundle semantics; they do not install or certify
+the aggregate algorithm Wheel. Algorithm-specific unit and package-conformance
+tests run in the algorithm repository. There is currently no real multi-node
+Gate for the aggregate algorithm Wheel.
 
 Ordinary third-party PyTorch models should implement `TorchRecipe`; framework-
 owned loops should implement `RayTorchAdapter`.
