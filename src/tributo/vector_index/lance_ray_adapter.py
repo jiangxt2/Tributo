@@ -12,6 +12,7 @@ from typing import Any, Iterable, Mapping
 
 import pyarrow as pa
 
+from tributo._common.runtime_versions import SUPPORTED_RAY_VERSION
 from tributo._common.storage_profiles import StorageProfileResolver
 from tributo.data._s3 import to_lance_storage_options
 from tributo.data.persistence import LanceRayBinding
@@ -34,7 +35,7 @@ from tributo.vector_index.errors import (
 )
 
 _EXPECTED_DISTRIBUTIONS = {
-    "ray": "2.55.1",
+    "ray": SUPPORTED_RAY_VERSION,
     "pylance": "9.0.0",
     "lance-ray": "0.5.0",
     "pyarrow": "19.0.1",

@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=rayproject/ray:2.55.1-py312@sha256:911245f2478ad2e9f67ac13978dc2a75bcae0498b9f188b10bba703324b78379
+ARG BASE_IMAGE
 
 FROM ${BASE_IMAGE}
 
@@ -14,16 +14,23 @@ ENV PATH="/opt/tributo/.venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1
 
 COPY --from=locked-requirements --chown=1000:100 /requirements.txt /opt/tributo/requirements.txt
+COPY --from=locked-requirements --chown=1000:100 /runtime-version-check.py /opt/tributo/
 
 WORKDIR /opt/tributo
 
+# Match the full CPU image's exact Linux arm64 pip metadata exception.
+# A different platform, exit code, or additional error must still fail.
 RUN --mount=type=cache,target=/home/ray/.cache/pip,uid=1000,gid=100 \
-    python -m pip install --require-hashes -r /opt/tributo/requirements.txt
+    python -m pip install --require-hashes -r /opt/tributo/requirements.txt && \
+    python -c "import platform, subprocess, sys; \
+result = subprocess.run([sys.executable, '-m', 'pip', 'check'], capture_output=True, text=True); \
+output = (result.stdout + result.stderr).strip(); \
+baseline = 'nvidia-cusparselt-cu13 0.8.1 is not supported on this platform'; \
+allowed = platform.system() == 'Linux' and platform.machine() == 'aarch64' and result.returncode == 1 and output == baseline; \
+print(output); \
+sys.exit(0 if result.returncode == 0 or allowed else 1)"
 
-# Optional connector under test; its wheel is outside Tributo's lockfile.
-RUN printf '%s\n' 'ray-clickhouse==1.0 --hash=sha256:5ac258dd425ea9fa879b3429c57755f7948c1541bda5fc6f57f2c9605e3c63cb' \
-    | python -m pip install --no-deps --require-hashes -r /dev/stdin
-
-RUN python -c "import importlib.metadata as m, sys; assert sys.version_info[:2] == (3, 12); assert m.version('pip'); assert m.version('ray') == '2.55.1'; assert m.version('daft').startswith('0.7.'); assert m.version('pylance') == '9.0.0'; assert m.version('lance-ray') == '0.5.0'; assert m.version('pyarrow') == '19.0.1'; assert m.version('daft-doris') == '1.0'; assert m.version('ray-doris') == '1.0'; assert m.version('ray-hive') == '1.0'; assert m.version('ray-clickhouse') == '1.0'; assert m.version('thrift') == '0.16.0'"
+RUN python -c "import importlib.metadata as m; assert m.version('pip')" && \
+    python /opt/tributo/runtime-version-check.py
 
 WORKDIR /workspace/tributo-src

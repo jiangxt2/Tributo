@@ -156,7 +156,7 @@ DESCRIPTOR = AlgorithmBuilder.from_torch(
     environment=EnvironmentSpec(
         environment_id="example.torch_recipe.binary_linear.v1",
         dependencies=(
-            "ray==2.55.1",
+            "ray==2.59.0",
             "torch>=2.5.0",
             "tributo-test-torch-recipe-algorithm==0.1.0",
         ),

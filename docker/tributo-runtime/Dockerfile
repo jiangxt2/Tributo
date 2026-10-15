@@ -1,5 +1,5 @@
-ARG BASE_IMAGE=tributo-ray-base:2.55.1-py312
-ARG TRIBUTO_BASE_IMAGE=rayproject/ray:2.55.1-py312@sha256:911245f2478ad2e9f67ac13978dc2a75bcae0498b9f188b10bba703324b78379
+ARG BASE_IMAGE
+ARG TRIBUTO_BASE_IMAGE
 ARG TRIBUTO_PLATFORM
 
 FROM ${BASE_IMAGE}
@@ -7,6 +7,7 @@ FROM ${BASE_IMAGE}
 ARG BASE_IMAGE
 ARG TRIBUTO_BASE_IMAGE
 ARG TRIBUTO_PLATFORM
+ARG TRIBUTO_RAY_VERSION
 ARG TRIBUTO_MANIFEST_SHA256=unsealed
 ARG TRIBUTO_RUNTIME_EXTRAS
 ARG TRIBUTO_VERSION=1.2.0.dev0
@@ -14,7 +15,7 @@ ARG TRIBUTO_VERSION=1.2.0.dev0
 LABEL org.opencontainers.image.title="tributo-runtime-full" \
       org.opencontainers.image.version="${TRIBUTO_VERSION}" \
       org.tributo.base-image="${TRIBUTO_BASE_IMAGE}" \
-      org.tributo.ray-version="2.55.1" \
+      org.tributo.ray-version="${TRIBUTO_RAY_VERSION}" \
       org.tributo.python-version="3.12" \
       org.tributo.platform="${TRIBUTO_PLATFORM}" \
       org.tributo.runtime-extras="${TRIBUTO_RUNTIME_EXTRAS}" \

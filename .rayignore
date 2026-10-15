@@ -20,4 +20,3 @@ explore/
 docs/
 *.md
 !/README.md
-uv.lock

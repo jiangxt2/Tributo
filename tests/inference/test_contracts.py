@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from tests.support.runtime_versions import RAY_VERSION
 from tributo.data import (
     DataWriteTargetRequest,
     IngestionPlanReceipt,
@@ -602,7 +603,7 @@ def _ingestion_receipt() -> IngestionPlanReceipt:
     return IngestionPlanReceipt(
         request_digest="1" * 64,
         engine_id="tributo.ray_data",
-        engine_version="2.55.1",
+        engine_version=RAY_VERSION,
         provider_id="tributo.parquet",
         connector_id="parquet",
         binding_id="tributo.ray.parquet",

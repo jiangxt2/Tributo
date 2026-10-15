@@ -27,6 +27,7 @@ from packaging.utils import (
 )
 from packaging.version import InvalidVersion, Version
 
+from tributo._common.runtime_versions import SUPPORTED_RAY_VERSION
 from tributo._common.version_compatibility import tributo_version_matches
 from tributo.algorithms.api.artifacts import (
     AlgorithmArtifact,
@@ -40,7 +41,6 @@ from tributo.util.annotations import DeveloperAPI
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_RAY_VERSION = "2.55.1"
 DEFAULT_MAX_BUNDLE_SIZE = 4 * 1024 * 1024 * 1024
 _RUNTIME_WORKING_DIR = "${RAY_RUNTIME_ENV_CREATE_WORKING_DIR}"
 _ALLOWED_PIP_INSTALL_OPTIONS = (

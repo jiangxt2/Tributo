@@ -88,6 +88,11 @@ or a validated cluster profile. See the
 [support matrix](../reference/support-matrix.md) and
 [stability inventory](../STABILITY.md) for execution and compatibility scope.
 
+This fixed historical recipe does not certify the Wheel against the current
+development runtime in the [support matrix](../reference/support-matrix.md).
+Use an algorithm package that explicitly declares
+a compatible Ray requirement before selecting that runtime.
+
 ### Build and install the example package
 
 Install uv and an available Python 3.12 interpreter. Run these commands in an

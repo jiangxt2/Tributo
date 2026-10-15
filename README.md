@@ -134,21 +134,31 @@ uv sync --locked --no-dev --extra data --extra data-daft --extra postgresql
 Data sources are opt-in extras where applicable. Install the extra for the
 dialect or backend you use:
 
+The runtime baseline in the [support matrix](docs/reference/support-matrix.md)
+has passed focused local/S3,
+Hive, exact-row coverage and SDK batch prediction gates, plus the full CPU
+runtime image gate on Linux arm64. Other algorithm and platform combinations
+retain their separate validation requirements. Connector extras declare the
+minimum supported stable versions; the versions below describe the exact locked
+test/image environment. Bindings record installed versions and retain
+driver/worker consistency checks.
+
 | Source | Physical reader | Extra | Status |
 |---|---|---|---|
 | Local/S3 Parquet and CSV | Ray Data / Daft public readers | core / `tributo[data-daft]` | Alpha; real dual-engine Conformance |
 | Local/S3 Iceberg and Lance | Ray Data / Daft public readers | `tributo[data,data-daft]` | Alpha; real dual-engine Conformance |
 | PostgreSQL structured table | Ray Data / Daft SQL readers | `tributo[postgresql,data-daft]` | Alpha; real PostgreSQL Conformance |
 | HDFS Parquet/CSV | Ray Data + PyArrow Hadoop filesystem | Ray runtime with HDFS libraries | Adapter present; cluster gate pending |
-| ClickHouse | `ray-clickhouse==1.0` | `tributo[clickhouse]` plus the separately installed Ray package | Adapter only; the connector is available on PyPI but remains outside Tributo's lock and canonical full image; real-database Conformance remains the support gate |
-| Doris | `ray-doris==1.0` / `daft-doris==1.0` | `tributo[mysql]` or `tributo[doris-flight]` | Adapter only; Ray routes require `ray-doris`, Daft routes require `daft-doris`, and real-database Conformance remains the support gate |
-| HiveServer2 structured tables | `ray-hive==1.0` through the built-in Ray Binding | `tributo[hive-ray]` or `uv sync --locked --no-dev --extra hive-ray` | Alpha; real Hive 4.2.0 structured-projection Conformance |
+| ClickHouse | `ray-clickhouse` | `tributo[clickhouse]` | Adapter only; real-database Tributo Conformance remains the support gate |
+| Doris | `ray-doris` / `daft-doris` | `tributo[mysql]` or `tributo[doris-flight]` | Adapter only; Ray routes require `ray-doris`, Daft routes require `daft-doris`, and real-database Conformance remains the support gate |
+| HiveServer2 structured tables | `ray-hive` through the built-in Ray Binding | `tributo[hive-ray]` or `uv sync --locked --no-dev --extra hive-ray` | Alpha; real Hive 4.2.0 structured-projection Conformance |
 | Native ORC files | no built-in reader | — | Unsupported; use an engine or table service that owns ORC decoding |
 
-Provider/binding presence is not a support claim. The canonical full image
-contains the locked v1.0 Doris connector packages, but the
-Ray ClickHouse route requires separately installing `ray-clickhouse==1.0` from
-PyPI; that package remains outside Tributo's lock and canonical full image.
+Provider/binding presence is not a support claim. The canonical full image definition
+uses the pinned Ray image and stable connector packages selected by `uv.lock`.
+The package requirements in `pyproject.toml` declare supported minimums;
+the lock and image checks select the exact validated versions.
+See the [installation requirements](docs/getting-started/installation.md).
 These paths remain adapter-only until their real-database Conformance gates
 pass.
 HDFS still requires its own infrastructure gate. Hive is Ray-only, uses binary

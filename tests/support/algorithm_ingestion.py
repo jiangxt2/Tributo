@@ -7,6 +7,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Literal
 
+from tests.support.runtime_versions import DAFT_VERSION, RAY_VERSION
 from tributo.data import (
     DaftDataFrameHandle,
     IngestionDescriptor,
@@ -142,9 +143,9 @@ class StubIngestionGateway:
             handle_kind=handle_kind,
             deferred_validations=("runtime_connectivity", "worker_versions"),
             binding_distribution=distribution,
-            binding_distribution_version="2.55.1"
+            binding_distribution_version=RAY_VERSION
             if distribution == "ray"
-            else "0.7.23",
+            else DAFT_VERSION,
             capability_version=1,
         )
 
@@ -158,11 +159,11 @@ class StubIngestionGateway:
         descriptor = self.describe(request)
         if descriptor.handle_kind == "ray_data":
             handle = RayDataHandle(StubRayDataset(self.columns))
-            engine_version = "2.55.1"
+            engine_version = RAY_VERSION
         else:
             self.last_daft_frame = StubDaftFrame(self.columns)
             handle = DaftDataFrameHandle(self.last_daft_frame)
-            engine_version = "0.7.23"
+            engine_version = DAFT_VERSION
         receipt = IngestionPlanReceipt(
             request_digest=descriptor.request_digest,
             engine_id=descriptor.engine_id,

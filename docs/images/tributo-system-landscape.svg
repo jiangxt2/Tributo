@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="736" height="860" viewBox="0 0 736 860" role="img" aria-labelledby="title description">
   <title id="title">Tributo system landscape on Ray</title>
-  <desc id="description">Users submit training, vector-index, inference, explainability, and serving workloads through Tributo. Tributo owns portable framework contracts and delegates distributed execution to Ray 2.55.1. Data systems, bundle stores, Lance, and MLflow remain external systems. Platform control-plane capabilities are outside the Tributo boundary.</desc>
+  <desc id="description">Users submit training, vector-index, inference, explainability, and serving workloads through Tributo. Tributo owns portable framework contracts and delegates distributed execution to Ray. Data systems, bundle stores, Lance, and MLflow remain external systems. Platform control-plane capabilities are outside the Tributo boundary.</desc>
   <style>
     :root {
       --canvas: #ffffff;
@@ -199,7 +199,7 @@
 
   <path class="flow" d="M 421 542 V 566"/>
   <rect class="node runtime" x="138" y="568" width="566" height="52" rx="8"/>
-  <text class="strong" x="156" y="600">Ray 2.55.1</text>
+  <text class="strong" x="156" y="600">Ray</text>
   <text x="258" y="600">Jobs</text>
   <text x="324" y="600">Data</text>
   <text x="390" y="600">Train</text>
@@ -275,7 +275,7 @@
     <path class="flow" d="M 368 574 V 586"/>
 
     <rect class="node runtime" x="38" y="588" width="660" height="86" rx="8"/>
-    <text class="strong" x="56" y="625">Ray 2.55.1</text>
+    <text class="strong" x="56" y="625">Ray</text>
     <text x="230" y="625">Jobs · Data · Train · Tune</text>
     <text x="230" y="658">Serve · Tasks / Actors</text>
 

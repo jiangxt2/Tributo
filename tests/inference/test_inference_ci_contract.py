@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from tests.support.runtime_versions import RAY_VERSION
+
 _ROOT = Path(__file__).resolve().parents[2]
 _WORKFLOW = _ROOT / ".github" / "workflows" / "pr-test-suite.yml"
 _MANIFEST = _ROOT / "ci" / "test-suites.json"
@@ -24,11 +26,11 @@ def _inference_suite() -> dict[str, object]:
 def test_inference_it_versions_are_explicit_and_immutable() -> None:
     versions = _VERSIONS.read_text(encoding="utf-8")
 
-    assert "rayproject/ray:2.55.1-py312@sha256:" in versions
+    assert f"rayproject/ray:{RAY_VERSION}-py312@sha256:" in versions
     assert "TRIBUTO_INFERENCE_UV_IMAGE" not in versions
     assert "minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:" in versions
     for expected in (
-        "TRIBUTO_EXPECTED_RAY_VERSION=2.55.1",
+        f"TRIBUTO_EXPECTED_RAY_VERSION={RAY_VERSION}",
         "TRIBUTO_EXPECTED_MLFLOW_VERSION=2.22.5",
         "TRIBUTO_EXPECTED_ONNX_VERSION=1.22.0",
         "TRIBUTO_EXPECTED_ONNXRUNTIME_VERSION=1.28.0",

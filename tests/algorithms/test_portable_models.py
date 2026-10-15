@@ -8,6 +8,7 @@ from typing import Any, Literal, cast
 
 import pytest
 
+from tests.support.runtime_versions import RAY_VERSION
 from tributo.algorithms import AlgorithmBuilder
 from tributo.algorithms.api import (
     AlgorithmConfigurationError,
@@ -285,10 +286,10 @@ def test_portable_registration_rejects_legacy_trainer() -> None:
 def test_environment_normalizes_dependency_order() -> None:
     environment = EnvironmentSpec(
         environment_id="tests.environment",
-        dependencies=("ray==2.55.1", "scikit-learn>=1.4,<2"),
+        dependencies=(f"ray=={RAY_VERSION}", "scikit-learn>=1.4,<2"),
     )
     assert environment.dependencies == (
-        "ray==2.55.1",
+        f"ray=={RAY_VERSION}",
         "scikit-learn<2,>=1.4",
     )
     assert json.dumps(environment.dependencies)

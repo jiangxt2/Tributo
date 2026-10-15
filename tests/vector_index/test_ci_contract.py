@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from tests.support.runtime_versions import RAY_VERSION
 from tools import tributo_it
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -63,33 +64,36 @@ def test_vector_gate_reuses_the_owned_ray_minio_lifecycle() -> None:
 
 def test_vector_runtime_is_exactly_versioned_in_the_shared_profile() -> None:
     dockerfile = _DOCKERFILE.read_text(encoding="utf-8")
-    profile = json.loads(_PROFILE.read_text(encoding="utf-8"))["profiles"][
-        "data-ingestion"
-    ]
+    profile = tributo_it.load_profile("data-ingestion").definition
     assert "vector-index" in profile["extras"]
     assert profile["version_contract"] == {
         "daft_prefix": "0.7.",
-        "daft_doris": "1.0",
+        "daft_doris": "1.1",
         "lance_ray": "0.5.0",
         "pyarrow": "19.0.1",
         "pylance": "9.0.0",
-        "ray": "2.55.1",
-        "ray_doris": "1.0",
-        "ray_hive": "1.0",
-        "ray_clickhouse": "1.0",
-        "thrift": "0.16.0",
+        "ray": RAY_VERSION,
+        "ray_doris": "1.3",
+        "ray_hive": "1.2",
+        "ray_clickhouse": "1.1",
+        "thrift": "0.22.0",
     }
     assert profile["dependency_mode"] == "host-uv-export"
     assert "COPY --from=locked-requirements" in dockerfile
     assert "python -m pip install --require-hashes" in dockerfile
-    assert "m.version('pylance') == '9.0.0'" in dockerfile
-    assert "m.version('lance-ray') == '0.5.0'" in dockerfile
-    assert "m.version('pyarrow') == '19.0.1'" in dockerfile
-    assert "m.version('daft-doris') == '1.0'" in dockerfile
-    assert "m.version('ray-doris') == '1.0'" in dockerfile
-    assert "m.version('ray-hive') == '1.0'" in dockerfile
-    assert "m.version('ray-clickhouse') == '1.0'" in dockerfile
-    assert "m.version('thrift') == '0.16.0'" in dockerfile
+    assert "runtime-version-check.py" in dockerfile
+    identity = tributo_it.RuntimeIdentity(
+        profile=tributo_it.load_profile("data-ingestion"),
+        platform="linux/arm64",
+        runtime_key="test",
+        lock_sha256="a" * 64,
+        contract_sha256="b" * 64,
+        local_tag="test:1",
+    )
+    code = tributo_it._version_check_code(identity)
+    for name, version in profile["version_contract"].items():
+        if name != "daft_prefix":
+            assert repr(version) in code
 
 
 def test_vector_project_names_are_scoped_and_cli_dispatches(monkeypatch) -> None:

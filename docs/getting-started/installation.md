@@ -21,6 +21,19 @@ metadata, and lock file from that revision. The development version does not
 determine which patch or minor release will be published next.
 The optional profiles below describe this documentation's source tree.
 
+The development source targets Ray 2.59.0 and Daft 0.7.26. Connector extras
+declare minimum stable versions: `ray-doris>=1.3`, `ray-hive>=1.2`,
+`ray-clickhouse>=1.1`, and `daft-doris>=1.1`. These packages are available on
+PyPI. The committed `uv.lock` selects their exact versions and hashes for the
+development, CI, and image environment. Use the locked `uv sync` commands
+below to reproduce that environment.
+
+Bindings record installed versions and retain driver/worker consistency checks.
+Each connector maintains its own Ray or Daft compatibility requirements. The
+minimums describe supported starting versions, not an automatic promise that
+every newer connector release has been validated. New releases do not
+automatically raise the minimums or update the lock.
+
 For an independently built algorithm package, use a reviewed Core/Wheel
 combination. The [fixed-source boosting recipe](../algorithms/getting-started.md#build-and-install-the-example-package)
 builds Core and the algorithm Wheel from explicit public revisions. It does
@@ -44,7 +57,7 @@ Pydantic, ONNX Runtime, PyArrow, pandas, and S3 filesystem support.
 | Daft ingestion | `uv sync --locked --no-dev --extra data --extra data-daft` |
 | HiveServer2 via Ray Data connector package | `uv sync --locked --no-dev --extra hive-ray` |
 | PostgreSQL ingestion | `uv sync --locked --no-dev --extra postgresql` |
-| ClickHouse via Ray Data | `uv sync --locked --no-dev --extra clickhouse`, then `uv pip install --python .venv/bin/python ray-clickhouse==1.0` |
+| ClickHouse via Ray Data | `uv sync --locked --no-dev --extra clickhouse` |
 | Doris via Daft/Ray Data | `uv sync --locked --no-dev --extra mysql` |
 | Doris Flight via Daft/Ray Data | `uv sync --locked --no-dev --extra doris-flight` |
 | Training data, export, and storage profile | `uv sync --locked --no-dev --extra training` |
@@ -64,13 +77,12 @@ An extra installs dependencies. It does not turn a protocol, adapter, or
 reserved problem type into a verified implementation. Check the
 [support matrix](../reference/support-matrix.md) before deployment. Ray Tune
 itself is included by the core Ray dependency; the `tune` extra adds the
-optional BayesOpt search implementation. The `clickhouse` extra installs the
-shared ClickHouse driver dependency. ClickHouse reads use the Ray route, which
-additionally requires the separately installed `ray-clickhouse==1.0` package
-from PyPI; this connector remains outside the Tributo lockfile. `mysql`
-installs `daft-doris==1.0` and
-`ray-doris==1.0` for their explicit engine routes, while `doris-flight` adds
-their Flight dependencies. The `hive-ray` extra installs `ray-hive==1.0` for
+optional BayesOpt search implementation. In this locked checkout, the `clickhouse` extra installs the
+shared ClickHouse driver and locked `ray-clickhouse==1.1` for the
+explicit Ray read/write route. `mysql`
+installs `daft-doris==1.1` and
+`ray-doris==1.3` for their explicit engine routes, while `doris-flight` adds
+their Flight dependencies. The `hive-ray` extra installs `ray-hive==1.2` for
 the built-in Ray-only HiveServer2 Provider/Binding route. This does not add
 Daft Hive, native ORC/HDFS access, raw SQL, or Hive writes.
 

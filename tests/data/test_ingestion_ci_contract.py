@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 import json
+import platform
+import shlex
+import subprocess
+import sys
 from pathlib import Path
 
+import pytest
+
 from tests.support.it_versions import load_it_component_versions
+from tools.tributo_it import load_profile
 
 _ROOT = Path(__file__).resolve().parents[2]
 _WORKFLOW = _ROOT / ".github" / "workflows" / "pr-test-suite.yml"
@@ -85,9 +92,7 @@ def test_distributed_ingestion_runs_from_the_project_import_root() -> None:
 def test_distributed_ingestion_image_uses_locked_project_dependencies() -> None:
     dockerfile = _DOCKERFILE.read_text(encoding="utf-8")
     versions = load_it_component_versions()
-    profile = json.loads(_PROFILE.read_text(encoding="utf-8"))["profiles"][
-        "data-ingestion"
-    ]
+    profile = load_profile("data-ingestion").definition
 
     assert versions["RAY_IMAGE"].startswith(
         f"rayproject/ray:{versions['RAY_VERSION']}-py312@sha256:"
@@ -110,6 +115,148 @@ def test_distributed_ingestion_image_uses_locked_project_dependencies() -> None:
     assert "COPY --chown=ray:users ." not in dockerfile
     assert "src/" not in dockerfile
     assert "tests/" not in dockerfile
+
+
+_ARM64_PIP_CHECK_BASELINE = (
+    "nvidia-cusparselt-cu13 0.8.1 is not supported on this platform"
+)
+
+
+@pytest.mark.parametrize(
+    ("system", "machine", "returncode", "stdout", "stderr", "expected"),
+    [
+        pytest.param(
+            "Linux",
+            "aarch64",
+            0,
+            "No broken requirements found.\n",
+            "",
+            0,
+            id="healthy-arm64",
+        ),
+        pytest.param(
+            "Linux",
+            "x86_64",
+            0,
+            "No broken requirements found.\n",
+            "",
+            0,
+            id="healthy-amd64",
+        ),
+        pytest.param(
+            "Linux",
+            "aarch64",
+            1,
+            _ARM64_PIP_CHECK_BASELINE + "\n",
+            "",
+            0,
+            id="exact-arm64-baseline",
+        ),
+        pytest.param(
+            "Linux",
+            "aarch64",
+            1,
+            "",
+            _ARM64_PIP_CHECK_BASELINE + "\n",
+            0,
+            id="exact-baseline-on-stderr",
+        ),
+        pytest.param(
+            "Linux",
+            "x86_64",
+            1,
+            _ARM64_PIP_CHECK_BASELINE,
+            "",
+            1,
+            id="reject-baseline-on-amd64",
+        ),
+        pytest.param(
+            "Darwin",
+            "aarch64",
+            1,
+            _ARM64_PIP_CHECK_BASELINE,
+            "",
+            1,
+            id="reject-baseline-outside-linux",
+        ),
+        pytest.param(
+            "Linux",
+            "aarch64",
+            1,
+            "another-package has a broken dependency",
+            "",
+            1,
+            id="reject-other-error",
+        ),
+        pytest.param(
+            "Linux",
+            "aarch64",
+            1,
+            _ARM64_PIP_CHECK_BASELINE + "\nother-package has a broken dependency",
+            "",
+            1,
+            id="reject-additional-error",
+        ),
+        pytest.param(
+            "Linux",
+            "aarch64",
+            1,
+            _ARM64_PIP_CHECK_BASELINE + "\n",
+            "another error\n",
+            1,
+            id="reject-additional-stderr",
+        ),
+        pytest.param(
+            "Linux",
+            "aarch64",
+            1,
+            _ARM64_PIP_CHECK_BASELINE.replace("0.8.1", "0.8.2"),
+            "",
+            1,
+            id="reject-other-version",
+        ),
+        pytest.param(
+            "Linux",
+            "aarch64",
+            2,
+            _ARM64_PIP_CHECK_BASELINE,
+            "",
+            1,
+            id="reject-abnormal-exit-code",
+        ),
+        pytest.param("Linux", "aarch64", 1, "", "", 1, id="reject-empty-error-output"),
+    ],
+)
+def test_data_image_pip_check_accepts_only_the_exact_arm64_exception(
+    monkeypatch: pytest.MonkeyPatch,
+    system: str,
+    machine: str,
+    returncode: int,
+    stdout: str,
+    stderr: str,
+    expected: int,
+) -> None:
+    dockerfile = _DOCKERFILE.read_text(encoding="utf-8").replace("\\\n", " ")
+    install_run = next(
+        line for line in dockerfile.splitlines() if line.startswith("RUN --mount=")
+    )
+    args = shlex.split(install_run)
+    code = args[args.index("-c") + 1]
+
+    def fake_pip_check(
+        command: list[str], *, capture_output: bool, text: bool
+    ) -> subprocess.CompletedProcess[str]:
+        assert command == [sys.executable, "-m", "pip", "check"]
+        assert capture_output and text
+        return subprocess.CompletedProcess(command, returncode, stdout, stderr)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(platform, "system", lambda: system)
+        patch.setattr(platform, "machine", lambda: machine)
+        patch.setattr(subprocess, "run", fake_pip_check)
+        with pytest.raises(SystemExit) as exc_info:
+            exec(code, {})
+    assert exc_info.value.code == expected
 
 
 def test_runtime_prepare_is_content_addressed_and_never_uses_compose_build() -> None:

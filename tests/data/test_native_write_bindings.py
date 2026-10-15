@@ -90,13 +90,22 @@ def test_clickhouse_binding_declares_append_only_native_contract() -> None:
     assert descriptor.capabilities.supports_empty_input is True
 
 
-def test_clickhouse_binding_requires_the_supported_connector_version(
+@pytest.mark.parametrize("version", ["1.0", "1.4", "1.4.dev0"])
+def test_clickhouse_binding_accepts_installed_connector_versions(
     monkeypatch: pytest.MonkeyPatch,
+    version: str,
 ) -> None:
-    monkeypatch.setattr(importlib.metadata, "version", lambda _name: "1.0")
+    monkeypatch.setattr(importlib.metadata, "version", lambda _name: version)
     assert RayClickHouseWriteBinding.is_available() is True
 
-    monkeypatch.setattr(importlib.metadata, "version", lambda _name: "0.1.0")
+
+def test_clickhouse_binding_requires_installed_connector(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def missing(name: str) -> str:
+        raise importlib.metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(importlib.metadata, "version", missing)
     assert RayClickHouseWriteBinding.is_available() is False
 
 

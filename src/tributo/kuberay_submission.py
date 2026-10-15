@@ -19,6 +19,7 @@ from typing import Any, Literal
 from pydantic import Field, field_validator, model_validator
 
 from tributo._common.config import StrictConfigModel
+from tributo._common.runtime_versions import SUPPORTED_RAY_VERSION
 from tributo._common.submission_id import generate_submission_id
 from tributo.exceptions import (
     JobConfigurationError,
@@ -189,7 +190,7 @@ class KubeRayDeploymentConfig(StrictConfigModel):
     namespace: str = "default"
     image: str = Field(min_length=1)
     worker_image: str | None = None
-    ray_version: str = Field(default="2.55.1", min_length=1)
+    ray_version: str = Field(default=SUPPORTED_RAY_VERSION, min_length=1)
     head_num_cpus: float = Field(default=1, gt=0)
     head_memory_bytes: int = Field(default=_BYTES_PER_GIB, gt=0)
     head_num_gpus: float = Field(default=0, ge=0)

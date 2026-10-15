@@ -36,6 +36,7 @@ import pyarrow.fs as pafs
 import pyarrow.parquet as pq
 import ray
 
+from tests.support.runtime_versions import RAY_VERSION
 from tributo.inference.contracts import (
     LanceResultSinkRequest,
     LanceVectorColumnSpec,
@@ -116,7 +117,7 @@ def _configure_cluster() -> None:
     assert all(
         item
         == {
-            "ray": "2.55.1",
+            "ray": RAY_VERSION,
             "pylance": "9.0.0",
             "lance-ray": "0.5.0",
             "pyarrow": "19.0.1",

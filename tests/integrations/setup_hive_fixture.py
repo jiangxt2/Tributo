@@ -100,7 +100,7 @@ def load_fixture(script: Path, *, host: str, port: int) -> None:
         raise RuntimeError("HiveServer2 fixture session was not established")
     try:
         # ray-hive has no public DDL fixture API; this test-only initializer is
-        # pinned to ray-hive==1.0 and does not participate in production reads.
+        # pinned to ray-hive==1.2 and does not participate in production reads.
         execute_statements(
             rpc.client,
             session,

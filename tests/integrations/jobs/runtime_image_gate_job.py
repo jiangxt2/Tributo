@@ -13,6 +13,7 @@ from pathlib import Path
 
 import ray
 
+from tests.support.runtime_versions import RAY_VERSION
 from tools.runtime_image_contract import (
     REQUIRED_DISTRIBUTION_VERSIONS,
     REQUIRED_DISTRIBUTIONS,
@@ -52,7 +53,7 @@ def main() -> None:
         "linux/arm64": "aarch64",
     }[os.environ["TRIBUTO_RUNTIME_PLATFORM"]]
     assert platform.machine() == expected_machine
-    assert importlib.metadata.version("ray") == "2.55.1"
+    assert importlib.metadata.version("ray") == RAY_VERSION
     assert importlib.metadata.version("tributo") == expected_tributo_version
     for name in REQUIRED_DISTRIBUTIONS:
         importlib.metadata.version(name)
@@ -67,12 +68,12 @@ def main() -> None:
         assert worker_result == {
             "python": "3.12",
             "machine": expected_machine,
-            "ray": "2.55.1",
+            "ray": RAY_VERSION,
             "tributo": expected_tributo_version,
-            "ray-hive": "1.0",
-            "daft-doris": "1.0",
-            "ray-doris": "1.0",
-            "thrift": "0.16.0",
+            "ray-hive": REQUIRED_DISTRIBUTION_VERSIONS["ray-hive"],
+            "daft-doris": REQUIRED_DISTRIBUTION_VERSIONS["daft-doris"],
+            "ray-doris": REQUIRED_DISTRIBUTION_VERSIONS["ray-doris"],
+            "thrift": REQUIRED_DISTRIBUTION_VERSIONS["thrift"],
         }
         dataset = ray.data.from_items([{"value": 1}, {"value": 2}])
         assert dataset.count() == 2

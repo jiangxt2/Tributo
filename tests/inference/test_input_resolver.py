@@ -6,6 +6,7 @@ from collections.abc import Callable
 
 import pytest
 
+from tests.support.runtime_versions import RAY_VERSION
 from tributo.data import (
     DaftDataFrameHandle,
     IngestionDescriptor,
@@ -58,7 +59,7 @@ def _receipt(descriptor: IngestionDescriptor) -> IngestionPlanReceipt:
     return IngestionPlanReceipt(
         request_digest=descriptor.request_digest,
         engine_id=descriptor.engine_id,
-        engine_version="2.55.1",
+        engine_version=RAY_VERSION,
         provider_id=descriptor.provider_id,
         connector_id=descriptor.connector_id,
         binding_id=descriptor.binding_id,

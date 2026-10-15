@@ -13,6 +13,7 @@ from typing import Any, cast
 import pytest
 from ray.job_submission import JobStatus, JobSubmissionClient
 
+from tests.support.runtime_versions import RAY_VERSION
 from tributo._common import DEFAULT_DASHBOARD_URL, build_runtime_env
 from tributo.algorithms import AlgorithmArtifact, ImageProfile
 from tributo.training import wait_for_job
@@ -88,7 +89,7 @@ def _algorithm_image_profile() -> ImageProfile:
         digest = digest.removeprefix("sha256:")
     return ImageProfile(
         profile_id="data-ingestion.cpu.v1",
-        image_uri=os.environ.get("TRIBUTO_IT_RUNTIME_IMAGE", "ray:2.55.1"),
+        image_uri=os.environ.get("TRIBUTO_IT_RUNTIME_IMAGE", f"ray:{RAY_VERSION}"),
         image_digest=digest,
         wheel_tags=("py3-none-any",),
         installed_distributions={"pip": "24.3.1"},

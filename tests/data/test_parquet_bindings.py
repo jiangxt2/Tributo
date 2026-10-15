@@ -7,6 +7,7 @@ from typing import Any
 import pyarrow as pa
 import pytest
 
+from tests.support.runtime_versions import DAFT_VERSION, RAY_VERSION
 from tributo._common.storage_profiles import StorageProfile
 from tributo.data.bindings import (
     _daft_parquet_descriptor,
@@ -113,7 +114,7 @@ def test_ray_binding_calls_public_reader_with_native_projection(
     monkeypatch.setattr("ray.data.read_parquet", read_parquet)
     monkeypatch.setattr(
         "tributo.data.bindings.ray_parquet.importlib.metadata.version",
-        lambda name: "2.55.1",
+        lambda name: RAY_VERSION,
     )
 
     result = RayParquetBinding().compile(
@@ -146,7 +147,7 @@ def test_ray_s3_binding_only_maps_filesystem_parameters(
     )
     monkeypatch.setattr(
         "tributo.data.bindings.ray_parquet.importlib.metadata.version",
-        lambda name: "2.55.1",
+        lambda name: RAY_VERSION,
     )
 
     RayParquetBinding().compile(
@@ -178,7 +179,7 @@ def test_ray_s3_binding_resolves_shared_storage_profile(
     monkeypatch.setattr("ray.data.read_parquet", lambda *args, **kwargs: _RayDataset())
     monkeypatch.setattr(
         "tributo.data.bindings.ray_parquet.importlib.metadata.version",
-        lambda name: "2.55.1",
+        lambda name: RAY_VERSION,
     )
 
     RayParquetBinding().compile(
@@ -222,7 +223,7 @@ def test_daft_binding_calls_public_reader_and_keeps_native_handle(
     monkeypatch.setattr("daft.read_parquet", read_parquet)
     monkeypatch.setattr(
         "tributo.data.bindings.daft_parquet.importlib.metadata.version",
-        lambda name: "0.7.23",
+        lambda name: DAFT_VERSION,
     )
 
     result = DaftParquetBinding().compile(_request())

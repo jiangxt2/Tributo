@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 from click.testing import CliRunner
 
+from tests.support.runtime_versions import RAY_VERSION
 from tributo.cli import main as cli_main
 from tributo.vector_index.contracts import (
     CoverageStatus,
@@ -61,7 +62,7 @@ def _build_job(tmp_path) -> VectorBuildJobRequest:
 
 def _runtime() -> RuntimeVersionEvidence:
     return RuntimeVersionEvidence(
-        ray="2.55.1",
+        ray=RAY_VERSION,
         pylance="9.0.0",
         lance_ray="0.5.0",
         pyarrow="19.0.1",

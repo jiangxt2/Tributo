@@ -123,9 +123,10 @@ is satisfied.
 
 ## Read a ClickHouse table with Ray Data
 
-Install `ray-clickhouse==1.0` from PyPI in the same environment as
-`tributo[clickhouse]`, then select Ray explicitly. The package is not part of
-the Tributo lockfile or canonical full image.
+Run `uv sync --locked --no-dev --extra clickhouse` in the source checkout,
+then select Ray explicitly. The lock selects the stable version
+`ray-clickhouse==1.1`; see the installation requirements in the
+[installation guide](../../getting-started/installation.md).
 
 ```python
 from tributo.data import (

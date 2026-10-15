@@ -3,17 +3,23 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from packaging.markers import default_environment
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
 
+from tests.support.runtime_versions import RAY_VERSION
 from tools.build_tributo_image import (
     BASE_IMAGE,
     BASE_IMAGE_MIRROR,
     DOCKERFILE,
     PLATFORM_AUTO,
+    PYTHON_VERSION,
     RUNTIME_EXTRAS,
     UV_VERSION,
     HostDependencyExport,
@@ -52,10 +58,58 @@ def test_full_runtime_config_is_pinned_and_complete() -> None:
     assert config.external_wheelhouse is None
 
 
+def test_locked_production_export_covers_required_distributions() -> None:
+    config = load_config(CONFIG, root=ROOT)
+    command = [
+        "uv",
+        "export",
+        "--locked",
+        "--offline",
+        "--no-emit-project",
+        "--no-default-groups",
+        "--no-annotate",
+        "--no-header",
+    ]
+    for extra in config.runtime_extras:
+        command.extend(("--extra", extra))
+    exported = subprocess.run(
+        command, cwd=ROOT, check=True, capture_output=True, text=True, timeout=60
+    ).stdout
+    requirements = [
+        Requirement(line.split("--hash=", 1)[0].strip())
+        for line in exported.replace("\\\n", "").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    project_name = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))[
+        "project"
+    ]["name"]
+    required = {canonicalize_name(name) for name in REQUIRED_DISTRIBUTIONS}
+    assert "test-integration" not in config.runtime_extras
+    assert "--hash=sha256:" in exported
+    for machine in ("aarch64", "x86_64"):
+        environment = default_environment()
+        environment.update(
+            sys_platform="linux",
+            platform_system="Linux",
+            platform_machine=machine,
+            python_version=PYTHON_VERSION,
+            python_full_version=f"{PYTHON_VERSION}.0",
+            extra="",
+        )
+        available = {
+            canonicalize_name(requirement.name)
+            for requirement in requirements
+            if requirement.marker is None or requirement.marker.evaluate(environment)
+        }
+        # Core itself is installed from the separately built project Wheel.
+        available.add(canonicalize_name(project_name))
+        assert not (missing := required - available), (machine, sorted(missing))
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("base_image", "rayproject/ray:2.55.1-py312"),
+        ("base_image", f"rayproject/ray:{RAY_VERSION}-py312"),
         ("uv_version", "0.11.22"),
         ("platform", "linux/ppc64le"),
     ],
@@ -166,6 +220,7 @@ def test_build_command_is_shell_free_and_uses_named_context() -> None:
     assert f"BASE_IMAGE={local_base_image(config.platform)}" in command
     assert not any("UV_IMAGE=" in value for value in command)
     assert f"TRIBUTO_BASE_IMAGE={BASE_IMAGE}" in command
+    assert f"TRIBUTO_RAY_VERSION={RAY_VERSION}" in command
     assert f"TRIBUTO_PLATFORM={config.platform}" in command
     assert f"TRIBUTO_RUNTIME_EXTRAS={','.join(RUNTIME_EXTRAS)}" in command
     expected_version = tomllib.loads(
@@ -300,13 +355,13 @@ def test_build_image_seals_dependency_closure_without_docker(
     distributions = {
         "bayesian-optimization": "1.4.3",
         "pip": "25.0",
-        "ray": "2.55.1",
+        "ray": RAY_VERSION,
         "tributo": "1.0.0",
     }
     monkeypatch.setattr("tools.build_tributo_image._build_once", fake_build_once)
     dependency_export = HostDependencyExport(
         uv_version="0.12.5",
-        content=b"ray==2.55.1 --hash=sha256:" + b"a" * 64 + b"\n",
+        content=f"ray=={RAY_VERSION} --hash=sha256:".encode() + b"a" * 64 + b"\n",
         sha256="a" * 64,
     )
     monkeypatch.setattr(
@@ -341,7 +396,7 @@ def test_manifest_core_contains_alpha_and_runtime_closure() -> None:
             content=b"requirements",
             sha256="a" * 64,
         ),
-        distributions={"ray": "2.55.1"},
+        distributions={"ray": RAY_VERSION},
         external_wheels=[],
     )
 
@@ -356,8 +411,8 @@ def test_manifest_core_contains_alpha_and_runtime_closure() -> None:
     assert "torch_geometric" in core["required_imports"]
     assert "ray_hive" in core["required_imports"]
     assert "bayesian-optimization" in core["required_distributions"]
-    assert core["required_distribution_versions"]["ray-hive"] == "1.0"
-    assert core["required_distribution_versions"]["thrift"] == "0.16.0"
+    assert core["required_distribution_versions"]["ray-hive"] == "1.2"
+    assert core["required_distribution_versions"]["thrift"] == "0.22.0"
     assert core["pip_check_baseline"] == list(pip_check_baseline(config.platform))
     assert core["image_sources"]["base_image"]["mirror"] == BASE_IMAGE_MIRROR
     assert core["dependency_mode"] == "host-uv-export"

@@ -24,7 +24,7 @@ classifiers = [
 dependencies = [
     "requests>=2.33.0",
     "aiohttp>=3.13.4",
-    "ray[default,serve,tune]==2.55.1",
+    "ray[default,serve,tune]==2.59.0",
     "pydantic>=2.0.0",
     "packaging>=24.0",
     "click>=8.0.0",
@@ -59,10 +59,10 @@ data = [
     "pylance==9.0.0",
 ]
 data-daft = [
-    "daft[lance,ray]>=0.7.23,<0.7.24",
+    "daft[lance,ray]>=0.7.26,<0.7.27",
 ]
 hive-ray = [
-    "ray-hive==1.0",
+    "ray-hive>=1.2",
 ]
 vector-index = [
     "tributo[data,s3]",
@@ -78,18 +78,19 @@ postgresql = [
 ]
 clickhouse = [
     "clickhouse-connect[arrow,async]>=1.5,<1.6",
+    "ray-clickhouse>=1.1",
 ]
 mysql = [
     "PyMySQL>=1.2,<1.3",
-    "daft-doris[doris]==1.0",
-    "ray-doris==1.0",
+    "daft-doris[doris]>=1.1",
+    "ray-doris>=1.3",
 ]
 doris-flight = [
     "PyMySQL>=1.2,<1.3",
     "adbc-driver-manager>=1.6,<2",
     "adbc-driver-flightsql>=1.6,<2",
-    "daft-doris[doris-flight]==1.0",
-    "ray-doris[flight]==1.0",
+    "daft-doris[doris-flight]>=1.1",
+    "ray-doris[flight]>=1.3",
 ]
 s3 = [
     "boto3>=1.42.91",
@@ -342,7 +343,7 @@ dev = [
     "redis>=8.0.0",
     "mypy>=2.3.0",
     "clickhouse-connect[arrow,async]>=1.5,<1.6",
-    "daft>=0.7.23,<0.7.24",
+    "daft>=0.7.26,<0.7.27",
     "ml-dtypes>=0.5.0",
     "skl2onnx>=1.17.0",
 ]

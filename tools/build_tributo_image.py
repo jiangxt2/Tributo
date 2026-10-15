@@ -41,9 +41,15 @@ from tools.host_uv_export import (  # noqa: E402
     export_locked_requirements,
 )
 from tools.runtime_image_contract import (  # noqa: E402
+    BASE_IMAGE,
+    BASE_IMAGE_MIRROR,
+    LOCAL_BASE_IMAGE,
+    PYTHON_VERSION,
+    RAY_VERSION,
     REQUIRED_DISTRIBUTION_VERSIONS,
     REQUIRED_DISTRIBUTIONS,
     REQUIRED_IMPORTS,
+    UV_VERSION,
 )
 
 try:
@@ -56,20 +62,8 @@ except ModuleNotFoundError:  # pragma: no cover - direct source checkout fallbac
 
 
 DOCKERFILE = ROOT / "docker" / "tributo-runtime" / "Dockerfile"
-BASE_IMAGE = (
-    "rayproject/ray:2.55.1-py312@"
-    "sha256:911245f2478ad2e9f67ac13978dc2a75bcae0498b9f188b10bba703324b78379"
-)
-BASE_IMAGE_MIRROR = (
-    "docker.m.daocloud.io/rayproject/ray:2.55.1-py312@"
-    "sha256:911245f2478ad2e9f67ac13978dc2a75bcae0498b9f188b10bba703324b78379"
-)
-LOCAL_BASE_IMAGE = "tributo-ray-base:2.55.1-py312"
-UV_VERSION = "0.11.23"
 PLATFORM_AUTO = "auto"
 SUPPORTED_PLATFORMS = ("linux/amd64", "linux/arm64")
-RAY_VERSION = "2.55.1"
-PYTHON_VERSION = "3.12"
 PYTHON_SPEC = ">=3.12,<3.14"
 PROFILE_ID = "tributo.runtime.full"
 IMAGE_DIGEST = re.compile(r"^[0-9a-f]{64}$")
@@ -433,6 +427,8 @@ def build_command(
         "--build-arg",
         f"TRIBUTO_BASE_IMAGE={config.base_image}",
         "--build-arg",
+        f"TRIBUTO_RAY_VERSION={RAY_VERSION}",
+        "--build-arg",
         f"TRIBUTO_PLATFORM={config.platform}",
         "--build-arg",
         f"TRIBUTO_MANIFEST_SHA256={manifest_sha256}",
@@ -628,7 +624,7 @@ def _prepare_pinned_images(
     *,
     log: _CommandLog | None = None,
 ) -> None:
-    """Prepare both digest-pinned image inputs without using the host proxy."""
+    """Prepare the digest-pinned Ray base image without using the host proxy."""
     _prepare_pinned_image(
         mirror=config.base_image_mirror,
         canonical=config.base_image,

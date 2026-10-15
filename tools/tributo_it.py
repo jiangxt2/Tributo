@@ -40,6 +40,11 @@ from tools.host_uv_export import (  # noqa: E402
     HostUVExportError,
     export_locked_requirements,
 )
+from tools.runtime_image_contract import (  # noqa: E402
+    LOCAL_BASE_IMAGE,
+    load_image_inputs,
+    locked_versions,
+)
 
 COMPOSE_FILE = ROOT / "tests" / "integrations" / "docker-compose.data-ingestion.yml"
 DEFAULT_LOCK_TIMEOUT_SECONDS = 3600.0
@@ -86,7 +91,7 @@ PROJECT_PREFIXES = frozenset(
     {"tributo-ingestion", "tributo-lance-vector", "tributo-hdfs-ingestion"}
 )
 DIGEST_REFERENCE_PATTERN = re.compile(r"^.+:[^/@]+@sha256:[0-9a-f]{64}$")
-LOCAL_RUNTIME_BASE_IMAGE = "tributo-ray-base:2.55.1-py312"
+LOCAL_RUNTIME_BASE_IMAGE = LOCAL_BASE_IMAGE
 LOCAL_RUNTIME_UV_IMAGE = "tributo-uv:0.11.23"
 HOST_UV_EXPORT_MODE = "host-uv-export"
 UV_IMAGE_MODE = "uv-image"
@@ -298,6 +303,46 @@ def load_profile(
     if not isinstance(profiles, dict) or name not in profiles:
         raise TributoITError(f"runtime profile {name!r} is not defined in {path}")
     definition = profiles[name]
+    if not isinstance(definition, dict):
+        raise TributoITError(f"runtime profile {name!r} must be an object")
+    definition = dict(definition)
+    shared_inputs = payload.get("shared_image_inputs", False)
+    if not isinstance(shared_inputs, bool):
+        raise TributoITError("shared_image_inputs must be a boolean")
+    if shared_inputs:
+        try:
+            inputs = load_image_inputs(root)
+        except (OSError, ValueError, KeyError) as exc:
+            raise TributoITError("cannot load shared runtime image inputs") from exc
+        definition = {
+            "base_image": inputs["base_image"],
+            "base_image_mirror": inputs["base_image_mirror"],
+            "uv_version": inputs["uv_version"],
+            "python_version": inputs["python_version"],
+            **definition,
+        }
+    selected_versions = definition.pop("locked_version_contract", [])
+    if not isinstance(selected_versions, list) or any(
+        not isinstance(item, str) for item in selected_versions
+    ):
+        raise TributoITError("locked_version_contract must be a distribution-name list")
+    if len(set(selected_versions)) != len(selected_versions):
+        raise TributoITError("locked_version_contract must not contain duplicates")
+    if selected_versions:
+        contract = definition.get("version_contract")
+        if not isinstance(contract, dict):
+            raise TributoITError("version_contract must be an object")
+        contract = dict(contract)
+        try:
+            selected = locked_versions(selected_versions, root)
+        except (OSError, ValueError, KeyError) as exc:
+            raise TributoITError("cannot resolve the locked version contract") from exc
+        for distribution, version in selected.items():
+            key = distribution.replace("-", "_")
+            if key in contract:
+                raise TributoITError(f"duplicate version contract for {distribution!r}")
+            contract[key] = version
+        definition["version_contract"] = contract
     required = {
         "base_image",
         "dockerfile",
@@ -587,6 +632,7 @@ def _version_check_code(identity: RuntimeIdentity) -> str:
         ("pylance", "pylance"),
         ("lance_ray", "lance-ray"),
         ("pyarrow", "pyarrow"),
+        ("pyiceberg", "pyiceberg"),
         ("ray_hive", "ray-hive"),
         ("ray_clickhouse", "ray-clickhouse"),
         ("daft_doris", "daft-doris"),
@@ -995,6 +1041,8 @@ def _build_runtime(
             str(metadata_file),
             "--build-arg",
             f"BASE_IMAGE={base_image}",
+            "--build-arg",
+            f"TRIBUTO_RAY_VERSION={identity.profile.version_contract['ray']}",
             "--build-context",
             f"external-wheelhouse={wheelhouse}",
         ]
@@ -1006,6 +1054,9 @@ def _build_runtime(
             requirements_path = Path(requirements_context.name) / "requirements.txt"
             requirements_path.write_bytes(identity.requirements_content)
             requirements_path.chmod(0o600)
+            (requirements_path.parent / "runtime-version-check.py").write_text(
+                _version_check_code(identity), encoding="utf-8"
+            )
             command.extend(
                 (
                     "--build-context",

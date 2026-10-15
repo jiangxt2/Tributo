@@ -8,6 +8,7 @@ from subprocess import CompletedProcess
 
 import pytest
 
+from tests.support.runtime_versions import RAY_VERSION
 from tools.host_uv_export import HostUVExportError, export_locked_requirements
 
 
@@ -39,7 +40,7 @@ def test_export_locked_requirements_is_hashed_and_lock_stable(
 ) -> None:
     lock = tmp_path / "uv.lock"
     lock.write_bytes(b"locked")
-    content = b"ray==2.55.1 --hash=sha256:" + b"a" * 64 + b"\n"
+    content = f"ray=={RAY_VERSION} --hash=sha256:".encode() + b"a" * 64 + b"\n"
     commands, run = _runner_factory(tmp_path, content=content)
     monkeypatch.setattr(
         "tools.host_uv_export.shutil.which", lambda _name: "/usr/bin/uv"
@@ -62,13 +63,38 @@ def test_export_locked_requirements_is_hashed_and_lock_stable(
     assert export_command[second_extra + 1] == "training"
 
 
+def test_export_locked_requirements_accepts_hashed_source_archives(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "uv.lock").write_bytes(b"locked")
+    content = (
+        b"ray-clickhouse @ https://github.com/jiangxt2/ray-clickhouse/archive/"
+        b"857ef213e2579d9fff144ffaf3f0de359bd8d8bc.tar.gz --hash=sha256:"
+        + b"a" * 64
+        + b"\n"
+    )
+    _commands, run = _runner_factory(tmp_path, content=content)
+    monkeypatch.setattr(
+        "tools.host_uv_export.shutil.which", lambda _name: "/usr/bin/uv"
+    )
+
+    exported = export_locked_requirements(
+        root=tmp_path,
+        extras=("clickhouse",),
+        baseline_uv_version="0.11.23",
+        run=run,
+    )
+
+    assert exported.content == content
+
+
 def test_export_locked_requirements_rejects_lock_mutation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     (tmp_path / "uv.lock").write_bytes(b"locked")
     _commands, run = _runner_factory(
         tmp_path,
-        content=b"ray==2.55.1 --hash=sha256:" + b"a" * 64 + b"\n",
+        content=f"ray=={RAY_VERSION} --hash=sha256:".encode() + b"a" * 64 + b"\n",
         mutate_lock=True,
     )
     monkeypatch.setattr(
@@ -90,7 +116,7 @@ def test_export_locked_requirements_rejects_local_paths(
     (tmp_path / "uv.lock").write_bytes(b"locked")
     _commands, run = _runner_factory(
         tmp_path,
-        content=b"-e .\nray==2.55.1 --hash=sha256:" + b"a" * 64 + b"\n",
+        content=f"-e .\nray=={RAY_VERSION} --hash=sha256:".encode() + b"a" * 64 + b"\n",
     )
     monkeypatch.setattr(
         "tools.host_uv_export.shutil.which", lambda _name: "/usr/bin/uv"

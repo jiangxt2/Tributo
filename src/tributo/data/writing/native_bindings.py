@@ -15,6 +15,12 @@ from collections.abc import Mapping
 from typing import Any, Literal, cast
 from urllib.parse import unquote, urlsplit
 
+from tributo._common.runtime_versions import (
+    SUPPORTED_DAFT_VERSION as DAFT_ENGINE_VERSION,
+)
+from tributo._common.runtime_versions import (
+    SUPPORTED_RAY_VERSION as RAY_ENGINE_VERSION,
+)
 from tributo.data.contracts.handles import DaftDataFrameHandle, RayDataHandle
 from tributo.data.contracts.modes import WriteMode
 from tributo.data.writing._native import (
@@ -40,9 +46,6 @@ from tributo.data.writing.contracts import (
 )
 from tributo.data.writing.targets import LogicalWritePlan
 
-RAY_ENGINE_VERSION = "2.55.1"
-DAFT_ENGINE_VERSION = "0.7.23"
-
 
 def _ray_descriptor(
     target_kind: str, binding_id: str, capabilities: WriteCapability
@@ -64,7 +67,7 @@ def _ray_descriptor(
         dependency_distributions=dependencies,
         capabilities=capabilities,
         installation_hint=(
-            "Install the ray-clickhouse==1.0 wheel"
+            "Install ray-clickhouse: uv sync --locked --extra clickhouse"
             if target_kind == "clickhouse"
             else None
         ),
@@ -334,9 +337,10 @@ class RayClickHouseWriteBinding:
     @staticmethod
     def is_available() -> bool:
         try:
-            return importlib.metadata.version("ray-clickhouse") == "1.0"
+            importlib.metadata.version("ray-clickhouse")
         except importlib.metadata.PackageNotFoundError:
             return False
+        return True
 
     def describe(
         self, plan: LogicalWritePlan, input_handle: WriteHandle

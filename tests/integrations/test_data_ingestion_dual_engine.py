@@ -13,8 +13,10 @@ import time
 import uuid
 from contextlib import ExitStack
 from pathlib import Path
+from typing import Any
 
 import daft
+import numpy as np
 import pyarrow as pa
 import pyarrow.fs as pafs
 import pyarrow.parquet as pq
@@ -27,6 +29,7 @@ except ModuleNotFoundError:  # Docker image intentionally omits test dependencie
     pytest = None
 
 from tests.data.ingestion_conformance import assert_dual_engine_conformance
+from tests.support.runtime_versions import RAY_VERSION
 from tributo.data import (
     CastColumn,
     ColumnRename,
@@ -56,6 +59,11 @@ from tributo.data import (
     default_write_gateway,
     open_ingestion,
     ray_worker_distribution_probe,
+)
+from tributo.inference.base import BasePredictor
+from tributo.inference.pipeline import InferenceConfig, run_batch_inference
+from tributo.integrations.algorithm_runtimes.ray_data_config import (
+    ExactCoverageDataConfig,
 )
 
 if pytest is not None:
@@ -669,9 +677,9 @@ def test_hive_server2_projection_on_worker() -> None:
         evidence = {
             item.distribution_name: item for item in result.receipt.component_versions
         }
-        assert evidence["ray-hive"].driver_version == "1.0"
+        assert evidence["ray-hive"].driver_version == "1.2"
         assert evidence["ray-hive"].worker_validation_complete is True
-        assert set(evidence["ray-hive"].worker_versions) == {"1.0"}
+        assert set(evidence["ray-hive"].worker_versions) == {"1.2"}
 
 
 def test_clickhouse_append_round_trip_and_native_receipt() -> None:
@@ -736,9 +744,63 @@ def test_clickhouse_append_round_trip_and_native_receipt() -> None:
         client.close()
 
 
+@ray.remote(num_cpus=0.5)
+def _consume_exact_shard(iterator: Any) -> list[int]:
+    return [int(row["id"]) for row in iterator.iter_rows()]
+
+
+class _CompatibilityPredictor(BasePredictor):
+    """Exercise the public caller-owned predictor path without a model download."""
+
+    def _load_model(self) -> None:
+        assert self.model_uri == "memory://compatibility-test"
+
+    def __call__(self, batch: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+        return {"id": batch["id"], "prediction": batch["id"] + 1}
+
+
+def test_exact_coverage_and_batch_inference_on_audited_ray() -> None:
+    """Preserve a remainder row across Train shards and execute the SDK actor path."""
+    _configure_cluster()
+    assert ray.__version__ == RAY_VERSION
+    dataset = ray.data.from_items([{"id": i} for i in range(7)], override_num_blocks=2)
+    assigned = ExactCoverageDataConfig().configure(
+        {"train": dataset},
+        world_size=2,
+        worker_handles=None,
+        worker_node_ids=None,
+    )
+    shards = ray.get([_consume_exact_shard.remote(item["train"]) for item in assigned])
+    assert sorted(value for shard in shards for value in shard) == list(range(7))
+    assert all(shards)
+
+    root = Path("/workspace/tributo-work") / f"compatibility-{uuid.uuid4().hex}"
+    root.mkdir(parents=True)
+    source = root / "input.parquet"
+    destination = root / "predictions"
+    pq.write_table(pa.table({"id": list(range(7))}), source)
+    result = run_batch_inference(
+        InferenceConfig(
+            source=ParquetSourceConfig(path=str(source), columns=("id",)),
+            output_uri=str(destination),
+            model_uri="memory://compatibility-test",
+            batch_size=2,
+            concurrency=1,
+            num_cpus_per_actor=0.5,
+        ),
+        predictor_cls=_CompatibilityPredictor,
+    )
+    assert result["status"] == "completed"
+    output = pq.read_table(destination).to_pylist()
+    assert sorted(output, key=lambda row: row["id"]) == [
+        {"id": i, "prediction": i + 1} for i in range(7)
+    ]
+
+
 if __name__ == "__main__":
     test_local_parquet_conformance_on_ray_cluster()
     test_s3_parquet_conformance_on_ray_cluster_and_minio()
     test_hive_server2_projection_on_worker()
     test_clickhouse_append_round_trip_and_native_receipt()
+    test_exact_coverage_and_batch_inference_on_audited_ray()
     print("dual-engine ingestion conformance passed")
