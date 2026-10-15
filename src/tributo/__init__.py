@@ -16,7 +16,7 @@ _version_str: str
 try:
     _version_str = _get_version("tributo")
 except PackageNotFoundError:
-    _version_str = "1.2.0.dev0"
+    _version_str = "1.2.0"
 __version__: Final[str] = _version_str
 
 from tributo.config import JobConfig  # noqa: E402

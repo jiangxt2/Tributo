@@ -41,15 +41,15 @@ for verified paths and explicit boundaries.
 
 ## Quick start
 
-Tributo 1.1.0 is a source-only GitHub Release; no PyPI distribution is
-published for this version.
+Tributo 1.2.0 is distributed through PyPI and GitHub Releases.
+The source checkout below uses its committed lockfile.
 
-Development checkouts on `master` declare `1.2.0.dev0`. This development
+Development checkouts on `master` declare `1.3.0.dev0`. This development
 version does not determine the next published patch or minor version. Use a
 release tag for a fixed source snapshot and that snapshot's documentation.
 
 ```bash
-git clone --branch tributo-1.1.0 --depth 1 https://github.com/jiangxt2/Tributo.git
+git clone --branch tributo-1.2.0 --depth 1 https://github.com/jiangxt2/Tributo.git
 cd Tributo
 uv sync --locked --no-dev
 ```
@@ -94,7 +94,7 @@ guarantees, see the [System Landscape](docs/architecture/system-landscape.md),
 ## Installation
 
 ```bash
-git clone --branch tributo-1.1.0 --depth 1 https://github.com/jiangxt2/Tributo.git
+git clone --branch tributo-1.2.0 --depth 1 https://github.com/jiangxt2/Tributo.git
 cd Tributo
 
 # Each runtime profile below is an alternative. Combine extras in one uv sync.
