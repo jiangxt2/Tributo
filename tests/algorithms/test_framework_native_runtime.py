@@ -113,7 +113,10 @@ def test_framework_evidence_rejects_role_mismatch_before_export() -> None:
         )
 
 
-def test_framework_native_input_snapshot_counts_each_role_once() -> None:
+@pytest.mark.parametrize("validation_required", [True, False])
+def test_framework_native_input_snapshot_counts_each_role_once(
+    validation_required: bool,
+) -> None:
     class CountedDataset:
         def __init__(self, role: str, rows: int, events: list[str]) -> None:
             self.role = role
@@ -142,7 +145,9 @@ def test_framework_native_input_snapshot_counts_each_role_once() -> None:
         evidence_collector_ref="tests.example:collect",
         input_routes=(
             FrameworkNativeInputRoute("train", "partitioned"),
-            FrameworkNativeInputRoute("validation", "partitioned"),
+            FrameworkNativeInputRoute(
+                "validation", "partitioned", required=validation_required
+            ),
         ),
     )
 
@@ -158,6 +163,88 @@ def test_framework_native_input_snapshot_counts_each_role_once() -> None:
     assert expected_roles == {"train": 7, "validation": 3}
     assert train.count_calls == validation.count_calls == 1
     assert len(events) == 2
+
+
+def test_framework_native_input_snapshot_allows_absent_optional_route() -> None:
+    class TrainingDataset:
+        def __init__(self) -> None:
+            self.count_calls = 0
+
+        def count(self) -> int:
+            self.count_calls += 1
+            return 7
+
+    train = TrainingDataset()
+    expected_rows, modes, role_rows = _framework_input_coverage_snapshot(
+        plan=cast(
+            ResolvedAlgorithmPlan,
+            SimpleNamespace(
+                input_bindings=SimpleNamespace(
+                    bindings=(SimpleNamespace(name="train"),)
+                )
+            ),
+        ),
+        prepared_views={"train": object()},
+        datasets={"train": train},
+        policy=FrameworkNativePolicy(
+            framework="test-framework",
+            evidence_collector_ref="tests.example:collect",
+            input_routes=(
+                FrameworkNativeInputRoute("train", "partitioned"),
+                FrameworkNativeInputRoute("validation", "partitioned", required=False),
+            ),
+        ),
+    )
+
+    assert expected_rows == 7
+    assert modes == {"train": "partitioned"}
+    assert role_rows == {"train": 7}
+    assert train.count_calls == 1
+
+
+@pytest.mark.parametrize(
+    ("validation_required", "provide_validation", "error"),
+    [
+        pytest.param(
+            True, False, "input_routes reference unbound role", id="required-route"
+        ),
+        pytest.param(False, True, "lack input bindings", id="optional-dataset"),
+    ],
+)
+def test_framework_native_input_snapshot_rejects_unbound_inputs_before_count(
+    validation_required: bool, provide_validation: bool, error: str
+) -> None:
+    class CountMustNotRun:
+        def count(self) -> int:
+            raise AssertionError("count must not run for an invalid binding")
+
+    datasets = {"train": CountMustNotRun()}
+    if provide_validation:
+        datasets["validation"] = CountMustNotRun()
+
+    with pytest.raises(AlgorithmConfigurationError, match=error):
+        _framework_input_coverage_snapshot(
+            plan=cast(
+                ResolvedAlgorithmPlan,
+                SimpleNamespace(
+                    input_bindings=SimpleNamespace(
+                        bindings=(SimpleNamespace(name="train"),)
+                    )
+                ),
+            ),
+            prepared_views={role: object() for role in datasets},
+            datasets=datasets,
+            policy=FrameworkNativePolicy(
+                framework="test-framework",
+                evidence_collector_ref="tests.example:collect",
+                input_routes=(
+                    FrameworkNativeInputRoute("train", "partitioned"),
+                    FrameworkNativeInputRoute(
+                        "validation", "partitioned", required=validation_required
+                    ),
+                ),
+            ),
+        )
 
 
 def test_framework_native_input_snapshot_preserves_legacy_train_only_route() -> None:

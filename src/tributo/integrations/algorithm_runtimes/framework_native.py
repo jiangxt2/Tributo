@@ -164,11 +164,15 @@ def _framework_input_coverage_snapshot(
             )
         return expected_training_rows, {}, {}
 
-    unknown_routes = set(routes) - binding_roles
-    if unknown_routes:
+    unbound_required_routes = {
+        route.role
+        for route in policy.input_routes
+        if route.required and route.role not in binding_roles
+    }
+    if unbound_required_routes:
         raise AlgorithmConfigurationError(
             "framework-native input_routes reference unbound role(s): "
-            f"{sorted(unknown_routes)}"
+            f"{sorted(unbound_required_routes)}"
         )
     if "train" not in dataset_roles:
         raise AlgorithmConfigurationError(
