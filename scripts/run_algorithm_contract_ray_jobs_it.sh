@@ -406,6 +406,7 @@ client.upload_file(archive, bucket, key); print(f"uploaded s3://{bucket}/{key}")
 compose exec -T \
   --env TRIBUTO_DOCKER_ALGORITHM_CONTRACT_IT=1 \
   --env TRIBUTO_DOCKER_GRAPH_CORE_GATE=1 \
+  --env TRIBUTO_DOCKER_FRAMEWORK_NATIVE_COVERAGE=1 \
   --env "TRIBUTO_CORE_WHEEL=${CORE_WHEEL_CONTAINER_PATH}" \
   --env "TRIBUTO_TORCH_RECIPE_PLUGIN_BUNDLE=${TORCH_RECIPE_CONTAINER_DIR}" \
   --env "TRIBUTO_OFFLINE_ALGORITHM_BUNDLE=${OFFLINE_CONTAINER_DIR}" \
@@ -419,6 +420,7 @@ compose exec -T \
   tests/training/test_dnn_pu_training.py \
   tests/integration/algorithm_jobs/test_portable_execution_jobs.py \
   tests/training/test_graph_core_gate.py \
+  tests/training/test_framework_native_input_coverage.py \
   -o addopts= \
   -o cache_dir=/workspace/tributo-work/cache/pytest-algorithm-contract-ray-jobs \
   -m "integration and slow" -vv -rP --tb=short --timeout=7200 \

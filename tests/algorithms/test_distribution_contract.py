@@ -12,6 +12,7 @@ from tributo.algorithms.api import (
     DistributionSpec,
     DistributionStrategy,
     ExecutionProfile,
+    FrameworkNativeInputRoute,
     FrameworkNativePolicy,
     InputDistribution,
     MapReducePolicy,
@@ -147,6 +148,83 @@ def test_framework_native_component_stages_are_canonical_and_round_trip() -> Non
     assert restored.policy.component_stages == policy.component_stages
 
 
+def test_framework_native_input_routes_are_canonical_and_round_trip() -> None:
+    policy = FrameworkNativePolicy(
+        framework="external-framework",
+        evidence_collector_ref="tests.example:collect",
+        input_routes=(
+            FrameworkNativeInputRoute("validation", "replicated", required=False),
+            FrameworkNativeInputRoute("train", "partitioned"),
+        ),
+    )
+    spec = DistributionSpec(
+        strategy=DistributionStrategy.FRAMEWORK_NATIVE,
+        supported_worker_range=WorkerRange(1, 8),
+        supported_execution_profiles=(ExecutionProfile.LOCAL,),
+        resources_per_worker=WorkerResources(),
+        input_distribution=InputDistribution.FRAMEWORK_OWNED,
+        state_coordination=StateCoordination.FRAMEWORK_NATIVE,
+        policy=policy,
+    )
+
+    restored = DistributionSpec.from_dict(spec.to_dict())
+
+    assert restored == spec
+    assert restored.digest == spec.digest
+    assert [route.role for route in restored.policy.input_routes] == [
+        "train",
+        "validation",
+    ]
+    assert restored.to_dict()["policy"]["input_routes"] == [
+        {"role": "train", "mode": "partitioned", "required": True},
+        {"role": "validation", "mode": "replicated", "required": False},
+    ]
+
+
+@pytest.mark.parametrize(
+    "routes",
+    [
+        (FrameworkNativeInputRoute("validation", "partitioned"),),
+        (
+            FrameworkNativeInputRoute("train", "partitioned"),
+            FrameworkNativeInputRoute("train", "partitioned"),
+        ),
+    ],
+)
+def test_framework_native_input_routes_require_one_unique_train_role(routes) -> None:
+    with pytest.raises(AlgorithmConfigurationError):
+        FrameworkNativePolicy(
+            framework="external-framework",
+            evidence_collector_ref="tests.example:collect",
+            input_routes=routes,
+        )
+
+
+@pytest.mark.parametrize(
+    ("mode", "required"),
+    [
+        ("replicated", True),
+        ("partitioned", False),
+    ],
+)
+def test_framework_native_train_route_must_be_required_and_partitioned(
+    mode: str, required: bool
+) -> None:
+    with pytest.raises(AlgorithmConfigurationError, match="train route"):
+        FrameworkNativeInputRoute(
+            "train",
+            mode,
+            required=required,
+        )
+
+
+def test_framework_native_route_rejects_unknown_serialized_fields() -> None:
+    with pytest.raises(AlgorithmConfigurationError, match="unknown field"):
+        FrameworkNativeInputRoute.from_dict(
+            {"role": "train", "mode": "partitioned", "required": True, "min_rows": 1}
+        )
+
+
 def test_empty_framework_component_stages_preserve_legacy_canonical_payload() -> None:
     spec = DistributionSpec(
         strategy=DistributionStrategy.FRAMEWORK_NATIVE,
@@ -163,6 +241,7 @@ def test_empty_framework_component_stages_preserve_legacy_canonical_payload() ->
 
     payload = spec.to_dict()
     assert "component_stages" not in payload["policy"]
+    assert "input_routes" not in payload["policy"]
     restored = DistributionSpec.from_dict(payload)
     assert restored.to_dict() == payload
     assert restored.digest == spec.digest

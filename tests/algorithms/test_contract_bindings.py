@@ -113,6 +113,138 @@ def test_input_coverage_contract_rejects_duplicate_shards() -> None:
         )
 
 
+def test_input_coverage_contract_checks_partitioned_roles_with_uneven_rows() -> None:
+    contract = InputCoverageContract()
+
+    contract.validate(
+        (
+            {
+                "shard_id": "shard-a",
+                "rows_processed": 3,
+                "input_rows": {"train": 3, "validation": 2},
+            },
+            {
+                "shard_id": "shard-b",
+                "rows_processed": 2,
+                "input_rows": {"train": 2, "validation": 3},
+            },
+        ),
+        expected_rows=5,
+        role_modes={"train": "partitioned", "validation": "partitioned"},
+        expected_role_rows={"train": 5, "validation": 5},
+    )
+
+
+def test_input_coverage_contract_does_not_sum_replicated_roles() -> None:
+    contract = InputCoverageContract()
+
+    contract.validate(
+        (
+            {
+                "shard_id": "shard-a",
+                "rows_processed": 3,
+                "input_rows": {"train": 3, "validation": 5},
+            },
+            {
+                "shard_id": "shard-b",
+                "rows_processed": 2,
+                "input_rows": {"train": 2, "validation": 5},
+            },
+        ),
+        expected_rows=5,
+        role_modes={"train": "partitioned", "validation": "replicated"},
+        expected_role_rows={"train": 5, "validation": 5},
+    )
+
+
+def test_input_coverage_contract_rejects_undeclared_role_counters() -> None:
+    with pytest.raises(AlgorithmExecutionError, match="undeclared role"):
+        InputCoverageContract().validate(
+            (
+                {
+                    "shard_id": "shard-a",
+                    "rows_processed": 2,
+                    "input_rows": {"train": 2, "validation": 1},
+                },
+                {
+                    "shard_id": "shard-b",
+                    "rows_processed": 3,
+                    "input_rows": {"train": 3},
+                },
+            ),
+            expected_rows=5,
+            role_modes={"train": "partitioned"},
+            expected_role_rows={"train": 5},
+        )
+
+
+def test_input_coverage_contract_keeps_declared_dimensions_with_role_routes() -> None:
+    InputCoverageContract(dimensions=("treated",)).validate(
+        (
+            {
+                "shard_id": "shard-a",
+                "rows_processed": 2,
+                "input_rows": {"train": 2, "coverage.treated": 1},
+            },
+            {
+                "shard_id": "shard-b",
+                "rows_processed": 3,
+                "input_rows": {"train": 3, "coverage.treated": 1},
+            },
+        ),
+        expected_rows=5,
+        role_modes={"train": "partitioned"},
+        expected_role_rows={"train": 5},
+    )
+
+
+@pytest.mark.parametrize(
+    ("input_rows", "mode", "expected", "match"),
+    [
+        ({"train": 1}, "partitioned", 5, "does not cover canonical input"),
+        ({"train": 5}, "replicated", 5, "not present in full on every worker"),
+        ({}, "partitioned", 5, "input role coverage"),
+        ({"train": True}, "partitioned", 5, "input role coverage"),
+    ],
+)
+def test_input_coverage_contract_rejects_invalid_role_evidence(
+    input_rows: dict[str, int],
+    mode: str,
+    expected: int,
+    match: str,
+) -> None:
+    contract = InputCoverageContract()
+    workers = (
+        {
+            "shard_id": "shard-a",
+            "rows_processed": 2,
+            "input_rows": input_rows,
+        },
+        {
+            "shard_id": "shard-b",
+            "rows_processed": 3,
+            "input_rows": {"train": 3},
+        },
+    )
+
+    with pytest.raises(AlgorithmExecutionError, match=match):
+        contract.validate(
+            workers,
+            expected_rows=5,
+            role_modes={"train": mode},
+            expected_role_rows={"train": expected},
+        )
+
+
+def test_input_coverage_contract_rejects_inconsistent_role_declarations() -> None:
+    with pytest.raises(AlgorithmConfigurationError, match="same roles"):
+        InputCoverageContract().validate(
+            (),
+            role_modes={"train": "partitioned"},
+            expected_role_rows={},
+        )
+
+
 def test_registration_rejects_contract_identity_drift() -> None:
     registration = function_registration()
     contracts = _contracts(registration)

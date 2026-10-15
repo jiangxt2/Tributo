@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import ray
@@ -24,7 +25,10 @@ from tributo.algorithms.api import (
     WorkerExecutionResult,
     WorkerResources,
 )
-from tributo.algorithms.api.models import FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS
+from tributo.algorithms.api.models import (
+    FORMAL_DISTRIBUTED_STRATEGY_CONTRACTS,
+    InputCoverageContract,
+)
 from tributo.algorithms.core.worker import (
     _actual_environment_versions,
     _load_reference,
@@ -117,12 +121,126 @@ def _framework_execution_result(
     return execution
 
 
+def _framework_input_coverage_snapshot(
+    *,
+    plan: ResolvedAlgorithmPlan,
+    prepared_views: Mapping[str, object],
+    datasets: Mapping[str, object],
+    policy: FrameworkNativePolicy,
+) -> tuple[int, dict[str, str], dict[str, int]]:
+    """Validate trainer input roles and count each routed Dataset once."""
+    if any(not isinstance(role, str) or not role for role in datasets):
+        raise AlgorithmConfigurationError(
+            "framework-native trainer Dataset roles must be non-empty strings"
+        )
+    binding_roles = {binding.name for binding in plan.input_bindings.bindings}
+    dataset_roles = set(datasets)
+    prepared_roles = set(prepared_views)
+    routes = {route.role: route for route in policy.input_routes}
+
+    if not routes:
+        if dataset_roles != {"train"}:
+            raise AlgorithmConfigurationError(
+                "framework-native multi-role trainer inputs require declared input_routes"
+            )
+        training_dataset = datasets["train"]
+        count_training_rows = getattr(training_dataset, "count", None)
+        if not callable(count_training_rows):
+            raise AlgorithmConfigurationError(
+                "framework-native fit requires a named 'train' Ray Dataset"
+            )
+        expected_training_rows = count_training_rows()
+        if (
+            not isinstance(expected_training_rows, int)
+            or isinstance(expected_training_rows, bool)
+            or expected_training_rows < 0
+        ):
+            raise AlgorithmExecutionError(
+                "framework-native train Dataset returned an invalid row count"
+            )
+        if expected_training_rows < 1:
+            raise AlgorithmConfigurationError(
+                "framework-native training Dataset must be non-empty"
+            )
+        return expected_training_rows, {}, {}
+
+    unknown_routes = set(routes) - binding_roles
+    if unknown_routes:
+        raise AlgorithmConfigurationError(
+            "framework-native input_routes reference unbound role(s): "
+            f"{sorted(unknown_routes)}"
+        )
+    if "train" not in dataset_roles:
+        raise AlgorithmConfigurationError(
+            "framework-native fit requires a named 'train' Ray Dataset"
+        )
+    undeclared = dataset_roles - set(routes)
+    if undeclared:
+        raise AlgorithmConfigurationError(
+            "framework-native trainer Dataset role(s) lack input_routes: "
+            f"{sorted(undeclared)}"
+        )
+    unbound = dataset_roles - binding_roles
+    if unbound:
+        raise AlgorithmConfigurationError(
+            "framework-native trainer Dataset role(s) lack input bindings: "
+            f"{sorted(unbound)}"
+        )
+    absent_required = sorted(
+        route.role
+        for route in policy.input_routes
+        if route.required
+        and (route.role not in dataset_roles or route.role not in prepared_roles)
+    )
+    if absent_required:
+        raise AlgorithmConfigurationError(
+            f"framework-native required input role(s) are missing: {absent_required}"
+        )
+    missing_prepared = dataset_roles - prepared_roles
+    if missing_prepared:
+        raise AlgorithmConfigurationError(
+            "framework-native trainer Dataset role(s) lack prepared input views: "
+            f"{sorted(missing_prepared)}"
+        )
+
+    role_modes = {role: routes[role].mode for role in sorted(dataset_roles)}
+    role_datasets = {role: datasets[role] for role in sorted(dataset_roles)}
+
+    def count_dataset(role: str, dataset: object) -> tuple[str, int]:
+        count_method = getattr(dataset, "count", None)
+        if not callable(count_method):
+            raise AlgorithmConfigurationError(
+                f"framework-native input role {role!r} must be a Ray Dataset"
+            )
+        rows = count_method()
+        if not isinstance(rows, int) or isinstance(rows, bool) or rows < 0:
+            raise AlgorithmExecutionError(
+                f"framework-native input role {role!r} returned an invalid row count"
+            )
+        return role, rows
+
+    with ThreadPoolExecutor(max_workers=min(4, len(role_datasets))) as executor:
+        futures = [
+            executor.submit(count_dataset, role, dataset)
+            for role, dataset in role_datasets.items()
+        ]
+        expected_role_rows = dict(future.result() for future in futures)
+    expected_training_rows = expected_role_rows["train"]
+    if expected_training_rows < 1:
+        raise AlgorithmConfigurationError(
+            "framework-native training Dataset must be non-empty"
+        )
+    return expected_training_rows, role_modes, expected_role_rows
+
+
 def _validated_framework_evidence(
     evidence: Mapping[str, Any],
     *,
     worker_count: int,
     resources_per_worker: WorkerResources,
     expected_training_rows: int,
+    input_role_modes: Mapping[str, str] | None = None,
+    expected_input_role_rows: Mapping[str, int] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Validate observed framework facts before any Bundle is published."""
     raw_workers = evidence.get("workers")
@@ -150,7 +268,6 @@ def _validated_framework_evidence(
         {worker.rank for worker in workers} != set(range(worker_count))
         or any(worker.world_size != worker_count for worker in workers)
         or len({worker.worker_id for worker in workers}) != worker_count
-        or len({worker.shard_id for worker in workers}) != worker_count
     ):
         raise AlgorithmExecutionError(
             "framework-native evidence does not prove unique workers and shards"
@@ -175,10 +292,12 @@ def _validated_framework_evidence(
         raise AlgorithmExecutionError(
             "framework-native evidence does not satisfy requested resources and input"
         )
-    if sum(worker.rows_processed or 0 for worker in workers) != expected_training_rows:
-        raise AlgorithmExecutionError(
-            "framework-native evidence does not prove complete training input coverage"
-        )
+    InputCoverageContract().validate(
+        (worker.to_dict() for worker in workers),
+        expected_rows=expected_training_rows,
+        role_modes=input_role_modes,
+        expected_role_rows=expected_input_role_rows,
+    )
     if (
         state.coordination is not StateCoordination.FRAMEWORK_NATIVE
         or not state.synchronized
@@ -213,6 +332,8 @@ def _validated_staged_framework_evidence(
     worker_count: int,
     resources_per_worker: WorkerResources,
     expected_training_rows: int,
+    input_role_modes: Mapping[str, str] | None = None,
+    expected_input_role_rows: Mapping[str, int] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Validate a bounded, explicitly declared sequence of framework fits."""
     raw_stages = evidence.get("stages")
@@ -273,6 +394,15 @@ def _validated_staged_framework_evidence(
                     worker_count=worker_count,
                     resources_per_worker=resources_per_worker,
                     expected_training_rows=fold_rows,
+                    input_role_modes=input_role_modes,
+                    expected_input_role_rows={
+                        **(expected_input_role_rows or {}),
+                        **(
+                            {"train": fold_rows}
+                            if "train" in (input_role_modes or {})
+                            else {}
+                        ),
+                    },
                 )
                 fold_records.append((fold_workers, fold_state, fold_rows, heldout_rows))
                 heldout_total += heldout_rows
@@ -282,10 +412,17 @@ def _validated_staged_framework_evidence(
                     "partition the input"
                 )
             rank_rows = [0] * worker_count
+            rank_input_rows: list[dict[str, int]] = [{} for _ in range(worker_count)]
             for workers, _, _, _ in fold_records:
                 for worker in workers:
                     rank = int(worker["rank"])
                     rank_rows[rank] += int(worker["rows_processed"])
+                    input_rows = worker.get("input_rows", {})
+                    if isinstance(input_rows, Mapping):
+                        for role, rows in input_rows.items():
+                            rank_input_rows[rank][role] = rank_input_rows[rank].get(
+                                role, 0
+                            ) + int(rows)
             digest = hashlib.sha256(
                 json.dumps(
                     [state["global_model_digest"] for _, state, _, _ in fold_records],
@@ -294,7 +431,9 @@ def _validated_staged_framework_evidence(
             ).hexdigest()
             workers = [dict(worker) for worker in fold_records[0][0]]
             for worker in workers:
-                worker["rows_processed"] = rank_rows[int(worker["rank"])]
+                rank = int(worker["rank"])
+                worker["rows_processed"] = rank_rows[rank]
+                worker["input_rows"] = rank_input_rows[rank]
                 worker["model_state_digest"] = digest
             validated[stage] = (
                 workers,
@@ -306,6 +445,7 @@ def _validated_staged_framework_evidence(
                     "details": {
                         "framework": "staged_cross_fit",
                         "cross_fit_folds": len(fold_records),
+                        "input_rows_scope": "cumulative_across_folds",
                         "heldout_rows": heldout_total,
                         "training_rows_per_fold": json.dumps(
                             [item[2] for item in fold_records], separators=(",", ":")
@@ -330,6 +470,13 @@ def _validated_staged_framework_evidence(
             worker_count=worker_count,
             resources_per_worker=resources_per_worker,
             expected_training_rows=stage_rows,
+            input_role_modes=input_role_modes,
+            expected_input_role_rows={
+                **(expected_input_role_rows or {}),
+                **(
+                    {"train": stage_rows} if "train" in (input_role_modes or {}) else {}
+                ),
+            },
         )
         validated[stage] = (workers, state, stage_rows)
 
@@ -382,6 +529,11 @@ def _validated_staged_framework_evidence(
         details[f"stage.{stage}.nodes"] = len(
             {item["node_id"] for item in validated[stage][0]}
         )
+        stage_details = validated[stage][1].get("details")
+        if isinstance(stage_details, Mapping):
+            input_rows_scope = stage_details.get("input_rows_scope")
+            if isinstance(input_rows_scope, str):
+                details[f"stage.{stage}.input_rows_scope"] = input_rows_scope
     return validated[anchor][0], {
         "coordination": StateCoordination.FRAMEWORK_NATIVE.value,
         "synchronized": True,
@@ -467,19 +619,29 @@ class FrameworkNativeRuntime:
                 raise AlgorithmConfigurationError(
                     "framework-native bind_datasets must return a mapping"
                 )
-            training_dataset = datasets.get("train")
-            count_training_rows = getattr(training_dataset, "count", None)
-            if not callable(count_training_rows):
+            plan = envelope.plan
+            distribution = plan.distribution_spec
+            if distribution is None:
                 raise AlgorithmConfigurationError(
-                    "framework-native fit requires a named 'train' Ray Dataset"
+                    "framework-native execution lost its DistributionSpec"
                 )
-            expected_training_rows = int(count_training_rows())
-            if expected_training_rows < 1:
+            policy = distribution.policy
+            if not isinstance(policy, FrameworkNativePolicy):
                 raise AlgorithmConfigurationError(
-                    "framework-native training Dataset must be non-empty"
+                    "framework-native DistributionSpec requires FrameworkNativePolicy"
                 )
+            (
+                expected_training_rows,
+                input_role_modes,
+                expected_input_role_rows,
+            ) = _framework_input_coverage_snapshot(
+                plan=plan,
+                prepared_views=prepared.views,
+                datasets=datasets,
+                policy=policy,
+            )
             trainer = algorithm.build_trainer(
-                envelope.plan.algorithm_config,
+                plan.algorithm_config,
                 datasets,
             )
             fit = getattr(trainer, "fit", None)
@@ -493,20 +655,12 @@ class FrameworkNativeRuntime:
                 raise AlgorithmExecutionError(
                     "framework-native collect_evidence must return a mapping"
                 )
-            plan = envelope.plan
             resources = WorkerResources(
                 num_cpus=plan.runtime.num_cpus,
                 num_gpus=plan.runtime.num_gpus,
                 memory_bytes=plan.runtime.memory_bytes,
                 custom=plan.runtime.custom_resources,
             )
-            distribution = plan.distribution_spec
-            if distribution is None:
-                raise AlgorithmConfigurationError(
-                    "framework-native execution lost its DistributionSpec"
-                )
-            policy = distribution.policy
-            assert isinstance(policy, FrameworkNativePolicy)
             if policy.component_stages:
                 workers, state = _validated_staged_framework_evidence(
                     evidence,
@@ -514,6 +668,8 @@ class FrameworkNativeRuntime:
                     worker_count=plan.runtime.worker_count,
                     resources_per_worker=resources,
                     expected_training_rows=expected_training_rows,
+                    input_role_modes=input_role_modes,
+                    expected_input_role_rows=expected_input_role_rows,
                 )
             else:
                 workers, state = _validated_framework_evidence(
@@ -521,6 +677,8 @@ class FrameworkNativeRuntime:
                     worker_count=plan.runtime.worker_count,
                     resources_per_worker=resources,
                     expected_training_rows=expected_training_rows,
+                    input_role_modes=input_role_modes,
+                    expected_input_role_rows=expected_input_role_rows,
                 )
             try:
                 execution = _framework_execution_result(

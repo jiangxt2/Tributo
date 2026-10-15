@@ -76,6 +76,10 @@ documentation for every public stability tier.
 :no-members:
 ```
 
+```{autoclass} tributo.algorithms.api.distribution.FrameworkNativeInputRoute
+:no-members:
+```
+
 ```{autoclass} tributo.algorithms.api.distribution.FrameworkNativePolicy
 :no-members:
 ```
