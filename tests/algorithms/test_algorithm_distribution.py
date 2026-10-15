@@ -289,9 +289,10 @@ def test_remote_offline_bundle_uses_attested_manifest_without_network() -> None:
 
     assert prepared.receipt.artifact_sha256 == "d" * 64
     assert patch["working_dir"] == artifact.source
-    assert patch["pip"]["packages"] == [
+    assert patch["pip"]["packages"][0] == (
         "-r ${RAY_RUNTIME_ENV_CREATE_WORKING_DIR}/requirements.lock"
-    ]
+    )
+    assert patch["pip"]["packages"][1].startswith("# tributo-runtime-env-cache-key=")
     assert patch["env_vars"]["TRIBUTO_PLUGINS"] == "distribution:demo-algorithm"
 
 
@@ -351,15 +352,48 @@ def test_offline_wheelhouse_validates_transitive_local_closure(tmp_path: Path) -
 
     assert prepared.receipt.plugin_names == ("demo_algorithm",)
     assert patch["working_dir"] == str(root)
-    assert patch["pip"]["packages"] == [
+    assert patch["pip"]["packages"][0] == (
         "-r ${RAY_RUNTIME_ENV_CREATE_WORKING_DIR}/requirements.lock"
-    ]
+    )
+    assert patch["pip"]["packages"][1].startswith("# tributo-runtime-env-cache-key=")
     assert patch["pip"]["pip_check"] is True
     assert patch["pip"]["pip_install_options"] == [
         "--disable-pip-version-check",
         "--no-cache-dir",
     ]
     assert "pip_check_full_environment" in prepared.receipt.checks
+
+
+def test_offline_bundle_pip_cache_key_includes_bundle_identity(
+    tmp_path: Path,
+) -> None:
+    first_bundle = _bundle(tmp_path / "first")
+    second_bundle = _bundle(
+        tmp_path / "second",
+        algorithm_requires=("dep-a==1.0.0",),
+    )
+    first_prepared = prepare_algorithm_distribution(
+        AlgorithmArtifact(
+            source=str(first_bundle),
+            mode=ArtifactDistributionMode.OFFLINE_WHEELHOUSE,
+        ),
+        _profile(),
+    )
+    second_prepared = prepare_algorithm_distribution(
+        AlgorithmArtifact(
+            source=str(second_bundle),
+            mode=ArtifactDistributionMode.OFFLINE_WHEELHOUSE,
+        ),
+        _profile(),
+    )
+
+    first_packages = algorithm_runtime_env_patch(first_prepared)["pip"]["packages"]
+    second_packages = algorithm_runtime_env_patch(second_prepared)["pip"]["packages"]
+
+    assert first_packages[0] == second_packages[0]
+    assert first_packages[1].startswith("# tributo-runtime-env-cache-key=")
+    assert second_packages[1].startswith("# tributo-runtime-env-cache-key=")
+    assert first_packages[1] != second_packages[1]
 
 
 def test_offline_wheelhouse_requires_profile_permission(tmp_path: Path) -> None:

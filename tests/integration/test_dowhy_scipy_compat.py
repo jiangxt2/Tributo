@@ -1,7 +1,7 @@
 """Real, bounded DoWhy calls for the locked SciPy dependency closure.
 
 Optional DoWhy imports remain inside tests so dev-only collection does not
-require the causal extra. The manifest owns execution with that extra.
+require DoWhy. The manifest owns execution with the test-causal extra.
 """
 
 from __future__ import annotations

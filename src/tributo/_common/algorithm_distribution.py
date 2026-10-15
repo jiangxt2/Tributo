@@ -1368,8 +1368,25 @@ def algorithm_runtime_env_patch(
         patch["working_dir"] = artifact.source
         patch["excludes"] = []
         requirements = prepared.requirements_name or artifact.requirements_name
+        cache_identity = hashlib.sha256(
+            json.dumps(
+                {
+                    "artifact_sha256": prepared.receipt.artifact_sha256,
+                    "image_digest": prepared.receipt.image_digest,
+                    "image_profile_id": prepared.receipt.image_profile_id,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        # Ray 2.55.1 hashes the pip spec without the working_dir URI. Add an
+        # ignored requirements-file comment so distinct offline Bundles and
+        # image profiles cannot reuse the same cached virtualenv.
         patch["pip"] = {
-            "packages": [f"-r {_RUNTIME_WORKING_DIR}/{requirements}"],
+            "packages": [
+                f"-r {_RUNTIME_WORKING_DIR}/{requirements}",
+                f"# tributo-runtime-env-cache-key={cache_identity}",
+            ],
             "pip_check": prepared.pip_check,
             "pip_install_options": list(_ALLOWED_PIP_INSTALL_OPTIONS),
         }

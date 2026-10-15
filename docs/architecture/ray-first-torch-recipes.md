@@ -107,10 +107,12 @@ dependency set, or framework installation.
 Local contract evidence covers descriptor lowering, exact-coverage
 configuration, streaming batch consumption, typed metric reduction, completed
 Stage checkpoints, trusted model reconstruction, Bundle publication, and
-execution-profile compatibility. Candidate-Wheel conformance and the final
-Docker Ray multi-node gate remain required before the migrated algorithms are
-declared validated. Kubernetes and KubeRay remain external deployment
-substrates; Tributo does not own or validate their control-plane lifecycle.
+execution-profile compatibility. The algorithm repository runs its own unit
+and package-conformance CI. Core's manual Ray Jobs probes use fixture plugins
+and do not certify official algorithm Wheels; no real multi-node Gate for the
+aggregate algorithm Wheel is currently provided. Kubernetes and KubeRay remain
+external deployment substrates; Tributo does not own or validate their
+control-plane lifecycle.
 Portable Torch Tune trials report the target metric only; the selected
 parameters must be used for a separate formal training run that publishes the
 final Bundle.

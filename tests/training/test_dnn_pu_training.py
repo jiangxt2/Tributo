@@ -1,4 +1,4 @@
-"""Formal distributed algorithm integration tests executed through Ray Jobs."""
+"""Core-owned fixture plugin integration tests executed through Ray Jobs."""
 
 from __future__ import annotations
 
@@ -13,15 +13,8 @@ from typing import Any, cast
 import pytest
 from ray.job_submission import JobStatus, JobSubmissionClient
 
-from tests.training.jobs.official_algorithm_matrix import (
-    ALL_ENTRY_POINTS,
-    CATEGORY_ENTRY_POINTS,
-    OFFICIAL_ALGORITHM_IDENTITIES,
-    parse_entry_point_selection,
-)
 from tributo._common import DEFAULT_DASHBOARD_URL, build_runtime_env
 from tributo.algorithms import AlgorithmArtifact, ImageProfile
-from tributo.algorithms.api import EnvironmentSpec
 from tributo.training import wait_for_job
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
@@ -79,54 +72,14 @@ def _object_from_logs(logs: str, marker: str) -> dict[str, Any]:
     return cast(dict[str, Any], value)
 
 
-def _plugin_wheel() -> Path:
-    configured = os.environ.get("TRIBUTO_DISTRIBUTED_PLUGIN_WHEEL")
+def _torch_recipe_plugin_bundle() -> Path:
+    configured = os.environ.get("TRIBUTO_TORCH_RECIPE_PLUGIN_BUNDLE")
     if not configured:
-        pytest.fail("distributed algorithm IT requires a third-party plugin wheel")
-    wheel = Path(configured)
-    if not wheel.is_file() or wheel.suffix != ".whl":
-        pytest.fail(f"third-party plugin wheel is unavailable: {wheel}")
-    return wheel
-
-
-def _torch_recipe_plugin_wheel() -> Path:
-    configured = os.environ.get("TRIBUTO_TORCH_RECIPE_PLUGIN_WHEEL")
-    if not configured:
-        pytest.fail("distributed algorithm IT requires a Torch recipe plugin wheel")
-    wheel = Path(configured)
-    if not wheel.is_file() or wheel.suffix != ".whl":
-        pytest.fail(f"Torch recipe plugin wheel is unavailable: {wheel}")
-    return wheel
-
-
-def _official_algorithm_wheels() -> tuple[Path, ...]:
-    configured = (
-        os.environ.get("TRIBUTO_CORE_WHEEL"),
-        os.environ.get("TRIBUTO_OFFICIAL_CLASSICAL_WHEEL"),
-        os.environ.get("TRIBUTO_OFFICIAL_TIMESERIES_WHEEL"),
-        os.environ.get("TRIBUTO_OFFICIAL_REPRESENTATION_WHEEL"),
-        os.environ.get("TRIBUTO_OFFICIAL_GRAPH_PYG_WHEEL"),
-        os.environ.get("TRIBUTO_OFFICIAL_TABULAR_TORCH_WHEEL"),
-        os.environ.get("TRIBUTO_OFFICIAL_RECSYS_TORCH_WHEEL"),
-        os.environ.get("TRIBUTO_OFFICIAL_TRANSFORMERS_NLP_WHEEL"),
-        os.environ.get("TRIBUTO_OFFICIAL_CAUSAL_CORE_WHEEL"),
-        os.environ.get("TRIBUTO_OFFICIAL_CAUSAL_DISCOVERY_WHEEL"),
-        os.environ.get("TRIBUTO_OFFICIAL_MULTISTAGE_TORCH_WHEEL"),
-        os.environ.get("TRIBUTO_OFFICIAL_BOOSTING_WHEEL"),
-        os.environ.get("TRIBUTO_OFFICIAL_CAUSAL_XLEARNER_WHEEL"),
-        os.environ.get("TRIBUTO_OFFICIAL_CAUSAL_DR_WHEEL"),
-        os.environ.get("TRIBUTO_OFFICIAL_CAUSAL_DOWHY_WHEEL"),
-        os.environ.get("TRIBUTO_OFFICIAL_CATBOOST_WHEEL"),
-    )
-    if any(not value for value in configured):
-        pytest.fail(
-            "official algorithm IT requires classical, timeseries, representation, "
-            "graph-pyg, tabular-torch, recsys-torch, transformers-nlp, causal-core, causal-discovery, multistage-torch, boosting, causal-xlearner, causal-dr, causal-dowhy, and catboost Wheels"
-        )
-    wheels = tuple(Path(cast(str, value)) for value in configured)
-    if any(not wheel.is_file() or wheel.suffix != ".whl" for wheel in wheels):
-        pytest.fail(f"official algorithm Wheel is unavailable: {wheels}")
-    return wheels
+        pytest.fail("fixture plugin IT requires a Torch recipe Bundle")
+    bundle = Path(configured)
+    if not (bundle / "manifest.json").is_file():
+        pytest.fail(f"Torch recipe plugin Bundle is unavailable: {bundle}")
+    return bundle
 
 
 def _algorithm_image_profile() -> ImageProfile:
@@ -139,75 +92,23 @@ def _algorithm_image_profile() -> ImageProfile:
         image_digest=digest,
         wheel_tags=("py3-none-any",),
         installed_distributions={"pip": "24.3.1"},
-        algorithm_ids=("offline.algorithm",),
+        algorithm_ids=("offline.algorithm", "torch_recipe.fixture"),
         pip_check_baseline=(
             "nvidia-cusparselt-cu13 0.8.1 is not supported on this platform",
         ),
     )
 
 
-def _submit_gate_job(
-    job_client: JobSubmissionClient,
-    *,
-    mode: str,
-    root: Path,
-    plugin_wheel: Path,
-) -> dict[str, Any]:
-    submission_id = f"distributed-algorithm-{mode}-{uuid.uuid4().hex}"
-    artifact = AlgorithmArtifact(
-        source=str(plugin_wheel),
-        package_name="tributo-test-distributed-algorithm",
-        package_version="0.1.0",
-        plugin_names=("third_party_mean_regressor",),
-        wheel_tags=("py3-none-any",),
-    )
-    environment = EnvironmentSpec(
-        environment_id="example.mean_regression.v1",
-        dependencies=("tributo-test-distributed-algorithm==0.1.0",),
-    )
-    runtime_env = build_runtime_env(
-        env_vars={
-            "RAY_ENABLE_UV_RUN_RUNTIME_ENV": "0",
-            "TRIBUTO_DISTRIBUTED_GATE_PROFILE": mode,
-            "TRIBUTO_DISTRIBUTED_GATE_ROOT": str(root),
-            "TRIBUTO_RUN_ID": submission_id,
-            "TRIBUTO_ATTEMPT_ID": "attempt-1",
-        },
-        algorithm_artifact=artifact,
-        image_profile=_algorithm_image_profile(),
-        declared_dependencies=environment.dependencies,
-    )
-    if str(plugin_wheel) not in runtime_env.get("py_modules", []):
-        raise AssertionError("Ray runtime_env did not include the algorithm Wheel")
-    job_id = job_client.submit_job(
-        entrypoint="python tests/training/jobs/distributed_algorithm_gate_job.py",
-        runtime_env=runtime_env,
-        submission_id=submission_id,
-    )
-    result = wait_for_job(job_client, job_id, timeout=900)
-    job_info = job_client.get_job_info(job_id)
-    result["message"] = job_info.message or ""
-    if log_path := os.environ.get("TRIBUTO_DISTRIBUTED_GATE_LOG"):
-        with Path(log_path).open("a", encoding="utf-8") as stream:
-            stream.write(
-                f"===== {mode} status={result['status']} job_id={job_id} =====\n"
-            )
-            if result["message"]:
-                stream.write(f"Ray Job message: {result['message']}\n")
-            stream.write(str(result["logs"]))
-            stream.write("\n")
-    return result
-
-
 def _submit_torch_recipe_gate_job(
     job_client: JobSubmissionClient,
     *,
     root: Path,
-    plugin_wheel: Path,
+    plugin_bundle: Path,
 ) -> dict[str, Any]:
     submission_id = f"torch-recipe-{uuid.uuid4().hex}"
     artifact = AlgorithmArtifact(
-        source=str(plugin_wheel),
+        source=str(plugin_bundle),
+        mode="offline_wheelhouse",
         package_name="tributo-test-torch-recipe-algorithm",
         package_version="0.1.0",
         plugin_names=("third_party_binary_linear",),
@@ -225,10 +126,16 @@ def _submit_torch_recipe_gate_job(
         image_profile=_algorithm_image_profile(),
         declared_dependencies=("tributo-test-torch-recipe-algorithm==0.1.0",),
     )
-    if str(plugin_wheel) not in runtime_env.get("py_modules", []):
-        raise AssertionError("Ray runtime_env did not include the Torch recipe Wheel")
+    if runtime_env.get("working_dir") != str(plugin_bundle):
+        raise AssertionError("Ray runtime_env did not include the Torch recipe Bundle")
+    if "pip" not in runtime_env:
+        raise AssertionError("Ray runtime_env did not install the Torch recipe Bundle")
+    entrypoint_code = (
+        "from tests.training.jobs.torch_recipe_gate_job import main; "
+        "raise SystemExit(main())"
+    )
     job_id = job_client.submit_job(
-        entrypoint="python tests/training/jobs/torch_recipe_gate_job.py",
+        entrypoint=f"python -c {json.dumps(entrypoint_code)}",
         runtime_env=runtime_env,
         submission_id=submission_id,
     )
@@ -246,338 +153,18 @@ def _submit_torch_recipe_gate_job(
     return result
 
 
-def _submit_official_algorithm_gate_job(
-    job_client: JobSubmissionClient,
-    *,
-    root: Path,
-    wheels: tuple[Path, ...],
-    entrypoint: str = "python tests/training/jobs/official_algorithm_gate_job.py",
-    category: str = "all",
-    entry_points: frozenset[str] | None = None,
-) -> dict[str, Any]:
-    submission_id = f"official-algorithms-{category}-{uuid.uuid4().hex}"
-    runtime_env = {
-        "working_dir": "/workspace/tributo-src",
-        "pip": {
-            "packages": [str(wheel) for wheel in wheels],
-            "pip_check": False,
-            "pip_install_options": [
-                "--disable-pip-version-check",
-                "--no-cache-dir",
-                "--no-deps",
-            ],
-        },
-        "env_vars": {
-            "RAY_ENABLE_UV_RUN_RUNTIME_ENV": "0",
-            "RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO": "0",
-            "TRIBUTO_OFFICIAL_ALGORITHM_GATE_ROOT": str(root),
-            "TRIBUTO_OFFICIAL_ALGORITHM_CATEGORY": category,
-            "TRIBUTO_OFFICIAL_ALGORITHM_ENTRY_POINTS": ",".join(
-                sorted(entry_points or ())
-            ),
-            "TRIBUTO_OFFICIAL_DISTRIBUTED_INFERENCE": "1",
-            "TRIBUTO_RUN_ID": submission_id,
-            "TRIBUTO_ATTEMPT_ID": "attempt-1",
-        },
-    }
-    job_id = job_client.submit_job(
-        entrypoint=entrypoint,
-        runtime_env=runtime_env,
-        submission_id=submission_id,
-    )
-    result = wait_for_job(job_client, job_id, timeout=1800)
-    result["message"] = job_client.get_job_info(job_id).message or ""
-    if log_path := os.environ.get("TRIBUTO_DISTRIBUTED_GATE_LOG"):
-        with Path(log_path).open("a", encoding="utf-8") as stream:
-            stream.write(
-                f"===== official-algorithms category={category} "
-                f"status={result['status']} "
-                f"job_id={job_id} =====\n"
-            )
-            if result["message"]:
-                stream.write(f"Ray Job message: {result['message']}\n")
-            stream.write(str(result["logs"]))
-            stream.write("\n")
-    return result
-
-
-def _submit_graph_core_gate_job(
-    job_client: JobSubmissionClient,
-) -> dict[str, Any]:
-    """Run the Core graph-partition fixture as one isolated Ray Job."""
-    core_wheel_value = os.environ.get("TRIBUTO_CORE_WHEEL")
-    if not core_wheel_value:
-        pytest.fail("graph Core gate requires the fixed Tributo Core Wheel")
-    core_wheel = Path(core_wheel_value)
-    if not core_wheel.is_file():
-        pytest.fail(f"graph Core gate Wheel is unavailable: {core_wheel}")
-    gate_root = Path(
-        f"/workspace/tributo-work/tributo-graph-core-gate-{uuid.uuid4().hex}"
-    )
-    result = _submit_official_algorithm_gate_job(
-        job_client,
-        root=gate_root,
-        wheels=(core_wheel,),
-        entrypoint="python tests/training/jobs/graph_core_gate_job.py",
-        category="graph-core",
-    )
-    assert result["status"] == JobStatus.SUCCEEDED, (
-        f"Core graph partition Gate failed:\n{result['message']}\n{result['logs']}"
-    )
-    evidence = _object_from_logs(str(result["logs"]), "GRAPH_CORE_RESULT: ")
-    graph = evidence["torch_evidence"]["graph_partition"]
-    assert evidence["distributed"] is True
-    assert evidence["cross_node"] is True
-    assert evidence["driver_materialized_training_rows"] == 0
-    assert graph["partition_count"] == 2
-    assert graph["total_nodes"] == 8
-    assert graph["total_edges"] == 8
-    workers = evidence["torch_evidence"]["workers"]
-    assert len(workers) == 2
-    assert len({worker["node_id"] for worker in workers}) == 2
-    assert all(set(worker["input_rows"]) == {"train"} for worker in workers)
-    seed_role = next(
-        role for role in evidence["torch_evidence"]["roles"] if role["role"] == "train"
-    )
-    assert seed_role["observed_rows"] == 8
-    assert seed_role["rows_per_rank"] == [4, 4]
-    assert sum(worker["graph"]["seed_rows"] for worker in workers) == 18
-    assert all(worker["rows_processed"] == 8 for worker in workers)
-    assert all(worker["batch_count"] == 4 for worker in workers)
-    assert all(worker["graph"]["batch_count"] == 5 for worker in workers)
-    assert all(worker["graph"]["touched_partitions"] == [0, 1] for worker in workers)
-    sampling_profiles = [worker["graph"]["sampling_profiles"] for worker in workers]
-    for profiles in sampling_profiles:
-        assert len(profiles) == 2
-        by_batch_size = {profile["seed_batch_size"]: profile for profile in profiles}
-        assert set(by_batch_size) == {1, 2}
-        training_profile = by_batch_size[2]
-        evaluation_profile = by_batch_size[1]
-        assert training_profile["fanouts"] == [2]
-        assert training_profile["direction"] == "incoming"
-        assert training_profile["request_count"] == 4
-        assert training_profile["random_seed_min"] == 17
-        assert training_profile["random_seed_max"] == 20
-        assert evaluation_profile["fanouts"] == [2]
-        assert evaluation_profile["direction"] == "incoming"
-        assert evaluation_profile["request_count"] == 1
-        assert evaluation_profile["random_seed_min"] == 21
-        assert evaluation_profile["random_seed_max"] == 21
-        assert all(len(profile["random_seed_digest"]) == 64 for profile in profiles)
-    return evidence
-
-
-def test_official_algorithm_wheels_complete_on_ray_cluster(
-    job_client: JobSubmissionClient,
-) -> None:
-    """Prove official decomposition and Torch Wheels train across nodes."""
-    if os.environ.get("TRIBUTO_DOCKER_DISTRIBUTED_ALGORITHM_IT") != "1":
-        pytest.fail("official algorithm IT must run in its owned Docker cluster")
-    wheels = _official_algorithm_wheels()
-    try:
-        selected_entry_points = parse_entry_point_selection(
-            os.environ.get("TRIBUTO_OFFICIAL_GATE_ENTRY_POINTS", "")
-        )
-    except ValueError as exc:
-        pytest.fail(str(exc))
-    requested_categories = os.environ.get("TRIBUTO_OFFICIAL_GATE_CATEGORIES", "")
-    if requested_categories:
-        categories = tuple(
-            value.strip() for value in requested_categories.split(",") if value.strip()
-        )
-        if not categories or len(set(categories)) != len(categories):
-            pytest.fail("official algorithm Gate categories must be unique names")
-        unknown = sorted(set(categories) - set(CATEGORY_ENTRY_POINTS))
-        if unknown:
-            pytest.fail(f"unknown official algorithm Gate categories: {unknown}")
-    else:
-        categories = tuple(CATEGORY_ENTRY_POINTS)
-    if selected_entry_points is not None:
-        covered_entry_points = frozenset(
-            entry_point
-            for category in categories
-            for entry_point in CATEGORY_ENTRY_POINTS[category]
-        )
-        uncovered_entry_points = sorted(selected_entry_points - covered_entry_points)
-        if uncovered_entry_points:
-            pytest.fail(
-                "selected official algorithm entry points are outside the selected "
-                f"categories: {uncovered_entry_points}"
-            )
-        categories = tuple(
-            category
-            for category in categories
-            if selected_entry_points.intersection(CATEGORY_ENTRY_POINTS[category])
-        )
-    records: list[dict[str, Any]] = []
-    category_logs: dict[str, str] = {}
-    for category in categories:
-        expected_entry_points = tuple(
-            entry_point
-            for entry_point in CATEGORY_ENTRY_POINTS[category]
-            if selected_entry_points is None or entry_point in selected_entry_points
-        )
-        gate_root = Path(
-            "/workspace/tributo-work/"
-            f"tributo-official-algorithm-gate-{category}-{uuid.uuid4().hex}"
-        )
-        result = _submit_official_algorithm_gate_job(
-            job_client,
-            root=gate_root,
-            wheels=wheels,
-            category=category,
-            entry_points=selected_entry_points,
-        )
-        assert result["status"] == JobStatus.SUCCEEDED, (
-            f"official {category} Gate failed:\n{result['message']}\n{result['logs']}"
-        )
-        logs = str(result["logs"])
-        category_logs[category] = logs
-        category_records = _result_from_logs(logs)
-        assert {record["entry_point"] for record in category_records} == set(
-            expected_entry_points
-        )
-        inference_result = _object_from_logs(logs, "INFERENCE_RESULT: ")
-        assert inference_result == {
-            "all_distributed": True,
-            "record_count": len(expected_entry_points),
-        }
-        installation_result = _object_from_logs(logs, "INSTALLATION_RESULT: ")
-        assert installation_result["record_count"] == len(ALL_ENTRY_POINTS)
-        assert {
-            (
-                record["entry_point"],
-                record["distribution"],
-                record["algorithm_id"],
-                record["implementation_id"],
-            )
-            for record in installation_result["records"]
-        } == {
-            (
-                entry_point,
-                identity.distribution,
-                identity.algorithm_id,
-                identity.implementation_id,
-            )
-            for entry_point, identity in OFFICIAL_ALGORITHM_IDENTITIES.items()
-        }
-        records.extend(category_records)
-    expected_selected = selected_entry_points or frozenset(
-        entry_point
-        for category in categories
-        for entry_point in CATEGORY_ENTRY_POINTS[category]
-    )
-    assert len(records) == len(expected_selected)
-    assert {record["entry_point"] for record in records} == expected_selected
-    if expected_selected == ALL_ENTRY_POINTS:
-        assert expected_selected == ALL_ENTRY_POINTS
-    if "classical" in category_logs:
-        classical_logs = category_logs["classical"]
-        for marker in (
-            "TUNE_RESULT: ",
-            "BASELINE_RESULT: ",
-            "RECOVERY_RESULT: ",
-            "FAILURE_RESULT: ",
-        ):
-            assert _object_from_logs(classical_logs, marker) == {"skipped": True}
-    expected_strategies = {
-        "ray_joblib_estimator",
-        "ray_parallel_ensemble",
-        "ray_iterative_optimization",
-        "ray_map_reduce",
-        "ray_train_torch",
-        "framework_native",
-    }
-    actual_strategies = {record["receipt"]["strategy"] for record in records}
-    assert actual_strategies
-    assert actual_strategies <= expected_strategies
-    if expected_selected == ALL_ENTRY_POINTS:
-        assert actual_strategies == expected_strategies
-    for record in records:
-        receipt = record["receipt"]
-        assert record["status"] == "succeeded"
-        assert receipt["distributed"] is True
-        assert receipt["driver_materialized_training_rows"] == 0
-        assert len(receipt["workers"]) == 2
-        assert receipt["cluster_distributed"] is True
-        assert receipt["cross_node"] is True
-        assert len({worker["node_id"] for worker in receipt["workers"]}) == 2
-        distributed_inference = record["distributed_inference"]
-        assert distributed_inference["status"] == "succeeded"
-        assert distributed_inference["row_count"] == 16
-        assert distributed_inference["node_count"] == 2
-        assert len(distributed_inference["manifest_sha256"]) == 64
-        assert len(distributed_inference["result_id"]) == 64
-    if "graph" in categories:
-        _submit_graph_core_gate_job(job_client)
-
-
-def test_priority_algorithm_wheels_complete_on_ray_cluster(
-    job_client: JobSubmissionClient,
-) -> None:
-    """Prove the selected XGBoost, RF, LR, and causal paths cross nodes."""
-    if os.environ.get("TRIBUTO_DOCKER_DISTRIBUTED_ALGORITHM_IT") != "1":
-        pytest.fail("priority algorithm IT must run in its owned Docker cluster")
-    wheels = _official_algorithm_wheels()
-    gate_root = Path(
-        f"/workspace/tributo-work/tributo-priority-algorithm-gate-{uuid.uuid4().hex}"
-    )
-    result = _submit_official_algorithm_gate_job(
-        job_client,
-        root=gate_root,
-        wheels=wheels,
-        entrypoint="python tests/training/jobs/priority_algorithm_gate_job.py",
-    )
-    assert result["status"] == JobStatus.SUCCEEDED, (
-        f"priority algorithm Gate failed:\n{result['message']}\n{result['logs']}"
-    )
-    records = _result_from_logs(str(result["logs"]))
-    assert {record["algorithm"] for record in records} == {
-        "random_forest",
-        "logistic_regression",
-        "xgboost",
-        "linear_dml_ate",
-        "doubly_robust_ate",
-        "x_learner",
-    }
-    assert len(records) == 6
-    assert all(record["onnx_exported"] is True for record in records)
-    assert all(
-        record["inference_roundtrip"] is True
-        for record in records
-        if record["algorithm"]
-        in {"random_forest", "logistic_regression", "xgboost", "x_learner"}
-    )
-    for record in records:
-        receipt = record["receipt"]
-        assert record["status"] == "succeeded"
-        assert receipt["distributed"] is True
-        assert receipt["cluster_distributed"] is True
-        assert len({worker["node_id"] for worker in receipt["workers"]}) == 2
-    baseline = _object_from_logs(str(result["logs"]), "BASELINE_RESULT: ")
-    assert baseline["random_forest_exact"] is True
-    assert baseline["logistic_prediction_equivalent"] is True
-    recovery = _object_from_logs(str(result["logs"]), "RECOVERY_RESULT: ")
-    assert recovery["ensemble_resumed"] is True
-    assert recovery["iterative_resumed"] is True
-    assert recovery["ensemble_corruption_rejected"] is True
-    assert recovery["iterative_corruption_rejected"] is True
-    inference = _object_from_logs(str(result["logs"]), "INFERENCE_RESULT: ")
-    assert inference["node_count"] == 2
-
-
 def test_out_of_tree_torch_recipe_completes_on_ray_cluster(
     job_client: JobSubmissionClient,
 ) -> None:
-    """Prove the low-code recipe Wheel, uneven shards, checkpoint, and Bundle."""
-    if os.environ.get("TRIBUTO_DOCKER_DISTRIBUTED_ALGORITHM_IT") != "1":
-        pytest.fail("distributed algorithm IT must run in its owned Docker cluster")
+    """Prove an out-of-tree recipe Bundle, uneven shards, and model export."""
+    if os.environ.get("TRIBUTO_DOCKER_ALGORITHM_CONTRACT_IT") != "1":
+        pytest.fail("fixture plugin IT must run in its owned Docker Ray Jobs cluster")
     gate_root = Path(f"/workspace/tributo-work/tributo-recipe-{uuid.uuid4().hex}")
     try:
         job_result = _submit_torch_recipe_gate_job(
             job_client,
             root=gate_root,
-            plugin_wheel=_torch_recipe_plugin_wheel(),
+            plugin_bundle=_torch_recipe_plugin_bundle(),
         )
         assert job_result["status"] == JobStatus.SUCCEEDED, (
             f"Torch recipe Gate failed:\n{job_result['message']}\n{job_result['logs']}"
@@ -607,7 +194,7 @@ def test_out_of_tree_torch_recipe_completes_on_ray_cluster(
 def _offline_bundle() -> Path:
     configured = os.environ.get("TRIBUTO_OFFLINE_ALGORITHM_BUNDLE")
     if not configured:
-        pytest.fail("algorithm distribution IT requires an offline Bundle")
+        pytest.fail("fixture plugin IT requires an offline Bundle")
     bundle = Path(configured)
     if not (bundle / "manifest.json").is_file():
         pytest.fail(f"offline algorithm Bundle is unavailable: {bundle}")
@@ -616,7 +203,18 @@ def _offline_bundle() -> Path:
 
 def _offline_job_entrypoint() -> str:
     code = (
-        "import importlib.metadata as metadata, json, ray; "
+        "import importlib.metadata as metadata, importlib.util, json, os, ray, sys; "
+        "module_spec = importlib.util.find_spec('tributo_test_offline_algorithm'); "
+        "distributions = sorted(distribution.metadata.get('Name', '') "
+        "for distribution in metadata.distributions() "
+        "if distribution.metadata.get('Name', '').lower().startswith("
+        "'tributo-test-offline-')); "
+        "print('ALGORITHM_RUNTIME_ENV_PROBE: ' + json.dumps({"
+        "'python': sys.executable, 'cwd': os.getcwd(), 'sys_path': sys.path, "
+        "'module_origin': module_spec.origin if module_spec else None, "
+        "'distributions': distributions, "
+        "'mode': os.environ.get('TRIBUTO_ALGORITHM_DISTRIBUTION_MODE')"
+        "}, sort_keys=True)); "
         "from tributo_test_offline_algorithm import verify_runtime; "
         "ray.init(); "
         "driver = verify_runtime(); "
@@ -632,8 +230,8 @@ def test_offline_wheelhouse_installs_unique_dependency_on_driver_and_workers(
     job_client: JobSubmissionClient,
 ) -> None:
     """Prove repeated offline Bundle submissions are reproducible on all nodes."""
-    if os.environ.get("TRIBUTO_DOCKER_DISTRIBUTED_ALGORITHM_IT") != "1":
-        pytest.fail("algorithm distribution IT must run in its owned Docker cluster")
+    if os.environ.get("TRIBUTO_DOCKER_ALGORITHM_CONTRACT_IT") != "1":
+        pytest.fail("fixture plugin IT must run in its owned Docker Ray Jobs cluster")
     bundle = _offline_bundle()
     profile = _algorithm_image_profile()
     artifact = AlgorithmArtifact(
@@ -678,8 +276,8 @@ def test_remote_offline_wheelhouse_archive_installs_on_driver_and_workers(
     job_client: JobSubmissionClient,
 ) -> None:
     """Prove Ray fetches an attested ZIP Bundle from the internal S3 endpoint."""
-    if os.environ.get("TRIBUTO_DOCKER_DISTRIBUTED_ALGORITHM_IT") != "1":
-        pytest.fail("algorithm distribution IT must run in its owned Docker cluster")
+    if os.environ.get("TRIBUTO_DOCKER_ALGORITHM_CONTRACT_IT") != "1":
+        pytest.fail("fixture plugin IT must run in its owned Docker Ray Jobs cluster")
     bundle = _offline_bundle()
     remote_uri = os.environ.get("TRIBUTO_OFFLINE_ALGORITHM_BUNDLE_URI")
     archive_sha256 = os.environ.get("TRIBUTO_OFFLINE_ALGORITHM_BUNDLE_SHA256")
@@ -706,9 +304,12 @@ def test_remote_offline_wheelhouse_archive_installs_on_driver_and_workers(
         image_profile=_algorithm_image_profile(),
     )
     assert runtime_env["working_dir"] == remote_uri
-    assert runtime_env["pip"]["packages"] == [
+    assert runtime_env["pip"]["packages"][0] == (
         "-r ${RAY_RUNTIME_ENV_CREATE_WORKING_DIR}/requirements.lock"
-    ]
+    )
+    assert runtime_env["pip"]["packages"][1].startswith(
+        "# tributo-runtime-env-cache-key="
+    )
     job_id = job_client.submit_job(
         entrypoint=_offline_job_entrypoint(),
         runtime_env=runtime_env,

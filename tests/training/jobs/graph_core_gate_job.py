@@ -8,6 +8,7 @@ import os
 import tempfile
 from collections.abc import Mapping
 from dataclasses import replace
+from importlib.resources import files
 from pathlib import Path
 from typing import Any, cast
 
@@ -418,7 +419,11 @@ def _register_test_algorithm() -> DistributedAlgorithmDescriptor:
         package_version="1.0.0",
         tributo_version_spec=">=1,<2",
         policy=policy,
-        code_digest=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        code_digest=hashlib.sha256(
+            files("tests.training")
+            .joinpath("jobs", "graph_core_gate_job.py")
+            .read_bytes()
+        ).hexdigest(),
         descriptor_api_version=1,
         is_default=True,
     )
@@ -453,7 +458,7 @@ def main() -> None:
         IngestionInputInvocation,
     )
 
-    root_value = os.environ.get("TRIBUTO_OFFICIAL_ALGORITHM_GATE_ROOT")
+    root_value = os.environ.get("TRIBUTO_GRAPH_CORE_GATE_ROOT")
     if not root_value:
         raise RuntimeError("Core graph Gate root is missing")
     root = Path(root_value)
