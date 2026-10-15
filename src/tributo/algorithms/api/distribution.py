@@ -480,6 +480,51 @@ class IterativeOptimizationPolicy:
 
 @PublicAPI(stability="alpha")
 @dataclass(frozen=True)
+class FrameworkNativeInputRoute:
+    """Coverage expectation for one Framework Native Dataset role."""
+
+    role: str
+    mode: str
+    required: bool = True
+
+    def __post_init__(self) -> None:
+        _string(self.role, "framework-native input route role")
+        mode = _string(self.mode, "framework-native input route mode")
+        if mode not in {"partitioned", "replicated"}:
+            raise AlgorithmConfigurationError(
+                "framework-native input route mode must be partitioned or replicated"
+            )
+        _boolean(self.required, "framework-native input route required")
+        if self.role == "train" and (not self.required or self.mode != "partitioned"):
+            raise AlgorithmConfigurationError(
+                "framework-native train route must be required and partitioned"
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the deterministic portable route declaration."""
+        return {"role": self.role, "mode": self.mode, "required": self.required}
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> FrameworkNativeInputRoute:
+        """Validate and restore one portable route declaration."""
+        route = _mapping(value, "framework-native input route")
+        unknown = set(route) - {"role", "mode", "required"}
+        if unknown:
+            raise AlgorithmConfigurationError(
+                "framework-native input route has unknown field(s): "
+                f"{sorted(str(name) for name in unknown)}"
+            )
+        return cls(
+            role=_string(route.get("role"), "framework-native input route role"),
+            mode=_string(route.get("mode"), "framework-native input route mode"),
+            required=_boolean(
+                route.get("required", True), "framework-native input route required"
+            ),
+        )
+
+
+@PublicAPI(stability="alpha")
+@dataclass(frozen=True)
 class FrameworkNativePolicy:
     """Conditional contract for a framework-owned distributed trainer."""
 
@@ -488,6 +533,7 @@ class FrameworkNativePolicy:
     manages_input_shards: bool = True
     manages_checkpoints: bool = True
     component_stages: tuple[str, ...] = ()
+    input_routes: tuple[FrameworkNativeInputRoute, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.framework, str) or not self.framework:
@@ -511,6 +557,23 @@ class FrameworkNativePolicy:
                 "framework-native component stages must be unique"
             )
         object.__setattr__(self, "component_stages", stages)
+        routes = tuple(self.input_routes)
+        if any(not isinstance(route, FrameworkNativeInputRoute) for route in routes):
+            raise AlgorithmConfigurationError(
+                "framework-native input_routes must contain FrameworkNativeInputRoute values"
+            )
+        roles = tuple(route.role for route in routes)
+        if len(roles) != len(set(roles)):
+            raise AlgorithmConfigurationError(
+                "framework-native input route roles must be unique"
+            )
+        if routes and "train" not in roles:
+            raise AlgorithmConfigurationError(
+                "framework-native input_routes must include the required train role"
+            )
+        object.__setattr__(
+            self, "input_routes", tuple(sorted(routes, key=lambda route: route.role))
+        )
         if not self.manages_input_shards:
             raise AlgorithmConfigurationError(
                 "framework-native training must prove framework-owned input shards"
@@ -1289,6 +1352,10 @@ class DistributionSpec:
             }
             if self.policy.component_stages:
                 policy["component_stages"] = list(self.policy.component_stages)
+            if self.policy.input_routes:
+                policy["input_routes"] = [
+                    route.to_dict() for route in self.policy.input_routes
+                ]
         return {
             "api_version": self.api_version,
             "strategy": self.strategy.value,
@@ -1449,6 +1516,14 @@ class DistributionSpec:
                             "component_stages",
                         )
                     ),
+                    input_routes=tuple(
+                        FrameworkNativeInputRoute.from_dict(
+                            _mapping(route, "input route")
+                        )
+                        for route in _sequence(
+                            policy_value.get("input_routes", ()), "input_routes"
+                        )
+                    ),
                 )
             else:
                 raise ValueError(f"unknown policy kind: {kind!r}")
@@ -1528,6 +1603,7 @@ __all__ = [
     "DistributionSpec",
     "DistributionStrategy",
     "ExecutionProfile",
+    "FrameworkNativeInputRoute",
     "FrameworkNativePolicy",
     "InputDistribution",
     "IterativeOptimizationPolicy",

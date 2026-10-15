@@ -1181,7 +1181,9 @@ class InputCoverageContract:
     on the Driver.  ``dimensions`` names orthogonal counters emitted as
     ``coverage.<name>`` in each worker's ``input_rows`` map (for example,
     ``treated``/``control`` or ``fold.0``/``fold.1``).  The ordinary row count
-    is always checked through ``rows_processed``.
+    is always checked through ``rows_processed``.  Optional role modes check
+    named input row counters in the same evidence map, either as partition sums
+    or as a full count on every worker.
     """
 
     dimensions: tuple[str, ...] = ()
@@ -1207,8 +1209,35 @@ class InputCoverageContract:
         workers: Iterable[Mapping[str, Any]],
         *,
         expected_rows: int | None = None,
+        role_modes: Mapping[str, str] | None = None,
+        expected_role_rows: Mapping[str, int] | None = None,
     ) -> None:
-        """Validate worker/shard identity and the declared coverage counters."""
+        """Validate worker identity, coverage dimensions, and routed input roles."""
+        normalized_role_modes = dict(role_modes or {})
+        normalized_expected_role_rows = dict(expected_role_rows or {})
+        if set(normalized_role_modes) != set(normalized_expected_role_rows):
+            raise AlgorithmConfigurationError(
+                "role_modes and expected_role_rows must declare the same roles"
+            )
+        if any(
+            not isinstance(role, str)
+            or not role
+            or not isinstance(mode, str)
+            or mode not in {"partitioned", "replicated"}
+            for role, mode in normalized_role_modes.items()
+        ):
+            raise AlgorithmConfigurationError(
+                "role_modes must map non-empty roles to partitioned or replicated"
+            )
+        if any(
+            not isinstance(row_count, int)
+            or isinstance(row_count, bool)
+            or row_count < 0
+            for row_count in normalized_expected_role_rows.values()
+        ):
+            raise AlgorithmConfigurationError(
+                "expected_role_rows must contain non-negative integers"
+            )
         records = tuple(
             item.to_dict() if hasattr(item, "to_dict") else item for item in workers
         )
@@ -1223,6 +1252,8 @@ class InputCoverageContract:
             raise AlgorithmExecutionError("coverage contract detected duplicate shards")
         total_rows = 0
         totals = dict.fromkeys(self.dimensions, 0)
+        role_totals = dict.fromkeys(normalized_role_modes, 0)
+        role_rows_by_worker: list[dict[str, int]] = []
         for record in records:
             rows = record.get("rows_processed")
             if not isinstance(rows, int) or isinstance(rows, bool) or rows < 0:
@@ -1231,6 +1262,18 @@ class InputCoverageContract:
             input_rows = record.get("input_rows")
             if not isinstance(input_rows, Mapping):
                 raise AlgorithmExecutionError("coverage input_rows is missing")
+            if normalized_role_modes:
+                undeclared_roles = [
+                    name
+                    for name in input_rows
+                    if name not in normalized_role_modes
+                    and not (isinstance(name, str) and name.startswith("coverage."))
+                ]
+                if undeclared_roles:
+                    raise AlgorithmExecutionError(
+                        "coverage input_rows contains undeclared role(s): "
+                        f"{sorted(str(name) for name in undeclared_roles)}"
+                    )
             for name in self.dimensions:
                 count = input_rows.get(f"coverage.{name}")
                 if not isinstance(count, int) or isinstance(count, bool) or count < 0:
@@ -1238,6 +1281,16 @@ class InputCoverageContract:
                         f"coverage dimension {name!r} is malformed"
                     )
                 totals[name] += count
+            observed_roles: dict[str, int] = {}
+            for role in normalized_role_modes:
+                count = input_rows.get(role)
+                if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+                    raise AlgorithmExecutionError(
+                        f"input role coverage {role!r} is malformed"
+                    )
+                observed_roles[role] = count
+                role_totals[role] += count
+            role_rows_by_worker.append(observed_roles)
         if expected_rows is not None and (
             not isinstance(expected_rows, int)
             or isinstance(expected_rows, bool)
@@ -1258,6 +1311,19 @@ class InputCoverageContract:
             raise AlgorithmExecutionError(
                 "coverage contract requires non-empty dimensions"
             )
+        for role, mode in normalized_role_modes.items():
+            expected = normalized_expected_role_rows[role]
+            if mode == "partitioned" and role_totals[role] != expected:
+                raise AlgorithmExecutionError(
+                    f"partitioned input role {role!r} does not cover canonical input: "
+                    f"expected={expected}, observed={role_totals[role]}"
+                )
+            if mode == "replicated" and any(
+                observed[role] != expected for observed in role_rows_by_worker
+            ):
+                raise AlgorithmExecutionError(
+                    f"replicated input role {role!r} is not present in full on every worker"
+                )
 
 
 @PublicAPI(stability="alpha")

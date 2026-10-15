@@ -36,7 +36,7 @@ the stable package baseline does not imply validation of every platform.
 | Explainability Ray Jobs | `../integration/test_explainability_ray_jobs.py` | `manual_external` | Explanation submission, distributed execution, and output evidence | Lifecycle-owned Ray Jobs runner |
 | Core algorithm runtimes | `../algorithms/test_distributed_ray_runtime.py`, `../algorithms/test_decomposition_runtimes.py` | `manual_external` | Core-owned local Ray worker, decomposition, and execution receipt contracts | Isolated Linux container with the locked Core environment |
 | Distributed algorithms | `../integration/test_distributed_algorithm_local.py` | `manual_external` | Collective and MapReduce execution, sharding, receipts, and Bundle atomicity | Isolated multi-worker Ray environment |
-| Core algorithm contract Ray Jobs | `../../scripts/run_algorithm_contract_ray_jobs_it.sh` | `manual_external` | Fixture Bundle installation, portable execution channels, offline dependency delivery, and Core graph partition contracts | Lifecycle-owned Docker Ray Jobs cluster, MinIO, and two workers |
+| Core algorithm contract Ray Jobs | `../../scripts/run_algorithm_contract_ray_jobs_it.sh` | `manual_external` | Fixture Bundle installation, portable execution channels, offline dependency delivery, Core graph partition contracts, and Framework Native role coverage | Lifecycle-owned Docker Ray Jobs cluster, MinIO, and two workers |
 | Ray runtime environment | `../integration/test_ray_runtime_env.py` | `manual_external` | uv runtime-environment propagation into Ray workers | Host capable of starting the required Ray runtime |
 
 ## Core Algorithm Contract Ray Jobs Suite
@@ -49,9 +49,10 @@ Run the fixture-only external suite from the repository root:
 
 The runner builds the current Core Wheel and test fixture Wheels, prepares
 offline Bundles, starts a unique Docker Compose Ray cluster with MinIO, and runs
-the third-party plugin, portable execution, and Core graph partition tests
-inside the owned Ray head. It captures pytest, Ray Job, image, and service logs
-under `/tmp/tributo-algorithm-contract-it-*`, then removes only that Compose
+the third-party plugin, portable execution, Core graph partition, and
+Framework Native role coverage tests inside the owned Ray head. It captures
+pytest, Ray Job, image, and service logs under
+`/tmp/tributo-algorithm-contract-it-*`, then removes only that Compose
 project's containers, network, and volumes. It does not install the official
 `tributo-algorithms` distribution or certify its multi-node profiles.
 
