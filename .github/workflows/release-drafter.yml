@@ -16,6 +16,6 @@ jobs:
       pull-requests: write
     runs-on: ubuntu-latest
     steps:
-      - uses: release-drafter/release-drafter@f259c0ada5376557cd49e74487398301fab5287a
+      - uses: release-drafter/release-drafter@978bb0b30c5ee8cdd332ced253758157150d43f0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
