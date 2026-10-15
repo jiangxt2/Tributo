@@ -5,8 +5,8 @@ your workload.
 
 ## Choose a source revision
 
-Tributo 1.1.0 is distributed as a source-only GitHub Release. To install that
-release, clone its tag and use its committed lock file:
+Tributo 1.1.0 is distributed through PyPI and GitHub Releases. To install
+the source release, clone its tag and use its committed lock file:
 
 ```bash
 git clone --branch tributo-1.1.0 --depth 1 https://github.com/jiangxt2/Tributo.git
@@ -15,7 +15,7 @@ cd Tributo
 
 The tag and a development checkout can declare the same package version while
 containing different APIs in historical snapshots. Current `master` declares
-`1.2.0.dev0`, while release branches use their selected formal version. Select
+`1.3.0.dev0`, while release branches use their selected formal version. Select
 the checkout before preparing dependencies, and use the documentation,
 metadata, and lock file from that revision. The development version does not
 determine which patch or minor release will be published next.
@@ -40,6 +40,17 @@ builds Core and the algorithm Wheel from explicit public revisions. It does
 not establish that the algorithm Wheel works with the historical release tag.
 
 ## Install the core package
+
+For an isolated PyPI installation, use a separate directory and virtual
+environment:
+
+```bash
+python -m venv .venv
+.venv/bin/python -m pip install "tributo==1.1.0"
+.venv/bin/tributo --help
+```
+
+For the selected source checkout, use its committed lockfile:
 
 ```bash
 uv sync --locked --no-dev
