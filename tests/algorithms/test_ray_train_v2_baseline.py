@@ -6,6 +6,8 @@ import inspect
 
 import pytest
 
+from tests.support.runtime_versions import RAY_VERSION
+
 
 def test_ray_2590_defaults_to_train_v2(monkeypatch: pytest.MonkeyPatch) -> None:
     import ray
@@ -13,7 +15,7 @@ def test_ray_2590_defaults_to_train_v2(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.delenv("RAY_TRAIN_V2_ENABLED", raising=False)
 
-    assert ray.__version__ == "2.59.0"
+    assert ray.__version__ == RAY_VERSION
     assert is_v2_enabled() is True
     assert "env_bool(V2_ENABLED_ENV_VAR, True)" in inspect.getsource(is_v2_enabled)
 

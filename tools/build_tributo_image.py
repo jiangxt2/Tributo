@@ -41,9 +41,15 @@ from tools.host_uv_export import (  # noqa: E402
     export_locked_requirements,
 )
 from tools.runtime_image_contract import (  # noqa: E402
+    BASE_IMAGE,
+    BASE_IMAGE_MIRROR,
+    LOCAL_BASE_IMAGE,
+    PYTHON_VERSION,
+    RAY_VERSION,
     REQUIRED_DISTRIBUTION_VERSIONS,
     REQUIRED_DISTRIBUTIONS,
     REQUIRED_IMPORTS,
+    UV_VERSION,
 )
 
 try:
@@ -56,20 +62,8 @@ except ModuleNotFoundError:  # pragma: no cover - direct source checkout fallbac
 
 
 DOCKERFILE = ROOT / "docker" / "tributo-runtime" / "Dockerfile"
-BASE_IMAGE = (
-    "rayproject/ray:2.59.0-py312@"
-    "sha256:0ffca209fb4c984d648db550b8dbe7879bdba3bbb5d96ee5894843cf6ac12eb5"
-)
-BASE_IMAGE_MIRROR = (
-    "docker.m.daocloud.io/rayproject/ray:2.59.0-py312@"
-    "sha256:0ffca209fb4c984d648db550b8dbe7879bdba3bbb5d96ee5894843cf6ac12eb5"
-)
-LOCAL_BASE_IMAGE = "tributo-ray-base:2.59.0-py312"
-UV_VERSION = "0.11.23"
 PLATFORM_AUTO = "auto"
 SUPPORTED_PLATFORMS = ("linux/amd64", "linux/arm64")
-RAY_VERSION = "2.59.0"
-PYTHON_VERSION = "3.12"
 PYTHON_SPEC = ">=3.12,<3.14"
 PROFILE_ID = "tributo.runtime.full"
 IMAGE_DIGEST = re.compile(r"^[0-9a-f]{64}$")
@@ -432,6 +426,8 @@ def build_command(
         f"BASE_IMAGE={local_base_image(config.platform)}",
         "--build-arg",
         f"TRIBUTO_BASE_IMAGE={config.base_image}",
+        "--build-arg",
+        f"TRIBUTO_RAY_VERSION={RAY_VERSION}",
         "--build-arg",
         f"TRIBUTO_PLATFORM={config.platform}",
         "--build-arg",

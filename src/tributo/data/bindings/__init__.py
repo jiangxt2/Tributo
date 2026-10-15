@@ -9,6 +9,7 @@ from collections.abc import Callable
 from packaging.specifiers import SpecifierSet
 from packaging.version import InvalidVersion, Version
 
+from tributo._common.runtime_versions import DAFT_SQL_VERSION_SPEC, RAY_VERSION_SPEC
 from tributo.data.engine_binding import (
     BindingDescriptor,
     BindingKey,
@@ -21,10 +22,10 @@ from tributo.exceptions import EngineNotAvailableError
 
 _DEFAULT_BINDINGS: EngineBindings | None = None
 _DEFAULT_BINDINGS_LOCK = threading.Lock()
-_RAY_VERSION_SPEC = "==2.59.0"
+_RAY_VERSION_SPEC = RAY_VERSION_SPEC
 _DAFT_VERSION_SPEC = ">=0.7.0,<0.8.0"
-_DAFT_SQL_VERSION_SPEC = ">=0.7.26,<0.7.27"
-_RAY_INSTALL_HINT = "pip install 'ray[default,serve,tune]==2.59.0'"
+_DAFT_SQL_VERSION_SPEC = DAFT_SQL_VERSION_SPEC
+_RAY_INSTALL_HINT = f"pip install 'ray[default,serve,tune]{RAY_VERSION_SPEC}'"
 _DAFT_INSTALL_HINT = "pip install 'tributo[data-daft]'"
 _DAFT_LANCE_INSTALL_HINT = "pip install 'tributo[data,data-daft]'"
 _DATA_INSTALL_HINT = "pip install 'tributo[data]'"

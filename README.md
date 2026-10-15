@@ -134,7 +134,8 @@ uv sync --locked --no-dev --extra data --extra data-daft --extra postgresql
 Data sources are opt-in extras where applicable. Install the extra for the
 dialect or backend you use:
 
-The Ray 2.59.0 / Daft 0.7.26 source baseline has passed focused local/S3,
+The runtime baseline in the [support matrix](docs/reference/support-matrix.md)
+has passed focused local/S3,
 Hive, exact-row coverage and SDK batch prediction gates, plus the full CPU
 runtime image gate on Linux arm64. Other algorithm and platform combinations
 retain their separate validation requirements. Connector extras declare the
@@ -148,13 +149,13 @@ driver/worker consistency checks.
 | Local/S3 Iceberg and Lance | Ray Data / Daft public readers | `tributo[data,data-daft]` | Alpha; real dual-engine Conformance |
 | PostgreSQL structured table | Ray Data / Daft SQL readers | `tributo[postgresql,data-daft]` | Alpha; real PostgreSQL Conformance |
 | HDFS Parquet/CSV | Ray Data + PyArrow Hadoop filesystem | Ray runtime with HDFS libraries | Adapter present; cluster gate pending |
-| ClickHouse | locked `ray-clickhouse==1.1` | `tributo[clickhouse]` | Adapter only; real-database Tributo Conformance remains the support gate |
-| Doris | `ray-doris==1.3` / `daft-doris==1.1` | `tributo[mysql]` or `tributo[doris-flight]` | Adapter only; Ray routes require `ray-doris`, Daft routes require `daft-doris`, and real-database Conformance remains the support gate |
-| HiveServer2 structured tables | `ray-hive==1.2` through the built-in Ray Binding | `tributo[hive-ray]` or `uv sync --locked --no-dev --extra hive-ray` | Alpha; real Hive 4.2.0 structured-projection Conformance |
+| ClickHouse | `ray-clickhouse` | `tributo[clickhouse]` | Adapter only; real-database Tributo Conformance remains the support gate |
+| Doris | `ray-doris` / `daft-doris` | `tributo[mysql]` or `tributo[doris-flight]` | Adapter only; Ray routes require `ray-doris`, Daft routes require `daft-doris`, and real-database Conformance remains the support gate |
+| HiveServer2 structured tables | `ray-hive` through the built-in Ray Binding | `tributo[hive-ray]` or `uv sync --locked --no-dev --extra hive-ray` | Alpha; real Hive 4.2.0 structured-projection Conformance |
 | Native ORC files | no built-in reader | — | Unsupported; use an engine or table service that owns ORC decoding |
 
 Provider/binding presence is not a support claim. The canonical full image definition
-uses Ray 2.59.0 and the stable connector packages selected by `uv.lock`.
+uses the pinned Ray image and stable connector packages selected by `uv.lock`.
 The package requirements in `pyproject.toml` declare supported minimums;
 the lock and image checks select the exact validated versions.
 See the [installation requirements](docs/getting-started/installation.md).

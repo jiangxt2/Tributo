@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from tests.support.runtime_versions import DAFT_VERSION, RAY_VERSION
 from tributo.data import (
     DaftDataFrameHandle,
     IngestionGateway,
@@ -126,10 +127,10 @@ class _ExternalHiveBinding:
         self.seen_plan = request.plan
         if self.engine_id == "tributo.ray_data":
             handle = RayDataHandle(object())
-            engine_version = "2.59.0"
+            engine_version = RAY_VERSION
         else:
             handle = DaftDataFrameHandle(object())
-            engine_version = "0.7.26"
+            engine_version = DAFT_VERSION
         return BindingCompilation(
             handle=handle,
             engine_version=engine_version,
@@ -153,9 +154,9 @@ def test_new_hive_provider_and_bindings_require_no_consumer_change(
     expected_handle: type[RayDataHandle] | type[DaftDataFrameHandle],
 ) -> None:
     versions = {
-        "daft": "0.7.26",
+        "daft": DAFT_VERSION,
         "external-hive-connector": "1.0.0",
-        "ray": "2.59.0",
+        "ray": RAY_VERSION,
     }
     monkeypatch.setattr(
         "tributo.data.engine_binding.importlib.metadata.version",
@@ -181,7 +182,9 @@ def test_new_hive_provider_and_bindings_require_no_consumer_change(
             distribution_name="external-hive-connector",
             distribution_version="1.0.0",
             engine_version_spec=(
-                "==2.59.0" if engine_id.endswith("ray_data") else "==0.7.26"
+                f"=={RAY_VERSION}"
+                if engine_id.endswith("ray_data")
+                else f"=={DAFT_VERSION}"
             ),
             constraints=BindingPlanConstraints(
                 catalog_ids=frozenset({"hive"}),

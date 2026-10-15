@@ -10,6 +10,8 @@ from pathlib import Path
 from packaging.requirements import Requirement
 
 from tests.support.it_versions import load_it_component_versions
+from tests.support.runtime_versions import RAY_VERSION
+from tools.tributo_it import load_profile
 
 ROOT = Path(__file__).parents[2]
 
@@ -79,9 +81,7 @@ def test_dockerfiles_and_compose_consume_the_version_contract() -> None:
     compose = (
         ROOT / "tests/integrations/docker-compose.data-ingestion.yml"
     ).read_text()
-    profile = json.loads(
-        (ROOT / "tests/integrations/runtime-profiles.json").read_text()
-    )["profiles"]["data-ingestion"]
+    profile = load_profile("data-ingestion", root=ROOT).definition
     versions = load_it_component_versions()
 
     assert profile["base_image"] == versions["RAY_IMAGE"]
@@ -119,10 +119,7 @@ def test_dockerfiles_and_compose_consume_the_version_contract() -> None:
 
 
 def test_full_runtime_profile_matches_the_image_builder_contract() -> None:
-    profiles = json.loads(
-        (ROOT / "tests/integrations/runtime-profiles.json").read_text()
-    )["profiles"]
-    profile = profiles["runtime-full"]
+    profile = load_profile("runtime-full", root=ROOT).definition
     dockerfile = (ROOT / profile["dockerfile"]).read_text()
     config = json.loads((ROOT / "tools/tributo-runtime-full.json").read_text())
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())
@@ -142,7 +139,7 @@ def test_full_runtime_profile_matches_the_image_builder_contract() -> None:
     )
     assert profile["extras"] == config["runtime_extras"]
     assert profile["python_version"] == "3.12"
-    assert profile["version_contract"]["ray"] == "2.59.0"
+    assert profile["version_contract"]["ray"] == RAY_VERSION
     assert project["project"]["optional-dependencies"]["hive-ray"] == ["ray-hive>=1.2"]
     for package, contract_key in {
         "daft-doris": "daft_doris",

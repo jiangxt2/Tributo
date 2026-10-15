@@ -2,8 +2,6 @@
   "schema_version": 1,
   "profiles": {
     "data-ingestion": {
-      "base_image": "rayproject/ray:2.59.0-py312@sha256:0ffca209fb4c984d648db550b8dbe7879bdba3bbb5d96ee5894843cf6ac12eb5",
-      "base_image_mirror": "docker.m.daocloud.io/rayproject/ray:2.59.0-py312@sha256:0ffca209fb4c984d648db550b8dbe7879bdba3bbb5d96ee5894843cf6ac12eb5",
       "dependency_mode": "host-uv-export",
       "dockerfile": "tests/integrations/Dockerfile.data-ingestion",
       "extras": [
@@ -23,25 +21,23 @@
       "minio_image": "minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e",
       "postgres_image": "postgres:16.14@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b",
       "clickhouse_image": "clickhouse/clickhouse-server:26.8.1.2041@sha256:9f8fa0d51f86611fda226c4085cdafdddce35312a60c934de2e4450d61fcb99a",
-      "python_version": "3.12",
       "runtime_repository": "tributo-it-runtime",
-      "uv_version": "0.11.23",
       "version_contract": {
-        "daft_prefix": "0.7.",
-        "daft_doris": "1.1",
-        "lance_ray": "0.5.0",
-        "pyarrow": "19.0.1",
-        "pylance": "9.0.0",
-        "ray": "2.59.0",
-        "ray_doris": "1.3",
-        "ray_hive": "1.2",
-        "ray_clickhouse": "1.1",
-        "thrift": "0.22.0"
-      }
+        "daft_prefix": "0.7."
+      },
+      "locked_version_contract": [
+        "daft-doris",
+        "lance-ray",
+        "pyarrow",
+        "pylance",
+        "ray",
+        "ray-doris",
+        "ray-hive",
+        "ray-clickhouse",
+        "thrift"
+      ]
     },
     "data-ingestion-hdfs": {
-      "base_image": "rayproject/ray:2.59.0-py312@sha256:0ffca209fb4c984d648db550b8dbe7879bdba3bbb5d96ee5894843cf6ac12eb5",
-      "base_image_mirror": "docker.m.daocloud.io/rayproject/ray:2.59.0-py312@sha256:0ffca209fb4c984d648db550b8dbe7879bdba3bbb5d96ee5894843cf6ac12eb5",
       "dependency_mode": "host-uv-export",
       "dockerfile": "tests/integrations/Dockerfile.data-ingestion-hdfs",
       "extras": [
@@ -50,21 +46,19 @@
       ],
       "hdfs_image": "apache/hive:4.2.0@sha256:b0d2842722567a89ac35da8af9002b6bba0fc2d0eb272664954a1fa46d694472",
       "minio_image": "minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e",
-      "python_version": "3.12",
       "runtime_repository": "tributo-it-runtime-hdfs",
-      "uv_version": "0.11.23",
       "version_contract": {
         "hadoop_client": "3.4.1",
-        "java": "21",
-        "pyarrow": "19.0.1",
-        "pyiceberg": "0.11.1",
-        "pylance": "9.0.0",
-        "ray": "2.59.0"
-      }
+        "java": "21"
+      },
+      "locked_version_contract": [
+        "pyarrow",
+        "pyiceberg",
+        "pylance",
+        "ray"
+      ]
     },
     "runtime-full": {
-      "base_image": "rayproject/ray:2.59.0-py312@sha256:0ffca209fb4c984d648db550b8dbe7879bdba3bbb5d96ee5894843cf6ac12eb5",
-      "base_image_mirror": "docker.m.daocloud.io/rayproject/ray:2.59.0-py312@sha256:0ffca209fb4c984d648db550b8dbe7879bdba3bbb5d96ee5894843cf6ac12eb5",
       "dependency_mode": "host-uv-export",
       "dockerfile": "docker/tributo-runtime/Dockerfile",
       "extras": [
@@ -92,21 +86,22 @@
         "causal"
       ],
       "minio_image": "minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e",
-      "python_version": "3.12",
       "runtime_repository": "tributo-runtime",
-      "uv_version": "0.11.23",
       "version_contract": {
-        "daft_prefix": "0.7.",
-        "daft_doris": "1.1",
-        "lance_ray": "0.5.0",
-        "pyarrow": "19.0.1",
-        "pylance": "9.0.0",
-        "ray": "2.59.0",
-        "ray_doris": "1.3",
-        "ray_hive": "1.2",
-        "ray_clickhouse": "1.1",
-        "thrift": "0.22.0"
-      }
+        "daft_prefix": "0.7."
+      },
+      "locked_version_contract": [
+        "daft-doris",
+        "lance-ray",
+        "pyarrow",
+        "pylance",
+        "ray",
+        "ray-doris",
+        "ray-hive",
+        "ray-clickhouse",
+        "thrift"
+      ]
     }
-  }
+  },
+  "shared_image_inputs": true
 }

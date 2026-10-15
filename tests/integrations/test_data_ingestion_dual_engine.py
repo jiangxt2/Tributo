@@ -29,6 +29,7 @@ except ModuleNotFoundError:  # Docker image intentionally omits test dependencie
     pytest = None
 
 from tests.data.ingestion_conformance import assert_dual_engine_conformance
+from tests.support.runtime_versions import RAY_VERSION
 from tributo.data import (
     CastColumn,
     ColumnRename,
@@ -761,7 +762,7 @@ class _CompatibilityPredictor(BasePredictor):
 def test_exact_coverage_and_batch_inference_on_audited_ray() -> None:
     """Preserve a remainder row across Train shards and execute the SDK actor path."""
     _configure_cluster()
-    assert ray.__version__ == "2.59.0"
+    assert ray.__version__ == RAY_VERSION
     dataset = ray.data.from_items([{"id": i} for i in range(7)], override_num_blocks=2)
     assigned = ExactCoverageDataConfig().configure(
         {"train": dataset},

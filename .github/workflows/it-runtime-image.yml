@@ -9,6 +9,8 @@ on:
       - "tests/integrations/runtime-profiles.json"
       - "tests/integrations/component-versions.env"
       - "tools/tributo_it.py"
+      - "tools/tributo-runtime-full.json"
+      - "tools/runtime_image_contract.py"
       - "pyproject.toml"
       - "uv.lock"
       - ".github/workflows/it-runtime-image.yml"

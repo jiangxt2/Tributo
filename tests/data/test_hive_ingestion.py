@@ -11,6 +11,7 @@ import pyarrow as pa
 import pytest
 
 import tributo.data.bindings as builtin_bindings
+from tests.support.runtime_versions import RAY_VERSION
 from tributo.data.bindings import _ray_hive_descriptor
 from tributo.data.bindings.ray_hive import RayHiveBinding
 from tributo.data.engine_binding import BindingCompileRequest, BindingKey
@@ -206,7 +207,7 @@ def test_ray_hive_binding_delegates_to_public_reader(
     monkeypatch.setitem(sys.modules, "ray_hive", module)
     monkeypatch.setattr(
         "tributo.data.bindings.ray_hive.importlib.metadata.version",
-        lambda name: "2.59.0" if name == "ray" else "1.2",
+        lambda name: RAY_VERSION if name == "ray" else "1.2",
     )
 
     plan = SqlScan(
@@ -268,7 +269,7 @@ def test_ray_hive_registration_rejects_missing_distribution(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     versions = {
-        "ray": "2.59.0",
+        "ray": RAY_VERSION,
         "ray-hive": None,
         "thrift": "0.22.0",
         "tributo": package_version("tributo"),
@@ -299,7 +300,7 @@ def test_ray_hive_registration_accepts_installed_versions(
     ray_hive_version: str,
 ) -> None:
     versions = {
-        "ray": "2.59.0",
+        "ray": RAY_VERSION,
         "ray-hive": ray_hive_version,
         "thrift": "0.22.0",
         "tributo": "1.0.0",

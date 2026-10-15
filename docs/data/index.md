@@ -1,6 +1,7 @@
 # Data
 
-The development Ray 2.59.0 / Daft 0.7.26 baseline has passed focused local/S3
+The development runtime baseline in the
+[support matrix](../reference/support-matrix.md) has passed focused local/S3
 read/write and Hive worker-projection gates on Linux arm64. The statuses below
 retain the implemented routes' validation boundaries; these focused checks do
 not certify every data source or platform on the new runtime combination.
@@ -61,9 +62,9 @@ selects `binding_id` explicitly.
 | Local/S3 Lance | Native reader | Native reader | Verified |
 | PostgreSQL structured table | Native SQL reader | Native SQL reader | Verified |
 | HDFS Parquet/CSV | Native reader with PyArrow HDFS | No locked public reader | Adapted; cluster gate pending |
-| ClickHouse | locked `ray-clickhouse==1.1` | No built-in route | Adapter only; Ray uses the package installed by the clickhouse extra through the `ray_clickhouse.read_clickhouse` API, and real-database Conformance remains the support gate |
-| Doris | `ray-doris==1.3` | `daft-doris==1.1` | Adapter only; Ray routes use `ray-doris`, Daft routes use `daft-doris`, with exact versions selected by the dependency lock |
-| HiveServer2 structured table | `ray-hive==1.2` through `tributo.ray.hive` | No built-in route | Alpha, verified with Hive 4.2.0; projection and worker execution only through binary HiveServer2 |
+| ClickHouse | `ray-clickhouse` | No built-in route | Adapter only; Ray uses the package installed by the clickhouse extra through the `ray_clickhouse.read_clickhouse` API, and real-database Conformance remains the support gate |
+| Doris | `ray-doris` | `daft-doris` | Adapter only; Ray routes use `ray-doris`, Daft routes use `daft-doris`, with exact versions selected by the dependency lock |
+| HiveServer2 structured table | `ray-hive` through `tributo.ray.hive` | No built-in route | Alpha, verified with Hive 4.2.0; projection and worker execution only through binary HiveServer2 |
 | Native ORC file | No built-in route | No built-in route | Unsupported; the HiveServer2 path does not expose ORC/HDFS files |
 
 “Verified” means the current combination has semantic Conformance and real

@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=rayproject/ray:2.59.0-py312@sha256:0ffca209fb4c984d648db550b8dbe7879bdba3bbb5d96ee5894843cf6ac12eb5
+ARG BASE_IMAGE
 FROM ${BASE_IMAGE}
 
 USER root

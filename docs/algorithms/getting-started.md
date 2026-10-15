@@ -31,7 +31,8 @@ or a validated cluster profile. See the
 [stability inventory](../STABILITY.md) for execution and compatibility scope.
 
 This fixed historical recipe does not certify the Wheel against the current
-Ray 2.59.0 development source. Use an algorithm package that explicitly declares
+development runtime in the [support matrix](../reference/support-matrix.md).
+Use an algorithm package that explicitly declares
 a compatible Ray requirement before selecting that runtime.
 
 ## Build and install the example package

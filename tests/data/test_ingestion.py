@@ -9,6 +9,7 @@ from typing import Any, MutableMapping, cast
 import daft
 import pytest
 
+from tests.support.runtime_versions import RAY_VERSION
 from tributo._common.storage_profiles import StorageProfile
 from tributo.data.engine_binding import (
     BindingCompilation,
@@ -54,7 +55,7 @@ def _descriptor() -> BindingDescriptor:
         capabilities=frozenset({SourceCapability.PROJECTION}),
         distribution_name="tributo",
         distribution_version="1.0.0",
-        engine_version_spec="==2.59.0",
+        engine_version_spec=f"=={RAY_VERSION}",
     )
 
 
@@ -74,7 +75,7 @@ class _Bindings:
         return (
             BindingCompilation(
                 handle=RayDataHandle(object()),
-                engine_version="2.59.0",
+                engine_version=RAY_VERSION,
                 reader_api="fake.read_parquet",
                 transport_id="test",
                 transform_decisions=classify_transform_decisions(kwargs["transforms"]),
@@ -84,7 +85,7 @@ class _Bindings:
             _descriptor(),
             (
                 DistributionVersionEvidence(
-                    distribution_name="ray", driver_version="2.59.0"
+                    distribution_name="ray", driver_version=RAY_VERSION
                 ),
                 DistributionVersionEvidence(
                     distribution_name="tributo", driver_version="1.0.0"
@@ -446,7 +447,7 @@ def test_daft_to_ray_adapter_is_explicit_and_records_conversion(
 
     monkeypatch.setattr(
         "tributo.data.handle_adapters.importlib.metadata.version",
-        lambda name: "2.59.0",
+        lambda name: RAY_VERSION,
     )
     monkeypatch.setattr(
         daft,

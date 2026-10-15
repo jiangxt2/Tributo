@@ -11,6 +11,7 @@ import pyarrow.parquet as pq
 import pytest
 
 import tributo.data.persistence.object_store as object_store_module
+from tests.support.runtime_versions import RAY_VERSION
 from tributo.vector_index.contracts import (
     CoverageStatus,
     LanceDatasetRef,
@@ -95,7 +96,7 @@ class _Dataset:
 
 def _runtime() -> RuntimeVersionEvidence:
     return RuntimeVersionEvidence(
-        ray="2.59.0",
+        ray=RAY_VERSION,
         pylance="9.0.0",
         lance_ray="0.5.0",
         pyarrow="19.0.1",

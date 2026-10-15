@@ -20,6 +20,7 @@ from packaging.version import InvalidVersion, Version
 from pydantic import ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
 from tributo._common.config import StrictConfigModel
+from tributo._common.runtime_versions import SUPPORTED_RAY_VERSION
 from tributo.util.annotations import PublicAPI
 
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
@@ -219,7 +220,7 @@ class ImageProfile(StrictConfigModel):
     profile_id: str = Field(..., min_length=1)
     image_uri: str = Field(..., min_length=1)
     image_digest: str
-    ray_version: str = "2.59.0"
+    ray_version: str = SUPPORTED_RAY_VERSION
     python_spec: str = ">=3.12,<3.14"
     python_version: str = "3.12"
     sys_platform: str = "linux"
@@ -353,7 +354,7 @@ class AlgorithmBundleManifest(StrictConfigModel):
     plugin_names: tuple[str, ...] = ()
     wheel_entry_points: tuple[str, ...] = ()
     python_spec: str = ">=3.12,<3.14"
-    ray_version: str = "2.59.0"
+    ray_version: str = SUPPORTED_RAY_VERSION
     tributo_version_spec: str = ">=1,<2"
     profile_ids: tuple[str, ...] = ()
     network: bool = False

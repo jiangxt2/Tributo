@@ -15,6 +15,12 @@ from collections.abc import Mapping
 from typing import Any, Literal, cast
 from urllib.parse import unquote, urlsplit
 
+from tributo._common.runtime_versions import (
+    SUPPORTED_DAFT_VERSION as DAFT_ENGINE_VERSION,
+)
+from tributo._common.runtime_versions import (
+    SUPPORTED_RAY_VERSION as RAY_ENGINE_VERSION,
+)
 from tributo.data.contracts.handles import DaftDataFrameHandle, RayDataHandle
 from tributo.data.contracts.modes import WriteMode
 from tributo.data.writing._native import (
@@ -39,9 +45,6 @@ from tributo.data.writing.contracts import (
     WriteReceipt,
 )
 from tributo.data.writing.targets import LogicalWritePlan
-
-RAY_ENGINE_VERSION = "2.59.0"
-DAFT_ENGINE_VERSION = "0.7.26"
 
 
 def _ray_descriptor(

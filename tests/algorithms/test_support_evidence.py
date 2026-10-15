@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from tests.support.runtime_versions import RAY_VERSION
 from tributo.algorithms.api import (
     AlgorithmSupportEvidence,
     AlgorithmSupportEvidenceRegistry,
@@ -147,7 +148,7 @@ def _evidence(
         distributed_semantics=DistributedSemantics.SINGLE_MODEL_DISTRIBUTED,
         execution_profile=ExecutionProfile.CLUSTER,
         tributo_version="1.0.0",
-        ray_version="2.59.0",
+        ray_version=RAY_VERSION,
         python_version="3.12",
         image_profile="tests.cpu",
         framework_version="tests-1.0",

@@ -405,10 +405,10 @@ Inference integration tests must run through the repository-owned entry point:
 ```
 
 The runner builds an isolated Docker Ray cluster and test-owned MLflow and
-MinIO services. Python 3.12, Ray 2.59.0, uv 0.11.23, MLflow 2.22.5, ONNX
-1.22.0, ONNX Runtime 1.28.0, PyArrow 19.0.1, and XGBoost 3.3.0 are verified
-before pytest starts; infrastructure images use the immutable digests recorded
-in `tests/integrations/inference-it-versions.conf`.
+MinIO services. It verifies the Python, Ray, uv, MLflow, model-runtime, and
+data-library versions before pytest starts. Those versions and immutable
+infrastructure image digests are recorded in
+`tests/integrations/inference-it-versions.conf`.
 
 Each invocation uses a unique Compose project without host ports or fixed
 container names. On success, failure, interrupt, or operator cancellation, the

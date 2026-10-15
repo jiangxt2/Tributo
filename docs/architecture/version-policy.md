@@ -179,7 +179,7 @@ resolution.
 
 ## Dependency Version Policy
 
-- **Ray**: Pinned to exact version (`==2.59.0`). Ray's own SemVer does not
+- **Ray**: Pinned to the exact version declared in `pyproject.toml`. Ray's own SemVer does not
   guarantee Train/Data/Serve API stability across minor versions.
 - **PyIceberg**: Constrained to `>=0.11.1,<0.12.0`. Built-in Iceberg bindings
   select `PyArrowFileIO`; named profiles are materialized into its public S3
@@ -192,6 +192,28 @@ resolution.
   any dependency change.
 - **Transitive-only dependencies** (PyMySQL, ConnectorX): Declared as optional
   extras; imported at runtime with `ModuleNotFoundError` → install hint.
+
+### Maintaining the runtime baseline
+
+SDK defaults, runtime checks, and installation hints share
+`src/tributo/_common/runtime_versions.json`. Ordinary test fixtures read
+`uv.lock` independently; tests compare that lock and the dependency declarations
+with the SDK baseline. Compatibility boundary tests and source audit notes keep
+their explicit versions and require review during an upgrade.
+
+Image builders share pinned base image inputs from
+`tools/tributo-runtime-full.json`. Managed IT profiles select their package
+checks from `uv.lock`; they do not repeat package version numbers. Use the
+repository builders, which supply the required Docker build arguments
+and named contexts. Shell runner version files remain explicit inputs for
+their separate integration suites.
+
+For an upgrade, update the SDK baseline, dependency declarations and lock,
+image inputs, and affected shell runner inputs. Review the
+[installation requirements](../getting-started/installation.md),
+[support matrix](../reference/support-matrix.md), compatibility tests, and
+source audit notes against the new validation evidence. General guides link
+to those references; historical recipes retain the versions actually tested.
 
 ### Data dependency upgrade gates
 

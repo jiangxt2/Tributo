@@ -13,6 +13,7 @@ from typing import Any, cast
 import pytest
 from ray.job_submission import JobStatus, JobSubmissionClient
 
+from tests.support.runtime_versions import RAY_VERSION
 from tests.training.jobs.official_algorithm_matrix import (
     ALL_ENTRY_POINTS,
     CATEGORY_ENTRY_POINTS,
@@ -135,7 +136,7 @@ def _algorithm_image_profile() -> ImageProfile:
         digest = digest.removeprefix("sha256:")
     return ImageProfile(
         profile_id="data-ingestion.cpu.v1",
-        image_uri=os.environ.get("TRIBUTO_IT_RUNTIME_IMAGE", "ray:2.59.0"),
+        image_uri=os.environ.get("TRIBUTO_IT_RUNTIME_IMAGE", f"ray:{RAY_VERSION}"),
         image_digest=digest,
         wheel_tags=("py3-none-any",),
         installed_distributions={"pip": "24.3.1"},

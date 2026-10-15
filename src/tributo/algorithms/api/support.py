@@ -13,6 +13,7 @@ from packaging.specifiers import SpecifierSet
 from packaging.utils import canonicalize_name
 from packaging.version import InvalidVersion, Version
 
+from tributo._common.runtime_versions import SUPPORTED_RAY_VERSION
 from tributo._common.version_compatibility import tributo_version_matches
 from tributo.algorithms.api.descriptor import DistributedAlgorithmDescriptor
 from tributo.algorithms.api.distribution import (
@@ -261,7 +262,7 @@ class AlgorithmSupportEvidence:
             if canonicalize_name(Requirement(requirement).name) == "ray"
         ]
         ray_matches = (
-            self.ray_version == "2.59.0"
+            self.ray_version == SUPPORTED_RAY_VERSION
             if not ray_requirements
             else any(
                 Version(self.ray_version) in Requirement(requirement).specifier

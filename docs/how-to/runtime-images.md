@@ -1,7 +1,9 @@
 # Build the Tributo runtime image
 
 Tributo provides one full runtime image definition targeting CPU
-execution with Ray 2.59.0: Linux, Python 3.12, and every first-party runtime
+execution with the Ray baseline in the
+[installation requirements](../getting-started/installation.md): Linux,
+Python 3.12, and every first-party runtime
 extra, including the Alpha modules. By default the builder selects the host's
 native architecture. The image is dependency-closed and does not install
 development or test dependencies. On Linux, the locked PyTorch closure may
@@ -97,7 +99,7 @@ uv sync --locked --no-dev --extra hive-ray       # Ray HiveServer2 connector pac
 A Doris test that selects
 `engine="tributo.daft"` needs `daft-doris`; a Ray Doris or generic training
 path that selects `engine="tributo.ray_data"` needs `ray-doris`.
-The Ray ClickHouse route uses `ray-clickhouse==1.1` installed by the
+The Ray ClickHouse route uses `ray-clickhouse` installed by the
 existing `clickhouse` extra; it does not add a Daft ClickHouse route.
 `ray-hive` backs the built-in `tributo.hive` to `tributo.ray.hive` route. The
 request must still select Ray explicitly; no Daft, native ORC/HDFS, or automatic
@@ -128,7 +130,7 @@ directory, then removes only that Compose project and its volumes.
 
 The full image includes the first-party data, model export, training,
 Tune, serving, streaming, registry, vector-index, explainability, graph, and
-causal dependency closure, plus `ray-hive==1.2` for the built-in Ray
+causal dependency closure, plus `ray-hive` for the built-in Ray
 HiveServer2 Binding. It does not include development/test dependencies, GPU
 compatibility or a GPU execution gate, HDFS/ORC file readers, a Daft Hive
 Binding, or a KubeRay control plane. Linux PyTorch dependencies may still contain

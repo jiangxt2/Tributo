@@ -13,6 +13,7 @@ from packaging.markers import default_environment
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 
+from tests.support.runtime_versions import RAY_VERSION
 from tools.build_tributo_image import (
     BASE_IMAGE,
     BASE_IMAGE_MIRROR,
@@ -108,7 +109,7 @@ def test_locked_production_export_covers_required_distributions() -> None:
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("base_image", "rayproject/ray:2.59.0-py312"),
+        ("base_image", f"rayproject/ray:{RAY_VERSION}-py312"),
         ("uv_version", "0.11.22"),
         ("platform", "linux/ppc64le"),
     ],
@@ -219,6 +220,7 @@ def test_build_command_is_shell_free_and_uses_named_context() -> None:
     assert f"BASE_IMAGE={local_base_image(config.platform)}" in command
     assert not any("UV_IMAGE=" in value for value in command)
     assert f"TRIBUTO_BASE_IMAGE={BASE_IMAGE}" in command
+    assert f"TRIBUTO_RAY_VERSION={RAY_VERSION}" in command
     assert f"TRIBUTO_PLATFORM={config.platform}" in command
     assert f"TRIBUTO_RUNTIME_EXTRAS={','.join(RUNTIME_EXTRAS)}" in command
     expected_version = tomllib.loads(
@@ -353,13 +355,13 @@ def test_build_image_seals_dependency_closure_without_docker(
     distributions = {
         "bayesian-optimization": "1.4.3",
         "pip": "25.0",
-        "ray": "2.59.0",
+        "ray": RAY_VERSION,
         "tributo": "1.0.0",
     }
     monkeypatch.setattr("tools.build_tributo_image._build_once", fake_build_once)
     dependency_export = HostDependencyExport(
         uv_version="0.12.5",
-        content=b"ray==2.59.0 --hash=sha256:" + b"a" * 64 + b"\n",
+        content=f"ray=={RAY_VERSION} --hash=sha256:".encode() + b"a" * 64 + b"\n",
         sha256="a" * 64,
     )
     monkeypatch.setattr(
@@ -394,7 +396,7 @@ def test_manifest_core_contains_alpha_and_runtime_closure() -> None:
             content=b"requirements",
             sha256="a" * 64,
         ),
-        distributions={"ray": "2.59.0"},
+        distributions={"ray": RAY_VERSION},
         external_wheels=[],
     )
 

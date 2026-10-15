@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.support.runtime_versions import DAFT_VERSION, RAY_VERSION
 from tools import tributo_it
 from tributo._common.runtime_env import find_project_root
 
@@ -42,7 +43,7 @@ def _write_profile(root: Path) -> tributo_it.RuntimeProfile:
         "runtime_repository": "tributo-it-runtime",
         "tool_image": f"python:3@sha256:{digest_c}",
         "uv_image": f"uv:1@sha256:{digest_d}",
-        "version_contract": {"daft_prefix": "0.7.", "ray": "2.59.0"},
+        "version_contract": {"daft_prefix": "0.7.", "ray": RAY_VERSION},
     }
     (integration_dir / "runtime-profiles.json").write_text(
         json.dumps({"schema_version": 1, "profiles": {"data-ingestion": definition}})
@@ -55,8 +56,7 @@ def _write_host_uv_profile(root: Path) -> tributo_it.RuntimeProfile:
     integration_dir.mkdir(parents=True)
     (root / "src").mkdir()
     (root / "pyproject.toml").write_text(
-        "[project]\nname='example'\n"
-        "[project.optional-dependencies]\ndata-daft=['daft==0.7.26']\n"
+        f"[project]\nname='example'\n[project.optional-dependencies]\ndata-daft=['daft=={DAFT_VERSION}']\n"
     )
     (root / "uv.lock").write_text("version = 1\n")
     dockerfile = integration_dir / "Dockerfile.data-ingestion"
@@ -78,7 +78,7 @@ def _write_host_uv_profile(root: Path) -> tributo_it.RuntimeProfile:
         "python_version": "3.12",
         "runtime_repository": "tributo-it-runtime",
         "uv_version": "0.11.23",
-        "version_contract": {"daft_prefix": "0.7.", "ray": "2.59.0"},
+        "version_contract": {"daft_prefix": "0.7.", "ray": RAY_VERSION},
     }
     (integration_dir / "runtime-profiles.json").write_text(
         json.dumps({"schema_version": 1, "profiles": {"data-ingestion": definition}})
@@ -118,7 +118,7 @@ def _fake_host_uv(
             output.write_text(
                 exported_content
                 if exported_content is not None
-                else "daft==0.7.26 --hash=sha256:" + "c" * 64 + "\n"
+                else f"daft=={DAFT_VERSION} --hash=sha256:" + "c" * 64 + "\n"
             )
             if mutate_lock:
                 (cwd / "uv.lock").write_text("version = 2\n")
@@ -316,13 +316,14 @@ def test_host_uv_profile_rejects_unhashed_or_local_requirements(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     profile = _write_host_uv_profile(tmp_path)
-    _fake_host_uv(monkeypatch, exported_content="daft==0.7.26\n")
+    _fake_host_uv(monkeypatch, exported_content=f"daft=={DAFT_VERSION}\n")
     with pytest.raises(tributo_it.TributoITError, match="hashed requirements"):
         tributo_it.runtime_identity(profile, "linux/amd64")
 
     local_reference = (
-        "local-package @ file:///Users/collaborator/local-package\n"
-        "daft==0.7.26 --hash=sha256:" + "c" * 64 + "\n"
+        f"local-package @ file:///Users/collaborator/local-package\ndaft=={DAFT_VERSION} --hash=sha256:"
+        + "c" * 64
+        + "\n"
     )
     _fake_host_uv(monkeypatch, exported_content=local_reference)
     with pytest.raises(tributo_it.TributoITError, match="host paths"):
@@ -384,6 +385,7 @@ def test_host_uv_runtime_build_uses_requirements_context_without_uv_image(
     identity = tributo_it.runtime_identity(profile, "linux/amd64")
     commands: list[list[str]] = []
     observed_requirements: list[bytes] = []
+    observed_version_checks: list[str] = []
 
     monkeypatch.setattr(
         tributo_it,
@@ -405,6 +407,9 @@ def test_host_uv_runtime_build_uses_requirements_context_without_uv_image(
         )
         context = Path(context_arg.split("=", 1)[1])
         observed_requirements.append((context / "requirements.txt").read_bytes())
+        observed_version_checks.append(
+            (context / "runtime-version-check.py").read_text()
+        )
         return subprocess.CompletedProcess(args, 0, "", "")
 
     monkeypatch.setattr(tributo_it, "_run", fake_build_run)
@@ -418,8 +423,10 @@ def test_host_uv_runtime_build_uses_requirements_context_without_uv_image(
     )
     command = commands[0]
     assert not any("UV_IMAGE=" in value for value in command)
+    assert f"TRIBUTO_RAY_VERSION={profile.version_contract['ray']}" in command
     assert any(value.startswith("locked-requirements=") for value in command)
     assert observed_requirements == [identity.requirements_content]
+    assert observed_version_checks == [tributo_it._version_check_code(identity)]
 
 
 def test_host_uv_profile_rejects_uv_or_python_tool_images(tmp_path: Path) -> None:
@@ -1094,6 +1101,11 @@ def test_runtime_image_workflow_selects_canonical_build_inputs() -> None:
     assert "docker/setup-buildx-action" in workflow
     assert "driver: docker-container" in workflow
     assert "--build-input-mode canonical" in workflow
+    trigger_paths = workflow.split("    paths:\n", 1)[1].split(
+        "  workflow_dispatch:", 1
+    )[0]
+    assert '      - "tools/tributo-runtime-full.json"' in trigger_paths
+    assert '      - "tools/runtime_image_contract.py"' in trigger_paths
 
 
 def test_container_states_capture_ownership_diagnostics(

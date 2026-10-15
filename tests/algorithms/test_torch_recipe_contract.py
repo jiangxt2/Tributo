@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from tests.support.runtime_versions import RAY_VERSION
 from tributo.algorithms import AlgorithmBuilder, TorchRecipe
 from tributo.algorithms.api import (
     AlgorithmConfigurationError,
@@ -37,7 +38,7 @@ def _descriptor():
             environment_id="example.torch_recipe.v1",
             dependencies=(
                 "example-torch-recipe==1.0.0",
-                "ray==2.59.0",
+                f"ray=={RAY_VERSION}",
                 "torch>=2.5.0",
             ),
         ),

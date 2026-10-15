@@ -8,6 +8,7 @@ from subprocess import CompletedProcess
 
 import pytest
 
+from tests.support.runtime_versions import RAY_VERSION
 from tools.host_uv_export import HostUVExportError, export_locked_requirements
 
 
@@ -39,7 +40,7 @@ def test_export_locked_requirements_is_hashed_and_lock_stable(
 ) -> None:
     lock = tmp_path / "uv.lock"
     lock.write_bytes(b"locked")
-    content = b"ray==2.59.0 --hash=sha256:" + b"a" * 64 + b"\n"
+    content = f"ray=={RAY_VERSION} --hash=sha256:".encode() + b"a" * 64 + b"\n"
     commands, run = _runner_factory(tmp_path, content=content)
     monkeypatch.setattr(
         "tools.host_uv_export.shutil.which", lambda _name: "/usr/bin/uv"
@@ -93,7 +94,7 @@ def test_export_locked_requirements_rejects_lock_mutation(
     (tmp_path / "uv.lock").write_bytes(b"locked")
     _commands, run = _runner_factory(
         tmp_path,
-        content=b"ray==2.59.0 --hash=sha256:" + b"a" * 64 + b"\n",
+        content=f"ray=={RAY_VERSION} --hash=sha256:".encode() + b"a" * 64 + b"\n",
         mutate_lock=True,
     )
     monkeypatch.setattr(
@@ -115,7 +116,7 @@ def test_export_locked_requirements_rejects_local_paths(
     (tmp_path / "uv.lock").write_bytes(b"locked")
     _commands, run = _runner_factory(
         tmp_path,
-        content=b"-e .\nray==2.59.0 --hash=sha256:" + b"a" * 64 + b"\n",
+        content=f"-e .\nray=={RAY_VERSION} --hash=sha256:".encode() + b"a" * 64 + b"\n",
     )
     monkeypatch.setattr(
         "tools.host_uv_export.shutil.which", lambda _name: "/usr/bin/uv"

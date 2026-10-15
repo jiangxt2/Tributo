@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 import tributo.data.bindings as builtin_bindings
+from tests.support.runtime_versions import DAFT_VERSION, RAY_VERSION
 from tributo.data.engine_binding import (
     BindingCompilation,
     BindingDescriptor,
@@ -45,9 +46,9 @@ _TEST_BINDING_ID = "test.ray.parquet"
 @pytest.fixture(autouse=True)
 def installed_versions(monkeypatch: pytest.MonkeyPatch) -> None:
     versions = {
-        "daft": "0.7.26",
+        "daft": DAFT_VERSION,
         "pyiceberg": "0.11.1",
-        "ray": "2.59.0",
+        "ray": RAY_VERSION,
         "test-binding": "1.2.3",
         "test-helper": "4.5.6",
         "tributo": "1.0.0",
@@ -70,7 +71,7 @@ class _Binding:
     def compile(self, request: Any) -> BindingCompilation:
         return BindingCompilation(
             handle=RayDataHandle(object()),
-            engine_version="2.59.0",
+            engine_version=RAY_VERSION,
             transform_decisions=classify_transform_decisions(request.transforms),
             reader_api="test.native_reader",
             transport_id="test",
@@ -98,7 +99,7 @@ def _descriptor(
         capabilities=capabilities,
         distribution_name=distribution_name,
         distribution_version=distribution_version,
-        engine_version_spec="==2.59.0",
+        engine_version_spec=f"=={RAY_VERSION}",
         constraints=constraints or BindingPlanConstraints(),
         dependency_distributions=dependency_distributions,
     )
@@ -194,7 +195,7 @@ def test_catalog_and_storage_format_constraints_select_hive_binding() -> None:
                 capabilities=frozenset(),
                 distribution_name="test-binding",
                 distribution_version="1.2.3",
-                engine_version_spec="==2.59.0",
+                engine_version_spec=f"=={RAY_VERSION}",
                 constraints=BindingPlanConstraints(
                     catalog_ids=frozenset({"hive"}),
                     storage_format_ids=frozenset({storage_format_id}),
@@ -288,7 +289,7 @@ def test_declared_connector_distribution_must_match_installed(
 ) -> None:
     monkeypatch.setattr(
         "tributo.data.engine_binding.importlib.metadata.version",
-        lambda name: "2.59.0" if name == "ray" else "9.9.9",
+        lambda name: RAY_VERSION if name == "ray" else "9.9.9",
     )
 
     with pytest.raises(EngineNotAvailableError, match="declares distribution version"):
@@ -321,7 +322,7 @@ def test_binding_factory_receives_engine_neutral_request_and_returns_evidence() 
     assert isinstance(compilation.handle, RayDataHandle)
     assert descriptor.distribution_name == "test-binding"
     assert {(item.distribution_name, item.driver_version) for item in versions} == {
-        ("ray", "2.59.0"),
+        ("ray", RAY_VERSION),
         ("test-binding", "1.2.3"),
     }
     assert all(not item.worker_validation_complete for item in versions)
@@ -334,7 +335,7 @@ def test_binding_dependency_distributions_are_part_of_version_evidence() -> None
     _, _, versions = _compile(bindings)
 
     assert {(item.distribution_name, item.driver_version) for item in versions} == {
-        ("ray", "2.59.0"),
+        ("ray", RAY_VERSION),
         ("test-binding", "1.2.3"),
         ("test-helper", "4.5.6"),
     }
@@ -345,7 +346,7 @@ def test_worker_distribution_versions_are_proved() -> None:
     bindings.register(_descriptor())
     context = IngestionRuntimeContext(
         distribution_probe=lambda names: {
-            name: (("2.59.0",) if name == "ray" else ("1.2.3",)) for name in names
+            name: ((RAY_VERSION,) if name == "ray" else ("1.2.3",)) for name in names
         },
         require_worker_validation=True,
     )
@@ -471,7 +472,7 @@ def test_every_transform_requires_a_decision() -> None:
         def compile(self, request: object) -> BindingCompilation:
             return BindingCompilation(
                 handle=RayDataHandle(object()),
-                engine_version="2.59.0",
+                engine_version=RAY_VERSION,
                 reader_api="test.native_reader",
                 transport_id="test",
             )
@@ -679,7 +680,7 @@ def test_binding_metadata_and_install_hints_reject_credentials() -> None:
     with pytest.raises(ValueError, match="credential-free"):
         BindingCompilation(
             handle=RayDataHandle(object()),
-            engine_version="2.59.0",
+            engine_version=RAY_VERSION,
             reader_api="test.native_reader",
             transport_id="test",
             diagnostics=("password=top-secret",),
@@ -702,7 +703,7 @@ def test_non_owned_binding_compilation_rejects_callbacks(
     with pytest.raises(ValueError, match="Non-owned BindingCompilation"):
         BindingCompilation(
             handle=RayDataHandle(object()),
-            engine_version="2.59.0",
+            engine_version=RAY_VERSION,
             reader_api="test.native_reader",
             transport_id="test",
             ownership=ownership,
@@ -767,8 +768,8 @@ def test_missing_external_sql_packages_report_install_hints(
 ) -> None:
     monkeypatch.setattr(builtin_bindings, "_DEFAULT_BINDINGS", None)
     versions = {
-        "daft": "0.7.26",
-        "ray": "2.59.0",
+        "daft": DAFT_VERSION,
+        "ray": RAY_VERSION,
         "tributo": "1.0.0",
     }
     monkeypatch.setattr(
@@ -842,9 +843,9 @@ def test_external_connectors_register_and_record_installed_versions(
     monkeypatch.setattr(builtin_bindings, "_DEFAULT_BINDINGS", None)
     versions = {
         "clickhouse-connect": "1.5.0",
-        "daft": "0.7.26",
+        "daft": DAFT_VERSION,
         "pyarrow": "19.0.1",
-        "ray": "2.59.0",
+        "ray": RAY_VERSION,
         package: version,
         "PyMySQL": "1.2.0",
         "thrift": "0.22.0",
@@ -905,11 +906,11 @@ def test_incompatible_optional_daft_does_not_disable_ray(
         "_distribution_version",
         lambda name: {
             "daft": "0.6.0",
-            "ray": "2.59.0",
+            "ray": RAY_VERSION,
             "tributo": "1.0.0",
         }.get(name),
     )
-    versions = {"ray": "2.59.0", "tributo": "1.0.0"}
+    versions = {"ray": RAY_VERSION, "tributo": "1.0.0"}
     monkeypatch.setattr(
         "tributo.data.engine_binding.importlib.metadata.version",
         lambda name: versions[name],
@@ -943,7 +944,7 @@ def test_incompatible_ray_does_not_disable_daft(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(builtin_bindings, "_DEFAULT_BINDINGS", None)
-    versions = {"ray": "2.54.0", "daft": "0.7.26", "tributo": "1.0.0"}
+    versions = {"ray": "2.54.0", "daft": DAFT_VERSION, "tributo": "1.0.0"}
     monkeypatch.setattr(
         builtin_bindings, "_distribution_version", lambda name: versions.get(name)
     )
@@ -984,8 +985,8 @@ def test_missing_postgresql_dependency_does_not_disable_daft(
 ) -> None:
     monkeypatch.setattr(builtin_bindings, "_DEFAULT_BINDINGS", None)
     versions = {
-        "ray": "2.59.0",
-        "daft": "0.7.26",
+        "ray": RAY_VERSION,
+        "daft": DAFT_VERSION,
         "tributo": "1.0.0",
         "psycopg": "3.3.4",
         "psycopg-binary": "3.3.4",
@@ -1042,8 +1043,7 @@ def test_binding_reported_engine_version_must_match_installed() -> None:
 
     with pytest.raises(
         EngineNotAvailableError,
-        match=r"\[engine_version_mismatch\].*reported engine version 2.54.0, "
-        r"installed 2.59.0",
+        match=f"\\[engine_version_mismatch\\].*reported engine version 2.54.0, installed {RAY_VERSION}",
     ) as exc_info:
         _compile(bindings)
 
