@@ -418,6 +418,71 @@ def test_lance_bindings_use_public_engine_readers(
     assert isinstance(result.handle, handle_type)
     assert result.reader_api in {"ray.data.read_lance", "daft.read_lance"}
     assert len(ray_calls) + len(daft_calls) == 1
+    calls = ray_calls or daft_calls
+    assert "scanner_options" not in calls[0][1]
+
+
+@pytest.mark.parametrize(
+    ("late_materialization", "expected_late_materialization"),
+    [
+        (("image_bytes",), ["image_bytes"]),
+        (True, True),
+        (False, False),
+    ],
+)
+def test_ray_lance_binding_forwards_scanner_options(
+    monkeypatch: pytest.MonkeyPatch,
+    late_materialization: tuple[str, ...] | bool,
+    expected_late_materialization: list[str] | bool,
+) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    def read_lance(uri: str, **kwargs: Any) -> _RayDataset:
+        calls.append((uri, kwargs))
+        return _RayDataset()
+
+    monkeypatch.setattr("ray.data.read_lance", read_lance)
+    monkeypatch.setattr(
+        "tributo.data.bindings.ray_lance.importlib.metadata.version",
+        lambda name: RAY_VERSION,
+    )
+    scanner_options = {
+        "batch_size": 8,
+        "batch_readahead": 1,
+        "fragment_readahead": 1,
+        "io_buffer_size": 1024,
+        "late_materialization": late_materialization,
+    }
+    plan = TableScan(
+        provider_id="tributo.lance",
+        connector_id="lance",
+        table=UriTableRef(uri="/data/images.lance"),
+    )
+
+    RayLanceBinding().compile(
+        _request(plan, runtime_options={"scanner_options": scanner_options})
+    )
+
+    assert len(calls) == 1
+    assert calls[0][1]["scanner_options"] == {
+        **scanner_options,
+        "late_materialization": expected_late_materialization,
+    }
+
+
+def test_daft_lance_binding_rejects_scanner_options() -> None:
+    plan = TableScan(
+        provider_id="tributo.lance",
+        connector_id="lance",
+        table=UriTableRef(uri="/data/images.lance"),
+    )
+
+    with pytest.raises(BindingStageError) as exc_info:
+        DaftLanceBinding().compile(
+            _request(plan, runtime_options={"scanner_options": {"batch_size": 8}})
+        )
+
+    assert exc_info.value.diagnostic_code == "unsupported_lance_scanner_options"
 
 
 @pytest.mark.parametrize("binding", [RayLanceBinding(), DaftLanceBinding()])

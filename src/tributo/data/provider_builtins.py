@@ -89,7 +89,7 @@ _SQL_OPTION_KEYS: frozenset[str] = frozenset(
     }
 )
 _LANCE_OPTION_KEYS: frozenset[str] = frozenset(
-    {"columns", "filter", "version", "asof", "s3"}
+    {"columns", "filter", "version", "asof", "s3", "scanner_options"}
 )
 _ICEBERG_OPTION_KEYS: frozenset[str] = frozenset(
     {
@@ -414,6 +414,7 @@ _LANCE_OPTION_TYPES: dict[str, type] = {
     "filter": str,
     "asof": str,
     "s3": dict,
+    "scanner_options": dict,
 }
 _ICEBERG_OPTION_TYPES: dict[str, type] = {
     "selected_fields": list,
@@ -424,6 +425,77 @@ _ICEBERG_OPTION_TYPES: dict[str, type] = {
     "catalog_properties": dict,
     "s3": dict,
 }
+
+_LANCE_SCANNER_OPTION_KEYS: frozenset[str] = frozenset(
+    {
+        "batch_size",
+        "batch_readahead",
+        "fragment_readahead",
+        "io_buffer_size",
+        "late_materialization",
+    }
+)
+
+
+def _normalize_lance_scanner_options(
+    provider_id: str, value: Any
+) -> dict[str, Any] | None:
+    """Validate the bounded scanner subset exposed by the Ray Lance reader."""
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise JobConfigurationError(
+            f"{provider_id}: option 'scanner_options' must be a mapping"
+        )
+
+    unknown = [
+        key
+        for key in value
+        if not isinstance(key, str) or key not in _LANCE_SCANNER_OPTION_KEYS
+    ]
+    if unknown:
+        names = sorted(str(key) for key in unknown)
+        raise JobConfigurationError(
+            f"{provider_id}: unknown scanner option(s) {names}; "
+            f"supported: {sorted(_LANCE_SCANNER_OPTION_KEYS)}"
+        )
+
+    normalized: dict[str, Any] = {}
+    minimums = {
+        "batch_size": 1,
+        "batch_readahead": 1,
+        "fragment_readahead": 0,
+        "io_buffer_size": 1,
+    }
+    for key, minimum in minimums.items():
+        option = value.get(key)
+        if option is None:
+            continue
+        if isinstance(option, bool) or not isinstance(option, int):
+            raise JobConfigurationError(
+                f"{provider_id}: scanner option {key!r} must be an integer"
+            )
+        if option < minimum:
+            comparison = "positive" if minimum == 1 else "non-negative"
+            raise JobConfigurationError(
+                f"{provider_id}: scanner option {key!r} must be {comparison}"
+            )
+        normalized[key] = option
+
+    late_materialization = value.get("late_materialization")
+    if late_materialization is not None:
+        if isinstance(late_materialization, bool):
+            normalized["late_materialization"] = late_materialization
+        elif isinstance(late_materialization, (list, tuple)) and all(
+            isinstance(column, str) and column for column in late_materialization
+        ):
+            normalized["late_materialization"] = list(late_materialization)
+        else:
+            raise JobConfigurationError(
+                f"{provider_id}: scanner option 'late_materialization' must be "
+                "a bool or a list/tuple of non-empty column names"
+            )
+    return normalized
 
 
 def _check_option_keys(
@@ -832,6 +904,9 @@ class LanceProvider(DataSourceProvider):
         _validate_file_uri(self.provider_id, source.uri)
         _check_option_keys(self.provider_id, source.options, _LANCE_OPTION_KEYS)
         _require_option_types(self.provider_id, source.options, _LANCE_OPTION_TYPES)
+        scanner_options = _normalize_lance_scanner_options(
+            self.provider_id, source.options.get("scanner_options")
+        )
         version = source.options.get("version")
         if version is not None and (
             isinstance(version, bool) or not isinstance(version, (int, str))
@@ -852,6 +927,10 @@ class LanceProvider(DataSourceProvider):
         if s3_identity:
             identity["s3"] = s3_identity
         runtime["s3"] = source.options.get("s3")
+        if scanner_options:
+            runtime["scanner_options"] = scanner_options
+        else:
+            runtime.pop("scanner_options", None)
         return ResolvedSource(
             provider_id=self.provider_id,
             canonical_uri=normalized_uri,

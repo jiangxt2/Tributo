@@ -11,7 +11,7 @@ import pytest
 
 from tributo.data import provider_builtins  # noqa: F401  (registers built-ins)
 from tributo.data.provider import DatasetHandle, DataSourceProvider, ResolvedSource
-from tributo.data.provider_builtins import ParquetProvider
+from tributo.data.provider_builtins import LanceProvider, ParquetProvider
 from tributo.data.provider_registry import (
     ProviderRegistry,
     list_providers,
@@ -283,6 +283,112 @@ class TestResolveLegacy:
             ).provider_id
             == "tributo.lance"
         )
+
+
+class TestLanceScannerOptions:
+    """Scanner tuning is validated and excluded from result identity."""
+
+    @staticmethod
+    def _source(options: dict[str, Any]) -> ProviderSourceConfig:
+        return ProviderSourceConfig(
+            provider="tributo.lance",
+            uri="/data/images.lance",
+            options=options,
+        )
+
+    def test_valid_options_remain_runtime_only(self) -> None:
+        provider = LanceProvider()
+        base = provider.normalize(
+            self._source({"columns": ["id", "image_bytes"], "filter": "id > 0"})
+        )
+        tuned = provider.normalize(
+            self._source(
+                {
+                    "columns": ["id", "image_bytes"],
+                    "filter": "id > 0",
+                    "scanner_options": {
+                        "batch_size": 1,
+                        "batch_readahead": 1,
+                        "fragment_readahead": 0,
+                        "io_buffer_size": 1024,
+                        "late_materialization": ["image_bytes"],
+                    },
+                }
+            )
+        )
+
+        assert tuned.ref_id() == base.ref_id()
+        assert "scanner_options" not in tuned.identity_options
+        assert dict(tuned.runtime_options["scanner_options"]) == {
+            "batch_size": 1,
+            "batch_readahead": 1,
+            "fragment_readahead": 0,
+            "io_buffer_size": 1024,
+            "late_materialization": ("image_bytes",),
+        }
+
+    @pytest.mark.parametrize(
+        "scanner_options",
+        [
+            {"unknown": 1},
+            {"batch_size": 0},
+            {"batch_size": True},
+            {"batch_size": 1.5},
+            {"batch_readahead": 0},
+            {"batch_readahead": -1},
+            {"fragment_readahead": -1},
+            {"io_buffer_size": 0},
+            {"late_materialization": "image_bytes"},
+            {"late_materialization": [""]},
+        ],
+    )
+    def test_unsupported_values_fail_closed(
+        self, scanner_options: dict[str, Any]
+    ) -> None:
+        source = self._source({"scanner_options": scanner_options})
+
+        with pytest.raises(JobConfigurationError, match="scanner"):
+            LanceProvider().normalize(source)
+
+    def test_scanner_options_must_be_a_mapping(self) -> None:
+        source = self._source({"scanner_options": "batch_size=1"})
+
+        with pytest.raises(JobConfigurationError, match="scanner_options.*dict"):
+            LanceProvider().normalize(source)
+
+    def test_empty_options_preserve_default_reader_behavior(self) -> None:
+        provider = LanceProvider()
+        empty = provider.normalize(self._source({"scanner_options": {}}))
+        omitted = provider.normalize(self._source({}))
+
+        assert empty.ref_id() == omitted.ref_id()
+        assert "scanner_options" not in empty.runtime_options
+
+    @pytest.mark.parametrize("late_materialization", [True, False])
+    def test_late_materialization_bool_is_preserved(
+        self, late_materialization: bool
+    ) -> None:
+        resolved = LanceProvider().normalize(
+            self._source(
+                {"scanner_options": {"late_materialization": late_materialization}}
+            )
+        )
+
+        assert (
+            resolved.runtime_options["scanner_options"]["late_materialization"]
+            is late_materialization
+        )
+
+    def test_late_materialization_tuple_is_normalized(self) -> None:
+        resolved = LanceProvider().normalize(
+            self._source(
+                {"scanner_options": {"late_materialization": ("image_bytes",)}}
+            )
+        )
+
+        assert tuple(
+            resolved.runtime_options["scanner_options"]["late_materialization"]
+        ) == ("image_bytes",)
 
 
 class TestThirdPartyRegistration:

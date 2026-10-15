@@ -281,6 +281,8 @@ services:
       - tests/integration/test_postgresql_ingestion.py
       - -o
       - addopts=
+      - -o
+      - cache_dir=/tmp/pytest-cache
       - -m
       - integration
       - -vv

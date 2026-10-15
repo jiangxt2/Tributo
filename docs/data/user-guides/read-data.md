@@ -60,6 +60,41 @@ Use `ProviderSourceConfig` for a versioned third-party provider. Check the
 [support matrix](../../reference/support-matrix.md) because adapter discovery
 alone is not verification evidence.
 
+## Tune a Lance scan with Ray Data
+
+Lance scanner controls are available only with `engine="ray"`. Pass the
+bounded `scanner_options` object through the `tributo.lance` provider:
+
+```python
+from tributo.data import IngestionRequest, ProviderSourceConfig, open_ingestion
+
+source = ProviderSourceConfig(
+    provider="tributo.lance",
+    uri="/data/images.lance",
+    options={
+        "columns": ["id", "image_bytes"],
+        "filter": "id > 0",
+        "scanner_options": {
+            "batch_size": 128,
+            "batch_readahead": 1,
+            "fragment_readahead": 0,
+            "io_buffer_size": 32 * 1024 * 1024,
+            "late_materialization": ["image_bytes"],
+        },
+    },
+)
+
+with open_ingestion(IngestionRequest(source=source, engine="ray")) as result:
+    dataset = result.handle.dataset
+```
+
+The accepted scanner fields are `batch_size`, `batch_readahead`,
+`fragment_readahead`, `io_buffer_size`, and `late_materialization`. They tune
+scan execution and do not change the source identity. The Daft binding rejects
+non-empty `scanner_options`. These settings are not a hard process-memory
+limit; `batch_readahead` must be positive, while `fragment_readahead` can be
+zero. Keep `io_buffer_size` large enough for the largest scanned batch.
+
 ## Read a HiveServer2 table with Ray Data
 
 Install `tributo[hive-ray]`, then configure a structured database/table URI and

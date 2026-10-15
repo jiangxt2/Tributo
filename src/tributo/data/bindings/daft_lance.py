@@ -21,6 +21,7 @@ from tributo.data.bindings.ray_lance import (
 from tributo.data.engine_binding import (
     BindingCompilation,
     BindingCompileRequest,
+    BindingStageError,
     binding_stage,
 )
 from tributo.data.ingestion import (
@@ -60,6 +61,15 @@ class DaftLanceBinding:
         with binding_stage("validate_capabilities"):
             plan = _require_lance(request.plan)
             _reject_lance_snapshot_ref(plan)
+            if request.runtime_options.get("scanner_options"):
+                raise BindingStageError.framework_diagnostic(
+                    "validate_capabilities",
+                    error_type=JobConfigurationError,
+                    diagnostic_code="unsupported_lance_scanner_options",
+                    diagnostic=(
+                        "Lance scanner_options are supported only by the Ray Data binding"
+                    ),
+                )
         with binding_stage("classify_transforms"):
             decisions = residual_decisions(request.transforms)
         with binding_stage("build_native_plan"):
