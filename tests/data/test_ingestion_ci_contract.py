@@ -305,7 +305,7 @@ def test_runtime_publish_workflow_is_trusted_and_immutable() -> None:
         "docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069"
         in workflow
     )
-    assert "astral-sh/setup-uv@d269b9917d8e33f7165632f15cc38a13726f64b5" in workflow
+    assert "astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884" in workflow
     assert 'version: "0.11.23"' in workflow
     assert "publish-runtime" in workflow
     assert "linux/amd64" in workflow
