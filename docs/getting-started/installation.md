@@ -5,11 +5,11 @@ your workload.
 
 ## Choose a source revision
 
-Tributo 1.1.0 is distributed through PyPI and GitHub Releases. To install
+Tributo 1.2.0 is distributed through PyPI and GitHub Releases. To install
 the source release, clone its tag and use its committed lock file:
 
 ```bash
-git clone --branch tributo-1.1.0 --depth 1 https://github.com/jiangxt2/Tributo.git
+git clone --branch tributo-1.2.0 --depth 1 https://github.com/jiangxt2/Tributo.git
 cd Tributo
 ```
 
@@ -46,7 +46,7 @@ environment:
 
 ```bash
 python -m venv .venv
-.venv/bin/python -m pip install "tributo==1.1.0"
+.venv/bin/python -m pip install "tributo==1.2.0"
 .venv/bin/tributo --help
 ```
 
