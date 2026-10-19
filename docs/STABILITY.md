@@ -46,6 +46,8 @@ covered by the external `runtime-image` suite.
 | `tools/build_tributo_image.py` | `alpha` | JSON-only Buildx builder for the pinned image validated for CPU execution by default, with explicit `linux/amd64`/`linux/arm64` targeting; it performs dependency-closure discovery, manifest sealing, and fail-closed import checks |
 | `tools/tributo-runtime-full.json` | `alpha` | Pinned Ray base and host uv export, native-platform default, complete first-party runtime-extra closure including locked stable Daft Doris, Ray Doris, Ray Hive and Ray ClickHouse packages; the CPU image/Ray Jobs gate passed on Linux arm64, while native `amd64` and GPU execution remain unverified |
 | `manifest.json` / `image-profile.json` | `alpha` | Build attestations consumed for immutable image selection and algorithm artifact compatibility; not a registry or deployment API |
+| `tools/publish_tributo_image.py` | `alpha` | Builds and publishes one platform image to Docker Hub; reuses a tag only when its registry manifest points to the same local image config, and emits a registry-backed `ImageProfile` |
+| `.github/workflows/publish-runtime-image.yml` | `alpha` | Manual `master` dispatch for Tributo 1.2.0 and automatic publication on stable GitHub Releases; checks out the release source, verifies its package version, then builds and publishes the arm64 CPU image; the Ray Jobs gate is separately recorded in the support matrix |
 
 ### Training (tributo.training.*)
 

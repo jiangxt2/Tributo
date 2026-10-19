@@ -68,10 +68,30 @@ The output directory contains:
 - `capabilities.json`: the Alpha capability declaration;
 - `build.log`: the command/evidence log for this build.
 
-The builder never pushes an image. Publishing requires a separate reviewed
-workflow. The development configuration resolves the stable connector
-packages declared in `pyproject.toml`, including Ray ClickHouse through the
-`clickhouse` extra. The committed lock selects the exact image inputs.
+The builder never pushes an image. The Docker Hub workflow supports two release
+paths: manually dispatch it from `master` to publish the existing
+`tributo-1.2.0` release, or publish a later stable GitHub Release to trigger an
+automatic build from that release tag. Both paths run the selected release's
+builder dependency/import checks before publishing to
+`tosche911/tributo-runtime`. It reuses a tag when it points to the same image
+and refuses to overwrite a tag that points to a different image. It writes
+`published-image-profile.json` with the registry manifest digest.
+The image tag is derived from the package, Python, Ray, and platform versions.
+The arm64 Tributo 1.2.0 CPU image tag is
+`1.2.0-py312-ray2.59.0-cpu-arm64`; later releases receive tags for their own
+package version. Only stable `tributo-X.Y.Z` releases trigger automatic
+publication. These are architecture-specific images; native `amd64` execution
+and GPU support are not claimed. The release commit's arm64 CPU Ray Jobs gate
+is recorded in the
+[support matrix](../reference/support-matrix.md).
+
+The workflow reads `DOCKERHUB_USERNAME` from a repository Actions variable and
+`DOCKERHUB_TOKEN` from a repository Actions secret. The manual path checks out
+the fixed 1.2.0 tag and commit; the automatic path checks out the published
+release tag and verifies its commit and package version. Both paths verify the
+configured Docker Hub username is `tosche911` and that
+`tosche911/tributo-runtime` exists and is publicly readable before pushing.
+Each release uses its committed lockfile to resolve the exact image inputs.
 
 The standard host-export builder rejects local dependency paths and exports
 PyPI connector versions with SHA-256 hashes from `uv.lock`. Exporting the

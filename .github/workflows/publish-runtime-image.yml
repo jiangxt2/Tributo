@@ -1,0 +1,103 @@
+name: Publish Tributo Runtime Image
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+concurrency:
+  group: publish-runtime-image-${{ github.event.release.tag_name || 'tributo-1.2.0' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish-arm64-release:
+    name: Validate and publish Tributo release arm64 image
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master') ||
+      (github.event_name == 'release' && github.event.action == 'published' &&
+      github.event.release.prerelease == false &&
+      startsWith(github.event.release.tag_name, 'tributo-'))
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    env:
+      TRIBUTO_RELEASE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || 'tributo-1.2.0' }}
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+
+      - name: Resolve and validate the Tributo release version
+        run: |
+          if [[ ! "${TRIBUTO_RELEASE_TAG}" =~ ^tributo-([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "Unsupported Tributo release tag: ${TRIBUTO_RELEASE_TAG}" >&2
+            exit 1
+          fi
+          printf 'TRIBUTO_EXPECTED_VERSION=%s\n' "${BASH_REMATCH[1]}" >> "${GITHUB_ENV}"
+
+      - name: Check out the Tributo release source
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          ref: ${{ env.TRIBUTO_RELEASE_TAG }}
+          path: source
+          fetch-depth: 1
+
+      - name: Verify the release commit and stage the publisher
+        env:
+          TRIBUTO_RELEASE_SHA: ${{ github.sha }}
+        run: |
+          source_sha="$(git -C source rev-parse HEAD)"
+          if [[ "${GITHUB_EVENT_NAME}" == "release" ]]; then
+            test "${source_sha}" = "${TRIBUTO_RELEASE_SHA}"
+          else
+            test "${source_sha}" = "55f303c66c20711fc80aa9d8bef87e37ebb405b8"
+          fi
+          cp tools/publish_tributo_image.py source/tools/publish_tributo_image.py
+
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+        with:
+          version: "0.11.23"
+          python-version: "3.12"
+
+      - name: Install the locked host build environment
+        run: uv sync --locked --no-dev
+        working-directory: source
+
+      - name: Verify the public Docker Hub repository
+        env:
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+        run: |
+          test "${DOCKERHUB_USERNAME}" = "tosche911"
+          curl --fail --silent --show-error --location --head \
+            https://hub.docker.com/v2/namespaces/tosche911/repositories/tributo-runtime
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+        with:
+          driver: docker
+
+      - name: Authenticate to Docker Hub
+        uses: docker/login-action@06fb636fac595d6fb4b28a5dfcb21a6f5091859c # v4.5.0
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Publish the release image and record its registry digest
+        env:
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+        run: >-
+          uv run --locked --no-sync python -m tools.publish_tributo_image
+          --output-dir "${RUNNER_TEMP}/tributo-runtime-image"
+          --repository "${DOCKERHUB_USERNAME}/tributo-runtime"
+          --platform linux/arm64
+          --expected-version "${TRIBUTO_EXPECTED_VERSION}"
+        working-directory: source
+
+      - name: Upload image attestation and publication record
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tributo-runtime-image-${{ github.run_id }}
+          path: ${{ runner.temp }}/tributo-runtime-image
+          if-no-files-found: ignore
+          retention-days: 30
