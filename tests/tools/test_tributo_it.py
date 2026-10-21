@@ -988,6 +988,66 @@ def test_publish_runtime_builds_and_pushes_exact_missing_tag(
     ]
 
 
+@pytest.mark.parametrize("registry", ["docker.io", "ghcr.io"])
+@pytest.mark.parametrize("use_mirror", [None, False])
+@pytest.mark.parametrize("wrong_digest", [False, True])
+def test_digest_image_sources_keep_pins_and_verify_downloads(
+    monkeypatch: pytest.MonkeyPatch,
+    registry: str,
+    use_mirror: bool | None,
+    wrong_digest: bool,
+) -> None:
+    reference = f"{registry}/example/tool:1@sha256:" + "b" * 64
+    mirror = tributo_it._domestic_mirror_reference(reference)
+    selected = mirror if use_mirror is None else reference
+    image_id = "sha256:" + "c" * 64
+    commands: list[list[str]] = []
+    pulled = False
+    tagged = False
+
+    def inspect(target: str) -> dict[str, object] | None:
+        if pulled and target == selected:
+            return {
+                "Id": image_id,
+                "RepoDigests": [
+                    selected if not wrong_digest else "example:1@sha256:" + "d" * 64
+                ],
+            }
+        if tagged and target == reference.split("@", 1)[0]:
+            return {"Id": image_id}
+        return None
+
+    def run(args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        nonlocal pulled, tagged
+        commands.append(args)
+        if args[1] == "pull":
+            assert args == ["docker", "pull", "--platform", "linux/amd64", selected]
+            pulled = True
+        else:
+            assert args == ["docker", "tag", image_id, reference.split("@", 1)[0]]
+            tagged = True
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    if use_mirror is False:
+        monkeypatch.setattr(
+            tributo_it,
+            "_domestic_mirror_reference",
+            lambda _: pytest.fail("canonical source must not resolve a mirror"),
+        )
+    monkeypatch.setattr(tributo_it, "_image_inspect", inspect)
+    monkeypatch.setattr(tributo_it, "_run", run)
+    monkeypatch.setattr(tributo_it, "docker_platform", lambda: "linux/amd64")
+    options = {} if use_mirror is None else {"use_mirror": use_mirror}
+    if wrong_digest:
+        with pytest.raises(tributo_it.TributoITError, match="digest mismatch"):
+            tributo_it.ensure_digest_image(reference, **options)
+        assert not tagged
+        assert len(commands) == 1
+    else:
+        assert tributo_it.ensure_digest_image(reference, **options) == image_id
+        assert tagged
+
+
 def test_digest_image_gets_readable_tag_without_overwriting(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

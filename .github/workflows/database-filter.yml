@@ -1,0 +1,95 @@
+name: Database Filter Pushdown
+
+on:
+  pull_request:
+    branches: [master, "release-*"]
+  push:
+    branches: [master, "release-*"]
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: database-filter-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run_database: ${{ steps.plan.outputs.run_database }}
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+        with:
+          fetch-depth: 0
+      - name: Audit test ownership and controlled entrypoints
+        run: python3 scripts/ci_test_plan.py audit
+      - name: Select affected database validation
+        id: plan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
+        run: >-
+          python3 scripts/ci_test_plan.py plan --mode pr
+          --event "$EVENT_NAME" --base "$BASE_SHA" --head "$HEAD_SHA"
+          --github-output "$GITHUB_OUTPUT" --summary "$GITHUB_STEP_SUMMARY"
+
+  database:
+    needs: plan
+    if: needs.plan.outputs.run_database == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        database: [clickhouse, doris]
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+        with:
+          version: "0.11.23"
+          python-version: "3.12"
+      - name: Validate actual source-side SQL execution on one Ray node
+        env:
+          DATABASE: ${{ matrix.database }}
+          EVIDENCE_DIR: ${{ runner.temp }}/database-filter-${{ matrix.database }}
+          TRIBUTO_FILTER_IMAGE_SOURCE: canonical
+        run: >-
+          python3 scripts/ci_test_plan.py run --suite database-filter
+          --database "$DATABASE" --log-dir "$EVIDENCE_DIR"
+      - name: Upload execution evidence and diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: database-filter-${{ matrix.database }}-${{ github.sha }}
+          path: ${{ runner.temp }}/database-filter-${{ matrix.database }}/
+          if-no-files-found: error
+          retention-days: 7
+
+  gate:
+    name: database-filter-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: always()
+    needs: [plan, database]
+    steps:
+      - name: Require applicable validation and evidence
+        env:
+          PLAN_RESULT: ${{ needs.plan.result }}
+          REQUIRED: ${{ needs.plan.outputs.run_database }}
+          DATABASE_RESULT: ${{ needs.database.result }}
+        run: |
+          set -eu
+          test "$PLAN_RESULT" = success
+          if [ "$REQUIRED" = true ]; then
+            test "$DATABASE_RESULT" = success
+          else
+            test "$REQUIRED" = false
+            test "$DATABASE_RESULT" = skipped
+            echo 'Database validation is not applicable to this change.'
+          fi

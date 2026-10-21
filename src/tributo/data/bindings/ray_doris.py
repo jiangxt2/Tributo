@@ -10,7 +10,12 @@ from typing import Any
 import pyarrow as pa
 from pydantic import ValidationError
 
-from tributo.data.bindings._shared import canonical_engine_schema, residual_decisions
+from tributo.data.bindings._shared import canonical_engine_schema
+from tributo.data.bindings._sql_filters import (
+    _SqlFilters,
+    compile_sql_filters,
+    require_transform_filters,
+)
 from tributo.data.bindings._sql_shared import require_sql_table, resolve_sql_target
 from tributo.data.engine_binding import (
     BindingCompilation,
@@ -40,6 +45,7 @@ class _RayDorisNativePlan:
     input_schema: pa.Schema
     transforms: CompiledPipeline
     transport_id: str
+    filters: _SqlFilters
 
 
 def _validated_doris_read_options(
@@ -90,12 +96,11 @@ class RayDorisBinding:
     def compile(self, request: BindingCompileRequest) -> BindingCompilation:
         with binding_stage("validate_capabilities"):
             plan = require_sql_table(request.plan, "doris")
-        with binding_stage("classify_transforms"):
-            decisions = residual_decisions(request.transforms)
+            require_transform_filters(plan)
         with binding_stage("build_native_plan"):
             native_plan = self._build(request, plan)
         with binding_stage("wrap_handle"):
-            return self._wrap(native_plan, decisions)
+            return self._wrap(native_plan, native_plan.filters.decisions)
 
     @staticmethod
     def _build(request: BindingCompileRequest, plan: SqlScan) -> _RayDorisNativePlan:
@@ -130,11 +135,22 @@ class RayDorisBinding:
         if target_parallelism is not None:
             options["override_num_blocks"] = target_parallelism
         dataset = read_doris(**options)
-        schema = canonical_engine_schema(dataset.schema())
+        schema = canonical_engine_schema(dataset.schema(fetch_if_missing=False))
         transforms = ConcreteTransformCompiler().compile(
             request.transforms, TransformBackend.RAY, schema
         )
-        return _RayDorisNativePlan(dataset, schema, transforms, protocol)
+        with binding_stage("classify_transforms"):
+            filters = compile_sql_filters(request.transforms, schema, "doris")
+        if filters.predicate is not None:
+            dataset = read_doris(**options, filter=filters.predicate)
+            filtered_schema = canonical_engine_schema(
+                dataset.schema(fetch_if_missing=False)
+            )
+            if not filtered_schema.equals(schema):
+                raise JobConfigurationError(
+                    "Doris schema changed while planning the filtered read"
+                )
+        return _RayDorisNativePlan(dataset, schema, transforms, protocol, filters)
 
     @staticmethod
     def _wrap(
@@ -142,7 +158,9 @@ class RayDorisBinding:
         decisions: tuple[TransformDecision, ...],
     ) -> BindingCompilation:
         transformed = apply_pipeline_to_ray_ds(
-            native_plan.transforms, native_plan.dataset
+            native_plan.transforms,
+            native_plan.dataset,
+            ordinals=native_plan.filters.residual_ordinals,
         )
         output_schema = (
             native_plan.transforms.steps[-1].output_schema

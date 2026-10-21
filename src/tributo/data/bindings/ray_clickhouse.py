@@ -8,7 +8,12 @@ from typing import Any
 
 import pyarrow as pa
 
-from tributo.data.bindings._shared import canonical_engine_schema, residual_decisions
+from tributo.data.bindings._shared import canonical_engine_schema
+from tributo.data.bindings._sql_filters import (
+    _SqlFilters,
+    compile_sql_filters,
+    require_transform_filters,
+)
 from tributo.data.bindings._sql_shared import require_sql_table, resolve_sql_target
 from tributo.data.engine_binding import (
     BindingCompilation,
@@ -38,6 +43,7 @@ class _RayClickHouseNativePlan:
     input_schema: pa.Schema
     transforms: CompiledPipeline
     split_mode: str
+    filters: _SqlFilters
 
 
 def _split_options(
@@ -86,13 +92,12 @@ class RayClickHouseBinding:
     def compile(self, request: BindingCompileRequest) -> BindingCompilation:
         with binding_stage("validate_capabilities"):
             plan = require_sql_table(request.plan, "clickhouse")
+            require_transform_filters(plan)
             split_options = _split_options(request, plan)
-        with binding_stage("classify_transforms"):
-            decisions = residual_decisions(request.transforms)
         with binding_stage("build_native_plan"):
             native_plan = self._build(request, plan, split_options)
         with binding_stage("wrap_handle"):
-            return self._wrap(native_plan, decisions)
+            return self._wrap(native_plan, native_plan.filters.decisions)
 
     @staticmethod
     def _build(
@@ -133,15 +138,31 @@ class RayClickHouseBinding:
             )
 
         dataset = read_clickhouse(**options)
-        schema = canonical_engine_schema(dataset.schema())
+        schema = canonical_engine_schema(dataset.schema(fetch_if_missing=False))
         transforms = ConcreteTransformCompiler().compile(
             request.transforms, TransformBackend.RAY, schema
         )
+        with binding_stage("classify_transforms"):
+            filters = compile_sql_filters(request.transforms, schema, "clickhouse")
+        if filters.predicate is not None:
+            dataset = read_clickhouse(
+                **options,
+                filter=filters.predicate,
+                query_parameters=filters.parameters,
+            )
+            filtered_schema = canonical_engine_schema(
+                dataset.schema(fetch_if_missing=False)
+            )
+            if not filtered_schema.equals(schema):
+                raise JobConfigurationError(
+                    "ClickHouse schema changed while planning the filtered read"
+                )
         return _RayClickHouseNativePlan(
             dataset=dataset,
             input_schema=schema,
             transforms=transforms,
             split_mode=str(options["split"]),
+            filters=filters,
         )
 
     @staticmethod
@@ -150,7 +171,9 @@ class RayClickHouseBinding:
         decisions: tuple[TransformDecision, ...],
     ) -> BindingCompilation:
         transformed = apply_pipeline_to_ray_ds(
-            native_plan.transforms, native_plan.dataset
+            native_plan.transforms,
+            native_plan.dataset,
+            ordinals=native_plan.filters.residual_ordinals,
         )
         output_schema = (
             native_plan.transforms.steps[-1].output_schema

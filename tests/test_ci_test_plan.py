@@ -88,8 +88,14 @@ def test_every_test_module_and_it_runner_has_one_effective_owner(
     assert runner_paths
     for runner_path in runner_paths:
         suite = ci_test_plan.suite_for_test_path(manifest, runner_path)
-        assert suite.tier == "manual_external"
-        assert suite.workflow == "external"
+        if runner_path == "scripts/run_database_filter_it.sh":
+            assert suite.suite_id == "database-filter"
+            assert suite.tier == "ci_database"
+            assert suite.entrypoint == ci_test_plan.DATABASE_ENTRYPOINT
+            assert suite.workflow == "database"
+        else:
+            assert suite.tier == "manual_external"
+            assert suite.workflow == "external"
 
 
 def test_dot_github_path_keeps_leading_dot_and_uses_first_rule(

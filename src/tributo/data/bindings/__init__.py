@@ -295,7 +295,9 @@ def _ray_clickhouse_descriptor() -> BindingDescriptor:
             "ray_clickhouse.ray.clickhouse",
         ),
         factory=RayClickHouseBinding,
-        capabilities=frozenset({SourceCapability.PROJECTION}),
+        capabilities=frozenset(
+            {SourceCapability.PROJECTION, SourceCapability.PREDICATE_PUSHDOWN}
+        ),
         distribution_name="ray-clickhouse",
         distribution_version=_require_distribution_version("ray-clickhouse"),
         engine_version_spec=_RAY_VERSION_SPEC,
@@ -346,7 +348,9 @@ def _ray_doris_descriptor() -> BindingDescriptor:
             "ray_doris.ray.doris",
         ),
         factory=RayDorisBinding,
-        capabilities=frozenset({SourceCapability.PROJECTION}),
+        capabilities=frozenset(
+            {SourceCapability.PROJECTION, SourceCapability.PREDICATE_PUSHDOWN}
+        ),
         distribution_name="ray-doris",
         distribution_version=_require_distribution_version("ray-doris"),
         engine_version_spec=_RAY_VERSION_SPEC,
