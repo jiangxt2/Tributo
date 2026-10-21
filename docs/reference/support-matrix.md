@@ -21,7 +21,7 @@ automation eligibility.
 | Area | Implementation and configuration | Bounded CI evidence | External environment evidence |
 | --- | --- | --- | --- |
 | Bounded ingestion | Data Gateway, Provider/Binding descriptors, and engine options | `unit`, `unit-integration-contracts`, and the ephemeral `s3-contract` suite | `data-ingestion-cluster` |
-| Ray ClickHouse/Doris filter pushdown | Leading supported structured filters forwarded through the native connectors | Owned `database-filter` suite and `database-filter-gate`; workflow added, hosted execution pending | Local single-node Docker Ray proof: ClickHouse single/partition/range; Doris MySQL/Flight |
+| Ray ClickHouse/Doris filter pushdown | Leading supported structured filters forwarded through the native connectors | Owned `database-filter` suite and `database-filter-gate`; verified single-node CI on Linux `amd64` with real ClickHouse and Doris | Local single-node Docker Ray proof: ClickHouse single/partition/range; Doris MySQL/Flight |
 | Model export and Bundle publication | Export planner, exporters, validators, publisher, and storage profiles | `unit`, `unit-integration-contracts`, and `s3-contract` | `model-export-cluster` |
 | Batch and online inference | Inference plans, model flavors, sinks, and serving configuration | `unit` and `unit-integration-contracts` | `inference-cluster` |
 | Lance vector index | Vector-index API, storage profiles, and Ray Jobs request contract | `unit` contracts | `lance-vector-cluster` |
