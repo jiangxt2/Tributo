@@ -2601,6 +2601,12 @@ def _parser() -> argparse.ArgumentParser:
     run_parser = subparsers.add_parser("run-data-ingestion")
     run_parser.add_argument("--profile", default="data-ingestion")
 
+    filter_parser = subparsers.add_parser("run-database-filter")
+    filter_parser.add_argument(
+        "--database", choices=("clickhouse", "doris"), required=True
+    )
+    filter_parser.add_argument("--log-dir", type=Path)
+
     hdfs_parser = subparsers.add_parser("run-hdfs-ingestion")
     hdfs_parser.add_argument("--profile", default="data-ingestion-hdfs")
 
@@ -2633,6 +2639,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         if args.command == "run-data-ingestion":
             run_data_ingestion(load_profile(args.profile))
+            return 0
+
+        if args.command == "run-database-filter":
+            from tools.database_filter_it import run_database_filter
+
+            run_database_filter(args.database, log_dir=args.log_dir)
             return 0
 
         if args.command == "run-hdfs-ingestion":

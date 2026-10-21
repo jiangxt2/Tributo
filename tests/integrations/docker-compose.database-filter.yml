@@ -1,0 +1,101 @@
+x-ray: &ray
+  image: ${TRIBUTO_FILTER_RUNTIME:?runtime required}
+  pull_policy: never
+  init: true
+  shm_size: 1gb
+  working_dir: /workspace/tributo-src
+  environment:
+    PYTHONPATH: /workspace/tributo-src/src:/workspace/tributo-src
+    PYTHONDONTWRITEBYTECODE: "1"
+    TRIBUTO_DOCKER_RAY_TEST: "1"
+    TRIBUTO_FILTER_DATABASE: ${TRIBUTO_FILTER_DATABASE:?database required}
+    TRIBUTO_CLICKHOUSE_PASSWORD: ${TRIBUTO_CLICKHOUSE_PASSWORD:?test credential required}
+    TRIBUTO_FILTER_SOURCE_SHA: ${TRIBUTO_FILTER_SOURCE_SHA:?commit required}
+    RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO: "0"
+  volumes:
+    - source:/workspace/tributo-src:ro
+    - work:/workspace/tributo-work
+
+services:
+  source-init:
+    <<: *ray
+    user: "0:0"
+    entrypoint: [python, /host-source/tools/tributo_it.py]
+    command: [create-source-snapshot, --source, /host-source, --destination, /snapshot]
+    environment:
+      PYTHONPATH: /host-source
+    volumes:
+      - ${TRIBUTO_FILTER_SOURCE:?source required}:/host-source:ro
+      - source:/snapshot
+
+  work-init:
+    <<: *ray
+    user: "0:0"
+    entrypoint: [bash, -ec]
+    command: ["mkdir -p /workspace/tributo-work/artifacts && chown -R 1000:100 /workspace/tributo-work"]
+
+  ray-head:
+    <<: *ray
+    command: [ray, start, --head, --num-cpus=2, --include-dashboard=true, --dashboard-host=0.0.0.0, --disable-usage-stats, --block]
+    depends_on:
+      source-init:
+        condition: service_completed_successfully
+      work-init:
+        condition: service_completed_successfully
+
+  clickhouse:
+    image: ${TRIBUTO_FILTER_CLICKHOUSE:?ClickHouse image required}
+    pull_policy: never
+    profiles: [clickhouse]
+    environment:
+      CLICKHOUSE_DB: tributo_filters
+      CLICKHOUSE_USER: tributo
+      CLICKHOUSE_PASSWORD: ${TRIBUTO_CLICKHOUSE_PASSWORD:?test credential required}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+
+  fe:
+    image: ${TRIBUTO_FILTER_DORIS_FE:?Doris FE image required}
+    pull_policy: never
+    profiles: [doris]
+    entrypoint: [bash, -ec]
+    command: ["cp /tributo-config/fe.conf /opt/apache-doris/fe/conf/fe.conf\nexec bash init_fe.sh"]
+    environment:
+      FE_SERVERS: fe1:${TRIBUTO_FILTER_FE_IP:?FE IP required}:9010
+      FE_ID: "1"
+    volumes:
+      - ${TRIBUTO_FILTER_SOURCE:?source required}/tests/integrations/database-filter:/tributo-config:ro
+    networks:
+      default:
+        ipv4_address: ${TRIBUTO_FILTER_FE_IP}
+    mem_limit: 3g
+    ulimits:
+      nofile: {soft: 200000, hard: 200000}
+
+  be:
+    image: ${TRIBUTO_FILTER_DORIS_BE:?Doris BE image required}
+    pull_policy: never
+    profiles: [doris]
+    entrypoint: [bash, -ec]
+    command: ["cp /tributo-config/be.conf /opt/apache-doris/be/conf/be.conf\nexec bash entry_point.sh"]
+    environment:
+      FE_SERVERS: fe1:${TRIBUTO_FILTER_FE_IP:?FE IP required}:9010
+      BE_ADDR: ${TRIBUTO_FILTER_BE_IP:?BE IP required}:9050
+    depends_on: [fe]
+    volumes:
+      - ${TRIBUTO_FILTER_SOURCE:?source required}/tests/integrations/database-filter:/tributo-config:ro
+    networks:
+      default:
+        ipv4_address: ${TRIBUTO_FILTER_BE_IP}
+    mem_limit: 2g
+    ulimits:
+      nofile: {soft: 200000, hard: 200000}
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${TRIBUTO_FILTER_SUBNET:?subnet required}
+
+volumes:
+  source:
+  work:

@@ -14,6 +14,7 @@ import fnmatch
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -24,10 +25,15 @@ from typing import Any, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = Path("ci/test-suites.json")
-TIERS = frozenset({"ci_fast", "ci_scheduled", "manual_external", "quarantine"})
+TIERS = frozenset(
+    {"ci_fast", "ci_scheduled", "ci_database", "manual_external", "quarantine"}
+)
 CI_TIERS = frozenset({"ci_fast", "ci_scheduled"})
-WORKFLOWS = frozenset({"matrix", "unit", "docs", "scheduled", "external", "none"})
+WORKFLOWS = frozenset(
+    {"matrix", "unit", "docs", "database", "scheduled", "external", "none"}
+)
 CI_PYTEST_ENTRYPOINT = ("python", "-m", "pytest")
+DATABASE_ENTRYPOINT = ("python", "tools/tributo_it.py", "run-database-filter")
 GOVERNED_MARKERS = frozenset(
     {
         "ci_safe",
@@ -608,6 +614,38 @@ def _workflow_errors(manifest: Manifest) -> list[str]:
         if path in active_combined:
             errors.append(f"GitHub Actions references non-CI suite path: {path}")
 
+    if any(suite.tier == "ci_database" for suite in manifest.suites):
+        database_path = ".github/workflows/database-filter.yml"
+        database = workflows.get(database_path, "")
+        commands = active_commands.get(database_path, ())
+        if not all(_uses_planner(commands, action) for action in ("audit", "plan")):
+            errors.append(
+                "database-filter workflow must use the manifest audit and plan"
+            )
+        if not _runs_planner_suite(commands, "database-filter"):
+            errors.append(
+                "database-filter workflow must use its controlled suite runner"
+            )
+        for required in (
+            "pull_request:",
+            "push:",
+            "merge_group:",
+            "workflow_dispatch:",
+            "name: database-filter-gate",
+            "needs: [plan, database]",
+            "if-no-files-found: error",
+        ):
+            if required not in database:
+                errors.append(f"database-filter workflow is missing {required}")
+        gate = re.search(r"(?ms)^  gate:\s*\n(.*?)(?=^  \S|\Z)", database)
+        if (
+            gate is None
+            or re.search(r"(?m)^    if:\s*always\(\)\s*$", gate.group(1)) is None
+        ):
+            errors.append("database-filter gate must use if: always()")
+        if "continue-on-error:" in database:
+            errors.append("database-filter workflow cannot ignore failed validation")
+
     pr_path = ".github/workflows/pr-test-suite.yml"
     nightly_path = ".github/workflows/nightly-test.yml"
     pr = workflows.get(pr_path, "")
@@ -661,6 +699,24 @@ def _workflow_errors(manifest: Manifest) -> list[str]:
     return errors
 
 
+def _database_suite_error(suite: Suite) -> str | None:
+    if (
+        suite.suite_id != "database-filter"
+        or suite.workflow != "database"
+        or suite.entrypoint != DATABASE_ENTRYPOINT
+        or suite.args
+        or not suite.ci_allowed
+        or not suite.forbid_skips
+        or not 0 < suite.budget_seconds <= 1800
+        or set(suite.requires)
+        != {"docker", "single_node_ray", "owned_clickhouse", "owned_doris"}
+    ):
+        return (
+            "ci_database is restricted to the owned single-node database-filter suite"
+        )
+    return None
+
+
 def audit_repository(manifest: Manifest) -> list[str]:
     """Return every manifest, inventory, budget, marker, and workflow violation."""
     errors: list[str] = []
@@ -677,9 +733,9 @@ def audit_repository(manifest: Manifest) -> list[str]:
     scheduled_budget = manifest.budgets["ci_scheduled_suite_seconds"]
     scheduled_total = 0
     for suite in manifest.suites:
-        if suite.tier in CI_TIERS and not suite.ci_allowed:
+        if suite.tier in CI_TIERS | {"ci_database"} and not suite.ci_allowed:
             errors.append(f"CI suite {suite.suite_id} must set ci_allowed=true")
-        if suite.tier not in CI_TIERS and suite.ci_allowed:
+        if suite.tier not in CI_TIERS | {"ci_database"} and suite.ci_allowed:
             errors.append(f"non-CI suite {suite.suite_id} must set ci_allowed=false")
         if suite.tier == "ci_fast" and suite.budget_seconds > fast_budget:
             errors.append(f"ci_fast suite {suite.suite_id} exceeds {fast_budget}s")
@@ -694,7 +750,14 @@ def audit_repository(manifest: Manifest) -> list[str]:
                 f"CI suite {suite.suite_id} declares forbidden infrastructure: "
                 + ", ".join(sorted(set(suite.requires) & FORBIDDEN_CI_REQUIREMENTS))
             )
-        if suite.tier in CI_TIERS | {"manual_external"} and not suite.entrypoint:
+        if suite.tier == "ci_database":
+            database_error = _database_suite_error(suite)
+            if database_error:
+                errors.append(database_error)
+        if (
+            suite.tier in CI_TIERS | {"ci_database", "manual_external"}
+            and not suite.entrypoint
+        ):
             errors.append(f"executable suite {suite.suite_id} has no entrypoint")
         if suite.tier in CI_TIERS and suite.entrypoint != CI_PYTEST_ENTRYPOINT:
             errors.append(
@@ -773,7 +836,11 @@ def audit_repository(manifest: Manifest) -> list[str]:
                 f"IT runner {runner} must have exactly one explicit owner; found "
                 + repr([suite.suite_id for suite in owners])
             )
-        elif owners[0].tier != "manual_external":
+        elif owners[0].tier != "manual_external" and not (
+            runner == "scripts/run_database_filter_it.sh"
+            and owners[0].suite_id == "database-filter"
+            and owners[0].tier == "ci_database"
+        ):
             errors.append(f"IT runner {runner} must be manual_external")
 
     try:
@@ -873,6 +940,8 @@ def build_plan(
             )
         elif suite.tier in {"manual_external", "quarantine"}:
             is_selected = fallback_all or _suite_triggered(suite, normalized_paths)
+        elif suite.tier == "ci_database":
+            is_selected = fallback_all or _suite_triggered(suite, normalized_paths)
         if is_selected:
             selected[suite.tier].append(suite.suite_id)
 
@@ -924,6 +993,10 @@ def external_report(manifest: Manifest, plan: dict[str, Any]) -> str:
     else:
         lines.append("- None")
 
+    database_suites = plan["selected"].get("ci_database", [])
+    if database_suites:
+        lines.extend(("", "### Single-node database CI", ""))
+        lines.extend(f"- `{suite_id}`" for suite_id in database_suites)
     lines.extend(("", "### Required external validation", ""))
     manual = plan["selected"]["manual_external"]
     if manual:
@@ -962,6 +1035,7 @@ def _write_outputs(path: Path, plan: dict[str, Any]) -> None:
         "matrix": json.dumps(plan["matrix"], separators=(",", ":")),
         "manual_count": str(len(plan["selected"]["manual_external"])),
         "quarantine_count": str(len(plan["selected"]["quarantine"])),
+        "run_database": str(bool(plan["selected"].get("ci_database"))).lower(),
     }
     with path.open("a", encoding="utf-8") as output:
         for name, value in values.items():
@@ -977,9 +1051,37 @@ def _pytest_skips(path: Path) -> int:
     )
 
 
-def run_suite(manifest: Manifest, suite_id: str, *, prepare: bool) -> int:
+def run_suite(
+    manifest: Manifest,
+    suite_id: str,
+    *,
+    prepare: bool,
+    database: str | None = None,
+    log_dir: Path | None = None,
+) -> int:
     """Execute one CI-allowed suite with argv-only commands and a hard budget."""
     suite = manifest.suite(suite_id)
+    if suite.tier == "ci_database":
+        if _database_suite_error(suite) or database not in {"clickhouse", "doris"}:
+            raise ManifestError(
+                "Use the controlled single-node database suite with an explicit database"
+            )
+        command = [sys.executable, *suite.entrypoint[1:], "--database", database]
+        if log_dir is not None:
+            command.extend(("--log-dir", str(log_dir)))
+        process = subprocess.Popen(command, cwd=manifest.root)
+        try:
+            return process.wait(timeout=suite.budget_seconds)
+        except subprocess.TimeoutExpired:
+            # Give the owned lifecycle an opportunity to collect evidence and
+            # tear down its exact Compose project before a final kill.
+            process.send_signal(signal.SIGTERM)
+            try:
+                process.wait(timeout=90)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+            return 1
     if suite.tier not in CI_TIERS or not suite.ci_allowed:
         raise ManifestError(
             f"suite {suite_id!r} is {suite.tier} and cannot run through the CI runner"
@@ -1077,6 +1179,8 @@ def _parser() -> argparse.ArgumentParser:
     run = subparsers.add_parser("run", help="run one CI-allowed suite")
     run.add_argument("--suite", required=True)
     run.add_argument("--prepare", action="store_true")
+    run.add_argument("--database", choices=("clickhouse", "doris"))
+    run.add_argument("--log-dir", type=Path)
     return parser
 
 
@@ -1097,7 +1201,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 0
         if args.command == "run":
-            return run_suite(manifest, args.suite, prepare=args.prepare)
+            return run_suite(
+                manifest,
+                args.suite,
+                prepare=args.prepare,
+                database=args.database,
+                log_dir=args.log_dir,
+            )
 
         changed_paths = list(args.changed_path)
         if not changed_paths and args.mode == "pr" and args.event != "merge_group":
