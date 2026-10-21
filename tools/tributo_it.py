@@ -1172,7 +1172,7 @@ def prepare_runtime(
         )
 
 
-def ensure_digest_image(reference: str) -> str:
+def ensure_digest_image(reference: str, *, use_mirror: bool = True) -> str:
     """Ensure an immutable third-party image is present without implicit pulls."""
     if "@sha256:" not in reference or ":" not in reference.split("@", 1)[0]:
         raise TributoITError(
@@ -1180,7 +1180,7 @@ def ensure_digest_image(reference: str) -> str:
         )
     expected_digest = reference.split("@", 1)[1]
     readable_tag = reference.split("@", 1)[0]
-    mirror_reference = _domestic_mirror_reference(reference)
+    pull_reference = _domestic_mirror_reference(reference) if use_mirror else reference
     tagged = _image_inspect(readable_tag)
     if tagged is not None:
         tagged_repo_digests = [str(value) for value in tagged.get("RepoDigests") or []]
@@ -1192,13 +1192,13 @@ def ensure_digest_image(reference: str) -> str:
                 f"refusing to overwrite {readable_tag}"
             )
 
-    inspected = _image_inspect(reference) or _image_inspect(mirror_reference) or tagged
+    inspected = _image_inspect(reference) or _image_inspect(pull_reference) or tagged
     if inspected is None:
         _run(
-            ["docker", "pull", "--platform", docker_platform(), mirror_reference],
+            ["docker", "pull", "--platform", docker_platform(), pull_reference],
             capture_output=False,
         )
-        inspected = _image_inspect(mirror_reference)
+        inspected = _image_inspect(pull_reference)
     if inspected is None:
         raise TributoITError(
             f"third-party image is unavailable after pull: {reference}"

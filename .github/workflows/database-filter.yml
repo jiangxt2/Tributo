@@ -58,6 +58,7 @@ jobs:
         env:
           DATABASE: ${{ matrix.database }}
           EVIDENCE_DIR: ${{ runner.temp }}/database-filter-${{ matrix.database }}
+          TRIBUTO_FILTER_IMAGE_SOURCE: canonical
         run: >-
           python3 scripts/ci_test_plan.py run --suite database-filter
           --database "$DATABASE" --log-dir "$EVIDENCE_DIR"

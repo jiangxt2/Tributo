@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import os
 import secrets
 import signal
 import sys
@@ -19,6 +20,16 @@ from tools import tributo_it as it
 
 _COMPOSE = it.ROOT / "tests/integrations/docker-compose.database-filter.yml"
 _PREFIX = "tributo-database-filter-"
+
+
+def _image_source() -> it.RuntimeBuildInputMode:
+    value = os.environ.get("TRIBUTO_FILTER_IMAGE_SOURCE", "local-mirror")
+    try:
+        return it.RuntimeBuildInputMode(value)
+    except ValueError as error:
+        raise it.TributoITError(
+            "TRIBUTO_FILTER_IMAGE_SOURCE must be local-mirror or canonical"
+        ) from error
 
 
 def _image_diagnostics(directory: Path, phase: str) -> None:
@@ -155,11 +166,19 @@ def run_database_filter(database: str, *, log_dir: Path | None = None) -> None:
         ):
             prepared = None
             try:
+                image_source = _image_source()
                 _image_diagnostics(directory, "before")
                 prepared = it.prepare_runtime(
-                    it.load_profile("database-filter"), platform=it.docker_platform()
+                    it.load_profile("database-filter"),
+                    platform=it.docker_platform(),
+                    build_input_mode=image_source,
                 )
-                _run_database_filter(database, log_dir=directory, prepared=prepared)
+                _run_database_filter(
+                    database,
+                    log_dir=directory,
+                    prepared=prepared,
+                    image_source=image_source,
+                )
             except BaseException as error:
                 traceback.print_exc()
                 if not (directory / "result.json").exists():
@@ -193,7 +212,11 @@ def run_database_filter(database: str, *, log_dir: Path | None = None) -> None:
 
 
 def _run_database_filter(
-    database: str, *, log_dir: Path, prepared: it.PreparedRuntime
+    database: str,
+    *,
+    log_dir: Path,
+    prepared: it.PreparedRuntime,
+    image_source: it.RuntimeBuildInputMode,
 ) -> None:
     """Own one isolated Compose lifecycle and submit tests through Ray Jobs."""
     if database not in {"clickhouse", "doris"}:
@@ -212,7 +235,10 @@ def _run_database_filter(
     resolved = {}
     for field in image_fields:
         reference = str(definition[field])
-        it.ensure_digest_image(reference)
+        it.ensure_digest_image(
+            reference,
+            use_mirror=image_source == it.RuntimeBuildInputMode.LOCAL_MIRROR,
+        )
         resolved[field] = it._local_digest_reference(reference)
     subnet = _available_subnet()
     credential = secrets.token_hex(24)

@@ -7,9 +7,10 @@ import subprocess
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import pytest
+import yaml
 
 from scripts import ci_test_plan
 from tools import database_filter_it
@@ -47,6 +48,121 @@ def _evidence(directory: Path) -> None:
 def test_complete_evidence_is_accepted(tmp_path: Path) -> None:
     _evidence(tmp_path)
     validate_evidence(tmp_path, "doris")
+
+
+@pytest.mark.parametrize("source", [None, "local-mirror", "canonical"])
+def test_image_source_reaches_runtime_and_database_preparation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str | None
+) -> None:
+    if source is None:
+        monkeypatch.delenv("TRIBUTO_FILTER_IMAGE_SOURCE", raising=False)
+    else:
+        monkeypatch.setenv("TRIBUTO_FILTER_IMAGE_SOURCE", source)
+    mode = database_filter_it.it.RuntimeBuildInputMode(source or "local-mirror")
+    profile = object()
+    prepared = SimpleNamespace(source="local")
+    prepare = Mock(return_value=prepared)
+    execute = Mock()
+    monkeypatch.setattr(database_filter_it, "_image_diagnostics", Mock())
+    monkeypatch.setattr(database_filter_it, "_run_database_filter", execute)
+    monkeypatch.setattr(database_filter_it.it, "load_profile", lambda _: profile)
+    monkeypatch.setattr(database_filter_it.it, "docker_platform", lambda: "linux/amd64")
+    monkeypatch.setattr(database_filter_it.it, "prepare_runtime", prepare)
+
+    database_filter_it.run_database_filter("clickhouse", log_dir=tmp_path)
+
+    prepare.assert_called_once_with(
+        profile, platform="linux/amd64", build_input_mode=mode
+    )
+    execute.assert_called_once_with(
+        "clickhouse", log_dir=tmp_path.resolve(), prepared=prepared, image_source=mode
+    )
+
+
+def test_invalid_image_source_preserves_failure_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TRIBUTO_FILTER_IMAGE_SOURCE", "invalid")
+    prepare = Mock()
+    monkeypatch.setattr(database_filter_it, "_image_diagnostics", Mock())
+    monkeypatch.setattr(database_filter_it.it, "prepare_runtime", prepare)
+
+    with pytest.raises(TributoITError, match="TRIBUTO_FILTER_IMAGE_SOURCE"):
+        database_filter_it.run_database_filter("doris", log_dir=tmp_path)
+
+    prepare.assert_not_called()
+    result = json.loads((tmp_path / "result.json").read_text())
+    assert result["passed"] is False
+    assert result["phase"] == "preparation"
+    assert "TRIBUTO_FILTER_IMAGE_SOURCE" in (tmp_path / "lifecycle.log").read_text()
+
+
+@pytest.mark.parametrize("database", ["clickhouse", "doris"])
+@pytest.mark.parametrize("source", list(database_filter_it.it.RuntimeBuildInputMode))
+def test_database_service_images_use_the_selected_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    database: str,
+    source: database_filter_it.it.RuntimeBuildInputMode,
+) -> None:
+    images = {
+        "clickhouse_image": "clickhouse/server:1@sha256:" + "a" * 64,
+        "doris_fe_image": "apache/doris:fe-1@sha256:" + "b" * 64,
+        "doris_be_image": "apache/doris:be-1@sha256:" + "c" * 64,
+    }
+    monkeypatch.setattr(database_filter_it.it, "_assert_project_absent", Mock())
+    monkeypatch.setattr(
+        database_filter_it.it, "_capture_image_diagnostic_baseline", Mock()
+    )
+    monkeypatch.setattr(
+        database_filter_it.it, "_capture_container_diagnostic_baseline", Mock()
+    )
+    monkeypatch.setattr(
+        database_filter_it.it,
+        "load_profile",
+        lambda _: SimpleNamespace(definition=images),
+    )
+    ensure = Mock()
+    monkeypatch.setattr(database_filter_it.it, "ensure_digest_image", ensure)
+    monkeypatch.setattr(database_filter_it.it, "_local_digest_reference", lambda x: x)
+    monkeypatch.setattr(
+        database_filter_it,
+        "_available_subnet",
+        Mock(side_effect=RuntimeError("stop after image preparation")),
+    )
+
+    with pytest.raises(RuntimeError, match="stop after image preparation"):
+        database_filter_it._run_database_filter(
+            database,
+            log_dir=tmp_path,
+            prepared=SimpleNamespace(),
+            image_source=source,
+        )
+
+    names = (
+        ("clickhouse_image",)
+        if database == "clickhouse"
+        else ("doris_fe_image", "doris_be_image")
+    )
+    assert ensure.call_args_list == [
+        call(
+            images[name],
+            use_mirror=source
+            == database_filter_it.it.RuntimeBuildInputMode.LOCAL_MIRROR,
+        )
+        for name in names
+    ]
+
+
+def test_database_workflow_selects_canonical_images() -> None:
+    path = ci_test_plan.ROOT / ".github/workflows/database-filter.yml"
+    workflow = yaml.safe_load(path.read_text())
+    controlled_step = next(
+        step
+        for step in workflow["jobs"]["database"]["steps"]
+        if "--suite database-filter" in step.get("run", "")
+    )
+    assert controlled_step["env"]["TRIBUTO_FILTER_IMAGE_SOURCE"] == "canonical"
 
 
 @pytest.mark.parametrize("source", ["local", "concurrent-local", "registry"])
