@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from typing import ClassVar, Literal, TypedDict
 
+from tributo._common.logging import active_logging_policy
+from tributo._common.logging_events import emit_event, log_stage
 from tributo.data import IngestionPlanReceipt
 from tributo.exceptions import ResultMaterializationError, ResultWriteError
 from tributo.inference.contracts import (
@@ -124,6 +126,24 @@ class RayMapBatchesExecutor:
         opened: OpenedInferenceInput,
         kernel_factory: PredictionKernelFactory,
     ) -> InferenceResult:
+        with log_stage(
+            logger,
+            "inference",
+            run_id=plan.run_id,
+            attempt_id=plan.attempt_id,
+            submission_id=plan.submission_id,
+        ) as outcome:
+            result = self._materialize_opened(plan, sink, opened, kernel_factory)
+            outcome.status = result.status
+            return result
+
+    def _materialize_opened(
+        self,
+        plan: PreparedInferencePlan,
+        sink: BoundResultSink,
+        opened: OpenedInferenceInput,
+        kernel_factory: PredictionKernelFactory,
+    ) -> InferenceResult:
         """Build and materialize the Ray graph over a prepared input."""
         try:
             import ray.data
@@ -135,6 +155,9 @@ class RayMapBatchesExecutor:
                     plan.input_binding,
                     plan.output_binding,
                 ),
+                fn_constructor_kwargs={
+                    "_logging_policy": active_logging_policy().serialize()
+                },
                 batch_format="numpy",
                 batch_size=plan.execution.batch_size,
                 compute=ray.data.ActorPoolStrategy(size=plan.execution.concurrency),
@@ -190,13 +213,36 @@ class RayMapBatchesExecutor:
                 type(exc).__name__,
             )
 
-        return InferenceResult(
-            **_result_identity(plan, opened.receipt),
-            ingestion_receipt=opened.receipt,
-            sink_receipt=receipt,
-            output_rows=receipt.rows_written,
+        try:
+            result = InferenceResult(
+                **_result_identity(plan, opened.receipt),
+                ingestion_receipt=opened.receipt,
+                sink_receipt=receipt,
+                output_rows=receipt.rows_written,
+                status="succeeded",
+            )
+        except BaseException as exc:
+            emit_event(
+                logger,
+                "tributo.write.finished",
+                level=logging.ERROR if isinstance(exc, Exception) else logging.INFO,
+                phase="sink_receipt",
+                status="failed" if isinstance(exc, Exception) else "cancelled",
+                error_type=type(exc).__name__,
+            )
+            raise
+        emit_event(
+            logger,
+            "tributo.write.finished",
+            phase="sink",
             status="succeeded",
+            result_kind="result_sink_receipt",
+            sink_id=result.sink_receipt.sink_id
+            if result.sink_receipt is not None
+            else None,
+            rows_written=result.output_rows,
         )
+        return result
 
 
 def _failed_result(
@@ -207,7 +253,7 @@ def _failed_result(
     ingestion_receipt: IngestionPlanReceipt | None = None,
     sink_receipt: ResultSinkReceipt | None = None,
 ) -> InferenceResult:
-    return InferenceResult(
+    result = InferenceResult(
         **_result_identity(plan, ingestion_receipt),
         ingestion_receipt=ingestion_receipt,
         sink_receipt=sink_receipt,
@@ -220,6 +266,20 @@ def _failed_result(
             retryable=False,
         ),
     )
+    emit_event(
+        logger,
+        "tributo.write.finished"
+        if phase in {"sink", "materialization"}
+        else "tributo.stage.finished",
+        level=logging.ERROR,
+        phase=phase,
+        status="failed",
+        run_id=plan.run_id,
+        attempt_id=plan.attempt_id,
+        submission_id=plan.submission_id,
+        error_type=result.failure.error_type if result.failure is not None else None,
+    )
+    return result
 
 
 class _RequestBoundResultSink:

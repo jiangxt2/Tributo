@@ -17,7 +17,8 @@ from typing import Any, Optional
 import click
 
 from tributo import JobConfig
-from tributo._common import DEFAULT_DASHBOARD_URL, configure_logging
+from tributo._common import DEFAULT_DASHBOARD_URL
+from tributo._common.logging import bootstrap_logging
 from tributo.exceptions import (
     JobConfigurationError,
     JobExecutionError,
@@ -82,7 +83,7 @@ class _LazyTributoGroup(click.Group):
 @click.version_option(package_name="tributo")
 def main():
     """Tributo: Unified framework for submitting Ray Jobs."""
-    configure_logging(log_format="text")
+    bootstrap_logging(default_format="text")
 
 
 @main.command()

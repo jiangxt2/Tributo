@@ -9,7 +9,9 @@ import sys
 
 import ray
 
-from tributo._common import configure_logging
+from tributo._common.logging import bootstrap_logging
+from tributo._common.logging_events import emit_event
+from tributo._common.logging_policy import driver_logging_runtime_env
 from tributo.explainability.contracts import ExplainabilityRequest
 
 logger = logging.getLogger(__name__)
@@ -23,7 +25,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(args: argparse.Namespace | None = None) -> int:
     args = args or _parse_args()
-    configure_logging(log_format="json")
+    bootstrap_logging()
     try:
         with open(args.config, encoding="utf-8") as stream:
             request = ExplainabilityRequest.model_validate(json.load(stream))
@@ -35,18 +37,28 @@ def main(args: argparse.Namespace | None = None) -> int:
             raise ValueError(
                 "batch explainability Ray Jobs require operation_store_uri"
             )
-        ray.init(address="auto")
+        ray.init(address="auto", **driver_logging_runtime_env())
         from tributo.explainability.executor import run_batch_explainability
 
         receipt = run_batch_explainability(request)
-        logger.info("Explainability completed: %s", receipt.model_dump(mode="json"))
+        emit_event(
+            logger,
+            "tributo.stage.finished",
+            phase="explainability_driver",
+            status=receipt.status,
+            operation_id=receipt.operation_id,
+            request_id=receipt.request_id,
+            bundle_id=receipt.bundle_id,
+        )
         return 0
     except Exception as exc:
-        logger.error(
-            "Explainability job failed (%s): %s",
-            type(exc).__name__,
-            exc,
-            exc_info=True,
+        emit_event(
+            logger,
+            "tributo.stage.finished",
+            level=logging.ERROR,
+            phase="explainability_driver",
+            status="failed",
+            error_type=type(exc).__name__,
         )
         return 1
 

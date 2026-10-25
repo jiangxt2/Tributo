@@ -308,8 +308,8 @@ def run_local_entrypoint(
     """Run an entrypoint with an owned Ray local runtime.
 
     Local execution intentionally runs the application as a child process.
-    The child sees ``RAY_ADDRESS=auto`` and can use Ray's native local-cluster
-    discovery without Tributo implementing a second task scheduler.
+    The child receives the exact address returned by the owned runtime, so
+    other local clusters cannot redirect native Ray discovery.
     """
     command = shlex.split(entrypoint)
     if not command:
@@ -323,6 +323,16 @@ def run_local_entrypoint(
     ):
         raise JobConfigurationError("local env_vars must map strings to strings")
 
+    from tributo._common.logging import active_logging_policy, apply_logging_policy
+    from tributo._common.logging_policy import (
+        JOB_HOOK_ENV,
+        POLICY_ENV,
+        override_logging_policy,
+    )
+
+    parent_policy = active_logging_policy()
+    policy = override_logging_policy(parent_policy, env_vars)
+    apply_logging_policy(parent_policy)
     import ray
 
     if ray.is_initialized():
@@ -334,11 +344,19 @@ def run_local_entrypoint(
         ray_kwargs["num_cpus"] = num_cpus
     if num_gpus is not None:
         ray_kwargs["num_gpus"] = num_gpus
-    ray.init(**ray_kwargs)
+    runtime = ray.init(**ray_kwargs)
     try:
+        address_info = getattr(runtime, "address_info", None)
+        address = (
+            address_info.get("gcs_address") if isinstance(address_info, dict) else None
+        )
+        if not isinstance(address, str) or not address:
+            raise JobConfigurationError("owned Ray runtime did not provide an address")
         child_env = os.environ.copy()
-        child_env["RAY_ADDRESS"] = "auto"
         child_env.update(env_vars or {})
+        child_env["RAY_ADDRESS"] = address
+        child_env[POLICY_ENV] = policy.serialize()
+        child_env.pop(JOB_HOOK_ENV, None)
         try:
             result = subprocess.run(
                 command,

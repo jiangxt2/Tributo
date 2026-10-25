@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from tests.inference.test_executor import _plan
+from tributo._common.logging_policy import POLICY_ENV, SETUP_HOOK, LoggingPolicy
 from tributo.inference.batch_job import _parse_args, _run_resolved_plan, main
 
 
@@ -69,7 +70,13 @@ def test_main_executes_frozen_plan_and_returns_success(
         exit_code = main(argparse.Namespace(config=None, resolved_plan_env="PLAN"))
 
     assert exit_code == 0
-    ray_init.assert_called_once_with(address="auto")
+    assert ray_init.call_count == 1
+    assert ray_init.call_args.kwargs["address"] == "auto"
+    runtime = ray_init.call_args.kwargs["runtime_env"]
+    assert runtime["worker_process_setup_hook"] == SETUP_HOOK
+    assert (
+        LoggingPolicy.deserialize(runtime["env_vars"][POLICY_ENV]).log_format == "json"
+    )
 
 
 def test_main_returns_failure_for_structured_failed_result(
@@ -96,7 +103,7 @@ def test_main_logs_only_unhandled_exception_type(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     with (
-        patch("tributo.inference.batch_job.configure_logging"),
+        patch("tributo.inference.batch_job.bootstrap_logging"),
         patch("tributo.inference.batch_job.ray.init"),
         patch(
             "tributo.inference.batch_job._run_resolved_plan",
@@ -109,3 +116,29 @@ def test_main_logs_only_unhandled_exception_type(
     assert exit_code == 1
     assert "RuntimeError" in caplog.text
     assert "must-not-leak" not in caplog.text
+
+
+def test_owned_child_main_passes_frozen_driver_policy_to_workers(monkeypatch):
+    from tributo._common import logging as logging_module
+    from tributo._common.logging_policy import JOB_HOOK_ENV
+
+    selected = LoggingPolicy(level="DEBUG", log_format="text", batches=True)
+    monkeypatch.setenv(POLICY_ENV, selected.serialize())
+    monkeypatch.delenv(JOB_HOOK_ENV, raising=False)
+    for name in ("_applied", "_last_inbound", "_explicit_policy"):
+        monkeypatch.setattr(logging_module, name, None)
+    previous = logging.getLogger("tributo").level
+    try:
+        with (
+            patch("tributo.inference.batch_job.ray.init") as init,
+            patch(
+                "tributo.inference.batch_job._run_resolved_plan",
+                return_value=MagicMock(status="succeeded"),
+            ),
+        ):
+            assert main(argparse.Namespace(config=None, resolved_plan_env="PLAN")) == 0
+        runtime = init.call_args.kwargs["runtime_env"]
+        assert LoggingPolicy.deserialize(runtime["env_vars"][POLICY_ENV]) == selected
+        assert runtime["worker_process_setup_hook"] == SETUP_HOOK
+    finally:
+        logging.getLogger("tributo").setLevel(previous)

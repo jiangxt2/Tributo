@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from threading import Lock
 from typing import Any
@@ -71,7 +72,8 @@ class InferenceContext:
     @classmethod
     def from_http(cls, request: Any) -> "InferenceContext":
         """Extract ``X-Request-ID`` and W3C ``traceparent`` from HTTP."""
-        headers = getattr(request, "headers", {})
+        candidate = getattr(request, "headers", None)
+        headers = candidate if isinstance(candidate, Mapping) else {}
         traceparent, trace_id = _trace_context(headers.get("traceparent"))
         return cls(
             request_id=_safe_request_id(headers.get("x-request-id")),
@@ -153,6 +155,16 @@ def log_inference_audit(
         model_version,
         status,
         None if duration_ms is None else round(duration_ms, 2),
+        extra={
+            "event": "tributo.serving.request.finished",
+            "phase": "request",
+            "request_id": context.request_id,
+            "trace_id": context.trace_id,
+            "status": status,
+            "bundle_id": bundle_id,
+            "model_version": model_version,
+            "duration_ms": duration_ms,
+        },
     )
 
 

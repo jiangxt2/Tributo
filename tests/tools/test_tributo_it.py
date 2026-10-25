@@ -10,12 +10,67 @@ import os
 import subprocess
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from tests.support.runtime_versions import DAFT_VERSION, RAY_VERSION
 from tools import tributo_it
 from tributo._common.runtime_env import find_project_root
+
+
+@pytest.mark.parametrize("kind", ["valid", "bad_hash", "symlink", "empty"])
+def test_verified_wheel_inputs_enforce_lock_and_file_identity(tmp_path, kind):
+    source = tmp_path / "source"
+    target = tmp_path / "target"
+    source.mkdir()
+    target.mkdir()
+    content = b"locked wheel"
+    digest = hashlib.sha256(content).hexdigest()
+    if kind != "empty":
+        wheel = source / "example.whl"
+        if kind == "symlink":
+            original = tmp_path / "outside.whl"
+            original.write_bytes(content)
+            wheel.symlink_to(original)
+        else:
+            wheel.write_bytes(content if kind == "valid" else b"untrusted")
+    requirements = f"example==1 --hash=sha256:{digest}\n".encode()
+    if kind == "valid":
+        tributo_it._copy_verified_wheels(requirements, source, target)
+        assert (target / "example.whl").read_bytes() == content
+    else:
+        with pytest.raises(tributo_it.TributoITError):
+            tributo_it._copy_verified_wheels(requirements, source, target)
+        assert list(target.iterdir()) == []
+
+
+@pytest.mark.parametrize("source", ["build", "local", "registry", "absent", "changed"])
+def test_runtime_cleanup_preserves_reused_and_changed_images(monkeypatch, source):
+    prepared = (
+        None
+        if source == "absent"
+        else SimpleNamespace(
+            source="build" if source == "changed" else source,
+            image_id="sha256:owned",
+            identity=SimpleNamespace(local_tag="runtime:owned"),
+        )
+    )
+    commands = []
+    monkeypatch.setattr(
+        tributo_it,
+        "_image_inspect",
+        lambda tag: {"Id": "sha256:other" if source == "changed" else "sha256:owned"},
+    )
+    monkeypatch.setattr(tributo_it, "_run", lambda args: commands.append(args))
+    if source == "changed":
+        with pytest.raises(tributo_it.TributoITError, match="identity changed"):
+            tributo_it._cleanup_owned_runtime(prepared)
+    else:
+        tributo_it._cleanup_owned_runtime(prepared)
+    assert commands == (
+        [["docker", "image", "rm", "runtime:owned"]] if source == "build" else []
+    )
 
 
 def _write_profile(root: Path) -> tributo_it.RuntimeProfile:

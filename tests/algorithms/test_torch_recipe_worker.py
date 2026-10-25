@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,7 @@ import pytest
 import ray
 import ray.train
 
+from tributo._common.logging_policy import LoggingPolicy
 from tributo.algorithms import (
     TorchBatch,
     TorchLossContribution,
@@ -122,10 +124,16 @@ class _RuntimeContext:
         return {"CPU": 1.0}
 
 
+@pytest.mark.parametrize("detail", [False, True])
 def test_recipe_worker_reports_typed_checkpoint_and_exact_coverage(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    detail: bool,
 ) -> None:
+    caplog.set_level(
+        logging.DEBUG, logger="tributo.integrations.algorithm_runtimes.ray_train_torch"
+    )
     data = _Iterator(
         [
             {
@@ -206,6 +214,9 @@ def test_recipe_worker_reports_typed_checkpoint_and_exact_coverage(
     torch_recipe_train_loop_per_worker(
         {
             "training": {"epochs": 1, "batch_size": 2},
+            "_core_logging_policy": LoggingPolicy(
+                level="DEBUG", steps=detail
+            ).serialize(),
             "_core_implementation_ref": "tests.algorithms.test_torch_recipe_worker:BinaryLinearRecipe",
             "_core_implementation_code_digest": "0" * 64,
             "_core_input_binding_digest": "3" * 64,
@@ -222,6 +233,15 @@ def test_recipe_worker_reports_typed_checkpoint_and_exact_coverage(
         "torch_execution_evidence.json",
         "torch_checkpoint_descriptor.json",
     } <= reports[0][1]
+    progress = [
+        r
+        for r in caplog.records
+        if getattr(r, "event", None) == "tributo.training.progress"
+    ]
+    assert len(progress) == int(detail)
+    if detail:
+        assert progress[0].step_index == 1 and progress[0].rows == 2
+        assert progress[0].rank == 0 and progress[0].world_size == 1
 
 
 def test_recipe_worker_replays_ray_retry_from_stage_start(

@@ -64,6 +64,25 @@ def test_repository_policy_audit_is_clean(
     assert ci_test_plan.audit_repository(manifest) == []
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "src/tributo/_common/serve_utils.py",
+        "src/tributo/serving/model_deployment.py",
+        "tools/prepare_logging_wheels.py",
+        "tools/tributo_it.py",
+        "tests/integrations/Dockerfile.debug-logging",
+        "tests/integrations/Dockerfile.debug-logging.dockerignore",
+        "tests/integrations/runtime-profiles.json",
+    ],
+)
+def test_logging_gate_tracks_replica_and_runtime_build_inputs(manifest, path):
+    plan = ci_test_plan.build_plan(
+        manifest, event="pull_request", mode="pr", changed_paths=[path]
+    )
+    assert "debug-logging-ray-jobs" in plan["selected"]["manual_external"]
+
+
 def test_manifest_rejects_non_positive_suite_budget(tmp_path: Path) -> None:
     payload = json.loads((ROOT / "ci" / "test-suites.json").read_text(encoding="utf-8"))
     payload["suites"][0]["budget_seconds"] = 0

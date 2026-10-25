@@ -8,6 +8,7 @@ distributed workflow.
 :maxdepth: 1
 
 ../user-guide/troubleshooting
+../user-guide/debug-logging
 ```
 
 Operational errors must not expose storage credentials, database passwords,

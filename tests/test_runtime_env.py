@@ -57,7 +57,8 @@ def test_runtime_env_debug_log_never_exposes_environment_values(
     assert profile_payload not in caplog.text
     assert extension_module not in caplog.text
     assert runtime_package not in caplog.text
-    assert "TRIBUTO_STORAGE_PROFILE_MODEL" in caplog.text
+    assert "TRIBUTO_STORAGE_PROFILE_MODEL" not in caplog.text
+    assert "env_var_count=1" in caplog.text
 
 
 def test_default_runtime_env_does_not_add_extension_dependencies(tmp_path) -> None:

@@ -176,6 +176,17 @@ class RayRuntimeManager:
                     if local_options.num_gpus is not None:
                         kwargs["num_gpus"] = local_options.num_gpus
                 try:
+                    from tributo._common.logging import (
+                        active_logging_policy,
+                        apply_logging_policy,
+                    )
+                    from tributo._common.logging_policy import (
+                        driver_logging_runtime_env,
+                    )
+
+                    logging_policy = active_logging_policy()
+                    apply_logging_policy(logging_policy)
+                    kwargs.update(driver_logging_runtime_env(policy=logging_policy))
                     ray.init(**kwargs)
                 except Exception as exc:
                     raise AlgorithmConfigurationError(

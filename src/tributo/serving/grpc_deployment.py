@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 import grpc
 import numpy as np
 
+from tributo._common.logging_events import emit_event
 from tributo._common.model_input_contract import (
     canonical_onnx_dtype,
     is_onnx_invalid_argument,
@@ -230,6 +231,9 @@ class gRPCInferenceService:
                 flavors that are not safe.
             storage_profile: Storage profile name for S3 bundles.
         """
+        from tributo._common.logging import bootstrap_logging
+
+        bootstrap_logging()
         if (model_path is None) == (bundle_uri is None):
             raise ValueError(
                 "exactly one of 'model_path' (legacy) or 'bundle_uri' must be provided"
@@ -275,12 +279,15 @@ class gRPCInferenceService:
         self._output_names = self._runtime.model.output_names
         self._bundle_id = self._runtime.bundle_id
         self._model_version = self._runtime.model_version
-        logger.info(
-            "gRPC bundle loaded from %s (role=%r), input_name=%s, inputs=%s",
-            bundle_uri,
-            role,
-            self._input_name,
-            self._runtime.model.input_names,
+        emit_event(
+            logger,
+            "tributo.model.ready",
+            phase="model_load",
+            status="succeeded",
+            bundle_id=self._bundle_id,
+            level=logging.DEBUG,
+            model_version=self._model_version,
+            field_count=len(self._input_names),
         )
 
     def _open_legacy(self, model_path: str | None) -> None:
@@ -307,11 +314,13 @@ class gRPCInferenceService:
             out.name if out.name else f"output_{i}"
             for i, out in enumerate(self._session.get_outputs())
         )
-        logger.info(
-            "gRPC model loaded from %s, input_name=%s, inputs=%s",
-            model_path,
-            self._input_name,
-            [inp.name for inp in self._session.get_inputs()],
+        emit_event(
+            logger,
+            "tributo.model.ready",
+            phase="model_load",
+            status="succeeded",
+            field_count=len(self._input_names),
+            level=logging.DEBUG,
         )
 
     def _run(self, inputs: dict[str, np.ndarray] | np.ndarray) -> list[np.ndarray]:

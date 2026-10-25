@@ -88,7 +88,12 @@ EXCLUDED_DIRECTORY_NAMES = {
 }
 EXCLUDED_FILE_NAMES = {".coverage", ".pypirc", "id_rsa", "id_ed25519"}
 PROJECT_PREFIXES = frozenset(
-    {"tributo-ingestion", "tributo-lance-vector", "tributo-hdfs-ingestion"}
+    {
+        "tributo-ingestion",
+        "tributo-lance-vector",
+        "tributo-hdfs-ingestion",
+        "tributo-logging",
+    }
 )
 DIGEST_REFERENCE_PATTERN = re.compile(r"^.+:[^/@]+@sha256:[0-9a-f]{64}$")
 LOCAL_RUNTIME_BASE_IMAGE = LOCAL_BASE_IMAGE
@@ -1002,6 +1007,22 @@ def _prepare_runtime_build_inputs(
     return LOCAL_RUNTIME_BASE_IMAGE, LOCAL_RUNTIME_UV_IMAGE
 
 
+def _copy_verified_wheels(requirements: bytes, source: Path, destination: Path) -> None:
+    """Copy only ordinary wheels whose digest is in the locked export."""
+    allowed_hashes = set(re.findall(rb"--hash=sha256:([0-9a-f]{64})", requirements))
+    candidates = list(source.glob("*.whl"))
+    if not candidates or len(candidates) > 512:
+        raise TributoITError("verified wheel directory is empty or too large")
+    for candidate in candidates:
+        if candidate.is_symlink() or not candidate.is_file():
+            raise TributoITError("wheel inputs must be ordinary files")
+        with candidate.open("rb") as stream:
+            actual = hashlib.file_digest(stream, "sha256").hexdigest().encode()
+        if actual not in allowed_hashes:
+            raise TributoITError("wheel checksum is absent from locked requirements")
+        shutil.copyfile(candidate, destination / candidate.name)
+
+
 def _build_runtime(
     identity: RuntimeIdentity,
     *,
@@ -1026,6 +1047,13 @@ def _build_runtime(
             prefix="tributo-it-wheelhouse-"
         )
         wheelhouse = wheelhouse_context.name
+        verified_wheels = os.environ.get("TRIBUTO_IT_VERIFIED_WHEELHOUSE")
+        if verified_wheels is not None:
+            if identity.requirements_content is None:
+                raise TributoITError("verified wheels require locked requirements")
+            _copy_verified_wheels(
+                identity.requirements_content, Path(verified_wheels), Path(wheelhouse)
+            )
         command = [
             "docker",
             "buildx",
@@ -2137,6 +2165,16 @@ def _validate_project(project: str, prefix: str = "tributo-ingestion") -> None:
         )
 
 
+def _cleanup_owned_runtime(prepared: PreparedRuntime | None) -> None:
+    """Remove only the exact runtime image built by this invocation."""
+    if prepared is None or prepared.source != "build":
+        return
+    current = _image_inspect(prepared.identity.local_tag)
+    if current is None or current.get("Id") != prepared.image_id:
+        raise TributoITError("owned logging runtime image identity changed")
+    _run(["docker", "image", "rm", prepared.identity.local_tag])
+
+
 def _run_docker_ray_suite(
     profile: RuntimeProfile,
     *,
@@ -2147,6 +2185,7 @@ def _run_docker_ray_suite(
     enable_postgresql: bool = False,
     enable_clickhouse: bool = False,
     enable_hdfs: bool = False,
+    cleanup_runtime: bool = False,
 ) -> None:
     """Run one module on the shared isolated Ray/MinIO lifecycle."""
     project = os.environ.get("COMPOSE_PROJECT_NAME") or _default_project(project_prefix)
@@ -2169,6 +2208,7 @@ def _run_docker_ray_suite(
     primary_error: BaseException | None = None
     cleanup_errors: list[str] = []
     previous_handlers: dict[signal.Signals, Any] = {}
+    prepared: PreparedRuntime | None = None
 
     def _interrupt(signum: int, _frame: object) -> None:
         raise KeyboardInterrupt(f"received signal {signum}")
@@ -2350,6 +2390,11 @@ def _run_docker_ray_suite(
             print(f"Scoped Compose cleanup verified: {project}", flush=True)
         except BaseException as exc:
             cleanup_errors.append(str(exc))
+        if cleanup_runtime:
+            try:
+                _cleanup_owned_runtime(prepared)
+            except BaseException as exc:
+                cleanup_errors.append(str(exc))
         _report_external_container_activity(project, containers_before)
         _report_new_image_artifacts(project, images_before)
 
@@ -2601,6 +2646,9 @@ def _parser() -> argparse.ArgumentParser:
     run_parser = subparsers.add_parser("run-data-ingestion")
     run_parser.add_argument("--profile", default="data-ingestion")
 
+    logging_parser = subparsers.add_parser("run-debug-logging")
+    logging_parser.add_argument("--profile", default="debug-logging")
+
     filter_parser = subparsers.add_parser("run-database-filter")
     filter_parser.add_argument(
         "--database", choices=("clickhouse", "doris"), required=True
@@ -2639,6 +2687,16 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         if args.command == "run-data-ingestion":
             run_data_ingestion(load_profile(args.profile))
+            return 0
+
+        if args.command == "run-debug-logging":
+            _run_docker_ray_suite(
+                load_profile(args.profile),
+                project_prefix="tributo-logging",
+                test_module="tests.integrations.test_debug_logging",
+                display_name="Debug logging",
+                cleanup_runtime=True,
+            )
             return 0
 
         if args.command == "run-database-filter":

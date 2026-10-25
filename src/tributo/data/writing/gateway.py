@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+import logging
+import time
+import uuid
+
+from tributo._common.cancellation import is_cancellation
+from tributo._common.logging_events import emit_event
 from tributo.data.contracts.handles import DaftDataFrameHandle, RayDataHandle
 from tributo.data.writing.bindings import WriteBinding
 from tributo.data.writing.contracts import (
@@ -21,6 +27,8 @@ from tributo.data.writing.registry import (
 from tributo.data.writing.target_registry import WriteTargetRegistry
 from tributo.data.writing.targets import LogicalWritePlan, WriteTargetProvider
 from tributo.util.annotations import PublicAPI
+
+logger = logging.getLogger(__name__)
 
 
 @PublicAPI(stability="alpha")
@@ -64,6 +72,41 @@ class WriteGateway:
 
     def execute(self, request: WriteRequest, input_handle: WriteHandle) -> WriteReceipt:
         """Run one terminal native write; the caller retains handle ownership."""
+        started = time.monotonic()
+        operation_id = uuid.uuid4().hex
+        try:
+            receipt = self._execute(request, input_handle)
+        except BaseException as exc:
+            cancelled = is_cancellation(exc) or not isinstance(exc, Exception)
+            emit_event(
+                logger,
+                "tributo.write.finished",
+                level=logging.INFO if cancelled else logging.ERROR,
+                phase="write",
+                status="cancelled" if cancelled else "failed",
+                operation_id=operation_id,
+                error_type=type(exc).__name__,
+                duration_ms=(time.monotonic() - started) * 1000,
+            )
+            raise
+        emit_event(
+            logger,
+            "tributo.write.finished",
+            phase="write",
+            status="succeeded" if receipt.committed else "not_committed",
+            operation_id=operation_id,
+            binding_id=receipt.binding_id,
+            result_kind="write_receipt",
+            committed=receipt.committed,
+            rows_written=receipt.rows_written,
+            bytes_written=receipt.bytes_written,
+            duration_ms=(time.monotonic() - started) * 1000,
+        )
+        return receipt
+
+    def _execute(
+        self, request: WriteRequest, input_handle: WriteHandle
+    ) -> WriteReceipt:
         plan = self._target_plan(request)
         registered, binding = self._binding(request, input_handle)
         context = WriteExecutionContext(

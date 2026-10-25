@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from typing import ClassVar, Literal, Protocol, runtime_checkable
 
 import numpy as np
 
+from tributo._common.logging import active_logging_policy, apply_logging_policy
+from tributo._common.logging_events import ProgressBudget, emit_event
+from tributo._common.logging_policy import LoggingPolicy
 from tributo.inference.contracts import InputBindingSpec, OutputBindingSpec
 from tributo.util.annotations import PublicAPI
+
+logger = logging.getLogger(__name__)
 
 
 @runtime_checkable
@@ -49,14 +56,36 @@ class KernelBatchPredictor:
         kernel_factory: PredictionKernelFactory,
         input_binding: InputBindingSpec,
         output_binding: OutputBindingSpec,
+        *,
+        _logging_policy: str | None = None,
     ) -> None:
+        policy = (
+            LoggingPolicy.deserialize(_logging_policy)
+            if _logging_policy is not None
+            else active_logging_policy()
+        )
+        apply_logging_policy(policy)
+        self._logging_policy = policy
+        self._progress_budget = ProgressBudget()
+        self._batch_index = 0
+        started = time.monotonic()
         self._kernel = kernel_factory.create()
+        emit_event(
+            logger,
+            "tributo.model.ready",
+            level=logging.DEBUG,
+            phase="model_load",
+            status="succeeded",
+            duration_ms=(time.monotonic() - started) * 1000,
+        )
         self._input_binding = input_binding
         self._output_binding = output_binding
         self._closed = False
 
     def __call__(self, batch: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         """Compile table columns into named tensors and bind named outputs."""
+        if self._logging_policy.batches:
+            self._batch_index += 1
         retained_columns = list(self._input_binding.passthrough_columns)
         if self._output_binding.preserve_features:
             retained_columns.extend(
@@ -114,6 +143,18 @@ class KernelBatchPredictor:
             if binding.dtype is not None:
                 output = output.astype(binding.dtype, copy=False)
             result[binding.column] = output
+        if self._progress_budget.allow(
+            enabled=self._logging_policy.batches, logger=logger
+        ):
+            emit_event(
+                logger,
+                "tributo.batch.progress",
+                level=logging.DEBUG,
+                phase="prediction",
+                status="running",
+                batch_index=self._batch_index,
+                rows=input_rows,
+            )
         return result
 
     def close(self) -> None:

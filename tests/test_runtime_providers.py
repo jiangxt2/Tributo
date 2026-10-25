@@ -174,7 +174,11 @@ def test_local_entrypoint_owns_native_ray_runtime() -> None:
         (),
         {
             "is_initialized": staticmethod(lambda: False),
-            "init": staticmethod(lambda **kwargs: None),
+            "init": staticmethod(
+                lambda **kwargs: type(
+                    "Context", (), {"address_info": {"gcs_address": "127.0.0.1:23456"}}
+                )()
+            ),
             "shutdown": staticmethod(lambda: None),
         },
     )()
@@ -193,7 +197,7 @@ def test_local_entrypoint_owns_native_ray_runtime() -> None:
     run.assert_called_once()
     args, kwargs = run.call_args
     assert args[0] == ["python", "script.py"]
-    assert kwargs["env"]["RAY_ADDRESS"] == "auto"
+    assert kwargs["env"]["RAY_ADDRESS"] == "127.0.0.1:23456"
     assert kwargs["env"]["EXAMPLE"] == "value"
 
 

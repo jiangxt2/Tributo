@@ -1272,6 +1272,11 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
     declared_metric_names = {str(name) for name in raw_metric_reducers} - {"train_loss"}
 
     epoch_micro_batch_cursor = 0
+    from tributo._common.logging import active_logging_policy
+    from tributo._common.logging_events import ProgressBudget, emit_event
+
+    logging_policy = active_logging_policy()
+    step_budget = ProgressBudget()
     for _epoch in range(epochs):
         epoch_micro_batch_cursor = 0
         next_payload: Any
@@ -1479,6 +1484,18 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
                 window = window.add(result.local_normalizer)
             rows += batch.local_rows
             steps += 1
+            if step_budget.allow(enabled=logging_policy.steps, logger=logger):
+                emit_event(
+                    logger,
+                    "tributo.training.progress",
+                    level=logging.DEBUG,
+                    phase="fit",
+                    status="running",
+                    step_index=steps,
+                    rows=batch.local_rows,
+                    rank=rank,
+                    world_size=world_size,
+                )
             epoch_micro_batch_cursor += 1
             raw = next_raw
         if optimization.scheduler is not None:
@@ -1747,12 +1764,57 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
 @DeveloperAPI
 def torch_recipe_train_loop_per_worker(config: Mapping[str, Any]) -> None:
     """Run the Core-selected Recipe Worker wrapper."""
-    _recipe_worker(config)
+    import ray.train
+
+    from tributo._common.logging import apply_logging_policy
+    from tributo._common.logging_events import log_stage
+    from tributo._common.logging_policy import LoggingPolicy, resolve_policy
+
+    raw_policy = config.get("_core_logging_policy")
+    policy = (
+        LoggingPolicy.deserialize(raw_policy)
+        if isinstance(raw_policy, str)
+        else resolve_policy()
+    )
+    apply_logging_policy(policy)
+    with log_stage(
+        logger,
+        "training_worker",
+        mode="recipe",
+        rank=ray.train.get_context().get_world_rank(),
+        world_size=ray.train.get_context().get_world_size(),
+    ):
+        _recipe_worker(config)
 
 
 @DeveloperAPI
 def ray_torch_adapter_train_loop_per_worker(config: Mapping[str, Any]) -> None:
     """Run the Core-selected Adapter Worker wrapper."""
+    from tributo._common.logging import apply_logging_policy
+    from tributo._common.logging_policy import LoggingPolicy, resolve_policy
+
+    raw_policy = config.get("_core_logging_policy")
+    policy = (
+        LoggingPolicy.deserialize(raw_policy)
+        if isinstance(raw_policy, str)
+        else resolve_policy()
+    )
+    apply_logging_policy(policy)
+    import ray.train
+
+    from tributo._common.logging_events import log_stage
+
+    with log_stage(
+        logger,
+        "training_worker",
+        mode="adapter",
+        rank=ray.train.get_context().get_world_rank(),
+        world_size=ray.train.get_context().get_world_size(),
+    ):
+        _adapter_worker(config)
+
+
+def _adapter_worker(config: Mapping[str, Any]) -> None:
     reference = config.get("_core_implementation_ref")
     if not isinstance(reference, str):
         raise AlgorithmConfigurationError(
@@ -2027,6 +2089,11 @@ class RayTrainTorchRuntime:
                     "stage_dependency" if initial_checkpoint is not None else "none"
                 )
                 train_config = _torch_algorithm_context_config(base.plan)
+                from tributo._common.logging import active_logging_policy
+
+                train_config["_core_logging_policy"] = (
+                    active_logging_policy().serialize()
+                )
                 stage_binding = base.plan.input_bindings.get(stage.input_roles[0])
                 if stage_binding is None:
                     raise AlgorithmConfigurationError(
