@@ -12,6 +12,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from tributo._common.reporting.session import merge_runtime_env
 from tributo.util.annotations import DeveloperAPI
 
 logger = logging.getLogger(__name__)
@@ -228,9 +229,9 @@ def build_runtime_env(
         runtime_env["env_vars"] = merged_env_vars
 
     logger.debug(
-        "Built runtime_env: py_module_count=%d, has_pip=%s, env_var_keys=%s",
+        "Built runtime_env: py_module_count=%d, has_pip=%s, env_var_count=%d",
         len(runtime_env["py_modules"]),
         "pip" in runtime_env,
-        sorted(merged_env_vars),
+        len(merged_env_vars),
     )
-    return runtime_env
+    return merge_runtime_env(runtime_env, for_job=True)

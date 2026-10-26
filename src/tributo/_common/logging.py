@@ -96,7 +96,11 @@ def configure_logging(
     root.setLevel(getattr(logging, level_upper))
 
     # Remove existing handlers to avoid duplicate output
-    root.handlers.clear()
+    root.handlers[:] = [
+        existing
+        for existing in root.handlers
+        if getattr(existing, "_tributo_reporting_handler", False) is True
+    ]
 
     handler = logging.StreamHandler(stream or sys.stderr)
     if log_format == "json":

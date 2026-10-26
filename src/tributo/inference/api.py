@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from tributo._common.reporting.session import reporting_operation
 from tributo.inference.contracts import (
     BoundResultSink,
     InferenceExecutor,
@@ -31,6 +32,7 @@ def resolve_inference(
 
 
 @PublicAPI(stability="alpha")
+@reporting_operation
 def run_resolved_inference(
     plan: ResolvedInference,
     *,
@@ -69,6 +71,7 @@ def run_resolved_inference(
 
 
 @PublicAPI(stability="alpha")
+@reporting_operation
 def run_prepared_inference(
     plan: PreparedInferencePlan,
     *,
@@ -90,6 +93,7 @@ def run_prepared_inference(
 
 
 @PublicAPI(stability="alpha")
+@reporting_operation
 def run_inference(
     request: InferenceRequest,
     *,

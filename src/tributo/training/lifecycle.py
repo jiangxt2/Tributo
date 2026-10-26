@@ -18,6 +18,7 @@ from typing import Any
 
 from ray.exceptions import RayTaskError, TaskCancelledError
 
+from tributo._common.reporting.session import reporting_operation
 from tributo.training.base import BaseTrainer
 from tributo.training.callbacks import CallbackDispatcher
 from tributo.training.results import (
@@ -131,6 +132,7 @@ class TrainingLifecycle:
         self._trainer = trainer
         self._dispatcher = dispatcher
 
+    @reporting_operation
     def run(
         self,
         output_path: str = "",
@@ -468,6 +470,7 @@ class TrainingLifecycle:
 
 
 @DeveloperAPI
+@reporting_operation
 def publish_existing_training_result(
     trainer: BaseTrainer,
     result: Any,

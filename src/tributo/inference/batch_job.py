@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 import ray
 
 from tributo._common import configure_logging
+from tributo._common.reporting.session import ray_options, reporting_operation
 
 if TYPE_CHECKING:
     from tributo.inference.contracts import InferenceResult
@@ -39,13 +40,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+@reporting_operation
 def main(args: argparse.Namespace | None = None) -> int:
     if args is None:
         args = _parse_args()
 
     configure_logging(log_format="json")
 
-    ray.init(address="auto")
+    ray.init(address="auto", **ray_options())
 
     try:
         if args.resolved_plan_env is not None:

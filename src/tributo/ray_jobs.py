@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ray.job_submission import JobSubmissionClient
 
 from tributo._common import DEFAULT_DASHBOARD_URL, build_runtime_env
+from tributo._common.reporting.session import reporting_operation
 from tributo._common.retry import retry_with_exponential_backoff
 from tributo._common.submission_id import generate_submission_id
 from tributo.exceptions import JobConfigurationError
@@ -149,6 +150,7 @@ def _submit_ray_job_with_client(
 
 
 @PublicAPI(stability="alpha")
+@reporting_operation
 def submit_ray_job(
     entrypoint: str,
     *,

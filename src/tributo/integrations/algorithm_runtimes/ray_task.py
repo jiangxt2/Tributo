@@ -6,6 +6,7 @@ from typing import Any
 
 import ray
 
+from tributo._common.reporting.session import producer_scope, ray_options
 from tributo.algorithms.api import (
     AlgorithmExecutionError,
     ResolvedAlgorithmPlan,
@@ -27,6 +28,18 @@ def _execute_on_worker(
     framework_parallelism: int,
 ) -> WorkerExecutionResult:
     """Collect Ray-only metadata and enter the framework-neutral bootstrap."""
+    with producer_scope(ray_worker=True):
+        return _execute_scoped_worker(
+            envelope, world_rank, world_size, framework_parallelism
+        )
+
+
+def _execute_scoped_worker(
+    envelope: ExecutionEnvelope,
+    world_rank: int,
+    world_size: int,
+    framework_parallelism: int,
+) -> WorkerExecutionResult:
     runtime_context = ray.get_runtime_context()
     metadata: dict[str, Any] = {
         "node_id": str(runtime_context.get_node_id()),
@@ -46,6 +59,14 @@ def _reduce_on_worker(
     results: tuple[WorkerExecutionResult, ...],
 ) -> WorkerExecutionResult:
     """Load and execute a user reducer outside the Driver control plane."""
+    with producer_scope(ray_worker=True):
+        return _reduce_scoped_worker(plan, results)
+
+
+def _reduce_scoped_worker(
+    plan: ResolvedAlgorithmPlan,
+    results: tuple[WorkerExecutionResult, ...],
+) -> WorkerExecutionResult:
     runtime_context = ray.get_runtime_context()
     metadata: dict[str, Any] = {
         "node_id": str(runtime_context.get_node_id()),
@@ -71,6 +92,15 @@ class RayTaskRuntime:
                 "Ray must be initialized before portable algorithm execution"
             )
         try:
+            reporting_options = ray_options()
+            if reporting_options:
+                # Preserve the caller's setup hook. Only add trusted producer
+                # environment; the owned RPC initializes it before user imports.
+                reporting_options = {
+                    "runtime_env": {
+                        "env_vars": reporting_options["runtime_env"]["env_vars"]
+                    }
+                }
             topology = envelope.plan.runtime.topology
             world_size = (
                 envelope.plan.runtime.worker_count
@@ -84,6 +114,7 @@ class RayTaskRuntime:
                     memory=envelope.plan.runtime.memory_bytes,
                     max_retries=envelope.plan.runtime.max_retries,
                     retry_exceptions=False,
+                    **reporting_options,
                 ).remote(
                     ExecutionEnvelope(
                         plan=envelope.plan,
@@ -103,7 +134,10 @@ class RayTaskRuntime:
                     "Ray Worker group returned an invalid execution result"
                 )
             if topology is RuntimeTopology.DATA_PARALLEL:
-                result = ray.get(_reduce_on_worker.remote(envelope.plan, results))
+                reducer = _reduce_on_worker
+                if reporting_options:
+                    reducer = reducer.options(**reporting_options)
+                result = ray.get(reducer.remote(envelope.plan, results))
             else:
                 result = results[0]
         except ray.exceptions.RayError as exc:

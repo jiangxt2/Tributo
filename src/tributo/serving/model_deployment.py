@@ -20,6 +20,7 @@ from tributo._common.model_input_contract import (
     normalize_model_shape,
     validate_named_inputs,
 )
+from tributo._common.reporting.session import bootstrap_producer
 from tributo.serving.observability import InferenceContext, log_inference_audit
 from tributo.serving.schema import PredictRequest, PredictResponse, request_to_inputs
 
@@ -61,6 +62,7 @@ class ONNXModel:
                 "exactly one of 'model_path' (legacy) or 'bundle_uri' must be provided"
             )
 
+        bootstrap_producer()
         self.model_path: str
         self._runtime: Any = None
         self._session: Any = None

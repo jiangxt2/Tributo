@@ -1,0 +1,292 @@
+"""Frozen-role propagation and separate-process real SDK construction."""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+import pytest
+
+from tributo._common.reporting import session as sessions
+from tributo._common.reporting.config import POLICY_ENV, WORKER_HOOK
+from tributo.observability import (
+    DorisProfile,
+    ReportingConfig,
+    ReportingError,
+)
+
+
+def test_producer_without_policy_never_inherits_owner_switch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sessions, "_ACTIVE", None)
+    monkeypatch.setenv("TRIBUTO_LOG_REPORTING_ENABLED", "1")
+    monkeypatch.setenv(
+        "TRIBUTO_LOG_REPORTING_CONFIG", "/must-not-load-worker-owner-config.json"
+    )
+
+    @sessions.reporting_operation
+    def business() -> int:
+        assert sessions.active_session() is None
+        return 42
+
+    with sessions.producer_scope(ray_worker=True) as producer:
+        assert producer is None and business() == 42
+    with pytest.raises(ReportingError, match="reporting.config.invalid"):
+        business()
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_core_task_and_reducer_options_preserve_caller_hook(
+    monkeypatch: pytest.MonkeyPatch, enabled: bool
+) -> None:
+    from tributo.algorithms.api import (
+        AlgorithmExecutionResult,
+        RuntimeTopology,
+        WorkerExecutionResult,
+    )
+    from tributo.integrations.algorithm_runtimes import ray_task
+
+    if enabled:
+        _owner(monkeypatch)
+    result = WorkerExecutionResult(AlgorithmExecutionResult(status="succeeded"), {})
+    task, reducer = MagicMock(), MagicMock()
+    task.options.return_value.remote.return_value = result
+    reducer.remote.return_value = result
+    reducer.options.return_value.remote.return_value = result
+    monkeypatch.setattr(ray_task, "_execute_on_worker", task)
+    monkeypatch.setattr(ray_task, "_reduce_on_worker", reducer)
+    monkeypatch.setattr(ray_task.ray, "is_initialized", lambda: True)
+    monkeypatch.setattr(ray_task.ray, "get", lambda value: value)
+    init = MagicMock(side_effect=AssertionError("must not reinitialize caller Ray"))
+    monkeypatch.setattr(ray_task.ray, "init", init)
+    topology = SimpleNamespace(
+        topology=RuntimeTopology.DATA_PARALLEL,
+        worker_count=2,
+        framework_parallelism=1,
+        num_cpus=0,
+        num_gpus=0,
+        memory_bytes=None,
+        max_retries=0,
+    )
+    envelope = SimpleNamespace(
+        plan=SimpleNamespace(runtime=topology),
+        input_payloads=(object(), object()),
+        artifacts=(),
+        cancelled=False,
+    )
+    assert ray_task.RayTaskRuntime().execute(envelope) is result
+    assert task.options.call_count == 2
+    for call in task.options.call_args_list:
+        if enabled:
+            runtime_env = call.kwargs["runtime_env"]
+            assert set(runtime_env) == {"env_vars"}
+            policy = json.loads(runtime_env["env_vars"][POLICY_ENV])
+            assert policy["role"] == "producer" and "read_profile" not in policy
+        else:
+            assert "runtime_env" not in call.kwargs
+    assert reducer.options.call_count == int(enabled)
+    init.assert_not_called()
+
+
+def _owner(monkeypatch: pytest.MonkeyPatch) -> sessions.ReportingSession:
+    profile = DorisProfile(
+        host="owner-only.invalid",
+        database="logs",
+        username_ref="env://OWNER_READ_USER",
+        password_ref="env://OWNER_READ_PASSWORD",
+    )
+    owner = sessions.ReportingSession(
+        ReportingConfig(enabled=True, mode="external", read_profile=profile)
+    )
+    monkeypatch.setattr(sessions, "_ACTIVE", owner)
+    return owner
+
+
+def test_policy_is_producer_only_and_runtime_env_is_not_mutated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = _owner(monkeypatch)
+    caller = {
+        "env_vars": {"USER_SETTING": "keep"},
+        "worker_process_setup_hook": "trusted.user_hook",
+        "num_cpus": 2,
+    }
+    merged = sessions.merge_runtime_env(caller)
+    payload = json.loads(merged["env_vars"][POLICY_ENV])
+    assert payload["role"] == "producer" and payload["version"] == 1
+    assert payload["context"]["operation_id"] == owner.operation_id
+    decoded, context = sessions._decode_policy(merged["env_vars"][POLICY_ENV])
+    assert (
+        decoded == owner.sender_config and context["operation_id"] == owner.operation_id
+    )
+    assert (
+        "read_profile" not in payload
+        and "owner-only" not in merged["env_vars"][POLICY_ENV]
+    )
+    assert "OWNER_READ" not in merged["env_vars"][POLICY_ENV]
+    assert caller == {
+        "env_vars": {"USER_SETTING": "keep"},
+        "worker_process_setup_hook": "trusted.user_hook",
+        "num_cpus": 2,
+    }
+    assert merged["worker_process_setup_hook"] == WORKER_HOOK
+    assert merged["env_vars"]["_TRIBUTO_REPORTING_USER_HOOK"] == "trusted.user_hook"
+    assert sessions.merge_runtime_env(merged) == merged
+    assert owner._collector is None
+
+
+def test_remote_job_does_not_borrow_submitter_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _owner(monkeypatch)
+    monkeypatch.setenv("TRIBUTO_LOG_REPORTING_ENABLED", "1")
+    monkeypatch.setenv("TRIBUTO_LOG_REPORTING_CONFIG", "/remote/execution/config.json")
+    result = sessions.merge_runtime_env(
+        {"worker_process_setup_hook": "trusted.job_hook"}, for_job=True
+    )
+    assert POLICY_ENV not in result["env_vars"]
+    assert (
+        result["env_vars"]["TRIBUTO_LOG_REPORTING_CONFIG"]
+        == "/remote/execution/config.json"
+    )
+    assert result["env_vars"]["_TRIBUTO_REPORTING_USER_HOOK"] == "trusted.job_hook"
+    with pytest.raises(ReportingError, match="reserved"):
+        sessions.merge_runtime_env({"env_vars": {POLICY_ENV: "forged"}}, for_job=True)
+    with pytest.raises(ReportingError, match="reserved_hook"):
+        sessions.merge_runtime_env(
+            {"env_vars": {"_TRIBUTO_REPORTING_USER_HOOK": "forged.hook"}}
+        )
+
+
+def test_callable_hook_is_idempotently_composed_in_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _owner(monkeypatch)
+    from tributo._common.reporting import worker
+
+    calls = []
+    monkeypatch.setattr(
+        worker, "bootstrap_producer", lambda **kwargs: calls.append("reporting")
+    )
+
+    def user_hook() -> None:
+        calls.append("user")
+
+    result = sessions.merge_runtime_env({"worker_process_setup_hook": user_hook})
+    repeated = sessions.merge_runtime_env(result)
+    assert repeated["worker_process_setup_hook"] is result["worker_process_setup_hook"]
+    repeated["worker_process_setup_hook"]()
+    assert calls == ["reporting", "user"]
+
+
+def test_string_hook_resolves_callable_and_preserves_user_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tributo._common.reporting import worker
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        worker, "bootstrap_producer", lambda **kwargs: calls.append("reporting")
+    )
+    monkeypatch.setenv(
+        "_TRIBUTO_REPORTING_USER_HOOK",
+        "tests.reporting.test_worker_policy._trusted_failing_hook",
+    )
+    with pytest.raises(RuntimeError, match="trusted-hook-failure"):
+        worker.setup()
+    assert calls == ["reporting"]
+
+
+def _trusted_failing_hook() -> None:
+    raise RuntimeError("trusted-hook-failure")
+
+
+def test_correlation_environment_is_frozen_at_domain_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TRIBUTO_RUN_ID", "original-run")
+    owner = _owner(monkeypatch)
+    monkeypatch.setenv("TRIBUTO_RUN_ID", "changed-node-run")
+    payload = json.loads(owner.producer_policy())
+    assert payload["context"]["run_id"] == "original-run"
+
+
+@pytest.mark.parametrize(
+    ("changes", "expected"),
+    [
+        ({}, "ready"),
+        (
+            {"OTEL_EXPORTER_OTLP_HEADERS": "secret"},
+            "reporting.config.otel_exporter_conflict",
+        ),
+        (
+            {"OTEL_EXPORTER_OTLP_LOGS_HEADERS": "secret"},
+            "reporting.config.otel_exporter_conflict",
+        ),
+        (
+            {"OTEL_EXPORTER_OTLP_CERTIFICATE": "/wrong/node/ca"},
+            "reporting.config.otel_exporter_conflict",
+        ),
+        (
+            {"OTEL_EXPORTER_OTLP_LOGS_CLIENT_CERTIFICATE": "/wrong/node/cert"},
+            "reporting.config.otel_exporter_conflict",
+        ),
+        ({"OTEL_SDK_DISABLED": "true"}, "reporting.config.sdk_disabled_conflict"),
+        (
+            {"OTEL_PYTHON_EXPORTER_OTLP_HTTP_CREDENTIAL_PROVIDER": "untrusted_plugin"},
+            "reporting.config.otel_exporter_conflict",
+        ),
+        (
+            {
+                "OTEL_BLRP_MAX_QUEUE_SIZE": "invalid",
+                "OTEL_SERVICE_NAME": "caller-owned-service",
+                "OTEL_ATTRIBUTE_COUNT_LIMIT": "invalid",
+                "OTEL_LOGRECORD_ATTRIBUTE_VALUE_LENGTH_LIMIT": "invalid",
+                "OTEL_EXPORTER_OTLP_TRACES_HEADERS": "caller-owned",
+            },
+            "ready",
+        ),
+    ],
+)
+def test_real_sdk_constructs_under_distinct_driver_worker_environments(
+    changes: dict[str, str], expected: str
+) -> None:
+    code = """
+import json
+from tributo._common.reporting.sender import Sender
+from tributo.observability import SenderConfig, ReportingError
+from opentelemetry._logs import get_logger_provider
+provider=get_logger_provider()
+try:
+    sender=Sender(SenderConfig(endpoint="http://127.0.0.1:1/v1/logs",shutdown_timeout=1.0),lambda code: None)
+except ReportingError as error:
+    print(json.dumps({"result":str(error)}))
+else:
+    assert sender._provider.resource.attributes["service.name"]=="tributo"
+    assert sender.close()
+    assert get_logger_provider() is provider
+    print(json.dumps({"result":"ready"}))
+"""
+    env = {
+        **os.environ,
+        **changes,
+        "PYTHONPATH": str(Path(__file__).resolve().parents[2] / "src"),
+    }
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=True,
+    )
+    assert json.loads(result.stdout)["result"] == expected
+    assert "secret" not in result.stdout + result.stderr
+    for key, value in changes.items():
+        assert os.environ.get(key) != value

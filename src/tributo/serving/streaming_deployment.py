@@ -17,13 +17,21 @@ import concurrent.futures
 import json
 import logging
 import threading
+import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator
+from contextvars import copy_context
 from typing import Any
 
 from starlette.requests import Request
 from starlette.responses import StreamingResponse
 
+from tributo._common.reporting.session import (
+    active_session,
+    bootstrap_producer,
+    reporting_context,
+)
+from tributo.serving.observability import InferenceContext
 from tributo.util.annotations import PublicAPI
 
 logger = logging.getLogger(__name__)
@@ -40,6 +48,7 @@ class StreamingInferenceService(ABC):
 
     def __init__(self) -> None:
         """Initialize streaming inference service."""
+        bootstrap_producer()
         self._model_loaded = False
 
     @abstractmethod
@@ -56,10 +65,36 @@ class StreamingInferenceService(ABC):
         """
 
     async def __call__(self, request: Request) -> StreamingResponse:
-        """Handle streaming inference request."""
+        """Handle streaming without treating response construction as completion."""
+        context = InferenceContext.from_http(request)
+        began = time.monotonic()
+        finished = False
+
+        def finish(status: str, phase: str = "request") -> None:
+            nonlocal finished
+            if finished:
+                return
+            finished = True
+            if active_session() is not None:
+                with reporting_context(
+                    request_id=context.request_id, trace_id=context.trace_id
+                ):
+                    logger.info(
+                        "Serving stream finished",
+                        extra={
+                            "event": "tributo.serving.stream.finished",
+                            "phase": phase,
+                            "status": status,
+                            "request_id": context.request_id,
+                            "trace_id": context.trace_id,
+                            "duration_ms": (time.monotonic() - began) * 1000,
+                        },
+                    )
+
         try:
             data = await request.json()
         except Exception:
+            finish("invalid_argument")
             return StreamingResponse(
                 iter(['data: {"error": "Invalid JSON"}\n\n']),
                 media_type="text/event-stream",
@@ -67,17 +102,66 @@ class StreamingInferenceService(ABC):
             )
 
         async def event_generator() -> AsyncGenerator[str, None]:
+            status = "cancelled"
+            stream: AsyncGenerator[str, None] | None = None
+            with reporting_context(
+                request_id=context.request_id, trace_id=context.trace_id
+            ):
+                if active_session() is not None:
+                    logger.debug(
+                        "Serving stream started",
+                        extra={
+                            "event": "tributo.serving.stream.started",
+                            "phase": "stream",
+                            "request_id": context.request_id,
+                            "trace_id": context.trace_id,
+                        },
+                    )
             try:
-                async for chunk in self._generate_stream(data):
+                with reporting_context(
+                    request_id=context.request_id, trace_id=context.trace_id
+                ):
+                    stream = self._generate_stream(data)
+                while True:
+                    try:
+                        with reporting_context(
+                            request_id=context.request_id, trace_id=context.trace_id
+                        ):
+                            chunk = await anext(stream)
+                    except StopAsyncIteration:
+                        break
+                    # No ContextVar token survives a yield to ASGI's send task.
                     yield f"data: {chunk}\n\n"
                 yield "data: [DONE]\n\n"
+                status = "succeeded"
             except asyncio.CancelledError:
-                logger.info("Client disconnected, cleaning up...")
+                with reporting_context(
+                    request_id=context.request_id, trace_id=context.trace_id
+                ):
+                    logger.info("Client disconnected, cleaning up...")
                 raise
             except Exception as e:
-                logger.error("Streaming error: %s", e, exc_info=True)
+                status = "failed"
+                with reporting_context(
+                    request_id=context.request_id, trace_id=context.trace_id
+                ):
+                    logger.error("Streaming error: %s", e, exc_info=True)
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
                 yield "data: [DONE]\n\n"
+            finally:
+                try:
+                    if stream is not None:
+                        with reporting_context(
+                            request_id=context.request_id, trace_id=context.trace_id
+                        ):
+                            await stream.aclose()
+                except Exception:
+                    with reporting_context(
+                        request_id=context.request_id, trace_id=context.trace_id
+                    ):
+                        logger.warning("Stream cleanup failed", exc_info=True)
+                finally:
+                    finish(status, "stream")
 
         return StreamingResponse(
             event_generator(),
@@ -269,6 +353,7 @@ class LLMStreamingService(StreamingInferenceService):
                     position_ids,
                 ) = await loop.run_in_executor(
                     self._executor,
+                    copy_context().run,
                     self._generate_one_token,
                     self._model,
                     self._tokenizer,

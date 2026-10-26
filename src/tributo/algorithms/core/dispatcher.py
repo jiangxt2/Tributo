@@ -9,6 +9,7 @@ from dataclasses import replace
 from typing import Any, cast
 
 from tributo._common.immutable import deep_thaw
+from tributo._common.reporting.session import reporting_operation
 from tributo.algorithms.api import (
     AlgorithmConfigurationError,
     AlgorithmExecutionError,
@@ -61,6 +62,7 @@ class AlgorithmRunCoordinator:
         self._input_adapters = dict(input_adapters)
         self._runtimes = dict(runtimes)
 
+    @reporting_operation
     def execute(
         self,
         plan: ResolvedAlgorithmPlan,
@@ -493,6 +495,7 @@ class AlgorithmDispatcher:
         """Return a credential-free deterministic plan projection."""
         return self._planner.explain(request, context)
 
+    @reporting_operation
     def execute(
         self,
         request: AlgorithmRequest | ExecutionRequest,
@@ -511,6 +514,7 @@ class AlgorithmDispatcher:
             cancelled=cancelled,
         )
 
+    @reporting_operation
     def execute_plan(
         self,
         plan: ResolvedAlgorithmPlan,

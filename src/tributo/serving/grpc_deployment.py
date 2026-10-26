@@ -23,6 +23,7 @@ from tributo._common.model_input_contract import (
     normalize_model_shape,
     validate_named_inputs,
 )
+from tributo._common.reporting.session import bootstrap_producer
 from tributo.serving.observability import InferenceContext, log_inference_audit
 from tributo.serving.proto import inference_pb2
 from tributo.serving.schema import PredictInput
@@ -235,6 +236,7 @@ class gRPCInferenceService:
                 "exactly one of 'model_path' (legacy) or 'bundle_uri' must be provided"
             )
 
+        bootstrap_producer()
         self._runtime: Any = None
         self._session: Any = None
         self._input_name = ""

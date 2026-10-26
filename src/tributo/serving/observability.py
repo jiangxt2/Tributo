@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from threading import Lock
 from typing import Any
 
+from tributo._common.reporting.session import active_session
+
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _TRACEPARENT_PATTERN = re.compile(
     r"^(?P<version>[0-9a-fA-F]{2})-"
@@ -153,6 +155,20 @@ def log_inference_audit(
         model_version,
         status,
         None if duration_ms is None else round(duration_ms, 2),
+        **(
+            {
+                "extra": {
+                    "event": "tributo.serving.request.finished",
+                    "request_id": context.request_id,
+                    "trace_id": context.trace_id,
+                    "bundle_id": bundle_id,
+                    "status": status,
+                    "duration_ms": duration_ms,
+                }
+            }
+            if active_session() is not None
+            else {}
+        ),
     )
 
 

@@ -12,6 +12,13 @@ from typing import Any
 import ray
 from ray import serve
 
+from tributo._common.reporting.session import (
+    active_session,
+    reporting_operation,
+    reserve_serve_app,
+    serve_runtime_env,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -20,6 +27,7 @@ DEFAULT_GRPC_SERVICER_FUNCTION = (
 )
 
 
+@reporting_operation
 def deploy_serve_app(
     deployment_cls: type,
     *,
@@ -63,6 +71,8 @@ def deploy_serve_app(
     Returns:
         The deployed application name.
     """
+    requested_runtime_env = runtime_env
+    runtime_env = serve_runtime_env(runtime_env, app_name)
     if not ray.is_initialized():
         ray.init(address=ray_address, ignore_reinit_error=True)
 
@@ -82,11 +92,22 @@ def deploy_serve_app(
         grpc_options = None
 
     serve.start(http_options=http_options, grpc_options=grpc_options)
+    reserve_serve_app(app_name)
 
     # Check if deployment_cls is already a Deployment object (decorated by @serve.deployment)
     if hasattr(deployment_cls, "bind"):
         # Already a Deployment object, use directly
         deployment = deployment_cls
+        if active_session() is not None:
+            options = dict(getattr(deployment, "ray_actor_options", {}) or {})
+            previous = dict(options.get("runtime_env") or {})
+            supplied = dict(requested_runtime_env or {})
+            variables = {**previous.get("env_vars", {}), **supplied.get("env_vars", {})}
+            previous.update(supplied)
+            if variables:
+                previous["env_vars"] = variables
+            options["runtime_env"] = serve_runtime_env(previous, app_name)
+            deployment = deployment.options(ray_actor_options=options)
     else:
         # Regular class, needs decoration
         ray_actor_options = {}

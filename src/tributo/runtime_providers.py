@@ -22,6 +22,11 @@ from urllib.parse import urlsplit
 import requests
 from ray.job_submission import JobSubmissionClient
 
+from tributo._common.reporting.session import (
+    active_session,
+    local_reporting_operation,
+    ray_options,
+)
 from tributo.exceptions import JobConfigurationError, JobExecutionError
 from tributo.runtime import RuntimeTarget
 from tributo.util.annotations import DeveloperAPI, PublicAPI
@@ -297,6 +302,7 @@ class RayClusterLauncherProvider:
 
 
 @DeveloperAPI
+@local_reporting_operation
 def run_local_entrypoint(
     entrypoint: str,
     *,
@@ -334,11 +340,17 @@ def run_local_entrypoint(
         ray_kwargs["num_cpus"] = num_cpus
     if num_gpus is not None:
         ray_kwargs["num_gpus"] = num_gpus
+    ray_kwargs.update(ray_options())
     ray.init(**ray_kwargs)
     try:
         child_env = os.environ.copy()
         child_env["RAY_ADDRESS"] = "auto"
         child_env.update(env_vars or {})
+        reporting = active_session()
+        if reporting is not None:
+            policy = reporting.producer_policy()
+            if policy:
+                child_env["_TRIBUTO_REPORTING_POLICY"] = policy
         try:
             result = subprocess.run(
                 command,

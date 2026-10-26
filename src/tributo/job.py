@@ -12,6 +12,10 @@ from pathlib import Path
 
 from ray.job_submission import JobSubmissionClient
 
+from tributo._common.reporting.session import (
+    reporting_operation,
+    submission_runtime_env,
+)
 from tributo._common.runtime_env import build_runtime_env
 from tributo.algorithms.api.artifacts import AlgorithmArtifact, ImageProfile
 from tributo.config import JobConfig
@@ -69,6 +73,7 @@ class TributoClient:
 
     # ── submit ──
 
+    @reporting_operation
     def submit(
         self,
         entrypoint: str,
@@ -143,6 +148,7 @@ class TributoClient:
                 )
         try:
             logger.info("Submitting job to %s", self.address)
+            resolved_runtime_env = submission_runtime_env(resolved_runtime_env)
             job_id = self._get_client().submit_job(
                 entrypoint=entrypoint,
                 runtime_env=resolved_runtime_env,

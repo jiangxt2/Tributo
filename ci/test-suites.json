@@ -472,6 +472,37 @@
       "rationale": "Owned single-node real database proof of filter forwarding and native source results; no external credentials or multi-node cluster."
     },
     {
+      "id": "log-reporting-cluster",
+      "owner": "core",
+      "domain": "core",
+      "tier": "manual_external",
+      "workflow": "external",
+      "owns_tests": true,
+      "entrypoint": ["python", "-m", "tools.reporting_it"],
+      "args": [],
+      "extras": ["dev"],
+      "test_paths": ["tests/integrations/test_log_reporting.py"],
+      "trigger_domains": [],
+      "trigger_paths": [
+        "src/tributo/_common/reporting/**", "src/tributo/observability.py",
+        "src/tributo/integrations/algorithm_runtimes/ray_task.py",
+        "src/tributo/integrations/algorithm_runtimes/ray_train_torch.py",
+        "src/tributo/inference/kernel.py", "src/tributo/training/tune_runner.py",
+        "src/tributo/serving/streaming_deployment.py",
+        "tools/reporting_it.py", "tools/reporting-collector.json",
+        "tools/build_reporting_collector.py", "tests/integrations/reporting*.py",
+        "tests/integrations/test_log_reporting.py",
+        "tests/integrations/docker-compose.log-reporting.yml",
+        "tests/integrations/runtime-profiles.json", "pyproject.toml", "uv.lock"
+      ],
+      "requires": ["docker", "multi_node_ray", "doris"],
+      "budget_seconds": 1800,
+      "ci_allowed": false,
+      "forbid_skips": true,
+      "log_contract": "Explicit --log-dir: tests.log, junit.xml, evidence.jsonl, versions.json, cleanup.log, result.json",
+      "rationale": "Requires a pre-provisioned platform-matching Collector binary and owned real Doris/Ray services."
+    },
+    {
       "id": "data-ingestion-cluster",
       "owner": "data",
       "domain": "data",

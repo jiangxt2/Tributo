@@ -6,6 +6,7 @@ from typing import ClassVar, Literal, Protocol, runtime_checkable
 
 import numpy as np
 
+from tributo._common.reporting.session import producer_scope
 from tributo.inference.contracts import InputBindingSpec, OutputBindingSpec
 from tributo.util.annotations import PublicAPI
 
@@ -49,14 +50,22 @@ class KernelBatchPredictor:
         kernel_factory: PredictionKernelFactory,
         input_binding: InputBindingSpec,
         output_binding: OutputBindingSpec,
+        *,
+        _reporting_policy: str | None = None,
     ) -> None:
-        self._kernel = kernel_factory.create()
+        self._reporting_policy = _reporting_policy
+        with producer_scope(self._reporting_policy):
+            self._kernel = kernel_factory.create()
         self._input_binding = input_binding
         self._output_binding = output_binding
         self._closed = False
 
     def __call__(self, batch: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         """Compile table columns into named tensors and bind named outputs."""
+        with producer_scope(self._reporting_policy):
+            return self._predict(batch)
+
+    def _predict(self, batch: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         retained_columns = list(self._input_binding.passthrough_columns)
         if self._output_binding.preserve_features:
             retained_columns.extend(
@@ -121,7 +130,8 @@ class KernelBatchPredictor:
         if self._closed:
             return
         self._closed = True
-        self._kernel.close()
+        with producer_scope(self._reporting_policy, _initialize=False):
+            self._kernel.close()
 
     def __del__(self) -> None:
         try:

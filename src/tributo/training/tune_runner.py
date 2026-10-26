@@ -26,6 +26,15 @@ from ray.tune import ResultGrid, RunConfig, Tuner
 from ray.tune.schedulers import ASHAScheduler, FIFOScheduler, HyperBandScheduler
 
 from tributo._common.immutable import deep_thaw
+from tributo._common.reporting.session import (
+    ReportingSession,
+    active_session,
+    current_policy,
+    merge_runtime_env,
+    producer_scope,
+    reporting_context,
+    reporting_operation,
+)
 from tributo.algorithms.api import (
     DistributionSpec,
     DistributionStrategy,
@@ -597,7 +606,9 @@ class TuneRunner:
             consumer="TuneRunner",
         )
 
-        def trainable(sampled_values: dict[str, Any]) -> None:
+        reporting_policy = current_policy()
+
+        def execute_trial(sampled_values: dict[str, Any]) -> None:
             from ray import tune as ray_tune
 
             stage = "configuration"
@@ -677,6 +688,26 @@ class TuneRunner:
                     f"Ray Tune trial {stage} failed with {type(exc).__name__}."
                 ) from exc
 
+        def trainable(sampled_values: dict[str, Any]) -> None:
+            from ray import tune as ray_tune
+
+            with producer_scope(reporting_policy, ray_worker=True) as session:
+                execute_scoped_trial(sampled_values, ray_tune, session)
+
+        def execute_scoped_trial(
+            sampled_values: dict[str, Any],
+            ray_tune: Any,
+            session: ReportingSession | None,
+        ) -> None:
+            identity: dict[str, str] = {}
+            if session is not None:
+                try:
+                    identity["trial_id"] = ray_tune.get_context().get_trial_id()
+                except Exception:
+                    session.diagnose("sender.trial_id_unavailable")
+            with reporting_context(**identity):
+                execute_trial(sampled_values)
+
         return trainable
 
     def _build_tune_config(self) -> Any:
@@ -709,6 +740,7 @@ class TuneRunner:
             fail_fast=self._tune_config.fail_fast,
         )
 
+    @reporting_operation
     def run(
         self,
         datasets: dict[str, ray.data.Dataset],
@@ -742,14 +774,13 @@ class TuneRunner:
             )
 
         # Set runtime_env at Ray session level (only before ray.init)
-        if runtime_env is not None:
+        if runtime_env is not None or active_session() is not None:
             if not ray.is_initialized():
-                ray.init(runtime_env=runtime_env)
-            else:
+                ray.init(runtime_env=merge_runtime_env(runtime_env))
+            elif runtime_env is not None:
                 logger.warning(
-                    "runtime_env=%s provided but Ray is already initialized. "
+                    "runtime_env provided but Ray is already initialized. "
                     "Set runtime_env at ray.init() before creating TuneRunner.",
-                    runtime_env,
                 )
 
         # Capture datasets and output_path via closure, not injected into param_space

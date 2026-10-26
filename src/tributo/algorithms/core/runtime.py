@@ -10,6 +10,7 @@ from types import TracebackType
 from typing import Any
 
 from tributo._common.immutable import FrozenDict
+from tributo._common.reporting.session import active_session, merge_runtime_env
 from tributo.algorithms.api import (
     AlgorithmConfigurationError,
     ExecutionProfile,
@@ -175,6 +176,8 @@ class RayRuntimeManager:
                         kwargs["num_cpus"] = local_options.num_cpus
                     if local_options.num_gpus is not None:
                         kwargs["num_gpus"] = local_options.num_gpus
+                if active_session() is not None:
+                    kwargs["runtime_env"] = merge_runtime_env()
                 try:
                     ray.init(**kwargs)
                 except Exception as exc:
