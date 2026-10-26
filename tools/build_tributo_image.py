@@ -102,9 +102,6 @@ ALPHA_CAPABILITIES = (
     "graph",
     "causal",
 )
-ARM64_PIP_CHECK_BASELINE = (
-    "nvidia-cusparselt-cu13 0.8.1 is not supported on this platform",
-)
 
 
 class ImageBuildError(RuntimeError):
@@ -197,10 +194,9 @@ def platform_wheel_tags(value: str) -> tuple[str, ...]:
 
 
 def pip_check_baseline(value: str) -> tuple[str, ...]:
-    """Return only the documented vendor metadata exception for one target."""
-    return (
-        ARM64_PIP_CHECK_BASELINE if normalize_platform(value) == "linux/arm64" else ()
-    )
+    """Require a clean dependency preflight for every full-runtime target."""
+    normalize_platform(value)
+    return ()
 
 
 def local_base_image(value: str) -> str:
@@ -539,6 +535,12 @@ def _host_dependency_export(
             baseline_uv_version=config.uv_version,
             run=lambda args, cwd: _run(args, cwd=cwd, log=log),
             warning_prefix="full runtime baseline uv is",
+            cpu_profile=(
+                root / "docker/tributo-runtime/cpu"
+                if config.platform == "linux/arm64"
+                else None
+            ),
+            platform=config.platform,
         )
     except HostUVExportError as exc:
         raise ImageBuildError(str(exc)) from exc
@@ -717,8 +719,7 @@ def _validate_image(
         "result = subprocess.run([sys.executable, '-m', 'pip', 'check'], "
         "capture_output=True, text=True); "
         "output = (result.stdout + result.stderr).strip(); "
-        f"baseline = {pip_check_baseline(config.platform)!r}; "
-        "assert result.returncode == 0 or tuple(output.splitlines()) == baseline, "
+        "assert result.returncode == 0, "
         "(result.returncode, output)"
     )
     _container_python(config.image, pip_check_code, platform=config.platform, log=log)
