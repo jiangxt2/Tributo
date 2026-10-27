@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import signal
 import subprocess
+import sys
+import time
 from dataclasses import replace
 from fnmatch import fnmatchcase
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 import yaml
@@ -291,7 +297,7 @@ def test_ci_runner_refuses_external_suite_before_spawning_process(
     def unexpected_run(*args: object, **kwargs: object) -> None:
         pytest.fail(f"subprocess must not run: {args!r} {kwargs!r}")
 
-    monkeypatch.setattr(ci_test_plan.subprocess, "run", unexpected_run)
+    monkeypatch.setattr(ci_test_plan.subprocess, "Popen", unexpected_run)
     with pytest.raises(ci_test_plan.ManifestError, match="cannot run through"):
         ci_test_plan.run_suite(manifest, "data-ingestion-cluster", prepare=True)
 
@@ -330,7 +336,7 @@ def test_ci_entrypoint_allowlist_is_enforced_before_spawning(
     def unexpected_run(*args: object, **kwargs: object) -> None:
         pytest.fail(f"subprocess must not run: {args!r} {kwargs!r}")
 
-    monkeypatch.setattr(ci_test_plan.subprocess, "run", unexpected_run)
+    monkeypatch.setattr(ci_test_plan.subprocess, "Popen", unexpected_run)
     with pytest.raises(ci_test_plan.ManifestError, match="controlled pytest"):
         ci_test_plan.run_suite(unsafe, "policy", prepare=True)
 
@@ -354,7 +360,7 @@ def test_ci_marker_safety_is_enforced_before_spawning(
     def unexpected_run(*args: object, **kwargs: object) -> None:
         pytest.fail(f"subprocess must not run: {args!r} {kwargs!r}")
 
-    monkeypatch.setattr(ci_test_plan.subprocess, "run", unexpected_run)
+    monkeypatch.setattr(ci_test_plan.subprocess, "Popen", unexpected_run)
     with pytest.raises(ci_test_plan.ManifestError, match="select manual_it"):
         ci_test_plan.run_suite(unsafe, "policy", prepare=True)
 
@@ -552,22 +558,318 @@ def test_forbid_skips_requires_valid_skip_free_junit_evidence(
 ) -> None:
     calls: list[tuple[list[str], dict[str, object]]] = []
 
-    def completed(
-        command: list[str], **kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
+    def completed(command: list[str], **kwargs: object) -> int:
         calls.append((command, kwargs))
         report_argument = next(
             argument for argument in command if argument.startswith("--junitxml=")
         )
         if junit is not None:
             Path(report_argument.split("=", 1)[1]).write_text(junit, encoding="utf-8")
-        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        return 0
 
-    monkeypatch.setattr(ci_test_plan.subprocess, "run", completed)
+    monkeypatch.setattr(ci_test_plan, "_run_ci_stage", completed)
 
     assert ci_test_plan.run_suite(manifest, "policy", prepare=False) == expected
     assert len(calls) == 1
     assert "env" not in calls[0][1]
+
+
+def test_preparation_and_execution_share_one_deadline(
+    manifest: ci_test_plan.Manifest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = [10.0]
+    waits: list[float] = []
+    calls: list[tuple[list[str], dict[str, object]]] = []
+    monkeypatch.setattr(ci_test_plan.time, "monotonic", lambda: now[0])
+
+    def start(command: list[str], **kwargs: object) -> Mock:
+        calls.append((command, kwargs))
+        process = Mock()
+
+        def wait(*, timeout: float) -> int:
+            waits.append(timeout)
+            now[0] += 2.0
+            return 0
+
+        process.wait.side_effect = wait
+        return process
+
+    monkeypatch.setattr(ci_test_plan.subprocess, "Popen", start)
+    bounded = _replace_suite(manifest, "unit", budget_seconds=5)
+    assert ci_test_plan.run_suite(bounded, "unit", prepare=True) == 0
+    assert waits == [5.0, 3.0]
+    assert calls[0][0] == ["uv", "sync", "--extra", "dev", "--locked"]
+    assert calls[1][0][0:3] == ["uv", "run", "--locked"]
+    assert all("env" not in kwargs for _, kwargs in calls)
+    assert all(
+        kwargs["start_new_session"] == (os.name == "posix") for _, kwargs in calls
+    )
+
+
+def test_relative_log_directory_is_shared_with_the_child_working_directory(
+    manifest: ci_test_plan.Manifest, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    def completed(command: list[str], **kwargs: object) -> int:
+        assert kwargs["root"] == ROOT
+        assert kwargs["log_dir"] == tmp_path / "logs"
+        report = next(
+            arg.split("=", 1)[1] for arg in command if arg.startswith("--junitxml=")
+        )
+        assert Path(report).is_absolute()
+        Path(report).parent.mkdir()
+        Path(report).write_text('<testsuite tests="1" skipped="0"/>')
+        return 0
+
+    monkeypatch.setattr(ci_test_plan, "_run_ci_stage", completed)
+    assert (
+        ci_test_plan.run_suite(manifest, "policy", prepare=False, log_dir=Path("logs"))
+        == 0
+    )
+
+
+@pytest.mark.parametrize("status", [0, 7])
+def test_no_test_process_after_failed_or_exhausted_preparation(
+    manifest: ci_test_plan.Manifest,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    status: int,
+) -> None:
+    now = [10.0]
+    monkeypatch.setattr(ci_test_plan.time, "monotonic", lambda: now[0])
+    process = Mock()
+
+    def wait(*, timeout: float) -> int:
+        now[0] += timeout
+        return status
+
+    process.wait.side_effect = wait
+    start = Mock(return_value=process)
+    monkeypatch.setattr(ci_test_plan.subprocess, "Popen", start)
+    bounded = _replace_suite(manifest, "unit", budget_seconds=1)
+    result = ci_test_plan.run_suite(bounded, "unit", prepare=True, log_dir=tmp_path)
+    assert result == (status or 124)
+    assert start.call_count == 1
+    assert not (tmp_path / "tests.log").exists()
+    events = [
+        json.loads(line)
+        for line in (tmp_path / "stages.jsonl").read_text().splitlines()
+    ]
+    assert events[0]["stage"] == "prepare"
+    assert events[-1]["state"] == ("finished" if status else "timed_out")
+
+
+@pytest.mark.parametrize("prepare", [True, False])
+def test_stage_timeout_is_nonzero_and_cleans_the_owned_process(
+    manifest: ci_test_plan.Manifest,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    prepare: bool,
+) -> None:
+    process = Mock()
+    process.wait.side_effect = subprocess.TimeoutExpired("controlled", 1)
+    start = Mock(return_value=process)
+    stop = Mock()
+    monkeypatch.setattr(ci_test_plan.subprocess, "Popen", start)
+    monkeypatch.setattr(ci_test_plan, "_stop_ci_process", stop)
+    assert (
+        ci_test_plan.run_suite(manifest, "unit", prepare=prepare, log_dir=tmp_path)
+        == 124
+    )
+    assert start.call_count == 1
+    stop.assert_called_once_with(process)
+    events = [
+        json.loads(line)
+        for line in (tmp_path / "stages.jsonl").read_text().splitlines()
+    ]
+    assert events[-1]["state"] == "timed_out"
+    assert events[-1]["stage"] == ("prepare" if prepare else "tests")
+
+
+def test_interrupted_stage_preserves_interruption_after_cleanup(
+    manifest: ci_test_plan.Manifest, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    process = Mock()
+    process.wait.side_effect = KeyboardInterrupt
+    stop = Mock()
+    monkeypatch.setattr(ci_test_plan.subprocess, "Popen", Mock(return_value=process))
+    monkeypatch.setattr(ci_test_plan, "_stop_ci_process", stop)
+    with pytest.raises(KeyboardInterrupt):
+        ci_test_plan.run_suite(manifest, "unit", prepare=False, log_dir=tmp_path)
+    stop.assert_called_once_with(process)
+    assert '"state": "interrupted"' in (tmp_path / "stages.jsonl").read_text()
+
+
+def test_stage_retains_both_streams_and_failure_status(tmp_path: Path) -> None:
+    status = ci_test_plan._run_ci_stage(
+        [
+            sys.executable,
+            "-c",
+            "import sys; print('last case'); print('details', file=sys.stderr); sys.exit(7)",
+        ],
+        root=ROOT,
+        suite_id="unit",
+        stage="tests",
+        deadline=time.monotonic() + 5,
+        log_dir=tmp_path,
+    )
+    assert status == 7
+    text = (tmp_path / "tests.log").read_text()
+    assert "last case" in text and "details" in text
+    assert '"returncode": 7' in (tmp_path / "stages.jsonl").read_text()
+
+
+def test_stage_start_failure_is_visible_and_not_success(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        ci_test_plan._run_ci_stage(
+            [str(tmp_path / "missing-installer")],
+            root=ROOT,
+            suite_id="unit",
+            stage="prepare",
+            deadline=time.monotonic() + 5,
+            log_dir=tmp_path,
+        )
+    assert '"state": "start_failed"' in (tmp_path / "stages.jsonl").read_text()
+
+
+def test_timeout_retains_the_child_thread_dump(tmp_path: Path) -> None:
+    status = ci_test_plan._run_ci_stage(
+        [
+            sys.executable,
+            "-u",
+            "-c",
+            "import faulthandler,time; faulthandler.dump_traceback_later(0.1); print('last case'); time.sleep(60)",
+        ],
+        root=ROOT,
+        suite_id="unit",
+        stage="tests",
+        deadline=time.monotonic() + 1,
+        log_dir=tmp_path,
+    )
+    assert status == 124
+    text = (tmp_path / "tests.log").read_text()
+    assert "last case" in text and "Timeout" in text and "Thread" in text
+
+
+@pytest.mark.skipif(os.name != "posix", reason="CI process groups use POSIX sessions")
+@pytest.mark.parametrize(
+    ("parent_ignores_term", "use_uv"), [(False, False), (True, False), (True, True)]
+)
+def test_timeout_removes_term_resistant_descendants(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    parent_ignores_term: bool,
+    use_uv: bool,
+) -> None:
+    monkeypatch.setattr(ci_test_plan, "_PROCESS_STOP_GRACE_SECONDS", 0.1)
+    ready = tmp_path / "child-ready"
+    pids = tmp_path / "pids.json"
+    child = (
+        "import signal,time; from pathlib import Path; "
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+        f"Path({str(ready)!r}).touch(); time.sleep(60)"
+    )
+    parent = (
+        "import json,os,signal,subprocess,sys,time; from pathlib import Path; "
+        + (
+            "signal.signal(signal.SIGTERM,signal.SIG_IGN); "
+            if parent_ignores_term
+            else ""
+        )
+        + f"p=subprocess.Popen([sys.executable,'-c',{child!r}]); "
+        + f"ready=Path({str(ready)!r}); "
+        + "\nwhile not ready.exists(): time.sleep(0.01)\n"
+        + f"Path({str(pids)!r}).write_text(json.dumps({{'parent':os.getpid(),'group':os.getpgrp(),'child':p.pid}})); "
+        + "time.sleep(60)"
+    )
+    command = [sys.executable, "-c", parent]
+    if use_uv:
+        uv = shutil.which("uv")
+        assert uv is not None, "The CI controller requires uv on PATH"
+        command = [
+            uv,
+            "run",
+            "--no-cache",
+            "--offline",
+            "--no-project",
+            "--no-python-downloads",
+            "--python",
+            sys.executable,
+            *command,
+        ]
+    owned_group: int | None = None
+
+    def running_owned_pids() -> list[str]:
+        identities = json.loads(pids.read_text())
+        result = subprocess.run(
+            [
+                "ps",
+                "-p",
+                ",".join(str(pid) for pid in set(identities.values())),
+                "-o",
+                "pid=,stat=",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode in (0, 1) and not result.stderr, result.stderr
+        # Reparented zombies are already dead; their reaper is outside this stage.
+        return [
+            line
+            for line in result.stdout.splitlines()
+            if not line.split()[1].startswith("Z")
+        ]
+
+    try:
+        assert (
+            ci_test_plan._run_ci_stage(
+                command,
+                root=ROOT,
+                suite_id="unit",
+                stage="tests",
+                deadline=time.monotonic() + 2,
+                log_dir=tmp_path,
+            )
+            == 124
+        )
+        owned_group = json.loads(pids.read_text())["group"]
+        assert owned_group != os.getpgrp()
+        deadline = time.monotonic() + 2
+        while running_owned_pids() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert not running_owned_pids(), "owned descendants still run after timeout"
+    finally:
+        if owned_group is None and pids.exists():
+            owned_group = json.loads(pids.read_text())["group"]
+        if owned_group is not None and running_owned_pids():
+            try:
+                os.killpg(owned_group, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+def test_unit_workflow_retains_diagnostics_without_changing_its_budget() -> None:
+    workflow = yaml.load(
+        (ROOT / ".github/workflows/pr-test-suite.yml").read_text(encoding="utf-8"),
+        Loader=yaml.BaseLoader,
+    )
+    unit = workflow["jobs"]["unit-tests"]
+    assert unit["timeout-minutes"] == "20"
+    assert unit["strategy"]["matrix"]["python-version"] == ["3.12", "3.13"]
+    run = next(
+        s for s in unit["steps"] if s.get("name") == "Run manifest-owned unit suite"
+    )
+    assert "--prepare --log-dir" in run["run"]
+    assert run["env"]["PYTHONUNBUFFERED"] == "1"
+    assert run["env"]["PYTEST_ADDOPTS"] == "-o faulthandler_timeout=60"
+    upload = next(
+        s for s in unit["steps"] if s.get("name") == "Upload unit diagnostics"
+    )
+    assert upload["if"] == "always()"
+    assert upload["with"]["path"].endswith("unit-${{ matrix.python-version }}/")
+    assert upload["with"]["if-no-files-found"] == "warn"
 
 
 def test_workflows_preserve_events_permissions_budgets_and_stable_gate() -> None:
