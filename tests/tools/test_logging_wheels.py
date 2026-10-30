@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-from tools.prepare_logging_wheels import download_wheel, select_wheels
+from tools.prepare_logging_wheels import download_wheel, prepare_wheels, select_wheels
 
 
 def test_selects_linux_arm_wheel_and_respects_python_markers():
@@ -70,3 +70,22 @@ def test_truncated_download_is_rejected_without_replacing_artifact(tmp_path: Pat
         with pytest.raises(ValueError, match="checksum/size mismatch"):
             download_wheel(wheel, tmp_path)
     assert not (tmp_path / "example.whl").exists()
+
+
+def test_preparation_uses_existing_export_and_records_lock_digest(tmp_path, capsys):
+    lock = tmp_path / "uv.lock"
+    lock.write_text("version = 1\n")
+    directory = tmp_path / "wheels"
+    requirements = b"locked export"
+    wheel = {"filename": "example.whl"}
+    with (
+        patch(
+            "tools.prepare_logging_wheels.select_wheels", return_value=[wheel]
+        ) as select,
+        patch("tools.prepare_logging_wheels.download_wheel") as download,
+    ):
+        prepare_wheels(requirements, lock, "linux/arm64", directory)
+    select.assert_called_once_with(requirements, {"version": 1}, "aarch64")
+    download.assert_called_once_with(wheel, directory)
+    assert directory.is_dir() and not (directory / "manifest.json").exists()
+    assert hashlib.sha256(lock.read_bytes()).hexdigest() in capsys.readouterr().out

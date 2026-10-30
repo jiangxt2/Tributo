@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import importlib
+import logging
 import os
 import sys
 from collections.abc import Iterator, Sequence
@@ -33,6 +34,63 @@ _OPTIONAL_IMPORTS = {
 }
 
 collect_ignore: list[str] = []
+
+
+@pytest.fixture
+def isolated_logging(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Isolate application logging only for tests that request this fixture."""
+    from tributo._common import logging as logging_module
+    from tributo._common import worker_logging
+    from tributo._common.logging_policy import (
+        JOB_HOOK_ENV,
+        LOG_ENV_KEYS,
+        POLICY_ENV,
+        USER_HOOK_ENV,
+    )
+
+    namespaces = {"tributo", "ray_doris", "ray_clickhouse"}
+    for name in namespaces:
+        logging.getLogger(name)
+
+    def loggers() -> Iterator[logging.Logger]:
+        for name, value in list(logging.Logger.manager.loggerDict.items()):
+            if isinstance(value, logging.Logger) and name.split(".")[0] in namespaces:
+                yield value
+
+    previous = {
+        logger: (
+            logger.level,
+            list(logger.handlers),
+            logger.propagate,
+            logger.disabled,
+            list(logger.filters),
+        )
+        for logger in loggers()
+    }
+    for logger in previous:
+        logger.setLevel(logging.NOTSET)
+        logger.handlers = []
+        logger.propagate = True
+        logger.disabled = False
+        logger.filters = []
+    for name in ("_applied", "_last_inbound", "_explicit_policy"):
+        monkeypatch.setattr(logging_module, name, None)
+    monkeypatch.setattr(logging_module, "_warned", set())
+    monkeypatch.setattr(worker_logging, "_dispatched", None)
+    for key in (*LOG_ENV_KEYS, POLICY_ENV, USER_HOOK_ENV, JOB_HOOK_ENV):
+        monkeypatch.delenv(key, raising=False)
+    try:
+        yield
+    finally:
+        for logger in loggers():
+            level, handlers, propagate, disabled, filters = previous.get(
+                logger, (logging.NOTSET, [], True, False, [])
+            )
+            logger.setLevel(level)
+            logger.handlers = handlers
+            logger.propagate = propagate
+            logger.disabled = disabled
+            logger.filters = filters
 
 
 @pytest.hookimpl(tryfirst=True)

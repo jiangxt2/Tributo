@@ -23,6 +23,8 @@ from tributo._common.logging_policy import (
     submission_logging_env,
 )
 
+pytestmark = pytest.mark.usefixtures("isolated_logging")
+
 
 def test_forwarding_preserves_explicit_values_and_never_scans_other_env(monkeypatch):
     monkeypatch.setenv("TRIBUTO_LOG_LEVEL", "DEBUG")
@@ -57,7 +59,6 @@ def test_job_transport_preserves_user_hook_and_is_serializable(monkeypatch):
 
 
 def test_module_hook_runs_after_logging_once_and_errors_are_not_swallowed(monkeypatch):
-    from tributo._common import logging as logging_module
     from tributo._common import worker_logging
 
     events = []
@@ -71,25 +72,19 @@ def test_module_hook_runs_after_logging_once_and_errors_are_not_swallowed(monkey
     monkeypatch.setitem(sys.modules, module.__name__, module)
     monkeypatch.setenv(POLICY_ENV, LoggingPolicy(level="DEBUG").serialize())
     monkeypatch.setenv(USER_HOOK_ENV, f"{module.__name__}.setup")
-    monkeypatch.setattr(worker_logging, "_dispatched", None)
-    monkeypatch.setattr(logging_module, "_applied", None)
     logger = logging.getLogger("tributo")
-    previous = logger.level
-    try:
-        worker_logging.setup()
-        worker_logging.setup()
-        assert events == [logging.DEBUG]
-        assert logger.level == logging.ERROR
+    worker_logging.setup()
+    worker_logging.setup()
+    assert events == [logging.DEBUG]
+    assert logger.level == logging.ERROR
 
-        def broken():
-            raise RuntimeError("hook failed")
+    def broken():
+        raise RuntimeError("hook failed")
 
-        module.broken = broken
-        monkeypatch.setenv(USER_HOOK_ENV, f"{module.__name__}.broken")
-        with pytest.raises(RuntimeError, match="hook failed"):
-            worker_logging.setup()
-    finally:
-        logger.setLevel(previous)
+    module.broken = broken
+    monkeypatch.setenv(USER_HOOK_ENV, f"{module.__name__}.broken")
+    with pytest.raises(RuntimeError, match="hook failed"):
+        worker_logging.setup()
 
 
 def test_local_callable_composition_is_serializable_idempotent_and_not_jobs():

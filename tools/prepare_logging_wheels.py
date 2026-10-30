@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import argparse
 import concurrent.futures
 import hashlib
-import json
 import os
 import subprocess
 import tomllib
@@ -115,27 +113,20 @@ def download_wheel(wheel: dict, directory: Path) -> dict:
     return wheel
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--directory", type=Path, required=True)
-    args = parser.parse_args()
-    from tools.tributo_it import ROOT, docker_platform, load_profile, runtime_identity
-
-    target = docker_platform()
-    architecture = "aarch64" if target.endswith("/arm64") else "x86_64"
-    identity = runtime_identity(load_profile("debug-logging"), target)
-    if identity.requirements_content is None:
-        raise ValueError("A locked export is required")
-    lock = tomllib.loads((ROOT / "uv.lock").read_text())
-    wheels = select_wheels(identity.requirements_content, lock, architecture)
-    args.directory.mkdir(parents=True, exist_ok=True)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
-        list(executor.map(lambda wheel: download_wheel(wheel, args.directory), wheels))
-    (args.directory / "manifest.json").write_text(
-        json.dumps({"platform": target, "wheels": wheels}, indent=2)
+def prepare_wheels(
+    requirements: bytes, lock_path: Path, platform: str, directory: Path
+) -> None:
+    """Prepare build inputs from the runtime's existing locked export."""
+    architecture = "aarch64" if platform.endswith("/arm64") else "x86_64"
+    lock_content = lock_path.read_bytes()
+    wheels = select_wheels(
+        requirements, tomllib.loads(lock_content.decode()), architecture
     )
-    print(f"Verified wheelhouse ready: {len(wheels)} artifacts ({target})", flush=True)
-
-
-if __name__ == "__main__":
-    main()
+    directory.mkdir(parents=True, exist_ok=True)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
+        list(executor.map(lambda wheel: download_wheel(wheel, directory), wheels))
+    print(
+        f"Verified wheelhouse ready: {len(wheels)} artifacts ({platform}), "
+        f"lock_sha256={hashlib.sha256(lock_content).hexdigest()}",
+        flush=True,
+    )

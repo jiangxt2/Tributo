@@ -13,6 +13,8 @@ from tests.inference.test_executor import _plan
 from tributo._common.logging_policy import POLICY_ENV, SETUP_HOOK, LoggingPolicy
 from tributo.inference.batch_job import _parse_args, _run_resolved_plan, main
 
+pytestmark = pytest.mark.usefixtures("isolated_logging")
+
 
 def _encoded_plan() -> str:
     return base64.urlsafe_b64encode(_plan().model_dump_json().encode("utf-8")).decode(
@@ -119,26 +121,19 @@ def test_main_logs_only_unhandled_exception_type(
 
 
 def test_owned_child_main_passes_frozen_driver_policy_to_workers(monkeypatch):
-    from tributo._common import logging as logging_module
     from tributo._common.logging_policy import JOB_HOOK_ENV
 
     selected = LoggingPolicy(level="DEBUG", log_format="text", batches=True)
     monkeypatch.setenv(POLICY_ENV, selected.serialize())
     monkeypatch.delenv(JOB_HOOK_ENV, raising=False)
-    for name in ("_applied", "_last_inbound", "_explicit_policy"):
-        monkeypatch.setattr(logging_module, name, None)
-    previous = logging.getLogger("tributo").level
-    try:
-        with (
-            patch("tributo.inference.batch_job.ray.init") as init,
-            patch(
-                "tributo.inference.batch_job._run_resolved_plan",
-                return_value=MagicMock(status="succeeded"),
-            ),
-        ):
-            assert main(argparse.Namespace(config=None, resolved_plan_env="PLAN")) == 0
-        runtime = init.call_args.kwargs["runtime_env"]
-        assert LoggingPolicy.deserialize(runtime["env_vars"][POLICY_ENV]) == selected
-        assert runtime["worker_process_setup_hook"] == SETUP_HOOK
-    finally:
-        logging.getLogger("tributo").setLevel(previous)
+    with (
+        patch("tributo.inference.batch_job.ray.init") as init,
+        patch(
+            "tributo.inference.batch_job._run_resolved_plan",
+            return_value=MagicMock(status="succeeded"),
+        ),
+    ):
+        assert main(argparse.Namespace(config=None, resolved_plan_env="PLAN")) == 0
+    runtime = init.call_args.kwargs["runtime_env"]
+    assert LoggingPolicy.deserialize(runtime["env_vars"][POLICY_ENV]) == selected
+    assert runtime["worker_process_setup_hook"] == SETUP_HOOK

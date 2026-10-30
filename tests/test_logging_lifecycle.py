@@ -21,6 +21,8 @@ from tributo.exporting.models import BundleOutputConfig, ExportTarget
 from tributo.inference.kernel import KernelBatchPredictor
 from tributo.serving.streaming_deployment import StreamingInferenceService
 
+pytestmark = pytest.mark.usefixtures("isolated_logging")
+
 
 @pytest.mark.parametrize(
     "committed,expected", [(True, "succeeded"), (False, "not_committed")]

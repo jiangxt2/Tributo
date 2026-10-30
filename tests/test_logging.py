@@ -22,53 +22,7 @@ from tributo._common.logging import (
 from tributo._common.logging_events import ProgressBudget, emit_event, log_stage
 from tributo._common.logging_policy import POLICY_ENV, LoggingPolicy, resolve_policy
 
-
-@pytest.fixture(autouse=True)
-def isolated_logging(monkeypatch):
-    from tributo._common import logging as module
-
-    names = {"tributo", "ray_doris", "tributo.test", "tributo.test.child"}
-    names.update(
-        name
-        for name in logging.Logger.manager.loggerDict
-        if name.startswith("tributo.")
-    )
-    previous = {}
-    for name in names:
-        logger = logging.getLogger(name)
-        previous[name] = (
-            logger.level,
-            list(logger.handlers),
-            logger.propagate,
-            logger.disabled,
-        )
-        logger.handlers = []
-        logger.setLevel(logging.NOTSET)
-        logger.propagate = True
-        logger.disabled = False
-    monkeypatch.setattr(logging.getLogger(), "handlers", [])
-    monkeypatch.setattr(module, "_applied", None)
-    monkeypatch.setattr(module, "_last_inbound", None)
-    monkeypatch.setattr(module, "_explicit_policy", None)
-    monkeypatch.setattr(module, "_warned", set())
-    for key in (
-        POLICY_ENV,
-        "TRIBUTO_LOG_LEVEL",
-        "TRIBUTO_LOG_FORMAT",
-        "TRIBUTO_LOGGER_LEVELS",
-        "TRIBUTO_LOG_BATCHES",
-        "TRIBUTO_LOG_STEPS",
-        "RAY_DORIS_LOG_BATCHES",
-        "RAY_CLICKHOUSE_LOG_BATCHES",
-    ):
-        monkeypatch.delenv(key, raising=False)
-    yield
-    for name, (level, handlers, propagate, disabled) in previous.items():
-        logger = logging.getLogger(name)
-        logger.setLevel(level)
-        logger.handlers = handlers
-        logger.propagate = propagate
-        logger.disabled = disabled
+pytestmark = pytest.mark.usefixtures("isolated_logging")
 
 
 def _without_external_output():

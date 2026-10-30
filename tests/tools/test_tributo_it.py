@@ -11,11 +11,12 @@ import subprocess
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
 from tests.support.runtime_versions import DAFT_VERSION, RAY_VERSION
-from tools import tributo_it
+from tools import prepare_logging_wheels, tributo_it
 from tributo._common.runtime_env import find_project_root
 
 
@@ -432,12 +433,41 @@ def test_host_uv_build_inputs_prepare_only_the_ray_base(
     ]
 
 
+@pytest.mark.parametrize("wheel_mode", ["none", "external", "logging", "failure"])
 def test_host_uv_runtime_build_uses_requirements_context_without_uv_image(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wheel_mode: str
 ) -> None:
     profile = _write_host_uv_profile(tmp_path)
-    _fake_host_uv(monkeypatch, version="0.11.23")
+    if wheel_mode in {"logging", "failure"}:
+        profile = tributo_it.RuntimeProfile(
+            name="debug-logging", definition=profile.definition, root=profile.root
+        )
+    content = b"locked wheel"
+    digest = hashlib.sha256(content).hexdigest()
+    _fake_host_uv(
+        monkeypatch,
+        version="0.11.23",
+        exported_content=f"example==1 --hash=sha256:{digest}\n",
+    )
     identity = tributo_it.runtime_identity(profile, "linux/amd64")
+    cache = tmp_path / "wheels"
+    if wheel_mode != "none":
+        monkeypatch.setenv("TRIBUTO_IT_VERIFIED_WHEELHOUSE", str(cache))
+    else:
+        monkeypatch.delenv("TRIBUTO_IT_VERIFIED_WHEELHOUSE", raising=False)
+    prepared = Mock()
+
+    def prepare(*args):
+        prepared(*args)
+        if wheel_mode == "failure":
+            raise ValueError("wheel preparation failed")
+        cache.mkdir()
+        (cache / "example.whl").write_bytes(content)
+
+    monkeypatch.setattr(prepare_logging_wheels, "prepare_wheels", prepare)
+    if wheel_mode == "external":
+        cache.mkdir()
+        (cache / "example.whl").write_bytes(content)
     commands: list[list[str]] = []
     observed_requirements: list[bytes] = []
     observed_version_checks: list[str] = []
@@ -465,10 +495,27 @@ def test_host_uv_runtime_build_uses_requirements_context_without_uv_image(
         observed_version_checks.append(
             (context / "runtime-version-check.py").read_text()
         )
+        wheels = Path(
+            next(
+                value.split("=", 1)[1]
+                for value in args
+                if value.startswith("external-wheelhouse=")
+            )
+        )
+        assert [path.read_bytes() for path in wheels.glob("*.whl")] == (
+            [] if wheel_mode == "none" else [content]
+        )
         return subprocess.CompletedProcess(args, 0, "", "")
 
     monkeypatch.setattr(tributo_it, "_run", fake_build_run)
 
+    if wheel_mode == "failure":
+        with pytest.raises(ValueError, match="wheel preparation failed"):
+            tributo_it._build_runtime(
+                identity, build_input_mode=tributo_it.RuntimeBuildInputMode.LOCAL_MIRROR
+            )
+        assert not commands
+        return
     assert (
         tributo_it._build_runtime(
             identity,
@@ -482,6 +529,49 @@ def test_host_uv_runtime_build_uses_requirements_context_without_uv_image(
     assert any(value.startswith("locked-requirements=") for value in command)
     assert observed_requirements == [identity.requirements_content]
     assert observed_version_checks == [tributo_it._version_check_code(identity)]
+    if wheel_mode == "logging":
+        prepared.assert_called_once_with(
+            identity.requirements_content,
+            profile.root / "uv.lock",
+            identity.platform,
+            cache,
+        )
+    else:
+        prepared.assert_not_called()
+
+
+@pytest.mark.parametrize("source", ["local", "registry"])
+def test_reused_logging_runtime_never_prepares_wheels(monkeypatch, source):
+    from contextlib import nullcontext
+
+    identity = SimpleNamespace(
+        profile=SimpleNamespace(name="debug-logging"), local_tag="logging:locked"
+    )
+    monkeypatch.setattr(tributo_it, "runtime_identity", lambda *_: identity)
+    monkeypatch.setattr(
+        tributo_it, "_image_inspect", lambda _: {} if source == "local" else None
+    )
+    monkeypatch.setattr(
+        tributo_it, "validate_runtime_image", lambda *_: "sha256:verified"
+    )
+    monkeypatch.setattr(tributo_it, "runtime_lock", lambda _: nullcontext())
+    monkeypatch.setattr(tributo_it, "_registry_reference", lambda *_: "registry:locked")
+    monkeypatch.setattr(
+        tributo_it,
+        "_pull_registry_runtime",
+        lambda *_args, **_kwargs: (
+            SimpleNamespace(returncode=0),
+            "registry:locked@sha256:verified",
+        ),
+    )
+    monkeypatch.setattr(tributo_it, "_run", Mock())
+    prepare = Mock(side_effect=AssertionError("reused images must not prepare wheels"))
+    monkeypatch.setattr(prepare_logging_wheels, "prepare_wheels", prepare)
+    result = tributo_it.prepare_runtime(
+        identity.profile, platform="linux/amd64", registry="registry"
+    )
+    assert result.source == source and result.image_id == "sha256:verified"
+    prepare.assert_not_called()
 
 
 def test_host_uv_profile_rejects_uv_or_python_tool_images(tmp_path: Path) -> None:

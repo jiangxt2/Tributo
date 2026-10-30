@@ -1029,6 +1029,19 @@ def _build_runtime(
     build_input_mode: RuntimeBuildInputMode,
 ) -> str:
     labels = _expected_labels(identity)
+    verified_wheels = os.environ.get("TRIBUTO_IT_VERIFIED_WHEELHOUSE")
+    if verified_wheels is not None:
+        if identity.requirements_content is None:
+            raise TributoITError("verified wheels require locked requirements")
+        if identity.profile.name == "debug-logging":
+            from tools.prepare_logging_wheels import prepare_wheels
+
+            prepare_wheels(
+                identity.requirements_content,
+                identity.profile.root / "uv.lock",
+                identity.platform,
+                Path(verified_wheels),
+            )
     base_image, uv_image = _prepare_runtime_build_inputs(
         identity,
         build_input_mode=build_input_mode,
@@ -1047,10 +1060,8 @@ def _build_runtime(
             prefix="tributo-it-wheelhouse-"
         )
         wheelhouse = wheelhouse_context.name
-        verified_wheels = os.environ.get("TRIBUTO_IT_VERIFIED_WHEELHOUSE")
         if verified_wheels is not None:
-            if identity.requirements_content is None:
-                raise TributoITError("verified wheels require locked requirements")
+            assert identity.requirements_content is not None
             _copy_verified_wheels(
                 identity.requirements_content, Path(verified_wheels), Path(wheelhouse)
             )

@@ -7,7 +7,6 @@ from unittest.mock import patch
 
 import pytest
 
-from tributo._common import logging as logging_module
 from tributo._common import worker_logging
 from tributo._common.logging import bootstrap_logging
 from tributo._common.logging_policy import (
@@ -17,6 +16,8 @@ from tributo._common.logging_policy import (
     LoggingPolicy,
 )
 from tributo._common.serve_utils import deploy_serve_app
+
+pytestmark = pytest.mark.usefixtures("isolated_logging")
 
 
 class _Deployment:
@@ -28,21 +29,6 @@ class _Deployment:
 
     def bind(self, **kwargs):
         return self
-
-
-@pytest.fixture(autouse=True)
-def preserve_logging(monkeypatch):
-    logger = logging.getLogger("tributo")
-    previous = logger.level, list(logger.handlers), logger.propagate
-    logger.handlers = []
-    logger.propagate = True
-    for name in ("_applied", "_last_inbound", "_explicit_policy"):
-        monkeypatch.setattr(logging_module, name, None)
-    monkeypatch.setattr(worker_logging, "_dispatched", None)
-    yield
-    logger.setLevel(previous[0])
-    logger.handlers = previous[1]
-    logger.propagate = previous[2]
 
 
 @pytest.mark.parametrize("decorated", [False, True])
