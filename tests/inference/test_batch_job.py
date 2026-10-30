@@ -12,6 +12,7 @@ import pytest
 from tests.inference.test_executor import _plan
 from tributo._common.logging_policy import POLICY_ENV, SETUP_HOOK, LoggingPolicy
 from tributo.inference.batch_job import _parse_args, _run_resolved_plan, main
+from tributo.inference.contracts import FailureDiagnostic
 
 pytestmark = pytest.mark.usefixtures("isolated_logging")
 
@@ -81,24 +82,54 @@ def test_main_executes_frozen_plan_and_returns_success(
     )
 
 
-def test_main_returns_failure_for_structured_failed_result(
+@pytest.mark.parametrize(
+    "phase", ["acquisition", "execution", "materialization", "sink", None]
+)
+def test_main_preserves_structured_non_success_log(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    phase,
 ) -> None:
     plan = _plan()
     monkeypatch.setenv("PLAN", _encoded_plan())
     monkeypatch.setenv("TRIBUTO_RUN_ID", plan.run_id)
     monkeypatch.setenv("TRIBUTO_ATTEMPT_ID", plan.attempt_id)
     monkeypatch.setenv("TRIBUTO_SUBMISSION_ID", plan.submission_id)
-    result = MagicMock(status="failed")
-    result.model_dump.return_value = {"status": "failed"}
+    status = "failed" if phase is not None else "cancelled"
+    failure = (
+        FailureDiagnostic(
+            phase=phase, code="inference_failed", error_type="RuntimeError"
+        )
+        if phase is not None
+        else None
+    )
+    result = MagicMock(
+        status=status, failure=failure, run_id=plan.run_id, attempt_id=plan.attempt_id
+    )
 
     with (
         patch("tributo.inference.batch_job.ray.init"),
         patch("tributo.inference.api.run_resolved_inference", return_value=result),
+        caplog.at_level(logging.INFO, logger="tributo.inference.batch_job"),
     ):
         exit_code = main(argparse.Namespace(config=None, resolved_plan_env="PLAN"))
 
     assert exit_code == 1
+    terminal = [
+        r
+        for r in caplog.records
+        if getattr(r, "event", None) == "tributo.stage.finished"
+    ]
+    assert len(terminal) == 1
+    record = terminal[0]
+    assert record.status == status
+    assert record.phase == (phase if failure is not None else "batch_driver")
+    assert getattr(record, "error_type", None) == (
+        failure.error_type if failure is not None else None
+    )
+    assert record.levelno == (logging.ERROR if failure is not None else logging.INFO)
+    assert record.run_id == plan.run_id and record.attempt_id == plan.attempt_id
+    result.model_dump.assert_not_called()
 
 
 def test_main_logs_only_unhandled_exception_type(

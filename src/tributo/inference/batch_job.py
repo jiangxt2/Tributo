@@ -52,12 +52,18 @@ def main(args: argparse.Namespace | None = None) -> int:
         if args.resolved_plan_env is not None:
             inference_result = _run_resolved_plan(args.resolved_plan_env)
             if inference_result.status != "succeeded":
+                failure = inference_result.failure
                 emit_event(
                     logger,
                     "tributo.stage.finished",
-                    level=logging.ERROR,
-                    phase="batch_driver",
-                    status="failed",
+                    level=(
+                        logging.INFO
+                        if inference_result.status == "cancelled"
+                        else logging.ERROR
+                    ),
+                    phase=failure.phase if failure is not None else "batch_driver",
+                    status=inference_result.status,
+                    error_type=failure.error_type if failure is not None else None,
                     run_id=inference_result.run_id,
                     attempt_id=inference_result.attempt_id,
                 )
