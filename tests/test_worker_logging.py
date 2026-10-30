@@ -6,7 +6,9 @@ import json
 import logging
 import sys
 import types
-from unittest.mock import MagicMock
+from concurrent.futures import CancelledError
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 from ray import cloudpickle
@@ -159,9 +161,46 @@ def test_bad_logging_config_does_not_trigger_submission_reconciliation(monkeypat
 
 
 def test_child_options_override_only_the_selected_leaves():
-    original = LoggingPolicy(level="DEBUG", log_format="text", steps=True)
+    original = LoggingPolicy(level="DEBUG", log_format="text")
     selected = override_logging_policy(original, {"TRIBUTO_LOG_LEVEL": "WARNING"})
-    assert selected == LoggingPolicy(level="WARNING", log_format="text", steps=True)
+    assert selected == LoggingPolicy(level="WARNING", log_format="text")
     assert original.level == "DEBUG"
     with pytest.raises(ValueError, match="Invalid application logging configuration"):
         override_logging_policy(original, {POLICY_ENV: LoggingPolicy().serialize()})
+
+
+@pytest.mark.parametrize("mode", ["recipe", "adapter"])
+@pytest.mark.parametrize("rank", [0, 1])
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_training_worker_keeps_rank_status_and_original_error(
+    mode, rank, cancelled, caplog
+):
+    import ray.train
+
+    from tributo.integrations.algorithm_runtimes import ray_train_torch as runtime
+
+    original = CancelledError() if cancelled else RuntimeError("password=private")
+    context = SimpleNamespace(get_world_rank=lambda: rank, get_world_size=lambda: 2)
+    wrapper = (
+        runtime.torch_recipe_train_loop_per_worker
+        if mode == "recipe"
+        else runtime.ray_torch_adapter_train_loop_per_worker
+    )
+    with (
+        patch.object(ray.train, "get_context", return_value=context),
+        patch.object(runtime, f"_{mode}_worker", side_effect=original),
+        caplog.at_level(logging.DEBUG, logger=runtime.__name__),
+        pytest.raises(type(original)) as caught,
+    ):
+        wrapper({"_core_logging_policy": LoggingPolicy(level="DEBUG").serialize()})
+    assert caught.value is original
+    terminal = [
+        r
+        for r in caplog.records
+        if getattr(r, "event", None) == "tributo.training.finished"
+    ]
+    assert len(terminal) == 1
+    assert terminal[0].rank == rank and terminal[0].world_size == 2
+    assert terminal[0].status == ("cancelled" if cancelled else "failed")
+    assert terminal[0].duration_ms >= 0
+    assert "private" not in caplog.text

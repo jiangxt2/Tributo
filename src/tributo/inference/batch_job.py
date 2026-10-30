@@ -15,8 +15,7 @@ from typing import TYPE_CHECKING
 
 import ray
 
-from tributo._common.logging import bootstrap_logging
-from tributo._common.logging_events import emit_event
+from tributo._common.logging import bootstrap_logging, emit_event
 from tributo._common.logging_policy import driver_logging_runtime_env
 
 if TYPE_CHECKING:

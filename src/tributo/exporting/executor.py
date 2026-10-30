@@ -12,7 +12,6 @@ import logging
 import time
 from pathlib import Path
 
-from tributo._common.logging_events import emit_event, observed_stage
 from tributo.exceptions import JobExecutionError, SessionFatalError
 from tributo.exporting.errors import sanitize_error_message
 from tributo.exporting.models import (
@@ -154,7 +153,6 @@ class ExportManager:
         self._exports = export_registry
         self._validators = validator_registry
 
-    @observed_stage("export", result_status=lambda result: result.status)
     def execute(
         self,
         plan: ExportPlan,
@@ -182,7 +180,7 @@ class ExportManager:
         terminal = False
         session_fatal = False
 
-        for phase_index, node in enumerate(plan.nodes, 1):
+        for node in plan.nodes:
             node_id = node.target.name
             upstream_statuses = {
                 dep: node_results[dep].status for dep in node.target.depends_on
@@ -195,15 +193,6 @@ class ExportManager:
             )
 
             if is_blocked:
-                emit_event(
-                    logger,
-                    "tributo.stage.finished",
-                    phase="export_node",
-                    phase_index=phase_index,
-                    node_id=node_id,
-                    status="blocked",
-                    execution_id=execution_id,
-                )
                 node_results[node_id] = NodeResult(
                     node_id=node_id,
                     target_name=node.target.name,
@@ -219,15 +208,6 @@ class ExportManager:
 
             # If a previous required node failed, cancel remaining.
             if terminal:
-                emit_event(
-                    logger,
-                    "tributo.stage.finished",
-                    phase="export_node",
-                    phase_index=phase_index,
-                    node_id=node_id,
-                    status="cancelled",
-                    execution_id=execution_id,
-                )
                 node_results[node_id] = NodeResult(
                     node_id=node_id,
                     target_name=node.target.name,
@@ -239,16 +219,6 @@ class ExportManager:
                 continue
 
             execution_started = True
-            emit_event(
-                logger,
-                "tributo.stage.started",
-                level=logging.DEBUG,
-                phase="export_node",
-                phase_index=phase_index,
-                node_id=node_id,
-                status="started",
-                execution_id=execution_id,
-            )
             start_ms = int(time.time() * 1000)
             failure_category = "export"
 
@@ -418,19 +388,6 @@ class ExportManager:
                 if is_required or isinstance(exc, SessionFatalError):
                     terminal = True
                     session_fatal = session_fatal or isinstance(exc, SessionFatalError)
-
-            emit_event(
-                logger,
-                "tributo.stage.finished",
-                level=logging.ERROR
-                if node_results[node_id].status == "failed"
-                else logging.INFO,
-                phase="export_node",
-                phase_index=phase_index,
-                node_id=node_id,
-                status=node_results[node_id].status,
-                execution_id=execution_id,
-            )
 
         # Compute overall status.
         all_explicit = [

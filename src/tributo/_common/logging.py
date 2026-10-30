@@ -37,47 +37,24 @@ _FIELDS = (
     "attempt_id",
     "submission_id",
     "ray_job_id",
-    "request_id",
-    "trace_id",
-    "execution_id",
-    "stage_id",
-    "node_id",
-    "trial_id",
-    "phase_index",
+    "task_id",
+    "worker_id",
+    "actor_id",
     "rank",
     "world_size",
     "duration_ms",
-    "worker_id",
-    "task_id",
-    "actor_id",
     "provider_id",
     "binding_id",
     "request_digest",
-    "plan_id",
-    "split_id",
+    "metadata_fetched",
     "bundle_id",
     "model_id",
     "model_version",
+    "request_id",
+    "trace_id",
     "mode",
-    "format",
-    "namespace_count",
-    "metadata_fetched",
-    "batch_index",
-    "step_index",
-    "rows",
-    "rows_written",
-    "bytes_written",
-    "committed",
-    "result_kind",
-    "source_status",
-    "sink_id",
-    "resource_kind",
     "error_type",
-    "mismatch_category",
-    "field_count",
-    "suppressed_progress",
     "fields_truncated",
-    "outcome",
 )
 _CREDENTIAL = re.compile(
     r"(?i)([a-z0-9_-]*(?:password|secret|token|api_key|access_key)[a-z0-9_-]*"
@@ -88,6 +65,12 @@ _URI_USER = re.compile(r"([A-Za-z][A-Za-z0-9+.-]*://)[^/@\s]+@")
 
 class _ConsoleHandler(logging.StreamHandler):
     """Identity establishes ownership; a caller's matching name is insufficient."""
+
+    def filter(self, record: logging.LogRecord) -> bool | logging.LogRecord:
+        # Caller thresholds and filters own this path, even if they reject a record.
+        return not _external_handlers(
+            logging.getLogger(record.name)
+        ) and super().filter(record)
 
 
 def safe_fields(values: dict[str, Any]) -> dict[str, str | int | float | bool]:
@@ -115,20 +98,46 @@ def safe_fields(values: dict[str, Any]) -> dict[str, str | int | float | bool]:
     return result
 
 
-def _message(record: logging.LogRecord) -> str:
-    if record.__dict__.get("event") == "tributo.serving.request.finished":
-        values = safe_fields(record.__dict__)
-        return "inference_audit " + " ".join(
-            f"{key}={values.get(key)}"
-            for key in (
-                "request_id",
-                "trace_id",
-                "bundle_id",
-                "model_version",
-                "status",
-                "duration_ms",
-            )
+def emit_event(
+    logger: logging.Logger, event: str, *, level: int = logging.INFO, **fields: Any
+) -> None:
+    """Write bounded existing facts without affecting business execution."""
+    if not logger.isEnabledFor(level):
+        return
+    values: dict[str, Any] = {
+        key: os.environ[env]
+        for key, env in (
+            ("run_id", "TRIBUTO_RUN_ID"),
+            ("attempt_id", "TRIBUTO_ATTEMPT_ID"),
+            ("submission_id", "TRIBUTO_SUBMISSION_ID"),
         )
+        if env in os.environ
+    }
+    values.update(fields)
+    values["event"] = event
+    try:
+        ray = sys.modules.get("ray")
+        if ray is not None and ray.is_initialized():
+            context = ray.get_runtime_context()
+            for key, method in (
+                ("ray_job_id", "get_job_id"),
+                ("task_id", "get_task_id"),
+                ("worker_id", "get_worker_id"),
+                ("actor_id", "get_actor_id"),
+            ):
+                getter = getattr(context, method, None)
+                value = getter() if callable(getter) else None
+                if isinstance(value, str) and value:
+                    values.setdefault(key, value)
+    except Exception:
+        pass  # Optional metadata can be unavailable during startup or teardown.
+    try:
+        logger.log(level, event, extra=safe_fields(values))
+    except Exception:
+        pass  # Only the logging call is isolated; business errors remain untouched.
+
+
+def _message(record: logging.LogRecord) -> str:
     if record.__dict__.get("event"):
         return str(safe_fields(record.__dict__).get("event", "tributo.event"))
     message = record.getMessage()
@@ -187,6 +196,14 @@ def _handlers(logger: logging.Logger) -> list[logging.Handler]:
     return handlers
 
 
+def _external_handlers(logger: logging.Logger) -> list[logging.Handler]:
+    return [
+        h
+        for h in _handlers(logger)
+        if not isinstance(h, (_ConsoleHandler, logging.NullHandler))
+    ]
+
+
 def apply_logging_policy(
     policy: LoggingPolicy, *, stream: Any = None, force: bool = False
 ) -> None:
@@ -196,7 +213,6 @@ def apply_logging_policy(
     with _lock:
         if not force and _applied is not None and _last_inbound == key:
             return
-        changed = _applied != key
         if not force and _applied == key:
             return
         if _applied is not None and _applied[0] == os.getpid():
@@ -211,11 +227,7 @@ def apply_logging_policy(
             logger = logging.getLogger(namespace)
             logger.setLevel(policy.level if namespace == "tributo" else "INFO")
             owned = [h for h in logger.handlers if isinstance(h, _ConsoleHandler)]
-            external = [
-                h
-                for h in _handlers(logger)
-                if not isinstance(h, (_ConsoleHandler, logging.NullHandler))
-            ]
+            external = _external_handlers(logger)
             if owned:
                 handler = owned[0]
                 handler.setLevel(logging.DEBUG)
@@ -237,7 +249,7 @@ def apply_logging_policy(
             logging.getLogger(name).setLevel(level)
         for name in roots | {name for name, _ in policy.logger_levels}:
             logger = logging.getLogger(name)
-            handlers = _handlers(logger)
+            handlers = _external_handlers(logger) or _handlers(logger)
             if (
                 logger.isEnabledFor(logging.DEBUG)
                 and handlers
@@ -254,25 +266,6 @@ def apply_logging_policy(
         _applied = key
         if not force:
             _last_inbound = key
-        from tributo._common.logging_events import emit_event
-
-        if not changed:
-            return
-        emit_event(
-            logging.getLogger("tributo"),
-            "tributo.logging.configured",
-            level=logging.DEBUG,
-            phase="logging",
-            status="configured",
-            mode="owned"
-            if any(
-                isinstance(h, _ConsoleHandler)
-                for h in logging.getLogger("tributo").handlers
-            )
-            else "external",
-            format=policy.log_format,
-            namespace_count=len(roots),
-        )
 
 
 @DeveloperAPI

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from ray.job_submission import JobSubmissionClient
 
-from tributo._common.logging_events import emit_event
+from tributo._common.logging import emit_event
 from tributo._common.logging_policy import submission_logging_env
 from tributo._common.runtime_env import build_runtime_env
 from tributo.algorithms.api.artifacts import AlgorithmArtifact, ImageProfile

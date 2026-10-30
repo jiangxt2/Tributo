@@ -13,7 +13,8 @@ import json
 import logging
 import math
 import tempfile
-from collections.abc import Mapping
+import time
+from collections.abc import Callable, Mapping
 from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
@@ -1273,11 +1274,6 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
     declared_metric_names = {str(name) for name in raw_metric_reducers} - {"train_loss"}
 
     epoch_micro_batch_cursor = 0
-    from tributo._common.logging import active_logging_policy
-    from tributo._common.logging_events import ProgressBudget, emit_event
-
-    logging_policy = active_logging_policy()
-    step_budget = ProgressBudget()
     for _epoch in range(epochs):
         epoch_micro_batch_cursor = 0
         next_payload: Any
@@ -1488,18 +1484,6 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
             if _epoch == 0:
                 input_rows += batch.local_rows
             steps += 1
-            if step_budget.allow(enabled=logging_policy.steps, logger=logger):
-                emit_event(
-                    logger,
-                    "tributo.training.progress",
-                    level=logging.DEBUG,
-                    phase="fit",
-                    status="running",
-                    step_index=steps,
-                    rows=batch.local_rows,
-                    rank=rank,
-                    world_size=world_size,
-                )
             epoch_micro_batch_cursor += 1
             raw = next_raw
         if optimization.scheduler is not None:
@@ -1766,57 +1750,67 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
         shutil.rmtree(checkpoint_dir, ignore_errors=True)
 
 
+def _run_logged_worker(
+    config: Mapping[str, Any], worker: Callable[[Mapping[str, Any]], None], mode: str
+) -> None:
+    import ray.train
+
+    from tributo._common.logging import apply_logging_policy, emit_event
+    from tributo._common.logging_policy import LoggingPolicy, resolve_policy
+    from tributo.training.lifecycle import _is_cancellation
+
+    raw = config.get("_core_logging_policy")
+    apply_logging_policy(
+        LoggingPolicy.deserialize(raw) if isinstance(raw, str) else resolve_policy()
+    )
+    fields = {
+        "phase": "training_worker",
+        "mode": mode,
+        "rank": ray.train.get_context().get_world_rank(),
+        "world_size": ray.train.get_context().get_world_size(),
+    }
+    started = time.monotonic()
+    emit_event(
+        logger,
+        "tributo.training.started",
+        level=logging.DEBUG,
+        status="started",
+        **fields,
+    )
+    try:
+        worker(config)
+    except BaseException as exc:
+        cancelled = _is_cancellation(exc) or not isinstance(exc, Exception)
+        emit_event(
+            logger,
+            "tributo.training.finished",
+            level=logging.INFO if cancelled else logging.ERROR,
+            status="cancelled" if cancelled else "failed",
+            error_type=type(exc).__name__,
+            duration_ms=(time.monotonic() - started) * 1000,
+            **fields,
+        )
+        raise
+    else:
+        emit_event(
+            logger,
+            "tributo.training.finished",
+            status="succeeded",
+            duration_ms=(time.monotonic() - started) * 1000,
+            **fields,
+        )
+
+
 @DeveloperAPI
 def torch_recipe_train_loop_per_worker(config: Mapping[str, Any]) -> None:
     """Run the Core-selected Recipe Worker wrapper."""
-    import ray.train
-
-    from tributo._common.logging import apply_logging_policy
-    from tributo._common.logging_events import log_stage
-    from tributo._common.logging_policy import LoggingPolicy, resolve_policy
-
-    raw_policy = config.get("_core_logging_policy")
-    policy = (
-        LoggingPolicy.deserialize(raw_policy)
-        if isinstance(raw_policy, str)
-        else resolve_policy()
-    )
-    apply_logging_policy(policy)
-    with log_stage(
-        logger,
-        "training_worker",
-        mode="recipe",
-        rank=ray.train.get_context().get_world_rank(),
-        world_size=ray.train.get_context().get_world_size(),
-    ):
-        _recipe_worker(config)
+    _run_logged_worker(config, _recipe_worker, "recipe")
 
 
 @DeveloperAPI
 def ray_torch_adapter_train_loop_per_worker(config: Mapping[str, Any]) -> None:
     """Run the Core-selected Adapter Worker wrapper."""
-    from tributo._common.logging import apply_logging_policy
-    from tributo._common.logging_policy import LoggingPolicy, resolve_policy
-
-    raw_policy = config.get("_core_logging_policy")
-    policy = (
-        LoggingPolicy.deserialize(raw_policy)
-        if isinstance(raw_policy, str)
-        else resolve_policy()
-    )
-    apply_logging_policy(policy)
-    import ray.train
-
-    from tributo._common.logging_events import log_stage
-
-    with log_stage(
-        logger,
-        "training_worker",
-        mode="adapter",
-        rank=ray.train.get_context().get_world_rank(),
-        world_size=ray.train.get_context().get_world_size(),
-    ):
-        _adapter_worker(config)
+    _run_logged_worker(config, _adapter_worker, "adapter")
 
 
 def _adapter_worker(config: Mapping[str, Any]) -> None:

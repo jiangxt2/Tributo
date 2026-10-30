@@ -9,13 +9,15 @@ and delegates ``run`` to this class.
 
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import logging
 import os
 import warnings
 from typing import Any
 
-from tributo._common.cancellation import is_cancellation as _is_cancellation
-from tributo._common.logging_events import observed_stage
+from ray.exceptions import RayTaskError, TaskCancelledError
+
 from tributo.training.base import BaseTrainer
 from tributo.training.callbacks import CallbackDispatcher
 from tributo.training.results import (
@@ -32,6 +34,37 @@ logger = logging.getLogger(__name__)
 # ── Source-provider plugin discovery (bundle export path) ────────────────
 
 _provider_plugins_cache: list[Any] | None = None
+
+
+def _is_cancellation(error: BaseException) -> bool:
+    """Recognize real local or Ray cancellation exceptions, including wrappers."""
+    pending: list[BaseException] = [error]
+    seen: set[int] = set()
+    cancellation_types = (
+        asyncio.CancelledError,
+        concurrent.futures.CancelledError,
+        TaskCancelledError,
+    )
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, cancellation_types):
+            return True
+        # Only explicit exception chaining represents wrapper intent. Implicit
+        # ``__context__`` merely records that a different exception was raised
+        # while handling another one and must not turn that new failure into a
+        # cancellation.
+        candidates: list[object] = [current.__cause__]
+        if isinstance(current, RayTaskError):
+            candidates.append(current.cause)
+        pending.extend(
+            candidate
+            for candidate in candidates
+            if isinstance(candidate, BaseException)
+        )
+    return False
 
 
 def _load_provider_plugins(registry: Any) -> None:
@@ -98,9 +131,6 @@ class TrainingLifecycle:
         self._trainer = trainer
         self._dispatcher = dispatcher
 
-    @observed_stage(
-        "training", result_status=lambda summary: summary.get("status", "succeeded")
-    )
     def run(
         self,
         output_path: str = "",

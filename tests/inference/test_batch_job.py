@@ -123,7 +123,7 @@ def test_main_logs_only_unhandled_exception_type(
 def test_owned_child_main_passes_frozen_driver_policy_to_workers(monkeypatch):
     from tributo._common.logging_policy import JOB_HOOK_ENV
 
-    selected = LoggingPolicy(level="DEBUG", log_format="text", batches=True)
+    selected = LoggingPolicy(level="DEBUG", log_format="text")
     monkeypatch.setenv(POLICY_ENV, selected.serialize())
     monkeypatch.delenv(JOB_HOOK_ENV, raising=False)
     with (

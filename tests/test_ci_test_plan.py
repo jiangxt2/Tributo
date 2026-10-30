@@ -67,20 +67,17 @@ def test_repository_policy_audit_is_clean(
 @pytest.mark.parametrize(
     "path",
     [
+        "src/tributo/_common/logging.py",
         "src/tributo/_common/serve_utils.py",
-        "src/tributo/serving/model_deployment.py",
-        "tools/prepare_logging_wheels.py",
-        "tools/tributo_it.py",
-        "tests/integrations/Dockerfile.debug-logging",
-        "tests/integrations/Dockerfile.debug-logging.dockerignore",
-        "tests/integrations/runtime-profiles.json",
+        "src/tributo/inference/kernel.py",
+        "src/tributo/integrations/algorithm_runtimes/ray_train_torch.py",
     ],
 )
-def test_logging_gate_tracks_replica_and_runtime_build_inputs(manifest, path):
+def test_logging_changes_select_existing_runtime_environment_gate(manifest, path):
     plan = ci_test_plan.build_plan(
         manifest, event="pull_request", mode="pr", changed_paths=[path]
     )
-    assert "debug-logging-ray-jobs" in plan["selected"]["manual_external"]
+    assert "ray-runtime-environment" in plan["selected"]["manual_external"]
 
 
 def test_manifest_rejects_non_positive_suite_budget(tmp_path: Path) -> None:

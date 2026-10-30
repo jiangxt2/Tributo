@@ -14,8 +14,6 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from starlette.responses import JSONResponse
 
-from tributo._common.logging import bootstrap_logging
-from tributo._common.logging_events import emit_event
 from tributo._common.model_input_contract import (
     canonical_onnx_dtype,
     is_onnx_invalid_argument,
@@ -58,7 +56,6 @@ class ONNXModel:
         unsafe: bool = False,
         storage_profile: str | None = None,
     ) -> None:
-        bootstrap_logging()
         if (model_path is None) == (bundle_uri is None):
             raise ValueError(
                 "exactly one of 'model_path' (legacy) or 'bundle_uri' must be provided"
@@ -106,15 +103,12 @@ class ONNXModel:
         self._input_shapes = tuple(self._runtime.model.input_shapes)
         self._bundle_id = self._runtime.bundle_id
         self._model_version = self._runtime.model_version
-        emit_event(
-            logger,
-            "tributo.model.ready",
-            phase="model_load",
-            status="succeeded",
-            bundle_id=self._bundle_id,
-            level=logging.DEBUG,
-            model_version=self._model_version,
-            field_count=len(self._input_names),
+        logger.info(
+            "Loaded bundle %r (role=%r). Inputs: %s, Outputs: %s",
+            bundle_uri,
+            role,
+            self._runtime.model.input_names,
+            self._runtime.model.output_names,
         )
 
     def _open_legacy(self, model_path: str) -> None:
@@ -126,7 +120,7 @@ class ONNXModel:
                 "onnxruntime is required for serving. Install with: uv sync"
             ) from e
 
-        logger.debug("Loading legacy ONNX model")
+        logger.info("Loading ONNX model from %s (legacy path)", model_path)
         self._session = ort.InferenceSession(model_path)
         session_inputs = self._session.get_inputs()
         self.input_name = session_inputs[0].name
@@ -137,13 +131,10 @@ class ONNXModel:
         self._input_shapes = tuple(
             normalize_model_shape(getattr(inp, "shape", None)) for inp in session_inputs
         )
-        emit_event(
-            logger,
-            "tributo.model.ready",
-            phase="model_load",
-            status="succeeded",
-            field_count=len(self._input_names),
-            level=logging.DEBUG,
+        logger.info(
+            "ONNX model loaded. Inputs: %s, Outputs: %s",
+            [i.name for i in self._session.get_inputs()],
+            [o.name for o in self._session.get_outputs()],
         )
 
     async def __call__(self, request: Request) -> JSONResponse:

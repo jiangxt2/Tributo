@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import asyncio
 import io
 import json
 import logging
-from concurrent.futures import CancelledError
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -18,8 +16,8 @@ from tributo._common.logging import (
     apply_logging_policy,
     bootstrap_logging,
     configure_logging,
+    emit_event,
 )
-from tributo._common.logging_events import ProgressBudget, emit_event, log_stage
 from tributo._common.logging_policy import POLICY_ENV, LoggingPolicy, resolve_policy
 
 pytestmark = pytest.mark.usefixtures("isolated_logging")
@@ -41,15 +39,15 @@ def test_owned_handler_is_idempotent_and_module_debug_reaches_output(monkeypatch
     configure_logging(stream=output)
     emit_event(
         logging.getLogger("tributo.test.child"),
-        "tributo.batch.progress",
+        "tributo.test",
         level=logging.DEBUG,
         phase="prediction",
         status="running",
-        batch_index=1,
+        rank=1,
     )
     records = [json.loads(line) for line in output.getvalue().splitlines()]
     assert len(logging.getLogger("tributo").handlers) == 1
-    assert records[-1]["batch_index"] == 1
+    assert records[-1]["rank"] == 1
     assert logging.getLogger("tributo").level == logging.INFO
     assert logging.getLogger("tributo").handlers[0].level == logging.DEBUG
 
@@ -72,6 +70,42 @@ def test_external_handler_format_threshold_filter_and_propagation_survive():
     assert output.getvalue().count("DEBUG is filtered") == 1
     logger.debug("hidden")
     assert "hidden" not in output.getvalue()
+
+
+@pytest.mark.parametrize("name", ["tributo.test", "ray_doris.reader"])
+@pytest.mark.parametrize("existing", [False, True])
+def test_child_handler_owns_output_without_disabling_sibling_fallback(
+    monkeypatch, name, existing
+):
+    caller, fallback = io.StringIO(), io.StringIO()
+    logger = logging.getLogger(name)
+    handler = logging.StreamHandler(caller)
+    handler.setLevel(logging.INFO)
+    formatter = logging.Formatter("caller:%(message)s")
+    handler.setFormatter(formatter)
+    handler.addFilter(lambda record: record.getMessage() != "filtered")
+    monkeypatch.setenv("TRIBUTO_LOGGER_LEVELS", json.dumps({name: "DEBUG"}))
+    with patch.object(logging.getLogger(), "handlers", []):
+        if existing:
+            logger.addHandler(handler)
+        configure_logging(stream=fallback)
+        if not existing:
+            logger.addHandler(handler)
+        configure_logging(stream=fallback)
+        configure_logging(stream=fallback)
+        logger.debug("hidden")
+        logger.info("visible")
+        logger.info("filtered")
+        logging.getLogger(name.split(".")[0] + ".sibling").info("sibling")
+    assert [
+        json.loads(line)["message"] for line in fallback.getvalue().splitlines()
+    ] == ["sibling"]
+    assert caller.getvalue().splitlines() == [
+        "caller:Application DEBUG is filtered by existing handler thresholds",
+        "caller:visible",
+    ]
+    assert logger.handlers == [handler] and logger.propagate
+    assert handler.level == logging.INFO and handler.formatter is formatter
 
 
 def test_explicit_parameters_override_environment_and_frozen_policy(monkeypatch):
@@ -117,24 +151,11 @@ def test_reconfiguration_removes_previously_owned_module_debug(monkeypatch):
     assert not logging.getLogger("tributo.test").isEnabledFor(logging.DEBUG)
 
 
-def test_reapplying_same_policy_emits_configuration_event_once():
-    _without_external_output()
-    output = io.StringIO()
-    configure_logging(level="DEBUG", stream=output)
-    configure_logging(level="DEBUG", stream=output)
-    records = [json.loads(line) for line in output.getvalue().splitlines()]
-    assert (
-        sum(record["event"] == "tributo.logging.configured" for record in records) == 1
-    )
-
-
 @pytest.mark.parametrize(
     "env",
     [
         {"TRIBUTO_LOG_LEVEL": "password=do-not-echo"},
         {"TRIBUTO_LOG_FORMAT": "yaml"},
-        {"TRIBUTO_LOG_BATCHES": "true"},
-        {"TRIBUTO_LOG_STEPS": "2"},
         {"TRIBUTO_LOGGER_LEVELS": '{"root":"DEBUG"}'},
         {"TRIBUTO_LOGGER_LEVELS": '{"torch.distributed":"DEBUG"}'},
         {"TRIBUTO_LOGGER_LEVELS": '{"handler":{"class":"bad"}}'},
@@ -184,77 +205,6 @@ def test_json_and_text_share_safe_fields_without_stringifying_objects():
         < text.index("status=")
         < text.index("rank=")
     )
-
-
-def test_error_event_keeps_original_exception_and_one_terminal():
-    _without_external_output()
-    output = io.StringIO()
-    configure_logging(level="DEBUG", stream=output)
-    original = RuntimeError("password=private")
-    with pytest.raises(RuntimeError) as error:
-        with log_stage(logging.getLogger("tributo.test"), "fit"):
-            raise original
-    assert error.value is original
-    records = [json.loads(line) for line in output.getvalue().splitlines()]
-    records = [
-        record for record in records if record["event"].startswith("tributo.stage.")
-    ]
-    assert [r["status"] for r in records] == ["started", "failed"]
-    assert records[0]["operation_id"] == records[1]["operation_id"]
-    assert records[0]["phase_index"] == records[1]["phase_index"]
-    assert records[1]["error_type"] == "RuntimeError"
-    assert "private" not in output.getvalue()
-
-
-def test_broken_handler_does_not_replace_business_failure():
-    class Broken(logging.Handler):
-        def emit(self, record):
-            raise OSError("sink failed")
-
-    logger = logging.getLogger("tributo.test")
-    logger.setLevel(logging.DEBUG)
-    logger.handlers = [Broken()]
-    logger.propagate = False
-    original = ValueError("business failure")
-    with pytest.raises(ValueError) as error:
-        with log_stage(logger, "fit"):
-            raise original
-    assert error.value is original
-
-
-def test_progress_budget_obeys_first_hundred_time_and_cap():
-    logger = logging.getLogger("tributo.test")
-    logger.setLevel(logging.DEBUG)
-    budget = ProgressBudget()
-    now = [0.0]
-    with patch(
-        "tributo._common.logging_events.time.monotonic", side_effect=lambda: now[0]
-    ):
-        assert budget.allow(enabled=True, logger=logger)
-        for _ in range(99):
-            assert not budget.allow(enabled=True, logger=logger)
-        now[0] = 2.0
-        for _ in range(99):
-            assert not budget.allow(enabled=True, logger=logger)
-        assert budget.allow(enabled=True, logger=logger)
-        for _ in range(20_000):
-            now[0] += 1.0
-            budget.allow(enabled=True, logger=logger)
-    assert budget.emitted == 100
-
-
-def test_disabled_progress_does_not_read_clock_or_count():
-    logger = logging.getLogger("tributo.test")
-    logger.setLevel(logging.DEBUG)
-    budget = ProgressBudget()
-    with patch(
-        "tributo._common.logging_events.time.monotonic",
-        side_effect=AssertionError("clock"),
-    ):
-        assert not budget.allow(enabled=False, logger=logger)
-        logger.setLevel(logging.INFO)
-        assert not budget.allow(enabled=True, logger=logger)
-    assert budget.count == 0
 
 
 def test_explicit_sdk_configuration_survives_owned_bootstrap():
@@ -309,32 +259,6 @@ def test_runtime_metadata_failure_does_not_drop_error_event(monkeypatch):
     assert "ray_job_id" not in record
 
 
-@pytest.mark.parametrize("original", [CancelledError(), asyncio.CancelledError()])
-def test_cancellation_has_one_non_error_terminal_and_preserves_exception(original):
-    _without_external_output()
-    output = io.StringIO()
-    configure_logging(level="DEBUG", stream=output)
-    with pytest.raises(type(original)) as error:
-        with log_stage(logging.getLogger("tributo.test"), "fit"):
-            raise original
-    assert error.value is original
-    events = [json.loads(line) for line in output.getvalue().splitlines()]
-    terminal = [event for event in events if event["event"] == "tributo.stage.finished"]
-    assert len(terminal) == 1
-    assert terminal[0]["status"] == "cancelled"
-    assert terminal[0]["level"] == "INFO"
-
-
-def test_returned_failure_uses_error_level_without_an_exception():
-    _without_external_output()
-    output = io.StringIO()
-    configure_logging(level="ERROR", stream=output)
-    with log_stage(logging.getLogger("tributo.test"), "inference") as outcome:
-        outcome.status = "failed"
-    record = json.loads(output.getvalue())
-    assert record["level"] == "ERROR" and record["status"] == "failed"
-
-
 def test_text_and_json_keep_the_same_safe_exception_type():
     error = ValueError("password=private")
     record = logging.LogRecord(
@@ -377,34 +301,6 @@ def test_local_entrypoint_preserves_explicit_sdk_policy_and_pins_owned_address(
     shutdown.assert_called_once()
 
 
-@pytest.mark.parametrize("kind", ["ray", "cause", "spoof", "implicit"])
-def test_stage_cancellation_matches_existing_business_classification(kind):
-    from ray.exceptions import RayTaskError, TaskCancelledError
-
-    cancellation = TaskCancelledError(error_message="cancelled")
-    if kind == "ray":
-        original = RayTaskError("train", "remote traceback", cancellation)
-    elif kind == "cause":
-        original = RuntimeError("wrapped")
-        original.__cause__ = cancellation
-    elif kind == "implicit":
-        original = ValueError("replacement")
-        original.__context__ = cancellation
-    else:
-        original = type("TaskCancelledError", (RuntimeError,), {})("ordinary failure")
-    _without_external_output()
-    output = io.StringIO()
-    configure_logging(level="DEBUG", stream=output)
-    with pytest.raises(type(original)) as caught:
-        with log_stage(logging.getLogger("tributo.test"), "training"):
-            raise original
-    assert caught.value is original
-    terminal = json.loads(output.getvalue().splitlines()[-1])
-    cancelled = kind in {"ray", "cause"}
-    assert terminal["status"] == ("cancelled" if cancelled else "failed")
-    assert terminal["level"] == ("INFO" if cancelled else "ERROR")
-
-
 def test_owned_runtime_without_address_is_closed_before_child_launch():
     from tributo.exceptions import JobConfigurationError
     from tributo.runtime_providers import run_local_entrypoint
@@ -419,3 +315,26 @@ def test_owned_runtime_without_address_is_closed_before_child_launch():
         run_local_entrypoint("python child.py")
     shutdown.assert_called_once()
     run.assert_not_called()
+
+
+def test_broken_handler_cannot_replace_business_failure():
+    class Broken(logging.Handler):
+        def emit(self, record):
+            raise OSError("sink failed")
+
+    logger = logging.getLogger("tributo.test")
+    logger.handlers = [Broken()]
+    logger.setLevel(logging.ERROR)
+    original = ValueError("business failure")
+    with pytest.raises(ValueError) as caught:
+        try:
+            raise original
+        except ValueError:
+            emit_event(
+                logger,
+                "tributo.test.failed",
+                level=logging.ERROR,
+                error_type="ValueError",
+            )
+            raise
+    assert caught.value is original

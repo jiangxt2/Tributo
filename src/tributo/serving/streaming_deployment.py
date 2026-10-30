@@ -17,74 +17,16 @@ import concurrent.futures
 import json
 import logging
 import threading
-import time
-import uuid
 from abc import ABC, abstractmethod
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator
 from typing import Any
 
-from starlette.requests import ClientDisconnect, Request
+from starlette.requests import Request
 from starlette.responses import StreamingResponse
-from starlette.types import Receive, Scope, Send
 
-from tributo._common.cancellation import is_cancellation
-from tributo._common.logging import bootstrap_logging
-from tributo._common.logging_events import emit_event
-from tributo.serving.observability import InferenceContext
 from tributo.util.annotations import PublicAPI
 
 logger = logging.getLogger(__name__)
-
-
-class _ObservedBody:
-    """Also observe explicit closure before the first iterator advance."""
-
-    def __init__(
-        self, body: AsyncGenerator[str, None], finish: Callable[[str, str | None], None]
-    ):
-        self._body = body
-        self._finish = finish
-
-    def __aiter__(self) -> _ObservedBody:
-        return self
-
-    async def __anext__(self) -> str:
-        return await self._body.__anext__()
-
-    async def aclose(self) -> None:
-        try:
-            await self._body.aclose()
-        finally:
-            self._finish("cancelled", None)
-
-
-class _ObservedStreamingResponse(StreamingResponse):
-    """Observe transport termination without changing response transmission."""
-
-    def __init__(
-        self,
-        body: _ObservedBody,
-        finish: Callable[[str, str | None], None],
-        **kwargs: Any,
-    ):
-        super().__init__(body, **kwargs)
-        self._finish = finish
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        try:
-            await super().__call__(scope, receive, send)
-        except BaseException as exc:
-            cancelled = (
-                is_cancellation(exc)
-                or isinstance(exc, (ClientDisconnect, GeneratorExit))
-                or not isinstance(exc, Exception)
-            )
-            self._finish("cancelled" if cancelled else "failed", type(exc).__name__)
-            raise
-        finally:
-            # ASGI 2.0 disconnect listeners can end the response normally while
-            # its body is suspended in send(), outside the generator boundary.
-            self._finish("cancelled", None)
 
 
 @PublicAPI(stability="alpha")
@@ -98,7 +40,6 @@ class StreamingInferenceService(ABC):
 
     def __init__(self) -> None:
         """Initialize streaming inference service."""
-        bootstrap_logging()
         self._model_loaded = False
 
     @abstractmethod
@@ -116,46 +57,9 @@ class StreamingInferenceService(ABC):
 
     async def __call__(self, request: Request) -> StreamingResponse:
         """Handle streaming inference request."""
-        context = InferenceContext.from_http(request)
-        operation_id = uuid.uuid4().hex
-        started = time.monotonic()
-        finished = False
-
-        def finish(status: str, error_type: str | None = None) -> None:
-            nonlocal finished
-            if finished:
-                return
-            finished = True
-            emit_event(
-                logger,
-                "tributo.serving.stream.finished",
-                level=logging.ERROR if status == "failed" else logging.INFO,
-                phase="stream",
-                status=status,
-                request_id=context.request_id,
-                trace_id=context.trace_id,
-                operation_id=operation_id,
-                error_type=error_type,
-                duration_ms=(time.monotonic() - started) * 1000,
-            )
-
-        emit_event(
-            logger,
-            "tributo.serving.stream.started",
-            level=logging.DEBUG,
-            phase="stream",
-            status="started",
-            request_id=context.request_id,
-            trace_id=context.trace_id,
-            operation_id=operation_id,
-        )
         try:
             data = await request.json()
-        except (asyncio.CancelledError, ClientDisconnect):
-            finish("cancelled")
-            raise
         except Exception:
-            finish("invalid_argument")
             return StreamingResponse(
                 iter(['data: {"error": "Invalid JSON"}\n\n']),
                 media_type="text/event-stream",
@@ -167,21 +71,16 @@ class StreamingInferenceService(ABC):
                 async for chunk in self._generate_stream(data):
                     yield f"data: {chunk}\n\n"
                 yield "data: [DONE]\n\n"
-                finish("succeeded")
             except asyncio.CancelledError:
-                finish("cancelled")
-                raise
-            except GeneratorExit:
-                finish("cancelled")
+                logger.info("Client disconnected, cleaning up...")
                 raise
             except Exception as e:
-                finish("failed", type(e).__name__)
+                logger.error("Streaming error: %s", e, exc_info=True)
                 yield f"data: {json.dumps({'error': str(e)})}\n\n"
                 yield "data: [DONE]\n\n"
 
-        return _ObservedStreamingResponse(
-            _ObservedBody(event_generator(), finish),
-            finish,
+        return StreamingResponse(
+            event_generator(),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -306,22 +205,14 @@ class LLMStreamingService(StreamingInferenceService):
                 self._model = self._model.to("cpu")
             self._model.eval()
             self._model_loaded = True
-            emit_event(
-                logger,
-                "tributo.model.ready",
-                level=logging.DEBUG,
-                phase="model_load",
-                status="succeeded",
+            logger.info(
+                "LLM model loaded from %s (device=%s, dtype=%s)",
+                self._model_path,
+                self._model.device,
+                dtype,
             )
         except Exception as e:
-            emit_event(
-                logger,
-                "tributo.stage.finished",
-                level=logging.ERROR,
-                phase="model_load",
-                status="failed",
-                error_type=type(e).__name__,
-            )
+            logger.error("Failed to load LLM model: %s", e)
             self._model_loaded = False
             raise
 

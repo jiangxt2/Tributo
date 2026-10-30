@@ -18,10 +18,6 @@ LOG_ENV_KEYS = (
     "TRIBUTO_LOG_LEVEL",
     "TRIBUTO_LOG_FORMAT",
     "TRIBUTO_LOGGER_LEVELS",
-    "TRIBUTO_LOG_BATCHES",
-    "TRIBUTO_LOG_STEPS",
-    "RAY_DORIS_LOG_BATCHES",
-    "RAY_CLICKHOUSE_LOG_BATCHES",
 )
 _LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 _NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
@@ -70,8 +66,6 @@ class LoggingPolicy:
     level: str = "INFO"
     log_format: str = "json"
     logger_levels: tuple[tuple[str, str], ...] = ()
-    batches: bool = False
-    steps: bool = False
 
     def serialize(self) -> str:
         result = json.dumps(
@@ -80,8 +74,6 @@ class LoggingPolicy:
                 "level": self.level,
                 "format": self.log_format,
                 "logger_levels": dict(self.logger_levels),
-                "batches": self.batches,
-                "steps": self.steps,
             },
             sort_keys=True,
             separators=(",", ":"),
@@ -98,24 +90,18 @@ class LoggingPolicy:
             "level",
             "format",
             "logger_levels",
-            "batches",
-            "steps",
         }:
             raise _error()
         if (
             type(raw["version"]) is not int
             or raw["version"] != 1
             or raw["format"] not in ("json", "text")
-            or type(raw["batches"]) is not bool
-            or type(raw["steps"]) is not bool
         ):
             raise _error()
         return cls(
             _level(raw["level"]),
             raw["format"],
             _modules(raw["logger_levels"]),
-            raw["batches"],
-            raw["steps"],
         )
 
 
@@ -128,9 +114,6 @@ def resolve_policy(
         return LoggingPolicy.deserialize(env[POLICY_ENV])
     if sum(len(env.get(key, "").encode("utf-8")) for key in LOG_ENV_KEYS) > _MAX_BYTES:
         raise _error()
-    for key in ("TRIBUTO_LOG_BATCHES", "TRIBUTO_LOG_STEPS", *LOG_ENV_KEYS[-2:]):
-        if env.get(key, "0") not in ("0", "1"):
-            raise _error()
     log_format = env.get("TRIBUTO_LOG_FORMAT", default_format)
     if log_format not in ("json", "text"):
         raise _error()
@@ -138,8 +121,6 @@ def resolve_policy(
         _level(env.get("TRIBUTO_LOG_LEVEL", "INFO")),
         log_format,
         _modules(_json(env.get("TRIBUTO_LOGGER_LEVELS", "{}"))),
-        env.get("TRIBUTO_LOG_BATCHES", "0") == "1",
-        env.get("TRIBUTO_LOG_STEPS", "0") == "1",
     )
 
 
@@ -151,8 +132,6 @@ def override_logging_policy(
         "TRIBUTO_LOG_LEVEL": base.level,
         "TRIBUTO_LOG_FORMAT": base.log_format,
         "TRIBUTO_LOGGER_LEVELS": json.dumps(dict(base.logger_levels)),
-        "TRIBUTO_LOG_BATCHES": "1" if base.batches else "0",
-        "TRIBUTO_LOG_STEPS": "1" if base.steps else "0",
     }
     supplied = env_vars or {}
     raw.update({key: supplied[key] for key in LOG_ENV_KEYS if key in supplied})
@@ -168,7 +147,7 @@ def forward_logging_env(env_vars: Mapping[str, str] | None) -> dict[str, str]:
     for key in LOG_ENV_KEYS:
         if key not in result and key in os.environ:
             result[key] = os.environ[key]
-    # Validate before scheduling, including explicit connector detail switches.
+    # Validate only the application logging options before scheduling.
     raw = {key: result[key] for key in LOG_ENV_KEYS if key in result}
     policy = resolve_policy(raw)
     if POLICY_ENV in result and result[POLICY_ENV] != policy.serialize():

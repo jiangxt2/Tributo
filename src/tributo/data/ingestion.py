@@ -22,7 +22,7 @@ from pydantic import (
     model_validator,
 )
 
-from tributo._common.logging_events import emit_event, observed_stage
+from tributo._common.logging import emit_event
 from tributo._common.storage_profiles import StorageProfileResolver
 from tributo.data._source_paths import resolve_file_source_path
 from tributo.data.contracts.handles import (
@@ -588,7 +588,6 @@ class IngestionGateway:
             capability_version=descriptor.capability_version,
         )
 
-    @observed_stage("ingestion", result_status=lambda _: "planned")
     def open(
         self,
         request: IngestionRequest,
