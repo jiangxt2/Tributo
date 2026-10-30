@@ -94,7 +94,9 @@ def test_core_task_and_reducer_options_preserve_caller_hook(
     init.assert_not_called()
 
 
-def _owner(monkeypatch: pytest.MonkeyPatch) -> sessions.ReportingSession:
+def _owner(
+    monkeypatch: pytest.MonkeyPatch, startup_environment: dict[str, str] | None = None
+) -> sessions.ReportingSession:
     profile = DorisProfile(
         host="owner-only.invalid",
         database="logs",
@@ -102,7 +104,8 @@ def _owner(monkeypatch: pytest.MonkeyPatch) -> sessions.ReportingSession:
         password_ref="env://OWNER_READ_PASSWORD",
     )
     owner = sessions.ReportingSession(
-        ReportingConfig(enabled=True, mode="external", read_profile=profile)
+        ReportingConfig(enabled=True, mode="external", read_profile=profile),
+        startup_environment=startup_environment,
     )
     monkeypatch.setattr(sessions, "_ACTIVE", owner)
     return owner
@@ -207,43 +210,48 @@ def _trusted_failing_hook() -> None:
     raise RuntimeError("trusted-hook-failure")
 
 
+@pytest.mark.parametrize(
+    ("supplied", "expected"),
+    [
+        (None, "original-run"),
+        ({"APP": "keep"}, "original-run"),
+        ({"TRIBUTO_RUN_ID": "local-run"}, "local-run"),
+        ({"TRIBUTO_RUN_ID": ""}, None),
+    ],
+)
 def test_correlation_environment_is_frozen_at_domain_start(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+    monkeypatch, supplied, expected
+):
     monkeypatch.setenv("TRIBUTO_RUN_ID", "original-run")
-    owner = _owner(monkeypatch)
+    before = dict(supplied or {})
+    owner = _owner(monkeypatch, supplied)
     monkeypatch.setenv("TRIBUTO_RUN_ID", "changed-node-run")
     payload = json.loads(owner.producer_policy())
-    assert payload["context"]["run_id"] == "original-run"
+    assert payload["context"].get("run_id") == expected
+    assert ("run_id" in payload["context"]) is (expected is not None)
+    assert (supplied or {}) == before
 
 
 @pytest.mark.parametrize(
     ("changes", "expected"),
     [
         ({}, "ready"),
-        (
-            {"OTEL_EXPORTER_OTLP_HEADERS": "secret"},
-            "reporting.config.otel_exporter_conflict",
-        ),
-        (
-            {"OTEL_EXPORTER_OTLP_LOGS_HEADERS": "secret"},
-            "reporting.config.otel_exporter_conflict",
-        ),
-        (
-            {"OTEL_EXPORTER_OTLP_CERTIFICATE": "/wrong/node/ca"},
-            "reporting.config.otel_exporter_conflict",
-        ),
-        (
-            {"OTEL_EXPORTER_OTLP_LOGS_CLIENT_CERTIFICATE": "/wrong/node/cert"},
-            "reporting.config.otel_exporter_conflict",
+        *(
+            ({key: "secret"}, "reporting.config.otel_exporter_conflict")
+            for key in (
+                "OTEL_EXPORTER_OTLP_HEADERS",
+                "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+                "OTEL_EXPORTER_OTLP_CERTIFICATE",
+                "OTEL_EXPORTER_OTLP_LOGS_CLIENT_KEY",
+                "OTEL_EXPORTER_OTLP_LOGS_CLIENT_CERTIFICATE",
+                "OTEL_PYTHON_EXPORTER_OTLP_HTTP_CREDENTIAL_PROVIDER",
+                "OTEL_PYTHON_EXPORTER_OTLP_HTTP_LOGS_CREDENTIAL_PROVIDER",
+            )
         ),
         ({"OTEL_SDK_DISABLED": "true"}, "reporting.config.sdk_disabled_conflict"),
         (
-            {"OTEL_PYTHON_EXPORTER_OTLP_HTTP_CREDENTIAL_PROVIDER": "untrusted_plugin"},
-            "reporting.config.otel_exporter_conflict",
-        ),
-        (
             {
+                "OTEL_SDK_DISABLED": "false",
                 "OTEL_BLRP_MAX_QUEUE_SIZE": "invalid",
                 "OTEL_SERVICE_NAME": "caller-owned-service",
                 "OTEL_ATTRIBUTE_COUNT_LIMIT": "invalid",
@@ -258,11 +266,12 @@ def test_real_sdk_constructs_under_distinct_driver_worker_environments(
     changes: dict[str, str], expected: str
 ) -> None:
     code = """
-import json
+import json, os
 from tributo._common.reporting.sender import Sender
 from tributo.observability import SenderConfig, ReportingError
 from opentelemetry._logs import get_logger_provider
 provider=get_logger_provider()
+environment=dict(os.environ)
 try:
     sender=Sender(SenderConfig(endpoint="http://127.0.0.1:1/v1/logs",shutdown_timeout=1.0),lambda code: None)
 except ReportingError as error:
@@ -272,6 +281,7 @@ else:
     assert sender.close()
     assert get_logger_provider() is provider
     print(json.dumps({"result":"ready"}))
+assert dict(os.environ)==environment
 """
     env = {
         **os.environ,

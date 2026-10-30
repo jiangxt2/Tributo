@@ -11,23 +11,25 @@ from pathlib import Path
 from typing import Any
 
 
-def emit(event: str) -> dict[str, Any]:
+def emit(event: str, count: int = 1) -> dict[str, Any]:
     from tributo._common.reporting.session import active_session
 
     logger = logging.getLogger("tributo.acceptance")
     logger.setLevel(logging.INFO)
-    logger.info(
-        "private SQL/password must not reach Doris",
-        extra={"event": event, "status": "succeeded"},
-    )
+    for _ in range(count):
+        logger.info(
+            "private SQL/password must not reach Doris",
+            extra={"event": event, "status": "succeeded"},
+        )
     session = active_session()
-    assert session is not None and session.state == "ready"
-    assert session._sender is not None and session._sender.flush(5.0)
-    snapshot = session.snapshot()
+    if session:
+        assert session.state == "ready"
+        assert session._sender is not None and session._sender.flush(5.0)
     return {
         "pid": os.getpid(),
-        "role": session.role,
-        "snapshot": snapshot,
+        "count": count,
+        "role": session.role if session else "disabled",
+        "snapshot": session.snapshot() if session else {},
         "owner_credentials": [
             key for key in os.environ if key.startswith("REPORTING_IT_SECRET_")
         ],
@@ -38,33 +40,12 @@ def original_hook() -> None:
     os.environ["REPORTING_IT_HOOK_RAN"] = "1"
 
 
-def task(event: str) -> dict[str, Any]:
+def task(event: str, count: int = 1) -> dict[str, Any]:
     import ray
 
-    result = emit(event)
+    result = emit(event, count)
     result["node_id"] = ray.get_runtime_context().get_node_id()
     result["original_hook"] = os.environ.get("REPORTING_IT_HOOK_RAN")
-    return result
-
-
-def light_emit(event: str, count: int) -> int:
-    logger = logging.getLogger("tributo.acceptance")
-    logger.setLevel(logging.INFO)
-    for _ in range(count):
-        logger.info("same bounded business event", extra={"event": event})
-    return count
-
-
-def light_flush() -> bool:
-    from tributo._common.reporting.session import active_session
-
-    session = active_session()
-    return session._sender.flush(5.0) if session and session._sender else True
-
-
-def light_task(event: str, count: int) -> int:
-    result = light_emit(event, count)
-    assert light_flush()
     return result
 
 
@@ -126,49 +107,26 @@ def core_reporting_reducer(plan: Any, results: Any) -> Any:
 
 class PolicyScopeActor:
     def __init__(self, first: str, second: str) -> None:
-        import numpy as np
-
-        from tests.inference.test_bundle_predictor import _bindings, _Runtime
+        from tests.reporting.conftest import reporting_kernel
         from tributo._common.reporting.session import bootstrap_producer
-        from tributo.inference.kernel import KernelBatchPredictor
 
         self.initial = bootstrap_producer(first, ray_worker=True)
         assert self.initial and self.initial._sender
         self.sender = self.initial._sender
 
-        class Kernel(_Runtime):
-            def predict(self, inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
-                light_emit("tributo.fix3.kernel.predict", 1)
-                return super().predict(inputs)
+        def record(name):
+            emit("tributo.fix3.kernel." + name)
 
-            def close(self) -> None:
-                light_emit("tributo.fix3.kernel.close", 1)
-                super().close()
-
-        class Factory:
-            factory_id = "test.reporting-policy"
-
-            def create(self) -> Kernel:
-                light_emit("tributo.fix3.kernel.load", 1)
-                return Kernel()
-
-        self.a = KernelBatchPredictor(Factory(), *_bindings(), _reporting_policy=first)
-        self.b = KernelBatchPredictor(Factory(), *_bindings(), _reporting_policy=second)
+        self.a, self.batch = reporting_kernel(first, record)
+        self.b, _ = reporting_kernel(second, record)
 
     def run(self) -> list[list[int]]:
-        import numpy as np
-
         from tributo._common.reporting.sender import CONTEXT
         from tributo._common.reporting.session import active_session
 
-        batch = {
-            "feature_a": np.array([1.0]),
-            "feature_b": np.array([2.0]),
-            "entity_id": np.array([7]),
-        }
         outputs = []
         for kernel in (self.b, self.a, self.b):
-            outputs.append(kernel(batch)["prediction"].tolist())
+            outputs.append(kernel(self.batch)["prediction"].tolist())
             assert CONTEXT.get() is None
         self.a.close()
         self.b.close()
@@ -185,15 +143,10 @@ def main(mode: str, path: str) -> None:
     payload = json.loads(Path(path).read_text())
     os.environ.update(payload["credentials"])
     config = ReportingConfig.model_validate(payload["config"])
-    if mode == "matrix":
+    if mode in {"matrix", "light"}:
         from tests.integrations.test_log_reporting import _run_ray_matrix
 
         _run_ray_matrix(config)
-        return
-    if mode == "light":
-        from tests.integrations.test_log_reporting import _run_resource_comparison
-
-        _run_resource_comparison(config)
         return
     if mode == "regressions":
         from tests.integrations.test_log_reporting import _run_review_regressions
@@ -209,11 +162,7 @@ def main(mode: str, path: str) -> None:
         collector = session._collector
         assert collector and collector.process
         pid = collector.process.pid
-        if mode == "job":
-            ray.init(address="auto", runtime_env=owner.runtime_env())
-        else:
-            # run_local_entrypoint owns Ray; this driver borrows its sender.
-            ray.init(address="auto", runtime_env=owner.runtime_env())
+        ray.init(address="auto", runtime_env=owner.runtime_env())
         try:
             result["worker"] = ray.get(
                 ray.remote(task).remote("tributo.it." + mode + ".worker")

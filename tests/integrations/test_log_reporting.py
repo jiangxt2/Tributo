@@ -276,11 +276,13 @@ def test_runtime_collector_loss_preserves_business_result() -> None:
     _evidence("runtime-loss", result=result, snapshot=owner.snapshot())
 
 
-def test_local_parent_child_owned_ray() -> None:
+def test_local_parent_child_owned_ray(monkeypatch: pytest.MonkeyPatch) -> None:
     from tributo.runtime_providers import run_local_entrypoint
 
     config = _config()
     # The parent is the sole owner. The child only needs the frozen producer policy.
+    for name in ("RUN_ID", "ATTEMPT_ID", "SUBMISSION_ID"):
+        monkeypatch.setenv("TRIBUTO_" + name, "parent-" + name.lower())
     config_path = _WORK / "local-config.json"
     config_path.write_text(
         json.dumps(config.model_dump(mode="json", exclude={"enabled"}))
@@ -292,14 +294,27 @@ def test_local_parent_child_owned_ray() -> None:
         env_vars={
             "TRIBUTO_LOG_REPORTING_ENABLED": "1",
             "TRIBUTO_LOG_REPORTING_CONFIG": str(config_path),
+            "APP": "keep",
+            "TRIBUTO_ATTEMPT_ID": "local-attempt",
         },
         num_cpus=2,
         timeout=90,
     )
-    assert _wait_rows("tributo.it.local.child")
-    assert _wait_rows("tributo.it.local.worker")
+    rows = [
+        row
+        for event in ("child", "worker")
+        for row in _wait_rows("tributo.it.local." + event)
+    ]
+    expected = {
+        "run_id": "parent-run_id",
+        "attempt_id": "local-attempt",
+        "submission_id": "parent-submission_id",
+    }
+    assert all(expected.items() <= json.loads(row[1]).items() for row in rows)
     _evidence(
-        "local-parent-child", result=json.loads((_ARTIFACTS / "local.json").read_text())
+        "local-parent-child",
+        result=json.loads((_ARTIFACTS / "local.json").read_text()),
+        rows=rows,
     )
 
 
@@ -320,105 +335,170 @@ def _run_ray_matrix(config: ReportingConfig) -> None:
     )
     from tributo._common.serve_utils import deploy_serve_app
 
-    with reporting_session(config, service_lifetime=True) as owner:
-        original = {
-            "env_vars": {"REPORTING_IT_ORIGINAL": "preserved"},
-            "worker_process_setup_hook": original_hook,
-        }
-        ray.init(address="auto", runtime_env=owner.runtime_env(original))
-        try:
-            deadline = time.monotonic() + 30
-            while len(nodes := [n for n in ray.nodes() if n["Alive"]]) < 2:
-                assert time.monotonic() < deadline
-                time.sleep(0.5)
-            results = []
-            for node in nodes:
-                result = ray.get(
-                    ray.remote(task)
-                    .options(
-                        scheduling_strategy=NodeAffinitySchedulingStrategy(
-                            node["NodeID"], soft=False
-                        )
-                    )
-                    .remote("tributo.it.task")
-                )
-                assert result["role"] == "producer" and result["original_hook"] == "1"
-                assert not result["owner_credentials"]
-                results.append(result)
-            actor = ray.remote(Actor).remote()
-            assert (
-                ray.get(actor.report.remote("tributo.it.actor"))["role"] == "producer"
-            )
-            ray.kill(actor)
-            policy = active_session().producer_policy()
-            trainer = DataParallelTrainer(
-                train_loop_per_worker=train_loop,
-                train_loop_config={"_core_reporting_policy": policy},
-                backend_config=BackendConfig(),
-                scaling_config=ScalingConfig(
-                    num_workers=2, use_gpu=False, placement_strategy="SPREAD"
-                ),
-                run_config=train.RunConfig(storage_path=str(_WORK / "train")),
-            )
-            result = trainer.fit()
-            assert result.error is None
-            # Ray Train V2 retains result.metrics only with a checkpoint.
-            # This logging workload deliberately has no checkpoint side effect.
-            train_rows = _wait_rows("tributo.it.train", 2)
-            assert {json.loads(row[1])["rank"] for row in train_rows} == {0, 1}
-            tuning = tune.Tuner(
-                tune.with_resources(tune_trial, {"cpu": 1}),
-                param_space={"policy": policy},
-                tune_config=tune.TuneConfig(num_samples=1),
-                run_config=tune.RunConfig(storage_path=str(_WORK / "tune")),
-            ).fit()
-            assert not tuning.errors and tuning[0].metrics["ok"] == 1
-
-            @serve.deployment(
-                ray_actor_options={
-                    "num_cpus": 0.1,
-                    "runtime_env": {"env_vars": {"SERVE_OPTION": "preserved"}},
-                }
-            )
-            class Reporter:
-                def __call__(self) -> dict[str, Any]:
-                    result = emit("tributo.it.serve")
-                    result["option"] = os.environ.get("SERVE_OPTION")
-                    return result
-
-            deploy_serve_app(
-                Reporter,
-                app_name="reporting-it",
-                route_prefix="/reporting-it",
-                enable_http=False,
-            )
-            response = (
-                serve.get_app_handle("reporting-it").remote().result(timeout_s=30)
-            )
-            assert response["role"] == "producer" and response["option"] == "preserved"
-            rows = {
-                name: _wait_rows(
-                    "tributo.it." + name, 2 if name in {"task", "train"} else 1
-                )
-                for name in ("task", "actor", "train", "tune", "serve")
-            }
-            assert all("ray_job_id" in str(row) for row in rows["task"])
-            assert "rank" in str(rows["train"])
-            _evidence(
-                "ray-multinode",
-                nodes=len(nodes),
-                tasks=results,
-                rows=rows,
-                snapshot=owner.snapshot(),
-            )
-        finally:
-            # Keep Ray alive while the service owner deletes only its app.
+    outcomes = {}
+    for enabled in (False, True):
+        started = time.monotonic()
+        with reporting_session(
+            config.model_copy(update={"enabled": enabled}), service_lifetime=True
+        ) as owner:
             session = active_session()
-            assert session is not None
-            session.close()
-            assert "reporting-it" not in serve.status().applications
-            serve.shutdown()
-            ray.shutdown()
+            process = session._collector.process if session else None
+            result = {
+                "startup_seconds": time.monotonic() - started,
+                "collector_processes": int(process is not None),
+                "business_counts": [],
+                "phases": {},
+            }
+
+            def measure(
+                name, count, work, result=result, enabled=enabled, process=process
+            ):
+                began = time.monotonic()
+                result["business_counts"].append(work())
+                if enabled:
+                    assert len(_wait_rows("tributo.it." + name, count)) == count
+                    result[name + "_resources"] = _process_resources(process.pid)
+                result["phases"][name + "_seconds"] = time.monotonic() - began
+
+            if process:
+                result["idle_resources"] = _process_resources(process.pid)
+            ray.init(
+                address="auto",
+                runtime_env=owner.runtime_env(
+                    {
+                        "env_vars": {"REPORTING_IT_ORIGINAL": "preserved"},
+                        "worker_process_setup_hook": original_hook,
+                    }
+                ),
+            )
+            try:
+                deadline = time.monotonic() + 30
+                while len(nodes := [n for n in ray.nodes() if n["Alive"]]) < 2:
+                    assert time.monotonic() < deadline
+                    time.sleep(0.5)
+                assert len(nodes) == 2
+                measure("local", 60, lambda: emit("tributo.it.local", 60)["count"])
+
+                def workers(enabled=enabled):
+                    results = ray.get(
+                        [
+                            ray.remote(task)
+                            .options(
+                                scheduling_strategy=NodeAffinitySchedulingStrategy(
+                                    node["NodeID"], soft=False
+                                )
+                            )
+                            .remote("tributo.it.task", 20)
+                            for node in nodes
+                        ]
+                    )
+                    if enabled:
+                        assert all(r["role"] == "producer" for r in results)
+                        assert all(r["original_hook"] == "1" for r in results)
+                        assert all(not r["owner_credentials"] for r in results)
+                        assert {r["node_id"] for r in results} == {
+                            n["NodeID"] for n in nodes
+                        }
+                    return sum(r["count"] for r in results)
+
+                measure("task", 40, workers)
+
+                @serve.deployment(
+                    ray_actor_options={
+                        "num_cpus": 0.1,
+                        "runtime_env": {"env_vars": {"SERVE_OPTION": "preserved"}},
+                    }
+                )
+                class Reporter:
+                    def __call__(self):
+                        return emit("tributo.it.serve") | {
+                            "option": os.environ.get("SERVE_OPTION")
+                        }
+
+                def requests(enabled=enabled):
+                    deploy_serve_app(
+                        Reporter,
+                        app_name="reporting-it",
+                        route_prefix="/reporting-it",
+                        enable_http=False,
+                    )
+                    handle = serve.get_app_handle("reporting-it")
+                    responses = [handle.remote().result(timeout_s=30) for _ in range(6)]
+                    assert all(r["option"] == "preserved" for r in responses)
+                    if enabled:
+                        assert all(r["role"] == "producer" for r in responses)
+                    return sum(r["count"] for r in responses)
+
+                measure("serve", 6, requests)
+                # Profile identical work before Train/Tune introduce extra load.
+                if enabled:
+                    actor = ray.remote(Actor).remote()
+                    assert (
+                        ray.get(actor.report.remote("tributo.it.actor"))["role"]
+                        == "producer"
+                    )
+                    ray.kill(actor)
+                    policy = session.producer_policy()
+                    trained = DataParallelTrainer(
+                        train_loop_per_worker=train_loop,
+                        train_loop_config={"_core_reporting_policy": policy},
+                        backend_config=BackendConfig(),
+                        scaling_config=ScalingConfig(
+                            num_workers=2, use_gpu=False, placement_strategy="SPREAD"
+                        ),
+                        run_config=train.RunConfig(storage_path=str(_WORK / "train")),
+                    ).fit()
+                    assert trained.error is None
+                    rows = _wait_rows("tributo.it.train", 2)
+                    assert {json.loads(row[1])["rank"] for row in rows} == {0, 1}
+                    tuned = tune.Tuner(
+                        tune.with_resources(tune_trial, {"cpu": 1}),
+                        param_space={"policy": policy},
+                        tune_config=tune.TuneConfig(num_samples=1),
+                        run_config=tune.RunConfig(storage_path=str(_WORK / "tune")),
+                    ).fit()
+                    assert not tuned.errors and tuned[0].metrics["ok"] == 1
+                    assert _wait_rows("tributo.it.actor") and _wait_rows(
+                        "tributo.it.tune"
+                    )
+                    assert all(
+                        "ray_job_id" in str(row)
+                        for row in _wait_rows("tributo.it.task", 40)
+                    )
+                    _evidence(
+                        "ray-multinode",
+                        nodes=2,
+                        train_rows=rows,
+                        snapshot=owner.snapshot(),
+                    )
+                else:
+                    serve.delete("reporting-it")
+                closing = time.monotonic()
+                if session:
+                    session.close()
+                result["reporting_close_seconds"] = time.monotonic() - closing
+                result["collector_reaped"] = (
+                    process is None or process.poll() is not None
+                )
+                assert result["collector_reaped"]
+                assert "reporting-it" not in serve.status().applications
+                outcomes["enabled" if enabled else "disabled"] = result
+            finally:
+                if session:
+                    session.close()
+                serve.shutdown()
+                ray.shutdown()
+    assert outcomes["disabled"]["collector_processes"] == 0
+    assert outcomes["enabled"]["collector_processes"] == 1
+    assert (
+        outcomes["disabled"]["business_counts"]
+        == outcomes["enabled"]["business_counts"]
+        == [60, 40, 6]
+    )
+    (_ARTIFACTS / "resource-comparison.json").write_text(
+        json.dumps(outcomes, indent=2) + "\n"
+    )
+    _evidence("resource-comparison", **outcomes)
 
 
 def _remote_job(mode: str) -> dict[str, Any]:
@@ -486,20 +566,14 @@ def _run_review_regressions(config: ReportingConfig) -> None:
 
     from tests.algorithms.conftest import (
         dispatcher_for,
-        fake_input_compatibility,
-        fake_runtime_binding,
-        make_spec,
+        function_registration,
         request_for,
     )
     from tests.integrations.reporting_workload import PolicyScopeActor, original_hook
     from tributo.algorithms.api import (
         AlgorithmOperation,
-        EnvironmentSpec,
-        ExecutionMode,
         QualifiedReference,
-        RuntimeTopology,
     )
-    from tributo.algorithms.core import AlgorithmBuilder
     from tributo.algorithms.input import FakeInputInvocation, FakeTabularPayload
     from tributo.algorithms.spi import InputExecutionContext
     from tributo.integrations.algorithm_runtimes.ray_task import RayTaskRuntime
@@ -518,29 +592,21 @@ def _run_review_regressions(config: ReportingConfig) -> None:
             session = active_session()
             assert session and session._collector and session._collector.process
             collector = session._collector.process
-            registration = AlgorithmBuilder.from_ray_function(
-                spec=make_spec(
-                    "external_function",
-                    operations=("fit",),
-                    mode=ExecutionMode.CUSTOM_RAY_FUNCTION,
-                ),
-                implementation_id="tests.reporting-function",
-                implementation_version="1.0.0",
-                function="tests.integrations.reporting_workload:core_reporting_fragment",
-                environment=EnvironmentSpec(environment_id="tests.reporting"),
-                runtime=replace(
-                    fake_runtime_binding(
-                        topology=RuntimeTopology.DATA_PARALLEL, worker_count=2
+            registration = function_registration(data_parallel=True)
+            registration = replace(
+                registration,
+                implementation=replace(
+                    registration.implementation,
+                    implementation_ref=QualifiedReference.parse(
+                        "tests.integrations.reporting_workload:core_reporting_fragment"
                     ),
+                ),
+                runtime=replace(
+                    registration.runtime,
                     result_reducer_ref=QualifiedReference.parse(
                         "tests.integrations.reporting_workload:core_reporting_reducer"
                     ),
                 ),
-                input_compatibility=fake_input_compatibility(
-                    RuntimeTopology.DATA_PARALLEL
-                ),
-                allowed_config_keys=(),
-                is_default=True,
             )
             dispatcher = dispatcher_for(registration, RayTaskRuntime())
             invocation = InputExecutionContext(
@@ -631,130 +697,3 @@ def _process_resources(pid: int) -> dict[str, float]:
         key: float(re.search(rf"{field}:\s+(\d+)", status).group(1))
         for key, field in (("rss_kib", "VmRSS"), ("peak_rss_kib", "VmHWM"))
     } | {"cpu_seconds": (int(fields[13]) + int(fields[14])) / os.sysconf("SC_CLK_TCK")}
-
-
-def _run_resource_comparison(config: ReportingConfig) -> None:
-    import ray
-    from ray import serve
-    from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
-
-    from tests.integrations.reporting_workload import (
-        light_emit,
-        light_flush,
-        light_task,
-    )
-    from tributo._common.serve_utils import deploy_serve_app
-
-    outcomes: dict[str, Any] = {}
-    for enabled in (False, True):
-        name = "enabled" if enabled else "disabled"
-        cfg = config.model_copy(update={"enabled": enabled})
-        started = time.monotonic()
-        with reporting_session(cfg, service_lifetime=True) as owner:
-            session = active_session()
-            collector = session._collector if session else None
-            process = collector.process if collector else None
-            result: dict[str, Any] = {
-                "startup_seconds": time.monotonic() - started,
-                "collector_processes": int(process is not None),
-                "business_counts": [],
-                "phases": {},
-            }
-            if process:
-                time.sleep(0.1)
-                result["idle_resources"] = _process_resources(process.pid)
-            phases = result["phases"]
-            try:
-                local = time.monotonic()
-                result["business_counts"].append(
-                    light_emit("tributo.it.light.local", 60)
-                )
-                assert light_flush()
-                if enabled:
-                    assert len(_wait_rows("tributo.it.light.local", 60)) == 60
-                phases["local_seconds"] = time.monotonic() - local
-                if process:
-                    result["local_resources"] = _process_resources(process.pid)
-
-                connect = time.monotonic()
-                ray.init(address="auto", runtime_env=owner.runtime_env())
-                phases["ray_init_seconds"] = time.monotonic() - connect
-                nodes = [node for node in ray.nodes() if node["Alive"]]
-                assert len(nodes) == 2
-                workers = time.monotonic()
-                results = ray.get(
-                    [
-                        ray.remote(light_task)
-                        .options(
-                            scheduling_strategy=NodeAffinitySchedulingStrategy(
-                                node["NodeID"], soft=False
-                            )
-                        )
-                        .remote("tributo.it.light.worker", 20)
-                        for node in nodes
-                    ]
-                )
-                result["business_counts"].append(sum(results))
-                if enabled:
-                    assert len(_wait_rows("tributo.it.light.worker", 40)) == 40
-                phases["two_worker_seconds"] = time.monotonic() - workers
-                if process:
-                    result["worker_resources"] = _process_resources(process.pid)
-
-                class LightService:
-                    def __call__(self) -> int:
-                        return light_emit("tributo.it.light.serve", 1)
-
-                    def flush(self) -> bool:
-                        return light_flush()
-
-                app_name = "reporting-light-" + name
-                serving = time.monotonic()
-                deploy_serve_app(
-                    LightService,
-                    app_name=app_name,
-                    route_prefix="/" + app_name,
-                    enable_http=False,
-                )
-                handle = serve.get_app_handle(app_name)
-                result["business_counts"].append(
-                    sum(handle.remote().result(timeout_s=30) for _ in range(6))
-                )
-                assert handle.flush.remote().result(timeout_s=10)
-                if enabled:
-                    assert len(_wait_rows("tributo.it.light.serve", 6)) == 6
-                phases["serve_deploy_requests_seconds"] = time.monotonic() - serving
-                if process:
-                    result["serve_resources"] = _process_resources(process.pid)
-                if not enabled:
-                    serve.delete(app_name)
-                closing = time.monotonic()
-                if session:
-                    session.close()
-                result["reporting_close_seconds"] = time.monotonic() - closing
-                result["collector_reaped"] = (
-                    process is None or process.poll() is not None
-                )
-                assert result["collector_reaped"]
-                outcomes[name] = result
-            finally:
-                if session:
-                    session.close()
-                if ray.is_initialized():
-                    serve.shutdown()
-                    ray.shutdown()
-    assert outcomes["disabled"]["collector_processes"] == 0
-    assert outcomes["enabled"]["collector_processes"] == 1
-    assert (
-        outcomes["disabled"]["business_counts"]
-        == outcomes["enabled"]["business_counts"]
-        == [60, 40, 6]
-    )
-    (_ARTIFACTS / "resource-comparison.json").write_text(
-        json.dumps(outcomes, indent=2) + "\n"
-    )
-    _evidence("resource-comparison", **outcomes)
-
-
-def test_reporting_resource_comparison() -> None:
-    _remote_job("light")

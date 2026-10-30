@@ -62,136 +62,94 @@ def test_runtime_producer_keeps_sender_after_initial_protocol_failure(
         producer.close()
 
 
-def _batch() -> list[ReadableLogRecord]:
-    return [
-        ReadableLogRecord(
-            LogRecord(body="safe.event"), Resource({"service.name": "test"})
-        )
-    ]
+def _reply(rejected: int, message: str) -> bytes:
+    response = ExportLogsServiceResponse()
+    response.partial_success.rejected_log_records = rejected
+    response.partial_success.error_message = message
+    return response.SerializeToString()
 
 
-@pytest.mark.parametrize("status", [201, 204, 301, 302, 307, 308])
-def test_non_protocol_success_never_redirects_or_retries(
-    otlp_endpoint: Endpoint, status: int
-) -> None:
-    otlp_endpoint.responses = [(status, "application/x-protobuf", b"")]
+@pytest.fixture
+def exporter(otlp_endpoint: Endpoint):
     outcomes: list[DeliveryOutcome] = []
-    exporter = ValidatingExporter(
-        SenderConfig(endpoint=otlp_endpoint.url), outcomes.append
-    )
-    try:
-        assert exporter.export(_batch()) is LogRecordExportResult.FAILURE
-        assert len(otlp_endpoint.requests) == 1
-        assert outcomes[0].kind == "protocol_error"
-        assert outcomes[0].accepted is None
-        assert outcomes[0].status_code == status
-    finally:
-        exporter.shutdown()
-
-
-@pytest.mark.parametrize(
-    ("content_type", "body"),
-    [
-        ("text/html", b"<html>secret</html>"),
-        ("application/json", b'{"error":"secret"}'),
-        ("application/x-protobuf", b'{"error":"secret"}'),
-        ("application/x-protobuf", b"<html>secret</html>"),
-        ("application/x-protobuf", b"\xff"),
-        ("application/x-protobuf", b"x" * (MAX_RESPONSE_BYTES + 1)),
-    ],
-)
-def test_invalid_200_is_unknown_and_body_is_not_logged(
-    otlp_endpoint: Endpoint,
-    caplog: pytest.LogCaptureFixture,
-    content_type: str,
-    body: bytes,
-) -> None:
-    otlp_endpoint.responses = [(200, content_type, body)]
-    outcomes: list[DeliveryOutcome] = []
-    exporter = ValidatingExporter(
-        SenderConfig(endpoint=otlp_endpoint.url), outcomes.append
-    )
-    try:
-        with caplog.at_level(logging.WARNING):
-            assert exporter.export(_batch()) is LogRecordExportResult.FAILURE
-        assert len(otlp_endpoint.requests) == 1
-        assert outcomes[0].kind == "protocol_error"
-        assert outcomes[0].accepted is None and outcomes[0].rejected is None
-        assert "secret" not in caplog.text
-    finally:
-        exporter.shutdown()
-
-
-@pytest.mark.parametrize(
-    ("rejected", "message", "kind", "success"),
-    [
-        (0, "", "accepted", True),
-        (0, "untrusted server warning", "warning", True),
-        (1, "untrusted rejection", "partial", False),
-        (-1, "invalid", "protocol_error", False),
-        (2, "too many", "protocol_error", False),
-    ],
-)
-def test_partial_success_counts_and_no_whole_batch_replay(
-    otlp_endpoint: Endpoint,
-    caplog: pytest.LogCaptureFixture,
-    rejected: int,
-    message: str,
-    kind: str,
-    success: bool,
-) -> None:
-    reply = ExportLogsServiceResponse()
-    reply.partial_success.rejected_log_records = rejected
-    reply.partial_success.error_message = message
-    otlp_endpoint.responses = [
-        (200, "application/x-protobuf", reply.SerializeToString())
-    ]
-    outcomes: list[DeliveryOutcome] = []
-    exporter = ValidatingExporter(
-        SenderConfig(endpoint=otlp_endpoint.url), outcomes.append
-    )
-    try:
-        result = exporter.export(_batch())
-        assert (result is LogRecordExportResult.SUCCESS) is success
-        assert len(otlp_endpoint.requests) == 1
-        assert outcomes[0].kind == kind
-        if 0 <= rejected <= 1:
-            assert outcomes[0].accepted == 1 - rejected
-            assert outcomes[0].rejected == rejected
-        else:
-            assert outcomes[0].accepted is None
-        assert "untrusted" not in caplog.text
-    finally:
-        exporter.shutdown()
-
-
-def test_valid_empty_response_is_success(otlp_endpoint: Endpoint) -> None:
-    outcomes: list[DeliveryOutcome] = []
-    exporter = ValidatingExporter(
-        SenderConfig(endpoint=otlp_endpoint.url), outcomes.append
-    )
-    try:
-        assert exporter.export(_batch()) is LogRecordExportResult.SUCCESS
-        assert outcomes[0].accepted == 1 and outcomes[0].rejected == 0
-    finally:
-        exporter.shutdown()
-
-
-@pytest.mark.parametrize("status", [429, 503])
-def test_retryable_status_uses_one_bounded_retry_layer(
-    otlp_endpoint: Endpoint, status: int
-) -> None:
-    otlp_endpoint.responses = [(status, "text/plain", b"untrusted error")]
-    outcomes: list[DeliveryOutcome] = []
-    exporter = ValidatingExporter(
+    value = ValidatingExporter(
         SenderConfig(endpoint=otlp_endpoint.url, send_timeout=2.0), outcomes.append
     )
     try:
-        assert exporter.export(_batch()) is LogRecordExportResult.SUCCESS
-        assert len(otlp_endpoint.requests) == 2
-        assert outcomes[0].accepted == 1
+        yield value, outcomes
     finally:
-        exporter.shutdown()
+        value.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("reply", "expected"),
+    [
+        *[
+            ((s, "application/x-protobuf", b""), ("protocol_error", None, None, 1))
+            for s in (201, 204, 301, 302, 307, 308)
+        ],
+        *[
+            ((200, media, body), ("protocol_error", None, None, 1))
+            for media, body in (
+                ("text/html", b"<html>secret</html>"),
+                ("application/json", b'{"error":"secret"}'),
+                ("application/x-protobuf", b'{"error":"secret"}'),
+                ("application/x-protobuf", b"<html>secret</html>"),
+                ("application/x-protobuf", b"\xff"),
+                ("application/x-protobuf", b"x" * (MAX_RESPONSE_BYTES + 1)),
+            )
+        ],
+        *[
+            ((200, "application/x-protobuf", _reply(n, message)), (kind, yes, no, 1))
+            for n, message, kind, yes, no in (
+                (0, "", "accepted", 1, 0),
+                (0, "untrusted warning", "warning", 1, 0),
+                (1, "untrusted rejection", "partial", 0, 1),
+                (-1, "invalid", "protocol_error", None, None),
+                (2, "too many", "protocol_error", None, None),
+            )
+        ],
+        ((200, "application/x-protobuf", b""), ("accepted", 1, 0, 1)),
+        *[
+            ((s, "text/plain", b"untrusted error"), ("accepted", 1, 0, 2))
+            for s in (429, 503)
+        ],
+    ],
+    ids=[
+        *[f"status-{s}" for s in (201, 204, 301, 302, 307, 308)],
+        "html",
+        "json",
+        "json-as-protobuf",
+        "html-as-protobuf",
+        "invalid-protobuf",
+        "oversized",
+        "full",
+        "warning",
+        "partial",
+        "negative-count",
+        "over-count",
+        "empty",
+        "retry-429",
+        "retry-503",
+    ],
+)
+def test_otlp_response_and_retry_contract(
+    otlp_endpoint, exporter, caplog, reply, expected
+):
+    delegate, outcomes = exporter
+    otlp_endpoint.responses = [reply]
+    batch = [ReadableLogRecord(LogRecord(body="safe.event"), Resource({}))]
+    with caplog.at_level(logging.WARNING):
+        result = delegate.export(batch)
+    kind, accepted, rejected, count = expected
+    assert (result is LogRecordExportResult.SUCCESS) == (
+        kind in {"accepted", "warning"}
+    )
+    assert len(otlp_endpoint.requests) == count
+    outcome = outcomes[0]
+    assert (outcome.kind, outcome.accepted, outcome.rejected) == expected[:3]
+    assert outcome.status_code == (200 if count == 2 else reply[0])
+    assert "secret" not in caplog.text and "untrusted" not in caplog.text
 
 
 def test_explicit_headers_and_disabled_environment_inheritance(
@@ -207,7 +165,8 @@ def test_explicit_headers_and_disabled_environment_inheritance(
         lambda outcome: None,
     )
     try:
-        assert exporter.export(_batch()) is LogRecordExportResult.SUCCESS
+        batch = [ReadableLogRecord(LogRecord(body="safe.event"), Resource({}))]
+        assert exporter.export(batch) is LogRecordExportResult.SUCCESS
         headers = {
             key.lower(): value for key, value in otlp_endpoint.requests[0][0].items()
         }

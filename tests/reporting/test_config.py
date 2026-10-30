@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -11,7 +10,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from tributo._common.reporting.config import load_config, validate_sdk_environment
+from tributo._common.reporting.config import load_config
 from tributo.observability import ReportingError, SenderConfig, reporting_session
 
 
@@ -46,39 +45,6 @@ assert set(threading.enumerate()) == before[1]
 assert 'tributo._common.reporting.sender' not in sys.modules
 """
     subprocess.run([sys.executable, "-c", code], check=True, timeout=20)
-
-
-@pytest.mark.parametrize(
-    "key",
-    [
-        "OTEL_EXPORTER_OTLP_HEADERS",
-        "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
-        "OTEL_EXPORTER_OTLP_CERTIFICATE",
-        "OTEL_EXPORTER_OTLP_LOGS_CLIENT_KEY",
-        "OTEL_PYTHON_EXPORTER_OTLP_HTTP_CREDENTIAL_PROVIDER",
-        "OTEL_PYTHON_EXPORTER_OTLP_HTTP_LOGS_CREDENTIAL_PROVIDER",
-    ],
-)
-def test_ambient_exporter_configuration_is_rejected_without_echo(
-    key: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv(key, "sensitive-value")
-    with pytest.raises(ReportingError) as error:
-        validate_sdk_environment()
-    assert str(error.value) == "reporting.config.otel_exporter_conflict"
-    assert "sensitive-value" not in str(error.value)
-    assert os.environ[key] == "sensitive-value"
-
-
-def test_sdk_disabled_cannot_silently_produce_noop(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("OTEL_SDK_DISABLED", "true")
-    with pytest.raises(ReportingError, match="sdk_disabled_conflict"):
-        validate_sdk_environment()
-    monkeypatch.setenv("OTEL_SDK_DISABLED", "false")
-    monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_HEADERS", "caller-trace-config")
-    validate_sdk_environment()
 
 
 @pytest.mark.parametrize(

@@ -60,3 +60,37 @@ def clean_reporting_environment(monkeypatch: pytest.MonkeyPatch) -> None:
 
     for name in (*KNOWN_ENV, POLICY_ENV, "OTEL_SDK_DISABLED"):
         monkeypatch.delenv(name, raising=False)
+
+
+def reporting_kernel(policy, emit):
+    """Same load/predict/close workload for direct and real Ray actor checks."""
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from tests.inference.test_bundle_predictor import _bindings, _Runtime
+    from tributo.inference.kernel import KernelBatchPredictor
+
+    class Kernel(_Runtime):
+        def predict(self, inputs):
+            emit("predict")
+            return super().predict(inputs)
+
+        def close(self):
+            emit("close")
+            super().close()
+
+    def create():
+        emit("load")
+        return Kernel()
+
+    factory = SimpleNamespace(factory_id="test.reporting-policy", create=create)
+    batch = {
+        key: np.array([value])
+        for key, value in (
+            ("feature_a", 1.0),
+            ("feature_b", 2.0),
+            ("entity_id", 7),
+        )
+    }
+    return KernelBatchPredictor(factory, *_bindings(), _reporting_policy=policy), batch

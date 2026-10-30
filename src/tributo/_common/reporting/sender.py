@@ -24,7 +24,6 @@ from opentelemetry.sdk.resources import Resource
 from tributo._common.reporting.config import (
     ReportingError,
     SenderConfig,
-    validate_sdk_environment,
 )
 from tributo._common.reporting.lifecycle import bounded_call
 from tributo._common.reporting.transport import DeliveryOutcome, ValidatingExporter
@@ -70,11 +69,6 @@ _FIELDS = frozenset(
         "probe_id",
     }
 )
-_DIAG = logging.getLogger("tributo.reporting.local")
-_DIAG.propagate = False
-_DIAG.setLevel(logging.INFO)
-if not _DIAG.handlers:
-    _DIAG.addHandler(logging.StreamHandler())
 
 
 def safe_attributes(values: dict[str, Any]) -> dict[str, str | int | float | bool]:
@@ -208,7 +202,6 @@ class Sender:
         environment: Mapping[str, str] | None = None,
         attributes: Mapping[str, Any] | None = None,
     ) -> None:
-        validate_sdk_environment()
         self.config = config
         self.attributes = safe_attributes(dict(attributes or {}))
         self.diagnose = diagnose
@@ -221,7 +214,6 @@ class Sender:
         self.accepted = 0
         self.rejected = 0
         self.failures = 0
-        self.protocol_failures = 0
         self.overflow_events = 0
         self._exporter = ValidatingExporter(
             config, self._observe, environment=environment
@@ -308,8 +300,6 @@ class Sender:
                 self.rejected += outcome.rejected
             if outcome.kind in {"protocol_error", "partial", "transport_error"}:
                 self.failures += 1
-            if outcome.kind == "protocol_error":
-                self.protocol_failures += 1
         if outcome.kind not in {"accepted"}:
             self.diagnose("sender." + outcome.kind)
 

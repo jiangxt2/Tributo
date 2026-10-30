@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import atexit
 import importlib
-import inspect
 import json
 import logging
 import os
@@ -16,7 +15,7 @@ from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import partial, wraps
-from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, cast
+from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar
 
 from tributo._common.reporting.config import (
     KNOWN_ENV,
@@ -62,7 +61,7 @@ class ReportingSession:
         self.enabled = producer is not None or bool(config and config.enabled)
         self.service_lifetime = service_lifetime
         self.state = "starting" if self.enabled else "disabled"
-        context_environment = startup_environment or os.environ
+        context_environment = {**os.environ, **(startup_environment or {})}
         self._context = {
             field: value
             for field, key in (
@@ -518,14 +517,6 @@ def local_reporting_operation(function: Callable[_P, _R]) -> Callable[_P, _R]:
 
 def reporting_operation(function: Callable[_P, _R]) -> Callable[_P, _R]:
     """Initialize an owned entry point before business work without changing APIs."""
-    if inspect.iscoroutinefunction(function):
-
-        @wraps(function)
-        async def invoke_async(*args: _P.args, **kwargs: _P.kwargs) -> Any:
-            with session_scope():
-                return await function(*args, **kwargs)
-
-        return cast(Callable[_P, _R], invoke_async)
 
     @wraps(function)
     def invoke(*args: _P.args, **kwargs: _P.kwargs) -> _R:

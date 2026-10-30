@@ -44,9 +44,13 @@ def run(binary_dir: Path, directory: Path, *, cases: str = "all") -> None:
         "--project-name",
         project,
     ]
+    env = it._docker_environment()
+
+    def command(*arguments, check=True):
+        return it._run([*compose, *arguments], env=env, check=check)
+
     prepared = None
     started = False
-    env = it._docker_environment()
     summary: dict[str, object] = {"project": project, "passed": False, "cases": cases}
     errors: list[str] = []
 
@@ -89,37 +93,25 @@ def run(binary_dir: Path, directory: Path, *, cases: str = "all") -> None:
         (directory / "state.json").write_text(json.dumps(summary, indent=2) + "\n")
         started = True
         services = ["driver", "fe", "be"]
-        if cases != "collector":
+        clustered = cases not in {"collector", "local"}
+        if clustered:
             services.extend(["ray-head", "ray-worker"])
-        it._run(
-            [
-                *compose,
-                "up",
-                "--detach",
-                "--no-build",
-                *services,
-            ],
-            env=env,
-        )
+        command("up", "--detach", "--no-build", *services)
         deadline = time.monotonic() + 180
-        while cases != "collector" and time.monotonic() < deadline:
-            ready = it._run(
-                [
-                    *compose,
-                    "exec",
-                    "--no-TTY",
-                    "driver",
-                    "python",
-                    "-c",
-                    "import urllib.request;urllib.request.urlopen('http://ray-head:8265/api/version',timeout=2).read()",
-                ],
-                env=env,
+        while clustered and time.monotonic() < deadline:
+            ready = command(
+                "exec",
+                "--no-TTY",
+                "driver",
+                "python",
+                "-c",
+                "import urllib.request;urllib.request.urlopen('http://ray-head:8265/api/version',timeout=2).read()",
                 check=False,
             )
             if ready.returncode == 0:
                 break
             time.sleep(2)
-        if cases != "collector" and time.monotonic() >= deadline:
+        if clustered and time.monotonic() >= deadline:
             raise it.TributoITError("Ray Jobs endpoint did not become ready")
         selection = (
             []
@@ -128,13 +120,15 @@ def run(binary_dir: Path, directory: Path, *, cases: str = "all") -> None:
                 "-k",
                 "local_parent or multinode or tributo_job"
                 if cases == "ray"
+                else "local_parent"
+                if cases == "local"
                 else "multinode"
                 if cases == "matrix"
-                else "resource_comparison"
+                else "multinode"
                 if cases == "light"
                 else "review_regressions"
                 if cases == "regressions"
-                else "not (local_parent or multinode or tributo_job or resource_comparison or review_regressions)",
+                else "not (local_parent or multinode or tributo_job or review_regressions)",
             ]
         )
         it._run_streamed(
@@ -160,15 +154,7 @@ def run(binary_dir: Path, directory: Path, *, cases: str = "all") -> None:
             env,
             directory / "tests.log",
         )
-        it._run(
-            [
-                *compose,
-                "cp",
-                "driver:/workspace/tributo-work/artifacts/.",
-                str(directory),
-            ],
-            env=env,
-        )
+        command("cp", "driver:/workspace/tributo-work/artifacts/.", str(directory))
         tree = ET.parse(directory / "junit.xml")
         if not list(tree.iter("testcase")) or any(
             list(tree.iter(tag)) for tag in ("skipped", "error", "failure")
@@ -181,23 +167,15 @@ def run(binary_dir: Path, directory: Path, *, cases: str = "all") -> None:
         for s, handler in previous.items():
             signal.signal(s, handler)
         if started:
-            logs = it._run([*compose, "logs", "--no-color"], env=env, check=False)
+            logs = command("logs", "--no-color", check=False)
             (directory / "services.log").write_text(logs.stdout + logs.stderr)
-            it._run(
-                [
-                    *compose,
-                    "cp",
-                    "driver:/workspace/tributo-work/artifacts/.",
-                    str(directory),
-                ],
-                env=env,
+            command(
+                "cp",
+                "driver:/workspace/tributo-work/artifacts/.",
+                str(directory),
                 check=False,
             )
-            cleanup = it._run(
-                [*compose, "down", "--volumes", "--remove-orphans"],
-                env=env,
-                check=False,
-            )
+            cleanup = command("down", "--volumes", "--remove-orphans", check=False)
             (directory / "cleanup.log").write_text(cleanup.stdout + cleanup.stderr)
             if cleanup.returncode:
                 errors.append("Compose cleanup failed")
@@ -226,7 +204,7 @@ if __name__ == "__main__":
     parser.add_argument("--log-dir", type=Path, required=True)
     parser.add_argument(
         "--cases",
-        choices=("all", "ray", "collector", "matrix", "light", "regressions"),
+        choices=("all", "ray", "local", "collector", "matrix", "light", "regressions"),
         default="all",
     )
     arguments = parser.parse_args()
