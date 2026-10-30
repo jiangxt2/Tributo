@@ -51,10 +51,30 @@ the image label `org.tributo.manifest-sha256` and verifies that the closure did
 not change. It also runs `pip check`, imports every declared runtime/Alpha
 module for the selected architecture, and checks `tributo --help`.
 
-The pinned `linux/arm64` Ray base exposes one known pip metadata baseline:
-`nvidia-cusparselt-cu13 0.8.1 is not supported on this platform`.
-The builder records that exact line in the manifest and accepts no other
-`pip check` error; all other dependency failures stop the build.
+The Python 3.12 `linux/arm64` CPU image uses the official Torch CPU Wheel from
+the generated profile in `docker/tributo-runtime/cpu`. This avoids the
+upstream `nvidia-cusparselt-cu13` platform-tag defect in the CUDA dependency
+closure. Every `pip check` failure stops the build; no metadata exception is
+accepted. Other platforms and the SDK's original lock retain their sources.
+
+The `Dockerfile` accepts optional `PIP_INDEX_URL` and `PIP_DEFAULT_TIMEOUT`
+build arguments for download configuration. Defaults remain the public PyPI
+index and 15 seconds. Overrides retain hashed installation and do not change
+the direct official Torch CPU URL or the dependency lock.
+
+The CPU profile is derived from the SDK metadata and seeded lock. Its manifest
+checks both inputs and the generated files before export. Regenerate it with
+`python tools/generate_cpu_profile.py` when dependency inputs change; review the
+resulting lock and official Torch hash. Non-Torch versions must remain in the
+original lock. This does not alter upstream Wheel bytes or repair GPU packages.
+
+For a separate image builder, export the same CPU dependencies with:
+
+```bash
+python tools/host_uv_export.py --cpu --platform linux/arm64 \
+  --extra graph --extra registry --extra grpc --group dev \
+  --output-file requirements-cpu.txt
+```
 
 The output directory contains:
 

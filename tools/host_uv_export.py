@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import shutil
 import sys
 import tempfile
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from subprocess import CompletedProcess
@@ -33,6 +35,50 @@ class HostDependencyExport:
     sha256: str
 
 
+def _cpu_export_root(root: Path, profile: Path, platform: str | None) -> Path:
+    """Validate the generated CPU profile against both original lock inputs."""
+    profile = profile.resolve()
+    if not profile.is_relative_to(root.resolve()):
+        raise HostUVExportError("CPU profile must belong to the selected repository")
+    try:
+        manifest = json.loads((profile / "profile.json").read_text())
+        if (
+            manifest["schema_version"] != 1
+            or manifest["platform"] != "linux/arm64"
+            or platform != manifest["platform"]
+            or manifest["python_version"] != "3.12"
+        ):
+            raise HostUVExportError("CPU profile does not match the target platform")
+        for section, base, names in (
+            ("inputs", root, {"pyproject.toml", "uv.lock"}),
+            ("files", profile, {"pyproject.toml", "uv.lock", "README.md"}),
+        ):
+            digests = manifest[section]
+            if not isinstance(digests, dict) or set(digests) != names:
+                raise HostUVExportError("CPU profile has invalid fingerprint fields")
+            for name, expected in digests.items():
+                actual = hashlib.sha256((base / name).read_bytes()).hexdigest()
+                if actual != expected:
+                    raise HostUVExportError(
+                        f"CPU profile is stale or modified: {section}/{name}"
+                    )
+        packages = tomllib.loads((profile / "uv.lock").read_text())["package"]
+        torch = [item for item in packages if item["name"] == "torch"]
+        if (
+            len(torch) != 1
+            or torch[0]["version"] != manifest["torch_version"]
+            or not isinstance(manifest["torch_version"], str)
+            or not manifest["torch_version"].endswith("+cpu")
+            or torch[0]["source"] != {"url": manifest["torch_url"]}
+            or {item["hash"] for item in torch[0]["wheels"]}
+            != {f"sha256:{manifest['torch_sha256']}"}
+        ):
+            raise HostUVExportError("CPU profile does not bind the exact CPU Wheel")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise HostUVExportError("Cannot read a valid CPU dependency profile") from exc
+    return profile
+
+
 def export_locked_requirements(
     *,
     root: Path,
@@ -40,6 +86,9 @@ def export_locked_requirements(
     baseline_uv_version: str,
     run: CommandRunner,
     warning_prefix: str = "host uv baseline",
+    cpu_profile: Path | None = None,
+    platform: str | None = None,
+    groups: Sequence[str] = (),
 ) -> HostDependencyExport:
     """Validate the lock and export requirements without host paths."""
     uv = shutil.which("uv")
@@ -63,15 +112,17 @@ def export_locked_requirements(
             flush=True,
         )
 
-    lock_path = root / "uv.lock"
+    export_root = _cpu_export_root(root, cpu_profile, platform) if cpu_profile else root
+    lock_path = export_root / "uv.lock"
     try:
+        original_lock = (root / "uv.lock").read_bytes()
         lock_before = hashlib.sha256(lock_path.read_bytes()).hexdigest()
     except OSError as exc:
         raise HostUVExportError(f"cannot read lock file: {lock_path}") from exc
 
     content: bytes | None = None
     try:
-        run([uv, "lock", "--check"], root)
+        run([uv, "lock", "--check"], export_root)
         with tempfile.TemporaryDirectory(prefix="tributo-host-uv-export-") as directory:
             output = Path(directory) / "requirements.txt"
             command = [
@@ -87,8 +138,10 @@ def export_locked_requirements(
             ]
             for extra in extras:
                 command.extend(("--extra", str(extra)))
+            for group in groups:
+                command.extend(("--group", str(group)))
             command.extend(("--output-file", str(output)))
-            run(command, root)
+            run(command, export_root)
             content = output.read_bytes()
     finally:
         try:
@@ -97,6 +150,8 @@ def export_locked_requirements(
             raise HostUVExportError(f"cannot reread lock file: {lock_path}") from exc
         if lock_after != lock_before:
             raise HostUVExportError("host uv changed uv.lock during locked export")
+        if (root / "uv.lock").read_bytes() != original_lock:
+            raise HostUVExportError("host uv changed the original SDK lock")
 
     if not content or b"--hash=sha256:" not in content:
         raise HostUVExportError("host uv export must contain hashed requirements")
@@ -110,3 +165,41 @@ def export_locked_requirements(
         content=content,
         sha256=hashlib.sha256(content).hexdigest(),
     )
+
+
+def main() -> None:
+    """Export a selected dependency closure for an external image builder."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output-file", type=Path, required=True)
+    parser.add_argument("--extra", action="append", default=[])
+    parser.add_argument("--group", action="append", default=[])
+    parser.add_argument("--cpu", action="store_true")
+    parser.add_argument("--platform", default="linux/arm64")
+    args = parser.parse_args()
+    root = Path(__file__).resolve().parents[1]
+
+    def run(command: Sequence[str], cwd: Path) -> CompletedProcess[str]:
+        import subprocess
+
+        return subprocess.run(
+            command, cwd=cwd, text=True, check=True, capture_output=True
+        )
+
+    exported = export_locked_requirements(
+        root=root,
+        extras=args.extra,
+        groups=args.group,
+        baseline_uv_version="0.11.23",
+        run=run,
+        cpu_profile=root / "docker/tributo-runtime/cpu" if args.cpu else None,
+        platform=args.platform,
+    )
+    args.output_file.parent.mkdir(parents=True, exist_ok=True)
+    args.output_file.write_bytes(exported.content)
+    print(json.dumps({"requirements_sha256": exported.sha256}))
+
+
+if __name__ == "__main__":
+    main()

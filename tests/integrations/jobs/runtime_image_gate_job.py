@@ -30,6 +30,11 @@ def worker_probe() -> dict[str, object]:
         assert importlib.metadata.version(name) == version
     for name in REQUIRED_IMPORTS:
         importlib.import_module(name)
+    if platform.machine() == "aarch64":
+        import torch
+
+        assert importlib.metadata.version("torch") == "2.13.0+cpu"
+        assert torch.version.cuda is None
     return {
         "python": f"{sys.version_info.major}.{sys.version_info.minor}",
         "machine": platform.machine(),

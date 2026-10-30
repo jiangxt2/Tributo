@@ -1183,6 +1183,7 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
     # its deterministic seed and Dataset beginning; only the completed Stage is
     # checkpointed below for export.
     rows = 0
+    input_rows = 0
     steps = 0
     optimizer_steps = 0
     coverage_totals: dict[str, int] = {}
@@ -1414,7 +1415,8 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
                         raise AlgorithmConfigurationError(
                             "Torch coverage_counts cannot override Core role rows"
                         )
-                    coverage_totals[name] = coverage_totals.get(name, 0) + count
+                    if _epoch == 0:
+                        coverage_totals[name] = coverage_totals.get(name, 0) + count
                 is_composite = isinstance(step.loss, TorchCompositeLossContribution)
                 if is_composite and accumulation != 1:
                     raise AlgorithmConfigurationError(
@@ -1483,6 +1485,8 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
             else:
                 window = window.add(result.local_normalizer)
             rows += batch.local_rows
+            if _epoch == 0:
+                input_rows += batch.local_rows
             steps += 1
             if step_budget.allow(enabled=logging_policy.steps, logger=logger):
                 emit_event(
@@ -1642,7 +1646,8 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
     }
     node_id = ray.get_runtime_context().get_node_id()
     input_rows_evidence = dict(coverage_totals)
-    input_rows_evidence[stage_roles[0]] = rows
+    # Coverage describes one input pass; rows_processed retains all epochs.
+    input_rows_evidence[stage_roles[0]] = input_rows
     for split, split_rows in evaluation_rows.items():
         if split in input_rows_evidence:
             raise AlgorithmExecutionError(

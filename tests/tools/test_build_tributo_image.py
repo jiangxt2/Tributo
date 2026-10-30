@@ -47,6 +47,18 @@ ROOT = Path(__file__).resolve().parents[2]
 CONFIG = ROOT / "tools" / "tributo-runtime-full.json"
 
 
+@pytest.mark.parametrize("platform", ["linux/arm64", "linux/amd64"])
+def test_full_runtime_requires_strict_dependency_preflight(platform: str) -> None:
+    assert pip_check_baseline(platform) == ()
+    dockerfile = (ROOT / "docker/tributo-runtime/Dockerfile").read_text()
+    assert "python -m pip check" in dockerfile
+    assert "is not supported on this platform" not in dockerfile
+    assert "ARG PIP_INDEX_URL=https://pypi.org/simple" in dockerfile
+    assert "ARG PIP_DEFAULT_TIMEOUT=15" in dockerfile
+    assert 'PIP_DEFAULT_TIMEOUT="${PIP_DEFAULT_TIMEOUT}"' in dockerfile
+    assert "pip install --require-hashes" in dockerfile
+
+
 def test_full_runtime_config_is_pinned_and_complete() -> None:
     config = load_config(CONFIG, root=ROOT)
 

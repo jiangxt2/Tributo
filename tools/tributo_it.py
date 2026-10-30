@@ -495,7 +495,9 @@ def _effective_dockerignore(profile: RuntimeProfile) -> tuple[str, bytes]:
     return "<none>", b""
 
 
-def _host_dependency_export(profile: RuntimeProfile) -> HostDependencyExport:
+def _host_dependency_export(
+    profile: RuntimeProfile, platform: str | None = None
+) -> HostDependencyExport:
     """Validate the lock and export hashed requirements without mutating it."""
     if not profile.uses_host_uv:
         raise TributoITError(
@@ -513,6 +515,12 @@ def _host_dependency_export(profile: RuntimeProfile) -> HostDependencyExport:
             baseline_uv_version=baseline_version,
             run=lambda args, cwd: _run(args, cwd=cwd),
             warning_prefix="Tributo IT was validated with uv",
+            cpu_profile=(
+                profile.root / "docker/tributo-runtime/cpu"
+                if profile.definition.get("torch_cpu") and platform == "linux/arm64"
+                else None
+            ),
+            platform=platform,
         )
     except HostUVExportError as exc:
         raise TributoITError(str(exc)) from exc
@@ -525,7 +533,7 @@ def runtime_identity(profile: RuntimeProfile, platform: str) -> RuntimeIdentity:
     contract_content = _canonical_json(profile.version_contract)
     ignore_path, ignore_content = _effective_dockerignore(profile)
     dependency_export = (
-        _host_dependency_export(profile) if profile.uses_host_uv else None
+        _host_dependency_export(profile, platform) if profile.uses_host_uv else None
     )
     runtime_definition: dict[str, Any] = {
         key: profile.definition[key]
@@ -611,6 +619,17 @@ def _version_check_code(identity: RuntimeIdentity) -> str:
         f"assert sys.version_info[:2] == ({int(major)}, {int(minor)})",
         f"assert metadata.version('ray') == {contract['ray']!r}",
     ]
+    if (
+        identity.profile.definition.get("torch_cpu")
+        and identity.platform == "linux/arm64"
+    ):
+        checks.extend(
+            (
+                "import torch",
+                "assert metadata.version('torch') == '2.13.0+cpu'",
+                "assert torch.version.cuda is None",
+            )
+        )
     if "daft_prefix" in contract:
         checks.append(
             f"assert metadata.version('daft').startswith({contract['daft_prefix']!r})"
@@ -2586,6 +2605,9 @@ def export_requirements(
     *,
     extras: Sequence[str],
     baseline_uv_version: str,
+    cpu: bool = False,
+    platform: str | None = None,
+    groups: Sequence[str] = (),
 ) -> HostDependencyExport:
     """Export validated locked requirements for a non-Docker build context."""
     try:
@@ -2595,6 +2617,9 @@ def export_requirements(
             baseline_uv_version=baseline_uv_version,
             run=lambda args, cwd: _run(args, cwd=cwd),
             warning_prefix="Tributo IT was validated with uv",
+            cpu_profile=ROOT / "docker/tributo-runtime/cpu" if cpu else None,
+            platform=platform,
+            groups=groups,
         )
     except HostUVExportError as exc:
         raise TributoITError(str(exc)) from exc
@@ -2680,6 +2705,9 @@ def _parser() -> argparse.ArgumentParser:
     export_parser.add_argument("--output-file", type=Path, required=True)
     export_parser.add_argument("--uv-version", required=True)
     export_parser.add_argument("--extra", action="append", required=True)
+    export_parser.add_argument("--group", action="append", default=[])
+    export_parser.add_argument("--cpu", action="store_true")
+    export_parser.add_argument("--platform")
     return parser
 
 
@@ -2747,6 +2775,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.output_file,
                 extras=tuple(args.extra),
                 baseline_uv_version=args.uv_version,
+                cpu=args.cpu,
+                platform=args.platform,
+                groups=tuple(args.group),
             )
             return 0
 
