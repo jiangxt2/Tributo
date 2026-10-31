@@ -46,7 +46,10 @@ COPY --from=project-wheelhouse / /opt/tributo-image/project-wheelhouse/
 
 WORKDIR /opt/tributo
 
+ARG PIP_INDEX_URL=https://pypi.org/simple
+ARG PIP_DEFAULT_TIMEOUT=15
 RUN --mount=type=cache,target=/home/ray/.cache/pip,uid=1000,gid=100 \
+    PIP_INDEX_URL="${PIP_INDEX_URL}" PIP_DEFAULT_TIMEOUT="${PIP_DEFAULT_TIMEOUT}" \
     python -m pip install --require-hashes -r /opt/tributo/requirements.txt && \
     python -m pip install --no-index --no-deps \
         /opt/tributo-image/project-wheelhouse/*.whl
@@ -67,17 +70,7 @@ RUN if find /opt/tributo-image/external-wheelhouse -type f -name '*.whl' -print 
         python -m pip install --no-index --no-deps \
             /opt/tributo-image/external-wheelhouse/*.whl; \
     fi && \
-    pip_check_output=""; \
-    pip_check_status=0; \
-    pip_check_output="$(python -m pip check 2>&1)" || pip_check_status=$?; \
-    if [ "${pip_check_status}" -ne 0 ]; then \
-        if [ "${TRIBUTO_PLATFORM}" != "linux/arm64" ] || \
-            ! printf '%s\n' "${pip_check_output}" | grep -Eq \
-                '^nvidia-cusparselt-cu13 0[.]8[.]1 is not supported on this platform[[:space:]]*$'; then \
-            printf '%s\n' "${pip_check_output}"; \
-            exit "${pip_check_status}"; \
-        fi; \
-    fi
+    python -m pip check
 
 COPY --chown=ray:users tools/generate_distributions.py /opt/tributo-image/
 

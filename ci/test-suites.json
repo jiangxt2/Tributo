@@ -921,7 +921,7 @@
       "tier": "manual_external",
       "workflow": "external",
       "owns_tests": true,
-      "entrypoint": [".venv/bin/python", "-m", "pytest"],
+      "entrypoint": ["uv", "run", "--locked", "--no-sync", "python", "-m", "pytest"],
       "args": [
         "tests/integration/test_ray_runtime_env.py",
         "-o",
@@ -929,22 +929,29 @@
         "-m",
         "ray_runtime_env and manual_it"
       ],
-      "extras": ["dev"],
+      "extras": ["dev", "model-export-torch"],
       "test_paths": ["tests/integration/test_ray_runtime_env.py"],
       "trigger_domains": [],
       "trigger_paths": [
         "src/tributo/_common/runtime_env.py",
+        "src/tributo/_common/logging*.py",
+        "src/tributo/_common/worker_logging.py",
+        "src/tributo/_common/serve_utils.py",
+        "src/tributo/algorithms/core/runtime.py",
+        "src/tributo/runtime_providers.py",
+        "src/tributo/inference/kernel.py",
+        "src/tributo/integrations/algorithm_runtimes/ray_train_torch.py",
         "src/tributo/job.py",
         "tests/integration/test_ray_runtime_env.py",
         "pyproject.toml",
         "uv.lock"
       ],
-      "requires": ["local_ray_worker", "runtime_environment"],
+      "requires": ["local_ray_worker", "runtime_environment", "ray_jobs", "torch"],
       "budget_seconds": 900,
       "ci_allowed": false,
       "forbid_skips": true,
-      "log_contract": "pytest output with the resolved worker environment",
-      "rationale": "Worker runtime-environment propagation is process-level evidence and is kept outside CI."
+      "log_contract": "pytest and owned Ray Jobs output with physical worker setup, rank failures, and runtime shutdown",
+      "rationale": "Runtime and logging propagation require owned Ray Jobs and physical workers; no Dataset action or model download is used."
     },
     {
       "id": "quarantine-mlflow-registry",

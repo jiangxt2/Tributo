@@ -9,7 +9,7 @@ import sys
 
 import ray
 
-from tributo._common import configure_logging
+from tributo._common.logging import bootstrap_logging, emit_event
 from tributo._common.reporting.session import ray_options, reporting_operation
 from tributo.explainability.contracts import ExplainabilityRequest
 
@@ -25,7 +25,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 @reporting_operation
 def main(args: argparse.Namespace | None = None) -> int:
     args = args or _parse_args()
-    configure_logging(log_format="json")
+    bootstrap_logging()
     try:
         with open(args.config, encoding="utf-8") as stream:
             request = ExplainabilityRequest.model_validate(json.load(stream))
@@ -37,18 +37,28 @@ def main(args: argparse.Namespace | None = None) -> int:
             raise ValueError(
                 "batch explainability Ray Jobs require operation_store_uri"
             )
-        ray.init(address="auto", **ray_options())
+        ray.init(address="auto", **ray_options(driver=True))
         from tributo.explainability.executor import run_batch_explainability
 
         receipt = run_batch_explainability(request)
-        logger.info("Explainability completed: %s", receipt.model_dump(mode="json"))
+        emit_event(
+            logger,
+            "tributo.stage.finished",
+            phase="explainability_driver",
+            status=receipt.status,
+            operation_id=receipt.operation_id,
+            request_id=receipt.request_id,
+            bundle_id=receipt.bundle_id,
+        )
         return 0
     except Exception as exc:
-        logger.error(
-            "Explainability job failed (%s): %s",
-            type(exc).__name__,
-            exc,
-            exc_info=True,
+        emit_event(
+            logger,
+            "tributo.stage.finished",
+            level=logging.ERROR,
+            phase="explainability_driver",
+            status="failed",
+            error_type=type(exc).__name__,
         )
         return 1
 

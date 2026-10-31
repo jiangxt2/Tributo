@@ -1,0 +1,366 @@
+[project]
+name = "tributo"
+version = "1.3.0.dev0"
+description = "Ray-native machine learning SDK for distributed data, training, model bundles, and inference"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "Tributo Contributors" },
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+]
+dependencies = [
+    "requests>=2.33.0",
+    "aiohttp>=3.13.4",
+    "ray[default,serve,tune]==2.59.0",
+    "pydantic>=2.0.0",
+    "packaging>=24.0",
+    "click>=8.0.0",
+    "onnxruntime>=1.20.0",
+    "s3fs>=2026.2.0",
+    "pyarrow>=15.0.0",
+    "pandas>=2.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/jiangxt2/tributo"
+Documentation = "https://tributo.readthedocs.io/en/latest/"
+Repository = "https://github.com/jiangxt2/tributo"
+Issues = "https://github.com/jiangxt2/tributo/issues"
+
+[project.optional-dependencies]
+log-reporting = [
+    "opentelemetry-exporter-otlp-proto-http==1.45.1",
+    "opentelemetry-sdk==1.45.1",
+    "PyMySQL>=1.2,<1.3",
+]
+dev = [
+    "tributo[log-reporting]",
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-timeout>=2.1.0",
+    "moto[server]>=5.1.0",
+    "ruff>=0.6.0,<1.0",
+    "mypy>=1.0.0",
+    "types-PyYAML>=6.0.12.20250516",
+    "pandas-stubs~=2.1.4",
+    "httpx>=0.25.0",
+    "pre-commit>=4.6.1",
+]
+data = [
+    "lance-ray==0.5.0",
+    "pyiceberg>=0.11.1,<0.12.0",
+    "pylance==9.0.0",
+]
+data-daft = [
+    "daft[lance,ray]>=0.7.26,<0.7.27",
+]
+hive-ray = [
+    "ray-hive>=1.2",
+]
+vector-index = [
+    "tributo[data,s3]",
+    "pyarrow==19.0.1",
+]
+kuberay = [
+    "kubernetes>=35.0.0,<37.0.0",
+]
+postgresql = [
+    "psycopg[binary]>=3.2,<4",
+    "SQLAlchemy>=2.0,<3",
+    "sqlglot<30.9.0",
+]
+clickhouse = [
+    "clickhouse-connect[arrow,async]>=1.5,<1.6",
+    "ray-clickhouse>=1.1",
+]
+mysql = [
+    "PyMySQL>=1.2,<1.3",
+    "daft-doris[doris]>=1.1",
+    "ray-doris>=1.3",
+]
+doris-flight = [
+    "PyMySQL>=1.2,<1.3",
+    "adbc-driver-manager>=1.6,<2",
+    "adbc-driver-flightsql>=1.6,<2",
+    "daft-doris[doris-flight]>=1.1",
+    "ray-doris[flight]>=1.3",
+]
+s3 = [
+    "boto3>=1.42.91",
+]
+model-export = [
+    "tributo[s3]",
+    "ml-dtypes>=0.5.0",
+    "onnx>=1.16.0",
+    "onnxruntime>=1.20.0",
+]
+model-export-torch = [
+    "tributo[model-export]",
+    "torch>=2.5.0",
+    "safetensors>=0.4.3",
+    "onnxscript>=0.1.0",
+]
+hf = [
+    "transformers>=4.40.0",
+    "tokenizers>=0.19.0",
+]
+model-export-hf = [
+    "tributo[model-export-torch,hf]",
+]
+training = [
+    "tributo[clickhouse,data,data-daft,model-export,mysql,postgresql,s3]",
+]
+tune = [
+    # Ray Tune's optional BayesOpt integration is validated against this exact version.
+    "bayesian-optimization==1.4.3",
+]
+explainability = [
+    "shap>=0.52.0,<0.53.0",
+    "numpy>=2.0.0,<3.0.0",
+]
+identity = [
+    "tributo[data,model-export]",
+    "torch>=2.5.0",
+    "onnxruntime>=1.20.0",
+]
+streaming = [
+    "tributo[hf]",
+    "torch>=2.5.0",
+    "accelerate>=0.20.0",
+]
+grpc = [
+    "grpcio>=1.60.0",
+]
+registry = [
+    "mlflow>=2.18.0,<3.0.0",
+]
+graph = [
+    "tributo[model-export-torch]",
+    "torch-geometric>=2.5.0",
+]
+causal = [
+    "dowhy>=0.11.0",
+    "econml>=0.15.0",
+]
+test-integration = [
+    "tributo[registry,training]",
+    "catboost>=1.2,<2",
+    "causal-learn==0.1.4.8",
+    "dowhy==0.14",
+    "lightgbm>=4.5,<5",
+    "onnxmltools>=1.13.0",
+    "pytest>=7.0.0",
+    "requests>=2.25.0",
+    "scikit-learn>=1.4,<2",
+    "skl2onnx>=1.17.0",
+    "xgboost>=2.1,<4",
+]
+
+[project.scripts]
+tributo = "tributo.cli:main"
+
+[project.entry-points."tributo.write_bindings"]
+
+[project.entry-points."tributo.trainers"]
+
+[project.entry-points."tributo.algorithms"]
+
+[project.entry-points."tributo.exporters"]
+torch-safetensors-v1 = "tributo.integrations.exporters.torch_safetensors:TorchSafetensorsExporter"
+torch-onnx-v1 = "tributo.integrations.exporters.torch_onnx:TorchONNXExporter"
+torch-export-v1 = "tributo.integrations.exporters.torch_export:TorchExportExporter"
+hf-onnx-v1 = "tributo.integrations.exporters.hf_onnx:HuggingFaceONNXExporter"
+onnx-quantizer-v1 = "tributo.integrations.exporters.onnx_quantizer:ONNXQuantizer"
+
+[project.entry-points."tributo.source_providers"]
+ray-torch-v1 = "tributo.integrations.sources.ray_torch:RayTorchSourceProvider"
+hf-v1 = "tributo.integrations.sources.huggingface:HuggingFaceSourceProvider"
+
+[project.entry-points."tributo.validators"]
+onnx-runtime-v1 = "tributo.integrations.validators.onnx_runtime:ONNXRuntimeValidator"
+
+[project.entry-points."tributo.model_flavors"]
+onnx-runtime-v1 = "tributo.integrations.flavors.onnx_runtime:ONNXRuntimeFlavor"
+
+[project.entry-points."tributo.model_factories"]
+
+[project.entry-points."tributo.bundle_repositories"]
+local-v1 = "tributo.integrations.storage.bundle_repository:LocalBundleRepository"
+s3-v1 = "tributo.integrations.storage.bundle_repository:S3BundleRepository"
+
+[project.entry-points."tributo.bundle_alias_stores"]
+local-alias-v1 = "tributo.integrations.storage.bundle_repository:LocalBundleAliasStore"
+s3-alias-v1 = "tributo.integrations.storage.bundle_repository:S3BundleAliasStore"
+
+[project.entry-points."tributo.hooks"]
+mlflow-log-artifacts-v1 = "tributo.integrations.hooks.mlflow_hook:MLflowPostPublishHook"
+
+[project.entry-points."tributo.explainers"]
+shap-v1 = "tributo.explainability.shap:ShapAdapter"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+extend-exclude = [
+    "jobs/",
+    "scripts/",
+    "src/tributo/serving/proto/inference_pb2*.py",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "Q", "C4", "W"]
+ignore = ["E501", "B008", "B905"]
+
+[tool.ruff.lint.per-file-ignores]
+# PEP 562 __getattr__ provides "SourceProvider" dynamically; static AST
+# analysis cannot see it. The deprecated alias is tested in
+# tests/exporting/test_export_api.py (explicit + wildcard imports).
+"src/tributo/exporting/protocols.py" = ["F822"]
+# The package root intentionally imports public symbols after defining
+# ``__version__`` so metadata fallback is initialized first.
+"src/tributo/__init__.py" = ["E402"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["tributo"]
+section-order = [
+    "future",
+    "standard-library",
+    "third-party",
+    "first-party",
+    "local-folder",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+timeout = 180
+filterwarnings = [
+    "error",
+    "ignore::DeprecationWarning",
+    "ignore:lance is not fork-safe:UserWarning",
+]
+markers = [
+    "ci_safe: marks bounded integration contracts allowed in GitHub Actions",
+    "manual_it: marks external integration tests that must not run in GitHub Actions",
+    "quarantine: marks tests excluded from automation pending reliability or ownership fixes",
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "s3_contract: marks S3-compatible contract tests (default backend: Moto)",
+    "minio_compat: marks tests that require real MinIO compatibility",
+    "integration: marks tests that require real services (Ray Serve, MLflow, Docker cluster) (deselect with '-m \"not integration\"')",
+    "tributo_walking_skeleton: marks the required core training-to-serving walking skeleton",
+    "ray_runtime_env: marks tests for Ray uv runtime-env propagation",
+    "ingestion_conformance: validates Ray Data and Daft ingestion semantics",
+    "distributed: marks explicit multi-Worker or multi-node Ray tests that are excluded from default CI",
+]
+addopts = "-m 'not slow and not distributed and not minio_compat and not ray_runtime_env and not integration and not manual_it and not quarantine'"
+
+[tool.coverage.run]
+source = ["src/tributo"]
+branch = true
+relative_files = true
+
+[tool.coverage.report]
+exclude_also = [
+    'def __repr__',
+    'def __str__',
+    'if self\.debug:',
+    'if settings\.DEBUG',
+    'raise AssertionError',
+    'raise NotImplementedError',
+    'if 0:',
+    'if __name__ == .__main__.:',
+    'if TYPE_CHECKING:',
+    'class .*\bProtocol\):',
+    '@(abc\.)?abstractmethod',
+]
+show_missing = true
+skip_covered = false
+
+[tool.coverage.xml]
+output = "coverage.xml"
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+exclude = ["inference_pb2"]
+
+[[tool.mypy.overrides]]
+module = "tributo.cli"
+disallow_untyped_defs = false
+
+[[tool.mypy.overrides]]
+# Modules whose remaining type errors come from incomplete stubs in
+# upstream libraries (Ray, numpy, MLflow, Click, grpcio).  Ignore those
+# errors so that mypy stays useful for the rest of the codebase.
+module = [
+    "tributo._common.serve_utils",
+    "tributo.serving.composition",
+    "tributo.serving.grpc_deployment",
+    "tributo.serving.identity_predictor",
+    "tributo.serving.streaming_deployment",
+]
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+# Modules with only no-any-return / no-untyped-def from external deps.
+module = [
+    "tributo.inference.pipeline",
+    "tributo.registry.mlflow_util",
+    "tributo.training.local_runner",
+    "tributo.training.tune_runner",
+]
+warn_return_any = false
+disallow_untyped_defs = false
+
+[dependency-groups]
+dev = [
+    # Select the compatible official wheel without exceeding DoWhy 0.14 constraints.
+    "scipy==1.15.3; sys_platform == 'darwin' and platform_machine == 'arm64' and python_version == '3.12'",
+    "pytest-html>=4.2.0",
+    "grpcio-tools>=1.60.0",
+    "boto3>=1.42.91",
+    "pytest>=9.0.2",
+    "pytest-timeout>=2.4.0",
+    "moto[server]>=5.1.0",
+    "pytest-asyncio>=1.3.0",
+    "pytest-metadata>=3.1.1",
+    "redis>=8.0.0",
+    "mypy>=2.3.0",
+    "clickhouse-connect[arrow,async]>=1.5,<1.6",
+    "daft>=0.7.26,<0.7.27",
+    "ml-dtypes>=0.5.0",
+    "skl2onnx>=1.17.0",
+]
+
+[tool.uv.sources]
+torch = { url = "https://download-r2.pytorch.org/whl/cpu/torch-2.13.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl" }
+# The macOS 14 arm64 wheel fails PROPACK loading on recent macOS.
+# Keep the same SciPy release and the upstream DoWhy requirements.
+# https://github.com/scipy/scipy/issues/25635
+scipy = { url = "https://files.pythonhosted.org/packages/7b/7e/f30be3d03de07f25dc0ec926d1681fed5c732d759ac8f51079708c79e680/scipy-1.15.3-cp312-cp312-macosx_12_0_arm64.whl", marker = "sys_platform == 'darwin' and platform_machine == 'arm64' and python_version == '3.12'" }
+
+[tool.uv]
+package = false
+environments = ["sys_platform == 'linux' and platform_machine == 'aarch64'"]

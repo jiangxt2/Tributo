@@ -206,7 +206,10 @@ def test_receipt_metadata_contract_rejects_credentials() -> None:
         )
 
 
-def test_gateway_builds_complete_credential_free_receipt() -> None:
+def test_gateway_builds_complete_credential_free_receipt(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level("INFO", logger="tributo.data.ingestion")
     bindings = _Bindings()
     source = ParquetSourceConfig(
         path="s3://bucket/input.parquet",
@@ -243,6 +246,15 @@ def test_gateway_builds_complete_credential_free_receipt() -> None:
     assert "access-secret" not in serialized
     assert "top-secret" not in serialized
     assert bindings.calls[0]["engine_id"] == "tributo.ray_data"
+    planned = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == "tributo.ingestion.plan_ready"
+    ]
+    assert len(planned) == 1
+    assert planned[0].status == "planned"
+    assert planned[0].request_digest == receipt.request_digest
+    assert "access-secret" not in caplog.text and "top-secret" not in caplog.text
 
 
 def test_runtime_context_is_passed_only_to_binding() -> None:

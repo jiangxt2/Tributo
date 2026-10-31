@@ -9,6 +9,7 @@ distributed workflow.
 
 ../user-guide/troubleshooting
 log-reporting
+../user-guide/debug-logging
 ```
 
 Operational errors must not expose storage credentials, database passwords,

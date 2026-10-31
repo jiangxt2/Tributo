@@ -295,10 +295,17 @@ def test_local_parent_child_owned_ray(monkeypatch: pytest.MonkeyPatch) -> None:
             "TRIBUTO_LOG_REPORTING_ENABLED": "1",
             "TRIBUTO_LOG_REPORTING_CONFIG": str(config_path),
             "APP": "keep",
+            "TRIBUTO_LOG_LEVEL": "DEBUG",
             "TRIBUTO_ATTEMPT_ID": "local-attempt",
         },
         num_cpus=2,
         timeout=90,
+    )
+    local_result = json.loads((_WORK / "artifacts/local.json").read_text())
+    assert (
+        local_result["logging_level"]
+        == local_result["worker"]["logging_level"]
+        == logging.DEBUG
     )
     rows = [
         row
@@ -333,6 +340,7 @@ def _run_ray_matrix(config: ReportingConfig) -> None:
         train_loop,
         tune_trial,
     )
+    from tributo._common.logging_policy import LoggingPolicy, logging_runtime_env
     from tributo._common.serve_utils import deploy_serve_app
 
     outcomes = {}
@@ -365,10 +373,13 @@ def _run_ray_matrix(config: ReportingConfig) -> None:
             ray.init(
                 address="auto",
                 runtime_env=owner.runtime_env(
-                    {
-                        "env_vars": {"REPORTING_IT_ORIGINAL": "preserved"},
-                        "worker_process_setup_hook": original_hook,
-                    }
+                    logging_runtime_env(
+                        {
+                            "env_vars": {"REPORTING_IT_ORIGINAL": "preserved"},
+                            "worker_process_setup_hook": original_hook,
+                        },
+                        policy=LoggingPolicy(level="DEBUG"),
+                    )
                 ),
             )
             try:
@@ -392,6 +403,7 @@ def _run_ray_matrix(config: ReportingConfig) -> None:
                             for node in nodes
                         ]
                     )
+                    assert all(r["logging_level"] == logging.DEBUG for r in results)
                     if enabled:
                         assert all(r["role"] == "producer" for r in results)
                         assert all(r["original_hook"] == "1" for r in results)
@@ -522,29 +534,47 @@ def _remote_job(mode: str) -> dict[str, Any]:
     )
     path.chmod(0o600)
     # Submitting returns without waiting; remote driver owns its own Collector.
-    submission = submit_ray_job(
-        "python -m tests.integrations.reporting_workload " + mode + " " + str(path),
-        operation_namespace="reporting",
-        run_id="reporting-" + mode,
-        dashboard_url="http://ray-head:8265",
+    entrypoint = (
+        "python -m tests.integrations.reporting_workload " + mode + " " + str(path)
     )
+    if mode == "job":
+        from tributo.job import TributoClient
+
+        submission_id = TributoClient("http://ray-head:8265").submit(
+            entrypoint,
+            runtime_env={
+                "env_vars": {
+                    "TRIBUTO_LOG_REPORTING_ENABLED": "1",
+                    "TRIBUTO_LOG_LEVEL": "DEBUG",
+                },
+                "worker_process_setup_hook": "tributo._common.worker_logging.setup",
+            },
+        )
+    else:
+        submission_id = submit_ray_job(
+            entrypoint,
+            operation_namespace="reporting",
+            run_id="reporting-" + mode,
+            dashboard_url="http://ray-head:8265",
+        ).submission_id
     client = JobSubmissionClient("http://ray-head:8265")
     deadline = time.monotonic() + 180
     while True:
-        status = client.get_job_status(submission.submission_id)
+        status = client.get_job_status(submission_id)
         if status in {JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.STOPPED}:
             break
         assert time.monotonic() < deadline
         time.sleep(0.5)
     (_ARTIFACTS / (mode + "-ray-job.log")).write_text(
-        client.get_job_logs(submission.submission_id)
+        client.get_job_logs(submission_id)
     )
     assert status == JobStatus.SUCCEEDED
     if mode in {"matrix", "light", "regressions"}:
-        return {"status": str(status), "submission_id": submission.submission_id}
+        return {"status": str(status), "submission_id": submission_id}
     rows = {kind: _wait_rows("tributo.it.job." + kind) for kind in ("driver", "worker")}
     result = json.loads((_ARTIFACTS / "job.json").read_text())
     assert result["role"] == "owner" and result["worker"]["role"] == "producer"
+    assert result["worker"]["logging_level"] == logging.DEBUG
     assert not result["worker"]["owner_credentials"]
     _evidence("tributo-job", status=str(status), result=result, rows=rows)
     return result

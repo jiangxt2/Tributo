@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 
 import ray
 
-from tributo._common import configure_logging
+from tributo._common.logging import bootstrap_logging, emit_event
 from tributo._common.reporting.session import ray_options, reporting_operation
 
 if TYPE_CHECKING:
@@ -45,25 +45,37 @@ def main(args: argparse.Namespace | None = None) -> int:
     if args is None:
         args = _parse_args()
 
-    configure_logging(log_format="json")
+    bootstrap_logging()
 
-    ray.init(address="auto", **ray_options())
+    ray.init(address="auto", **ray_options(driver=True))
 
     try:
         if args.resolved_plan_env is not None:
             inference_result = _run_resolved_plan(args.resolved_plan_env)
             if inference_result.status != "succeeded":
-                logger.error(
-                    "Inference failed: %s",
-                    inference_result.model_dump(mode="json"),
+                failure = inference_result.failure
+                emit_event(
+                    logger,
+                    "tributo.stage.finished",
+                    level=(
+                        logging.INFO
+                        if inference_result.status == "cancelled"
+                        else logging.ERROR
+                    ),
+                    phase=failure.phase if failure is not None else "batch_driver",
+                    status=inference_result.status,
+                    error_type=failure.error_type if failure is not None else None,
+                    run_id=inference_result.run_id,
+                    attempt_id=inference_result.attempt_id,
                 )
                 return 1
-            result_for_log: object = inference_result
         else:
             from tributo.inference.pipeline import run_inference_from_json
 
-            result_for_log = run_inference_from_json(args.config)
-        logger.info("Inference completed: %s", result_for_log)
+            run_inference_from_json(args.config)
+        emit_event(
+            logger, "tributo.stage.finished", phase="batch_driver", status="succeeded"
+        )
         return 0
     except Exception as exc:
         logger.error("Inference job failed (%s)", type(exc).__name__)

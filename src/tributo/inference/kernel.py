@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from typing import ClassVar, Literal, Protocol, runtime_checkable
 
 import numpy as np
 
+from tributo._common.logging import (
+    active_logging_policy,
+    apply_logging_policy,
+    emit_event,
+)
+from tributo._common.logging_policy import LoggingPolicy
 from tributo._common.reporting.session import producer_scope
 from tributo.inference.contracts import InputBindingSpec, OutputBindingSpec
 from tributo.util.annotations import PublicAPI
@@ -52,10 +60,26 @@ class KernelBatchPredictor:
         output_binding: OutputBindingSpec,
         *,
         _reporting_policy: str | None = None,
+        _logging_policy: str | None = None,
     ) -> None:
+        policy = (
+            LoggingPolicy.deserialize(_logging_policy)
+            if _logging_policy is not None
+            else active_logging_policy()
+        )
+        apply_logging_policy(policy)
+        started = time.monotonic()
         self._reporting_policy = _reporting_policy
         with producer_scope(self._reporting_policy):
             self._kernel = kernel_factory.create()
+            emit_event(
+                logging.getLogger(__name__),
+                "tributo.model.ready",
+                level=logging.DEBUG,
+                phase="model_load",
+                status="succeeded",
+                duration_ms=(time.monotonic() - started) * 1000,
+            )
         self._input_binding = input_binding
         self._output_binding = output_binding
         self._closed = False

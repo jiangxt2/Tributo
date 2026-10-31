@@ -13,7 +13,8 @@ import json
 import logging
 import math
 import tempfile
-from collections.abc import Mapping
+import time
+from collections.abc import Callable, Mapping
 from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
@@ -1185,6 +1186,7 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
     # its deterministic seed and Dataset beginning; only the completed Stage is
     # checkpointed below for export.
     rows = 0
+    input_rows = 0
     steps = 0
     optimizer_steps = 0
     coverage_totals: dict[str, int] = {}
@@ -1411,7 +1413,8 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
                         raise AlgorithmConfigurationError(
                             "Torch coverage_counts cannot override Core role rows"
                         )
-                    coverage_totals[name] = coverage_totals.get(name, 0) + count
+                    if _epoch == 0:
+                        coverage_totals[name] = coverage_totals.get(name, 0) + count
                 is_composite = isinstance(step.loss, TorchCompositeLossContribution)
                 if is_composite and accumulation != 1:
                     raise AlgorithmConfigurationError(
@@ -1480,6 +1483,8 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
             else:
                 window = window.add(result.local_normalizer)
             rows += batch.local_rows
+            if _epoch == 0:
+                input_rows += batch.local_rows
             steps += 1
             epoch_micro_batch_cursor += 1
             raw = next_raw
@@ -1627,7 +1632,8 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
     }
     node_id = ray.get_runtime_context().get_node_id()
     input_rows_evidence = dict(coverage_totals)
-    input_rows_evidence[stage_roles[0]] = rows
+    # Coverage describes one input pass; rows_processed retains all epochs.
+    input_rows_evidence[stage_roles[0]] = input_rows
     for split, split_rows in evaluation_rows.items():
         if split in input_rows_evidence:
             raise AlgorithmExecutionError(
@@ -1746,17 +1752,72 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
         shutil.rmtree(checkpoint_dir, ignore_errors=True)
 
 
+def _run_logged_worker(
+    config: Mapping[str, Any], worker: Callable[[Mapping[str, Any]], None], mode: str
+) -> None:
+    import ray.train
+
+    from tributo._common.logging import apply_logging_policy, emit_event
+    from tributo._common.logging_policy import LoggingPolicy, resolve_policy
+    from tributo.training.lifecycle import _is_cancellation
+
+    raw = config.get("_core_logging_policy")
+    apply_logging_policy(
+        LoggingPolicy.deserialize(raw) if isinstance(raw, str) else resolve_policy()
+    )
+    fields = {
+        "phase": "training_worker",
+        "mode": mode,
+        "rank": ray.train.get_context().get_world_rank(),
+        "world_size": ray.train.get_context().get_world_size(),
+    }
+    started = time.monotonic()
+    emit_event(
+        logger,
+        "tributo.training.started",
+        level=logging.DEBUG,
+        status="started",
+        **fields,
+    )
+    try:
+        worker(config)
+    except BaseException as exc:
+        cancelled = _is_cancellation(exc) or not isinstance(exc, Exception)
+        emit_event(
+            logger,
+            "tributo.training.finished",
+            level=logging.INFO if cancelled else logging.ERROR,
+            status="cancelled" if cancelled else "failed",
+            error_type=type(exc).__name__,
+            duration_ms=(time.monotonic() - started) * 1000,
+            **fields,
+        )
+        raise
+    else:
+        emit_event(
+            logger,
+            "tributo.training.finished",
+            status="succeeded",
+            duration_ms=(time.monotonic() - started) * 1000,
+            **fields,
+        )
+
+
 @DeveloperAPI
 @reporting_worker
 def torch_recipe_train_loop_per_worker(config: Mapping[str, Any]) -> None:
     """Run the Core-selected Recipe Worker wrapper."""
-    _recipe_worker(config)
+    _run_logged_worker(config, _recipe_worker, "recipe")
 
 
 @DeveloperAPI
 @reporting_worker
 def ray_torch_adapter_train_loop_per_worker(config: Mapping[str, Any]) -> None:
     """Run the Core-selected Adapter Worker wrapper."""
+    _run_logged_worker(config, _adapter_worker, "adapter")
+
+
+def _adapter_worker(config: Mapping[str, Any]) -> None:
     reference = config.get("_core_implementation_ref")
     if not isinstance(reference, str):
         raise AlgorithmConfigurationError(
@@ -2031,6 +2092,11 @@ class RayTrainTorchRuntime:
                     "stage_dependency" if initial_checkpoint is not None else "none"
                 )
                 train_config = _torch_algorithm_context_config(base.plan)
+                from tributo._common.logging import active_logging_policy
+
+                train_config["_core_logging_policy"] = (
+                    active_logging_policy().serialize()
+                )
                 stage_binding = base.plan.input_bindings.get(stage.input_roles[0])
                 if stage_binding is None:
                     raise AlgorithmConfigurationError(

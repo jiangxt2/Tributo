@@ -349,15 +349,37 @@ def active_session() -> ReportingSession | None:
     return _ACTIVE if _ACTIVE is not None and _ACTIVE._pid == os.getpid() else None
 
 
-def ray_options() -> dict[str, Any]:
-    """Leave the disabled Ray call exactly unchanged."""
-    return {"runtime_env": merge_runtime_env()} if active_session() else {}
+def ray_options(*, driver: bool = False) -> dict[str, Any]:
+    """Compose driver logging and optional reporting; preserve caller-owned tasks."""
+    from tributo._common.logging_policy import driver_logging_runtime_env
+
+    options = driver_logging_runtime_env() if driver else {}
+    if active_session():
+        options["runtime_env"] = merge_runtime_env(options.get("runtime_env"))
+        if driver and (injected := os.environ.get("RAY_JOB_CONFIG_JSON_ENV_VAR")):
+            # Ray 2.59 rejects even identical keys shared by Job and driver.
+            # Keep the submission hook and inherited credentials; add only new
+            # producer state, without enabling Ray's global override switch.
+            inherited = json.loads(injected).get("runtime_env", {})
+            runtime = options["runtime_env"]
+            for key, value in inherited.items():
+                if key != "env_vars" and runtime.get(key) == value:
+                    runtime.pop(key, None)
+            runtime["env_vars"] = {
+                key: value
+                for key, value in runtime.get("env_vars", {}).items()
+                if key not in inherited.get("env_vars", {})
+                or inherited["env_vars"][key] != value
+            }
+    return options
 
 
 def submission_runtime_env(
     runtime_env: Mapping[str, Any] | None,
 ) -> dict[str, Any] | None:
     result = merge_runtime_env(runtime_env, for_job=True)
+    if isinstance(runtime_env, dict) and result == runtime_env:
+        return runtime_env
     return result if result or runtime_env is not None else None
 
 
@@ -638,10 +660,12 @@ def merge_runtime_env(
         if env.get("TRIBUTO_LOG_REPORTING_ENABLED") == "1":
             hook = result.get("worker_process_setup_hook")
             reserved = env.get("_TRIBUTO_REPORTING_USER_HOOK")
-            if reserved is not None and reserved != hook:
+            if reserved is not None and hook not in (reserved, WORKER_HOOK):
                 raise ReportingError("reporting.policy.reserved_hook")
             if isinstance(hook, str) and hook != WORKER_HOOK:
                 env["_TRIBUTO_REPORTING_USER_HOOK"] = hook
+            if hook is None or isinstance(hook, str):
+                result["worker_process_setup_hook"] = WORKER_HOOK
     elif session is not None:
         policy = session.producer_policy()
         previous = env.get(POLICY_ENV)

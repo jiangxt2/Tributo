@@ -159,6 +159,19 @@ def test_remote_job_does_not_borrow_submitter_endpoint(
         == "/remote/execution/config.json"
     )
     assert result["env_vars"]["_TRIBUTO_REPORTING_USER_HOOK"] == "trusted.job_hook"
+    assert result["worker_process_setup_hook"] == WORKER_HOOK
+    assert sessions.merge_runtime_env(result, for_job=True) == result
+    from ray.runtime_env.runtime_env import _merge_runtime_env
+
+    for name, value in result["env_vars"].items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("_TRIBUTO_LOG_JOB_HOOK", "external")
+    monkeypatch.setenv(
+        "RAY_JOB_CONFIG_JSON_ENV_VAR", json.dumps({"runtime_env": result})
+    )
+    driver = sessions.ray_options(driver=True)["runtime_env"]
+    assert POLICY_ENV in driver["env_vars"]
+    assert _merge_runtime_env(result, driver) is not None
     with pytest.raises(ReportingError, match="reserved"):
         sessions.merge_runtime_env({"env_vars": {POLICY_ENV: "forged"}}, for_job=True)
     with pytest.raises(ReportingError, match="reserved_hook"):
@@ -169,7 +182,12 @@ def test_remote_job_does_not_borrow_submitter_endpoint(
 
 def test_callable_hook_is_idempotently_composed_in_order(
     monkeypatch: pytest.MonkeyPatch,
+    isolated_logging,
 ) -> None:
+    import logging
+
+    from tributo._common.logging_policy import LoggingPolicy, logging_runtime_env
+
     _owner(monkeypatch)
     from tributo._common.reporting import worker
 
@@ -179,9 +197,15 @@ def test_callable_hook_is_idempotently_composed_in_order(
     )
 
     def user_hook() -> None:
+        assert logging.getLogger("tributo").level == logging.DEBUG
         calls.append("user")
 
-    result = sessions.merge_runtime_env({"worker_process_setup_hook": user_hook})
+    result = sessions.merge_runtime_env(
+        logging_runtime_env(
+            {"worker_process_setup_hook": user_hook},
+            policy=LoggingPolicy(level="DEBUG"),
+        )
+    )
     repeated = sessions.merge_runtime_env(result)
     assert repeated["worker_process_setup_hook"] is result["worker_process_setup_hook"]
     repeated["worker_process_setup_hook"]()
@@ -190,17 +214,26 @@ def test_callable_hook_is_idempotently_composed_in_order(
 
 def test_string_hook_resolves_callable_and_preserves_user_failure(
     monkeypatch: pytest.MonkeyPatch,
+    isolated_logging,
 ) -> None:
+    from tributo._common.logging_policy import LoggingPolicy, logging_runtime_env
     from tributo._common.reporting import worker
 
+    _owner(monkeypatch)
     calls: list[str] = []
     monkeypatch.setattr(
         worker, "bootstrap_producer", lambda **kwargs: calls.append("reporting")
     )
-    monkeypatch.setenv(
-        "_TRIBUTO_REPORTING_USER_HOOK",
-        "tests.reporting.test_worker_policy._trusted_failing_hook",
+    runtime = sessions.merge_runtime_env(
+        logging_runtime_env(
+            {
+                "worker_process_setup_hook": "tests.reporting.test_worker_policy._trusted_failing_hook"
+            },
+            policy=LoggingPolicy(level="DEBUG"),
+        )
     )
+    for name, value in runtime["env_vars"].items():
+        monkeypatch.setenv(name, value)
     with pytest.raises(RuntimeError, match="trusted-hook-failure"):
         worker.setup()
     assert calls == ["reporting"]

@@ -268,6 +268,62 @@ def test_host_uv_profile_warns_on_version_difference_and_hashes_export(
     assert labels[tributo_it.REQUIREMENTS_SHA_LABEL] == identity.requirements_sha256
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("platform", ["linux/arm64", "linux/amd64"])
+def test_cpu_profile_routing_and_version_preflight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, enabled: bool, platform: str
+) -> None:
+    profile = _write_host_uv_profile(tmp_path)
+    profile.definition["torch_cpu"] = enabled
+    content = b"torch==2.13.0+cpu --hash=sha256:" + b"a" * 64 + b"\n"
+    observed = []
+
+    def export(**kwargs: object) -> tributo_it.HostDependencyExport:
+        observed.append(kwargs)
+        return tributo_it.HostDependencyExport(
+            uv_version="0.11.23",
+            content=content,
+            sha256=hashlib.sha256(content).hexdigest(),
+        )
+
+    monkeypatch.setattr(tributo_it, "export_locked_requirements", export)
+    identity = tributo_it.runtime_identity(profile, platform)
+    expected = enabled and platform == "linux/arm64"
+    assert observed[0]["cpu_profile"] == (
+        tmp_path / "docker/tributo-runtime/cpu" if expected else None
+    )
+    assert observed[0]["platform"] == platform
+    code = tributo_it._version_check_code(identity)
+    assert ("assert metadata.version('torch') == '2.13.0+cpu'" in code) is expected
+    assert ("assert torch.version.cuda is None" in code) is expected
+
+
+def test_cpu_requirements_change_runtime_identity_without_changing_sdk_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile = _write_host_uv_profile(tmp_path)
+    profile.definition["torch_cpu"] = True
+    lock_before = (tmp_path / "uv.lock").read_bytes()
+    content = b"torch==2.13.0+cpu --hash=sha256:" + b"a" * 64 + b"\n"
+
+    def export(**kwargs: object) -> tributo_it.HostDependencyExport:
+        assert kwargs["cpu_profile"] == tmp_path / "docker/tributo-runtime/cpu"
+        return tributo_it.HostDependencyExport(
+            uv_version="0.11.23",
+            content=content,
+            sha256=hashlib.sha256(content).hexdigest(),
+        )
+
+    monkeypatch.setattr(tributo_it, "export_locked_requirements", export)
+    before = tributo_it.runtime_identity(profile, "linux/arm64")
+    content += b"filelock==3.20.0 --hash=sha256:" + b"b" * 64 + b"\n"
+    after = tributo_it.runtime_identity(profile, "linux/arm64")
+    assert before.runtime_key != after.runtime_key
+    assert before.requirements_sha256 != after.requirements_sha256
+    assert before.lock_sha256 == after.lock_sha256
+    assert (tmp_path / "uv.lock").read_bytes() == lock_before
+
+
 def test_host_uv_profile_accepts_baseline_without_warning(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

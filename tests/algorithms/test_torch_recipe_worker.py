@@ -93,6 +93,22 @@ class UnexpectedMetricRecipe(BinaryLinearRecipe):
         )
 
 
+class CoverageCountingRecipe(BinaryLinearRecipe):
+    def training_step(
+        self, modules: TorchModuleSet, batch: TorchBatch, context: object
+    ) -> TorchStepResult:
+        result = super().training_step(modules, batch, context)
+        positive = int((batch.targets > 0).sum().item())
+        return TorchStepResult(
+            outputs=result.outputs,
+            loss=result.loss,
+            coverage_counts={
+                "coverage.positive": positive,
+                "coverage.unlabeled": batch.local_rows - positive,
+            },
+        )
+
+
 class _Iterator:
     def __init__(self, batches: list[dict[str, Any]]) -> None:
         self._batches = batches
@@ -122,9 +138,15 @@ class _RuntimeContext:
         return {"CPU": 1.0}
 
 
+@pytest.mark.parametrize("epochs", [1, 3])
+@pytest.mark.parametrize(
+    "recipe_name", ["BinaryLinearRecipe", "CoverageCountingRecipe"]
+)
 def test_recipe_worker_reports_typed_checkpoint_and_exact_coverage(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    epochs: int,
+    recipe_name: str,
 ) -> None:
     data = _Iterator(
         [
@@ -205,18 +227,28 @@ def test_recipe_worker_reports_typed_checkpoint_and_exact_coverage(
     stage = TorchStageContext(runtime, "train", 0, True, ("train", "val"))
     torch_recipe_train_loop_per_worker(
         {
-            "training": {"epochs": 1, "batch_size": 2},
-            "_core_implementation_ref": "tests.algorithms.test_torch_recipe_worker:BinaryLinearRecipe",
+            "training": {"epochs": epochs, "batch_size": 2},
+            "_core_implementation_ref": f"tests.algorithms.test_torch_recipe_worker:{recipe_name}",
             "_core_implementation_code_digest": "0" * 64,
             "_core_input_binding_digest": "3" * 64,
             "_core_stage_context": stage.to_dict(),
         }
     )
-    assert reports and reports[0][0]["checkpoint_descriptor"]["completed_step"] == 2
-    assert reports[0][0]["execution_workers"][0]["input_rows"] == {
+    assert (
+        reports
+        and reports[0][0]["checkpoint_descriptor"]["completed_step"] == 2 * epochs
+    )
+    expected_rows = {
         "train": 3,
         "val": 1,
     }
+    if recipe_name == "CoverageCountingRecipe":
+        expected_rows.update({"coverage.positive": 2, "coverage.unlabeled": 1})
+    worker = reports[0][0]["execution_workers"][0]
+    assert worker["input_rows"] == expected_rows
+    assert worker["rows_processed"] == 3 * epochs
+    assert worker["batch_count"] == 2 * epochs
+    assert len(data.calls) == epochs
     assert {
         "model.pt",
         "torch_execution_evidence.json",

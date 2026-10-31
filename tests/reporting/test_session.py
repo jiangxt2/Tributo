@@ -408,6 +408,31 @@ def test_real_sdk_queue_overflow_and_flush_wait_are_bounded(
         assert sender.close()
 
 
+def test_logging_console_and_reporting_handler_coexist(
+    config, otlp_stub, monkeypatch, isolated_logging
+):
+    from tributo._common.logging import configure_logging
+
+    logger = logging.getLogger("tributo")
+    monkeypatch.setattr(logger, "propagate", False)
+    config = config.model_copy(
+        update={"sender": config.sender.model_copy(update={"namespaces": ("tributo",)})}
+    )
+    output = io.StringIO()
+    with reporting_session(config) as owner:
+        configure_logging("DEBUG", stream=output)
+        logger.info("message", extra={"event": "tributo.console.and.reporting"})
+        assert owner._sender and owner._sender.flush(2)
+        assert "tributo.console.and.reporting" in output.getvalue()
+        assert (
+            sum(
+                r.body.string_value == "tributo.console.and.reporting"
+                for r in _records(otlp_stub)
+            )
+            == 1
+        )
+
+
 def test_nested_parallel_owner_preserves_logging_and_global_provider(
     config: ReportingConfig, otlp_stub: Endpoint, monkeypatch: pytest.MonkeyPatch
 ) -> None:

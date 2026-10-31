@@ -14,7 +14,9 @@ from typing import Any
 
 from packaging.requirements import Requirement
 from packaging.specifiers import SpecifierSet
+from packaging.utils import canonicalize_name
 
+from tributo._common.version_compatibility import tributo_version_matches
 from tributo.algorithms.api import (
     AlgorithmConfigurationError,
     AlgorithmDependencyError,
@@ -87,7 +89,12 @@ def _actual_environment_versions(
             raise AlgorithmDependencyError(
                 f"Worker dependency is not installed: {requirement.name}"
             ) from exc
-        if requirement.specifier and actual not in requirement.specifier:
+        compatible = (
+            tributo_version_matches(actual, str(requirement.specifier))
+            if canonicalize_name(requirement.name) == "tributo"
+            else actual in requirement.specifier
+        )
+        if requirement.specifier and not compatible:
             raise AlgorithmDependencyError(
                 f"Worker dependency {requirement.name}=={actual} does not satisfy "
                 f"{requirement.specifier}"

@@ -12,6 +12,8 @@ from pathlib import Path
 
 from ray.job_submission import JobSubmissionClient
 
+from tributo._common.logging import emit_event
+from tributo._common.logging_policy import submission_logging_env
 from tributo._common.reporting.session import (
     reporting_operation,
     submission_runtime_env,
@@ -146,8 +148,9 @@ class TributoClient:
                         if key != "env_vars"
                     }
                 )
+        resolved_runtime_env = submission_logging_env(entrypoint, resolved_runtime_env)
         try:
-            logger.info("Submitting job to %s", self.address)
+            logger.debug("Submitting Ray Job")
             resolved_runtime_env = submission_runtime_env(resolved_runtime_env)
             job_id = self._get_client().submit_job(
                 entrypoint=entrypoint,
@@ -158,10 +161,23 @@ class TributoClient:
                 entrypoint_num_gpus=entrypoint_num_gpus,
                 entrypoint_memory=entrypoint_memory,
             )
-            logger.info("Job submitted successfully: %s", job_id)
+            emit_event(
+                logger,
+                "tributo.job.submitted",
+                phase="submission",
+                status="submitted",
+                submission_id=job_id,
+            )
             return job_id
         except Exception as e:
-            logger.error("Failed to submit job: %s", e)
+            emit_event(
+                logger,
+                "tributo.stage.finished",
+                level=logging.ERROR,
+                phase="submission",
+                status="failed",
+                error_type=type(e).__name__,
+            )
             raise JobSubmissionError(f"Failed to submit job: {e}") from e
 
     # ── query / control ──

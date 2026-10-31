@@ -29,6 +29,7 @@ def emit(event: str, count: int = 1) -> dict[str, Any]:
         "pid": os.getpid(),
         "count": count,
         "role": session.role if session else "disabled",
+        "logging_level": logging.getLogger("tributo").level,
         "snapshot": session.snapshot() if session else {},
         "owner_credentials": [
             key for key in os.environ if key.startswith("REPORTING_IT_SECRET_")
@@ -153,16 +154,16 @@ def main(mode: str, path: str) -> None:
 
         _run_review_regressions(config)
         return
-    with reporting_session(config) as owner:
+    with reporting_session(config):
         result = emit("tributo.it." + mode + ".driver")
-        from tributo._common.reporting.session import active_session
+        from tributo._common.reporting.session import active_session, ray_options
 
         session = active_session()
         assert session is not None
         collector = session._collector
         assert collector and collector.process
         pid = collector.process.pid
-        ray.init(address="auto", runtime_env=owner.runtime_env())
+        ray.init(address="auto", **ray_options(driver=True))
         try:
             result["worker"] = ray.get(
                 ray.remote(task).remote("tributo.it." + mode + ".worker")

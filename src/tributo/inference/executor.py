@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any, ClassVar, Literal, TypedDict
 
+from tributo._common.logging import active_logging_policy
 from tributo._common.reporting.session import current_policy
 from tributo.data import IngestionPlanReceipt
 from tributo.exceptions import ResultMaterializationError, ResultWriteError
@@ -129,12 +130,12 @@ class RayMapBatchesExecutor:
         try:
             import ray.data
 
-            reporting_options: dict[str, Any] = {}
+            constructor_options: dict[str, Any] = {
+                "_logging_policy": active_logging_policy().serialize()
+            }
             policy = current_policy()
             if policy:
-                reporting_options["fn_constructor_kwargs"] = {
-                    "_reporting_policy": policy
-                }
+                constructor_options["_reporting_policy"] = policy
             predicted = opened.dataset.map_batches(
                 KernelBatchPredictor,
                 fn_constructor_args=(
@@ -142,8 +143,8 @@ class RayMapBatchesExecutor:
                     plan.input_binding,
                     plan.output_binding,
                 ),
+                fn_constructor_kwargs=constructor_options,
                 batch_format="numpy",
-                **reporting_options,
                 batch_size=plan.execution.batch_size,
                 compute=ray.data.ActorPoolStrategy(size=plan.execution.concurrency),
                 num_cpus=plan.execution.num_cpus_per_actor,
