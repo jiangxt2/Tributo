@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import ast
-import contextlib
 import fnmatch
 import json
 import os
@@ -19,7 +18,6 @@ import signal
 import subprocess
 import sys
 import tempfile
-import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
@@ -1053,98 +1051,6 @@ def _pytest_skips(path: Path) -> int:
     )
 
 
-_PROCESS_STOP_GRACE_SECONDS = 5.0
-
-
-def _stop_ci_process(process: subprocess.Popen[Any]) -> None:
-    """Stop an owned stage; POSIX sessions include surviving descendants."""
-    if os.name != "posix":
-        process.terminate()
-        try:
-            process.wait(timeout=_PROCESS_STOP_GRACE_SECONDS)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=_PROCESS_STOP_GRACE_SECONDS)
-        return
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
-    try:
-        process.wait(timeout=_PROCESS_STOP_GRACE_SECONDS)
-    except subprocess.TimeoutExpired:
-        pass
-    finally:
-        # The leader may already have exited while a child ignores SIGTERM.
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        process.wait(timeout=_PROCESS_STOP_GRACE_SECONDS)
-
-
-def _run_ci_stage(
-    command: Sequence[str],
-    *,
-    root: Path,
-    suite_id: str,
-    stage: str,
-    deadline: float,
-    log_dir: Path | None,
-) -> int:
-    """Run one owned process under the suite deadline and retain stage output."""
-    started = time.monotonic()
-
-    def record(state: str, **values: Any) -> None:
-        event = {"suite": suite_id, "stage": stage, "state": state, **values}
-        print(json.dumps(event), flush=True)
-        if log_dir is not None:
-            with (log_dir / "stages.jsonl").open("a", encoding="utf-8") as stream:
-                stream.write(json.dumps(event) + "\n")
-
-    if log_dir is not None:
-        log_dir.mkdir(parents=True, exist_ok=True)
-    if started >= deadline:
-        record("timed_out", returncode=124, elapsed_seconds=0.0)
-        return 124
-    record("started", command=list(command), remaining_seconds=deadline - started)
-    output = (
-        (log_dir / f"{stage}.log").open("w", encoding="utf-8")
-        if log_dir is not None
-        else contextlib.nullcontext()
-    )
-    with output as stream:
-        try:
-            process = subprocess.Popen(
-                command,
-                cwd=root,
-                stdout=stream,
-                stderr=subprocess.STDOUT if stream is not None else None,
-                start_new_session=os.name == "posix",
-            )
-        except OSError:
-            record(
-                "start_failed", returncode=1, elapsed_seconds=time.monotonic() - started
-            )
-            raise
-        try:
-            status = process.wait(timeout=max(0, deadline - time.monotonic()))
-        except subprocess.TimeoutExpired:
-            _stop_ci_process(process)
-            record(
-                "timed_out",
-                returncode=124,
-                elapsed_seconds=time.monotonic() - started,
-            )
-            return 124
-        except BaseException:
-            _stop_ci_process(process)
-            record("interrupted", elapsed_seconds=time.monotonic() - started)
-            raise
-    record("finished", returncode=status, elapsed_seconds=time.monotonic() - started)
-    return status
-
-
 def run_suite(
     manifest: Manifest,
     suite_id: str,
@@ -1187,9 +1093,6 @@ def run_suite(
     selection_error = _ci_suite_selection_error(manifest, suite)
     if selection_error is not None:
         raise ManifestError(selection_error)
-    if log_dir is not None:
-        log_dir = log_dir.resolve()
-    deadline = time.monotonic() + suite.budget_seconds
     if prepare:
         sync = ["uv", "sync"]
         if suite.all_extras:
@@ -1198,16 +1101,9 @@ def run_suite(
             for extra in suite.extras:
                 sync.extend(("--extra", extra))
         sync.append("--locked")
-        status = _run_ci_stage(
-            sync,
-            root=manifest.root,
-            suite_id=suite_id,
-            stage="prepare",
-            deadline=deadline,
-            log_dir=log_dir,
-        )
-        if status != 0:
-            return status
+        completed = subprocess.run(sync, cwd=manifest.root, check=False)
+        if completed.returncode != 0:
+            return completed.returncode
 
     command = [
         "uv",
@@ -1217,35 +1113,49 @@ def run_suite(
         *suite.entrypoint,
         *suite.args,
     ]
-    with tempfile.TemporaryDirectory(prefix=f"tributo-{suite.suite_id}-") as tmp:
-        report = (log_dir or Path(tmp)) / "junit.xml"
-        if suite.forbid_skips or log_dir is not None:
-            command.append(f"--junitxml={report}")
-        status = _run_ci_stage(
+    try:
+        if suite.forbid_skips:
+            with tempfile.TemporaryDirectory(
+                prefix=f"tributo-{suite.suite_id}-"
+            ) as tmp:
+                report = Path(tmp) / "junit.xml"
+                completed = subprocess.run(
+                    [*command, f"--junitxml={report}"],
+                    cwd=manifest.root,
+                    check=False,
+                    timeout=suite.budget_seconds,
+                )
+                if completed.returncode == 0:
+                    try:
+                        skipped = _pytest_skips(report) if report.is_file() else None
+                    except (ET.ParseError, OSError, ValueError) as exc:
+                        print(
+                            f"suite {suite.suite_id} produced invalid JUnit evidence: "
+                            f"{exc}",
+                            file=sys.stderr,
+                        )
+                        return 1
+                    if skipped is None or skipped > 0:
+                        print(
+                            f"suite {suite.suite_id} skipped required tests or produced "
+                            "no JUnit evidence",
+                            file=sys.stderr,
+                        )
+                        return 1
+                return completed.returncode
+        completed = subprocess.run(
             command,
-            root=manifest.root,
-            suite_id=suite_id,
-            stage="tests",
-            deadline=deadline,
-            log_dir=log_dir,
+            cwd=manifest.root,
+            check=False,
+            timeout=suite.budget_seconds,
         )
-        if status == 0 and suite.forbid_skips:
-            try:
-                skipped = _pytest_skips(report) if report.is_file() else None
-            except (ET.ParseError, OSError, ValueError) as exc:
-                print(
-                    f"suite {suite.suite_id} produced invalid JUnit evidence: {exc}",
-                    file=sys.stderr,
-                )
-                return 1
-            if skipped is None or skipped > 0:
-                print(
-                    f"suite {suite.suite_id} skipped required tests or produced "
-                    "no JUnit evidence",
-                    file=sys.stderr,
-                )
-                return 1
-        return status
+        return completed.returncode
+    except subprocess.TimeoutExpired:
+        print(
+            f"suite {suite.suite_id} exceeded its {suite.budget_seconds}s budget",
+            file=sys.stderr,
+        )
+        return 124
 
 
 def _parser() -> argparse.ArgumentParser:

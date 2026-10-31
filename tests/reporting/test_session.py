@@ -35,7 +35,6 @@ def test_bridge_reentrant_library_logs_do_not_recurse(
     config: ReportingConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     logger = logging.getLogger("tributo_test")
-    monkeypatch.setattr(logger, "level", logging.INFO)
 
     def job_id() -> str:
         logger.info("library emits while identity is read")
@@ -104,12 +103,8 @@ def test_producer_ack_is_not_owner_doris_checked(
 
 
 @pytest.fixture
-def otlp_stub(otlp_endpoint: Endpoint) -> Endpoint:
-    return otlp_endpoint
-
-
-@pytest.fixture
-def config(otlp_stub: Endpoint, monkeypatch: pytest.MonkeyPatch) -> ReportingConfig:
+def config(otlp_endpoint: Endpoint, monkeypatch: pytest.MonkeyPatch) -> ReportingConfig:
+    monkeypatch.setattr(logging.getLogger("tributo_test"), "level", logging.INFO)
     monkeypatch.setenv("TEST_READ_USER", "reader")
     monkeypatch.setenv("TEST_READ_PASSWORD", "unit-test-only")
     monkeypatch.setattr(
@@ -119,7 +114,7 @@ def config(otlp_stub: Endpoint, monkeypatch: pytest.MonkeyPatch) -> ReportingCon
         enabled=True,
         mode="external",
         sender=SenderConfig(
-            endpoint=otlp_stub.url,
+            endpoint=otlp_endpoint.url,
             namespaces=("tributo_test",),
             shutdown_timeout=2.0,
         ),
@@ -182,7 +177,6 @@ def producer(config: ReportingConfig, monkeypatch: pytest.MonkeyPatch):
     owner = sessions.bootstrap_producer(a)
     assert owner and owner._sender
     logger = logging.getLogger("tributo_test")
-    monkeypatch.setattr(logger, "level", logging.INFO)
     try:
         yield owner, a, b, logger
     finally:
@@ -190,7 +184,7 @@ def producer(config: ReportingConfig, monkeypatch: pytest.MonkeyPatch):
 
 
 def test_reused_sender_uses_scoped_policy_and_restores_missing_ids(
-    producer, otlp_stub: Endpoint, monkeypatch: pytest.MonkeyPatch
+    producer, otlp_endpoint: Endpoint, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     owner, a, b, logger = producer
     with pytest.raises(ReportingError, match="context_requires_scope"):
@@ -211,7 +205,7 @@ def test_reused_sender_uses_scoped_policy_and_restores_missing_ids(
     with sessions.reporting_context(request_id="request-default"):
         logger.info("hidden", extra={"event": "tributo.scope.default"})
     assert owner._sender.flush(2.0)
-    rows = _wire_attributes(otlp_stub)
+    rows = _wire_attributes(otlp_endpoint)
     assert [row["run_id"] for row in rows] == ["run-b", "run-a", "run-a"]
     assert "attempt_id" not in rows[0] and "submission_id" not in rows[0]
     assert rows[1]["attempt_id"] == "attempt-a"
@@ -225,7 +219,7 @@ def test_reused_sender_uses_scoped_policy_and_restores_missing_ids(
 
 @pytest.mark.asyncio
 async def test_reused_sender_isolates_concurrent_policy_contexts(
-    producer, otlp_stub: Endpoint, monkeypatch: pytest.MonkeyPatch
+    producer, otlp_endpoint: Endpoint, monkeypatch: pytest.MonkeyPatch
 ) -> None:
 
     owner, a, b, logger = producer
@@ -239,13 +233,13 @@ async def test_reused_sender_isolates_concurrent_policy_contexts(
     await asyncio.gather(work(a, "a"), work(b, "b"))
     assert owner and owner._sender and owner._sender.flush(2.0)
     assert CONTEXT.get() is None
-    rows = _wire_attributes(otlp_stub)
+    rows = _wire_attributes(otlp_endpoint)
     assert len(rows) == 6
     assert all(row["run_id"] == "run-" + str(row["event"])[-1] for row in rows)
 
 
 def test_kernel_load_predict_close_bind_explicit_policy(
-    producer, otlp_stub: Endpoint, monkeypatch: pytest.MonkeyPatch
+    producer, otlp_endpoint: Endpoint, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     owner, a, b, logger = producer
     from tests.reporting.conftest import reporting_kernel
@@ -258,7 +252,7 @@ def test_kernel_load_predict_close_bind_explicit_policy(
     assert output["prediction"].tolist() == [0]
     kernel.close()
     assert owner and owner._sender and owner._sender.flush(2.0)
-    rows = _wire_attributes(otlp_stub)
+    rows = _wire_attributes(otlp_endpoint)
     assert len(rows) == 3 and all(row["run_id"] == "run-b" for row in rows)
     assert all("attempt_id" not in row for row in rows)
     assert CONTEXT.get() is None
@@ -272,7 +266,7 @@ def test_kernel_load_predict_close_bind_explicit_policy(
 
 
 def test_train_wrapper_reuses_sender_with_invocation_identity(
-    producer, otlp_stub: Endpoint, monkeypatch: pytest.MonkeyPatch
+    producer, otlp_endpoint: Endpoint, monkeypatch: pytest.MonkeyPatch
 ) -> None:
 
     owner, a, b, logger = producer
@@ -293,14 +287,14 @@ def test_train_wrapper_reuses_sender_with_invocation_identity(
 
     work({"_core_reporting_policy": b})
     assert owner and owner._sender and owner._sender.flush(2.0)
-    row = _wire_attributes(otlp_stub)[0]
+    row = _wire_attributes(otlp_endpoint)[0]
     assert row["run_id"] == "run-b" and row["rank"] == 1 and row["world_size"] == 2
     assert CONTEXT.get() is None
 
 
 def test_tune_trial_binds_captured_policy_and_restores(
     producer,
-    otlp_stub: Endpoint,
+    otlp_endpoint: Endpoint,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: object,
 ) -> None:
@@ -338,20 +332,19 @@ def test_tune_trial_binds_captured_policy_and_restores(
     trial({})
     assert reported == [{"loss": 0.5}]
     assert owner and owner._sender and owner._sender.flush(2.0)
-    row = _wire_attributes(otlp_stub)[0]
+    row = _wire_attributes(otlp_endpoint)[0]
     assert row["run_id"] == "run-b" and row["trial_id"] == "trial-b"
     assert CONTEXT.get() is None
 
 
 def test_runtime_failure_does_not_replace_business_exception(
-    config: ReportingConfig, otlp_stub: Endpoint, monkeypatch: pytest.MonkeyPatch
+    config: ReportingConfig, otlp_endpoint: Endpoint, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     logger = logging.getLogger("tributo_test")
-    monkeypatch.setattr(logger, "level", logging.INFO)
     original = ValueError("business failure")
     with pytest.raises(ValueError) as caught:
         with reporting_session(config) as session:
-            otlp_stub.responses.append((200, "text/html", b"invalid gateway"))
+            otlp_endpoint.responses.append((200, "text/html", b"invalid gateway"))
             logger.error("safe message")
             assert session._sender is not None and session._sender.flush()
             assert session.state == "degraded"
@@ -361,15 +354,14 @@ def test_runtime_failure_does_not_replace_business_exception(
 
 
 def test_frozen_sender_ignores_later_ambient_changes(
-    config: ReportingConfig, otlp_stub: Endpoint, monkeypatch: pytest.MonkeyPatch
+    config: ReportingConfig, otlp_endpoint: Endpoint, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     logger = logging.getLogger("tributo_test")
-    monkeypatch.setattr(logger, "level", logging.INFO)
     with reporting_session(config) as session:
         original_env = dict(os.environ)
         monkeypatch.setenv("OTEL_EXPORTER_OTLP_HEADERS", "Injected=sensitive")
         logger.warning("untrusted text")
-    assert all("Injected" not in headers for headers, _ in otlp_stub.requests)
+    assert all("Injected" not in headers for headers, _ in otlp_endpoint.requests)
     assert session.state == "closed"
     assert os.environ["OTEL_EXPORTER_OTLP_HEADERS"] == "Injected=sensitive"
     assert all(
@@ -380,14 +372,14 @@ def test_frozen_sender_ignores_later_ambient_changes(
 
 
 def test_real_sdk_queue_overflow_and_flush_wait_are_bounded(
-    otlp_stub: Endpoint, monkeypatch: pytest.MonkeyPatch
+    otlp_endpoint: Endpoint, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from opentelemetry.sdk._logs.export import LogRecordExportResult
 
     diagnostics = []
     sender = Sender(
         SenderConfig(
-            endpoint=otlp_stub.url, queue_size=2, batch_size=1, shutdown_timeout=2.0
+            endpoint=otlp_endpoint.url, queue_size=2, batch_size=1, shutdown_timeout=2.0
         ),
         diagnostics.append,
     )
@@ -416,7 +408,7 @@ def test_real_sdk_queue_overflow_and_flush_wait_are_bounded(
 
 
 def test_logging_console_and_reporting_handler_coexist(
-    config, otlp_stub, monkeypatch, isolated_logging
+    config, otlp_endpoint, monkeypatch, isolated_logging
 ):
     from tributo._common.logging import configure_logging
 
@@ -434,19 +426,18 @@ def test_logging_console_and_reporting_handler_coexist(
         assert (
             sum(
                 r.body.string_value == "tributo.console.and.reporting"
-                for r in _records(otlp_stub)
+                for r in _records(otlp_endpoint)
             )
             == 1
         )
 
 
 def test_nested_parallel_owner_preserves_logging_and_global_provider(
-    config: ReportingConfig, otlp_stub: Endpoint, monkeypatch: pytest.MonkeyPatch
+    config: ReportingConfig, otlp_endpoint: Endpoint, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from concurrent.futures import ThreadPoolExecutor
 
     logger = logging.getLogger("tributo_test")
-    monkeypatch.setattr(logger, "level", logging.INFO)
     output = io.StringIO()
     handler = logging.StreamHandler(output)
     logger.addHandler(handler)
@@ -477,7 +468,7 @@ def test_nested_parallel_owner_preserves_logging_and_global_provider(
         assert active_session() is None and handler in logger.handlers
         assert "raw SQL" in output.getvalue()
         assert get_logger_provider() is global_provider
-        wire = " ".join(str(r) for r in _records(otlp_stub))
+        wire = " ".join(str(r) for r in _records(otlp_endpoint))
         assert "sensitive" not in wire and "raw SQL" not in wire
         assert "run-one" in wire and "tributo.stage.finished" in wire
         assert "committed" not in first.snapshot()
@@ -505,7 +496,7 @@ def test_incompatible_nested_config_preserves_active_owner(config, disabled):
 @pytest.mark.parametrize("kind", ["http", "grpc", "batch"])
 @pytest.mark.parametrize("fail", [False, True])
 async def test_serving_request_logs_bind_and_restore_identity(
-    config, otlp_stub, monkeypatch, kind, fail
+    config, otlp_endpoint, monkeypatch, kind, fail
 ):
     from tests.reporting.conftest import reporting_serving_request
 
@@ -536,7 +527,7 @@ async def test_serving_request_logs_bind_and_restore_identity(
     with reporting_session(config) as owner:
         await asyncio.gather(request("request-a"), request("request-b"))
         assert owner._sender.flush(2)
-    rows = _wire_attributes(otlp_stub)
+    rows = _wire_attributes(otlp_endpoint)
     assert {row["request_id"] for row in rows} == {"request-a", "request-b"}
     assert len(rows) == 2 and all(row["trace_id"] == "1" * 32 for row in rows)
     assert CONTEXT.get() is None

@@ -190,33 +190,24 @@ message. Only safe bounded identifiers, numeric summaries and whitelisted status
 fields are sent, marked `redacted=true`. Arbitrary message text, SQL, payloads,
 exception messages and configuration dumps are excluded. Local logging retains
 its existing formatting and levels; the reporting branch does not raise source
-logger levels. SSE completion is emitted at iterator termination, with request
-correlation held per request.
+logger levels.
 
 HTTP and gRPC handlers bind the existing request/trace identity while validating
-and executing a request, so ordinary selected Python logs share that identity.
-They restore the caller's context on return or failure, retaining the execution
-identity when entering from a process-local sender. An explicitly scoped absence
-of an execution identifier remains authoritative.
+and executing a request, so ordinary selected Python logs share that identity,
+then restore caller context on return or failure. Streams capture the complete
+original execution identity, including absent fields. Each advancement/close
+uses that snapshot and restores caller context before yielding, so a task closing
+another request's stream cannot replace its run/execution identifiers.
 
-`tributo.serving.inference.audit` records the existing computation audit. Its
-timing and process-local metrics retain their original meaning. For gRPC server
-streams, a separate `tributo.serving.stream.finished` event records generator
-completion, early close, cancellation or failure without counting another
-inference. Context is restored before each yield, including when another task
-closes the stream. Generator completion does not prove client receipt.
+`tributo.serving.inference.audit` retains computation timing and process-local
+metrics. The separate `tributo.serving.stream.finished` event records one
+SSE/gRPC terminal for completion, early close, cancellation or failure without
+counting another inference. Generator completion does not prove client receipt.
 
-Streams retain the complete execution identity captured at request start,
-including intentionally absent fields. A task closing another request's stream
-does not replace its run/execution identity. The SSE response owns iterator
-closure: ASGI returns only after its cleanup has run, including failed response
-sends and disconnect cancellation.
-
-Streaming binds request context only while advancing the generator and while
-recording its terminal event, then restores it before yielding to ASGI. Client
-disconnects, send failures and cleanup in another task preserve the caller's
-context. The underlying generator is closed under its request context; cleanup
-errors are logged without replacing the disconnect or business result.
+The SSE response closes its iterator under the original request context and
+records its terminal event before ASGI returns, including failed sends and
+disconnect cancellation. Cleanup errors are logged without replacing the
+disconnect or business result.
 
 For a library logger with `propagate=False`, include that logger's exact
 namespace explicitly. The bridge preserves this routing decision and avoids

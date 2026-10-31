@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -120,6 +121,7 @@ def test_policy_is_producer_only_and_runtime_env_is_not_mutated(
         "worker_process_setup_hook": "trusted.user_hook",
         "num_cpus": 2,
     }
+    original = deepcopy(caller)
     merged = sessions.merge_runtime_env(caller)
     payload = json.loads(merged["env_vars"][POLICY_ENV])
     assert payload["role"] == "producer" and payload["version"] == 1
@@ -133,11 +135,7 @@ def test_policy_is_producer_only_and_runtime_env_is_not_mutated(
         and "owner-only" not in merged["env_vars"][POLICY_ENV]
     )
     assert "OWNER_READ" not in merged["env_vars"][POLICY_ENV]
-    assert caller == {
-        "env_vars": {"USER_SETTING": "keep"},
-        "worker_process_setup_hook": "trusted.user_hook",
-        "num_cpus": 2,
-    }
+    assert caller == original
     assert merged["worker_process_setup_hook"] == WORKER_HOOK
     assert merged["env_vars"]["_TRIBUTO_REPORTING_USER_HOOK"] == "trusted.user_hook"
     assert sessions.merge_runtime_env(merged) == merged
@@ -253,7 +251,6 @@ def test_public_job_submit_composes_hooks_once(
     monkeypatch, isolated_logging, tmp_path, module, user_hook
 ):
     import logging
-    from copy import deepcopy
     from importlib import import_module
 
     from tributo import job
