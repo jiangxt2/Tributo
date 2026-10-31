@@ -17,12 +17,19 @@ and is the only entry point used by the PR and nightly test matrices.
 | --- | --- | --- |
 | `ci_fast` | Unit tests and small self-owned contracts | May run on PR, push, and merge queue events within a 12-minute suite budget |
 | `ci_scheduled` | Broader optional-dependency regression shards | May run only from the scheduled workflow; each shard has a 10-minute execution budget |
-| `manual_external` | Docker, Ray Jobs, multi-worker, database, model-download, or other environment-owned validation | Reported as required external evidence; never executed by a GitHub Actions event |
+| `manual_external` | Docker, Ray Jobs, multi-worker, database, model-download, or other environment-owned validation | Reported as external evidence and excluded from automatic CI; the explicit reporting-only dispatch exception is described below |
 | `quarantine` | Tests without a reliable lifecycle, deterministic fixture, or accountable owner | Reported when affected and excluded from all automated execution |
 
 The scheduled shard budgets sum to 30 minutes. Workflow timeouts are larger
 only to allow checkout and locked dependency preparation; the suite runner
 enforces the narrower test-command budget itself.
+
+The `log-reporting-cluster` suite additionally permits an operator to run
+`log-reporting-e2e.yml` through `workflow_dispatch`. That workflow calls the
+existing lifecycle-owned entry point with a 30-minute command deadline and
+always uploads diagnostics. It keeps `manual_external`/`ci_allowed=false`:
+PR, push, merge-queue and nightly matrices still cannot select it for execution.
+This exception does not authorize other external or quarantined suites.
 
 ## Selection and fallback
 
@@ -51,7 +58,7 @@ The manifest assigns collection-time execution markers through
 `tests/conftest.py`:
 
 - `ci_safe` identifies a bounded integration contract that may run in CI.
-- `manual_it` identifies an external suite that must not run in CI.
+- `manual_it` identifies an external suite excluded from automatic CI selection.
 - `quarantine` identifies a test excluded from automation; quarantined tests
   also receive `manual_it`.
 

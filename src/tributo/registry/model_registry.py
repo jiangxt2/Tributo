@@ -9,6 +9,7 @@ import logging
 import re
 from typing import Any
 
+from tributo._common.reporting.session import reporting_operation
 from tributo.registry.schema import ModelVersion
 from tributo.util.annotations import PublicAPI
 
@@ -46,6 +47,7 @@ class ModelRegistry:
 
         self._client = MlflowClient(tracking_uri=tracking_uri)
 
+    @reporting_operation
     def register_model(
         self,
         model_uri: str,
@@ -136,6 +138,7 @@ class ModelRegistry:
             except Exception as e:
                 logger.warning("Failed to clean up registered model '%s': %s", name, e)
 
+    @reporting_operation
     def get_model(
         self,
         name: str,
@@ -189,6 +192,7 @@ class ModelRegistry:
             tags=dict(mv.tags) if mv.tags else {},
         )
 
+    @reporting_operation
     def list_models(self) -> list[str]:
         """List all registered model names.
 
@@ -217,6 +221,7 @@ class ModelRegistry:
             name_set.add(mv.name)
         return sorted(name_set)
 
+    @reporting_operation
     def transition_stage(
         self,
         name: str,
@@ -242,6 +247,7 @@ class ModelRegistry:
         )
         logger.info("Model '%s' v%d transitioned to '%s'", name, version, stage)
 
+    @reporting_operation
     def compare_models(
         self,
         name: str,
@@ -285,6 +291,7 @@ class ModelRegistry:
 
         return results
 
+    @reporting_operation
     def delete_model(self, name: str) -> None:
         """Delete a registered model (including all versions).
 
@@ -294,6 +301,7 @@ class ModelRegistry:
         self._client.delete_registered_model(name=name)
         logger.info("Model '%s' deleted.", name)
 
+    @reporting_operation
     def delete_model_version(self, name: str, version: int) -> None:
         """Delete a specific model version.
 

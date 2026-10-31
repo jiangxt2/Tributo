@@ -12,6 +12,10 @@ from ray.job_submission import JobSubmissionClient
 from tributo._common import DEFAULT_DASHBOARD_URL, build_runtime_env
 from tributo._common.logging import emit_event
 from tributo._common.logging_policy import submission_logging_env
+from tributo._common.reporting.session import (
+    reporting_operation,
+    submission_runtime_env,
+)
 from tributo._common.retry import retry_with_exponential_backoff
 from tributo._common.submission_id import generate_submission_id
 from tributo.exceptions import JobConfigurationError
@@ -119,7 +123,9 @@ def _submit_ray_job_with_client(
             raise ValueError("request_digest must not be empty")
         job_metadata[_REQUEST_DIGEST_METADATA_KEY] = request_digest
 
-    resolved_runtime_env = submission_logging_env(entrypoint, runtime_env)
+    resolved_runtime_env = submission_runtime_env(
+        submission_logging_env(entrypoint, runtime_env)
+    )
     try:
         client.submit_job(
             entrypoint=entrypoint,
@@ -163,6 +169,7 @@ def _submit_ray_job_with_client(
 
 
 @PublicAPI(stability="alpha")
+@reporting_operation
 def submit_ray_job(
     entrypoint: str,
     *,

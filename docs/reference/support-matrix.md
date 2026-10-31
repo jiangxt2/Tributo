@@ -26,6 +26,7 @@ automation eligibility.
 | Batch and online inference | Inference plans, model flavors, sinks, and serving configuration | `unit` and `unit-integration-contracts` | `inference-cluster` |
 | Lance vector index | Vector-index API, storage profiles, and Ray Jobs request contract | `unit` contracts | `lance-vector-cluster` |
 | Tune and explainability | Capability declarations and typed job configuration | `unit` contracts | `tune-cluster` and `explainability-cluster` |
+| Lifecycle log reporting (Alpha) | Explicit reporting session or switch, managed/external OTLP HTTP logs pipeline and Doris probe readback | `unit` reporting configuration, real SDK protocol, environment and lifecycle contracts | `log-reporting-cluster`; see [ownership and boundaries](../operations/log-reporting.md) |
 | Distributed algorithms | Core descriptors, execution profiles, and portable receipts | `unit` and `unit-integration-contracts` | Official algorithm package CI; no Core-owned Wheel Gate |
 | Full runtime image for CPU validation | Pinned Ray base, host uv export, locked first-party extras, Alpha import closure, and `ImageProfile` attestation | `unit` contracts | `runtime-image` |
 

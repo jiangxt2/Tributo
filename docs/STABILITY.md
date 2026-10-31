@@ -28,6 +28,8 @@ This page provides module-level guidance and deprecation notes.
 | `tributo.job` — `TributoClient` | `stable` | Primary Ray Jobs client |
 | `tributo.job` — `RayJob` | `stable` annotation with runtime deprecation warning | Use `TributoClient`; the annotation and warning conflict is documented without changing the public contract in this documentation update |
 | `tributo.ray_jobs` | `alpha` | Workload-neutral submission identity, ambiguous-submit reconciliation, status, logs, and stop helpers |
+| `tributo.observability` | `alpha` | Explicit lifecycle reporting session and read-only status/propagation handle |
+| `tributo._common.reporting.config` | `alpha` through public re-exports | `ReportingConfig`, `SenderConfig`, `CollectorConfig`, `DorisProfile`, and `ReportingError` are imported from `tributo.observability`; other reporting internals remain private |
 | `tributo.kuberay_submission` | `alpha` | Explicit KubeRay RayJob resource profile compilation and one-job Kubernetes submission lifecycle; requires the optional `kuberay` extra |
 | `tributo.exceptions` — core exceptions | `stable` | ``TributoError`` and 16 common subtypes |
 | `tributo.exceptions` — `ResultMaterializationError` | `alpha` | Credential-safe lazy inference action failure |

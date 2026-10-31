@@ -14,6 +14,11 @@ from ray import serve
 
 from tributo._common.logging import active_logging_policy, apply_logging_policy
 from tributo._common.logging_policy import logging_runtime_env, override_logging_policy
+from tributo._common.reporting.session import (
+    reporting_operation,
+    reserve_serve_app,
+    serve_runtime_env,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +28,7 @@ DEFAULT_GRPC_SERVICER_FUNCTION = (
 )
 
 
+@reporting_operation
 def deploy_serve_app(
     deployment_cls: type,
     *,
@@ -83,8 +89,9 @@ def deploy_serve_app(
     replica_policy = override_logging_policy(logging_policy, merged_runtime["env_vars"])
     if callable(merged_runtime.get("worker_process_setup_hook")):
         raise ValueError("Ray Serve logging setup requires a string hook")
-    options["runtime_env"] = logging_runtime_env(merged_runtime, policy=replica_policy)
-
+    options["runtime_env"] = serve_runtime_env(
+        logging_runtime_env(merged_runtime, policy=replica_policy), app_name
+    )
     if not ray.is_initialized():
         ray.init(address=ray_address, ignore_reinit_error=True)
 
@@ -104,6 +111,7 @@ def deploy_serve_app(
         grpc_options = None
 
     serve.start(http_options=http_options, grpc_options=grpc_options)
+    reserve_serve_app(app_name)
 
     # Check if deployment_cls is already a Deployment object (decorated by @serve.deployment)
     if hasattr(deployment_cls, "bind"):

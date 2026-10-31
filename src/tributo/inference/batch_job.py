@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 import ray
 
 from tributo._common.logging import bootstrap_logging, emit_event
-from tributo._common.logging_policy import driver_logging_runtime_env
+from tributo._common.reporting.session import ray_options, reporting_operation
 
 if TYPE_CHECKING:
     from tributo.inference.contracts import InferenceResult
@@ -40,13 +40,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+@reporting_operation
 def main(args: argparse.Namespace | None = None) -> int:
     if args is None:
         args = _parse_args()
 
     bootstrap_logging()
 
-    ray.init(address="auto", **driver_logging_runtime_env())
+    ray.init(address="auto", **ray_options(driver=True))
 
     try:
         if args.resolved_plan_env is not None:

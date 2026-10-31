@@ -10,6 +10,7 @@ from types import TracebackType
 from typing import Any
 
 from tributo._common.immutable import FrozenDict
+from tributo._common.reporting.session import ray_options
 from tributo.algorithms.api import (
     AlgorithmConfigurationError,
     ExecutionProfile,
@@ -180,13 +181,10 @@ class RayRuntimeManager:
                         active_logging_policy,
                         apply_logging_policy,
                     )
-                    from tributo._common.logging_policy import (
-                        driver_logging_runtime_env,
-                    )
 
                     logging_policy = active_logging_policy()
                     apply_logging_policy(logging_policy)
-                    kwargs.update(driver_logging_runtime_env(policy=logging_policy))
+                    kwargs.update(ray_options(driver=True))
                     ray.init(**kwargs)
                 except Exception as exc:
                     raise AlgorithmConfigurationError(

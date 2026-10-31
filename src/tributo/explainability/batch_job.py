@@ -10,7 +10,7 @@ import sys
 import ray
 
 from tributo._common.logging import bootstrap_logging, emit_event
-from tributo._common.logging_policy import driver_logging_runtime_env
+from tributo._common.reporting.session import ray_options, reporting_operation
 from tributo.explainability.contracts import ExplainabilityRequest
 
 logger = logging.getLogger(__name__)
@@ -22,6 +22,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+@reporting_operation
 def main(args: argparse.Namespace | None = None) -> int:
     args = args or _parse_args()
     bootstrap_logging()
@@ -36,7 +37,7 @@ def main(args: argparse.Namespace | None = None) -> int:
             raise ValueError(
                 "batch explainability Ray Jobs require operation_store_uri"
             )
-        ray.init(address="auto", **driver_logging_runtime_env())
+        ray.init(address="auto", **ray_options(driver=True))
         from tributo.explainability.executor import run_batch_explainability
 
         receipt = run_batch_explainability(request)

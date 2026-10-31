@@ -79,6 +79,7 @@ Pydantic, ONNX Runtime, PyArrow, pandas, and S3 filesystem support.
 | Hugging Face sources/exporters | `uv sync --locked --no-dev --extra model-export-hf` |
 | MLflow registry | `uv sync --locked --no-dev --extra registry` |
 | gRPC serving | `uv sync --locked --no-dev --extra grpc` |
+| Opt-in lifecycle log reporting (Alpha) | `uv sync --locked --no-dev --extra log-reporting` |
 
 Each row is an installation profile. `uv sync` reconciles the environment to
 the selected extras, so combine multiple workloads in one command by providing

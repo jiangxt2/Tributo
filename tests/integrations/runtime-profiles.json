@@ -1,6 +1,17 @@
 {
   "schema_version": 1,
   "profiles": {
+    "log-reporting": {
+      "dependency_mode": "host-uv-export",
+      "dockerfile": "tests/integrations/Dockerfile.data-ingestion",
+      "extras": ["dev"],
+      "runtime_repository": "tributo-reporting-runtime",
+      "minio_image": "minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e",
+      "doris_fe_image": "apache/doris:fe-4.0.6@sha256:830863e9ff8af4b354df5303b1235c11b2f822fa3125b83a1627e498c5c251cf",
+      "doris_be_image": "apache/doris:be-4.0.6@sha256:72e58021c2fa110350269e587d6c74a28579d3c1ed563023cb784a3824f4ad87",
+      "version_contract": {},
+      "locked_version_contract": ["ray", "pyarrow", "opentelemetry-sdk", "opentelemetry-exporter-otlp-proto-http"]
+    },
     "data-ingestion": {
       "dependency_mode": "host-uv-export",
       "dockerfile": "tests/integrations/Dockerfile.data-ingestion",
