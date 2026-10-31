@@ -43,12 +43,14 @@ def enabled(monkeypatch: pytest.MonkeyPatch) -> list[logging.LogRecord]:
     from contextlib import contextmanager
 
     from tributo._common.reporting.sender import context_scope
+    from tributo.serving import grpc_deployment, observability
 
     records: list[logging.LogRecord] = []
 
     class Capture(logging.Handler):
         def emit(self, record: logging.LogRecord) -> None:
             record.correlated_request_id = (CONTEXT.get() or {}).get("request_id")
+            record.correlated_trace_id = (CONTEXT.get() or {}).get("trace_id")
             records.append(record)
 
     @contextmanager
@@ -56,14 +58,18 @@ def enabled(monkeypatch: pytest.MonkeyPatch) -> list[logging.LogRecord]:
         with context_scope(**values):
             yield
 
-    monkeypatch.setattr(module, "active_session", lambda: object())
-    monkeypatch.setattr(module, "reporting_context", scope)
+    monkeypatch.setattr(observability, "active_session", lambda: object())
+    for target in (module, grpc_deployment):
+        monkeypatch.setattr(target, "active_session", lambda: object())
+        monkeypatch.setattr(target, "reporting_context", scope)
+        monkeypatch.setattr(target.logger, "level", logging.DEBUG)
     monkeypatch.setattr(module, "bootstrap_producer", lambda: None)
-    monkeypatch.setattr(module.logger, "level", logging.DEBUG)
     handler = Capture()
-    module.logger.addHandler(handler)
+    for target in (module, grpc_deployment):
+        target.logger.addHandler(handler)
     yield records
-    module.logger.removeHandler(handler)
+    for target in (module, grpc_deployment):
+        target.logger.removeHandler(handler)
 
 
 @pytest.mark.asyncio
@@ -85,6 +91,77 @@ async def test_concurrent_streams_finish_on_iteration_without_context_leak(
         ("first", "succeeded"),
         ("second", "succeeded"),
     }
+    assert CONTEXT.get() is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["complete", "close", "cancel", "invalid", "failure"])
+async def test_grpc_stream_terminal_preserves_computation_audit_and_metrics(
+    enabled, mode
+):
+    from tests.reporting.conftest import reporting_serving_request
+    from tributo._common.reporting.sender import context_scope
+    from tributo.serving.observability import inference_metrics_snapshot
+
+    before = inference_metrics_snapshot()
+    error = RuntimeError("test model failure")
+
+    def predict():
+        if mode == "failure":
+            raise error
+
+    def terminals():
+        return [
+            r
+            for r in enabled
+            if getattr(r, "event", "") == "tributo.serving.stream.finished"
+        ]
+
+    stream = await reporting_serving_request(
+        "stream", "stream-request", predict, invalid=mode == "invalid"
+    )
+    if mode == "failure":
+        with pytest.raises(RuntimeError) as caught:
+            await anext(stream)
+        assert caught.value is error
+    elif mode == "invalid":
+        assert [item async for item in stream] == []
+    else:
+        assert (await asyncio.create_task(anext(stream))).predictions == [0.25]
+        assert not terminals() and CONTEXT.get() is None
+        with context_scope(request_id="closing-caller", trace_id="c" * 32):
+            if mode == "complete":
+                assert len([item async for item in stream]) == 1
+            elif mode == "cancel":
+                with pytest.raises(asyncio.CancelledError):
+                    await asyncio.create_task(stream.athrow(asyncio.CancelledError()))
+            else:
+                await asyncio.create_task(stream.aclose())
+            assert CONTEXT.get()["request_id"] == "closing-caller"
+    assert len(terminals()) == 1
+    terminal = terminals()[0]
+    expected = {
+        "complete": "succeeded",
+        "invalid": "invalid_argument",
+        "failure": "failed",
+    }
+    assert terminal.status == expected.get(mode, "cancelled")
+    assert (
+        terminal.correlated_request_id == "stream-request"
+        and terminal.correlated_trace_id == "1" * 32
+    )
+    audits = [
+        r
+        for r in enabled
+        if getattr(r, "event", "") == "tributo.serving.inference.audit"
+    ]
+    assert len(audits) == 1
+    after = inference_metrics_snapshot()
+    assert after["inference_requests_total"] == before["inference_requests_total"] + 1
+    assert (
+        after["inference_requests_" + audits[0].status]
+        == before["inference_requests_" + audits[0].status] + 1
+    )
     assert CONTEXT.get() is None
 
 

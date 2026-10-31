@@ -198,7 +198,8 @@ def test_reused_sender_uses_scoped_policy_and_restores_missing_ids(
     with sessions.producer_scope(b) as borrowed:
         assert borrowed is owner
         with sessions.session_scope():
-            logger.info("hidden", extra={"event": "tributo.scope.b"})
+            with sessions.reporting_context(request_id="request-b"):
+                logger.info("hidden", extra={"event": "tributo.scope.b"})
             child_policy = json.loads(sessions.current_policy())
             assert child_policy["context"] == {
                 "operation_id": "op-b",
@@ -207,12 +208,18 @@ def test_reused_sender_uses_scoped_policy_and_restores_missing_ids(
     assert CONTEXT.get() is None
     with sessions.producer_scope(a):
         logger.info("hidden", extra={"event": "tributo.scope.a"})
-    logger.info("hidden", extra={"event": "tributo.scope.default"})
+    with sessions.reporting_context(request_id="request-default"):
+        logger.info("hidden", extra={"event": "tributo.scope.default"})
     assert owner._sender.flush(2.0)
     rows = _wire_attributes(otlp_stub)
     assert [row["run_id"] for row in rows] == ["run-b", "run-a", "run-a"]
     assert "attempt_id" not in rows[0] and "submission_id" not in rows[0]
     assert rows[1]["attempt_id"] == "attempt-a"
+    assert (
+        rows[0]["request_id"] == "request-b"
+        and rows[2]["request_id"] == "request-default"
+    )
+    assert rows[2]["attempt_id"] == "attempt-a"
     assert owner._context["run_id"] == "run-a"
 
 
@@ -492,3 +499,44 @@ def test_incompatible_nested_config_preserves_active_owner(config, disabled):
             with reporting_session(changed):
                 pass
         assert active_session() is owner and owner.state == "ready"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["http", "grpc", "batch"])
+@pytest.mark.parametrize("fail", [False, True])
+async def test_serving_request_logs_bind_and_restore_identity(
+    config, otlp_stub, monkeypatch, kind, fail
+):
+    from tests.reporting.conftest import reporting_serving_request
+
+    config = config.model_copy(
+        update={"sender": config.sender.model_copy(update={"level": "DEBUG"})}
+    )
+    logger = logging.getLogger("tributo_test")
+    monkeypatch.setattr(logger, "level", logging.DEBUG)
+    error = RuntimeError("test model failure")
+
+    def predict():
+        logger.debug("private model text", extra={"event": "tributo.scope.request"})
+        if fail:
+            raise error
+
+    async def request(identity):
+        with context_scope(request_id="caller", trace_id="c" * 32):
+            call = reporting_serving_request(kind, identity, predict)
+            if fail:
+                with pytest.raises(RuntimeError) as caught:
+                    await call
+                assert caught.value is error
+            else:
+                await call
+            assert CONTEXT.get()["request_id"] == "caller"
+            assert CONTEXT.get()["trace_id"] == "c" * 32
+
+    with reporting_session(config) as owner:
+        await asyncio.gather(request("request-a"), request("request-b"))
+        assert owner._sender.flush(2)
+    rows = _wire_attributes(otlp_stub)
+    assert {row["request_id"] for row in rows} == {"request-a", "request-b"}
+    assert len(rows) == 2 and all(row["trace_id"] == "1" * 32 for row in rows)
+    assert CONTEXT.get() is None

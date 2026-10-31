@@ -122,6 +122,9 @@ class PolicyScopeActor:
         self.b, _ = reporting_kernel(second, record)
 
     def run(self) -> list[list[int]]:
+        import asyncio
+
+        from tests.reporting.conftest import reporting_serving_request
         from tributo._common.reporting.sender import CONTEXT
         from tributo._common.reporting.session import active_session
 
@@ -131,6 +134,21 @@ class PolicyScopeActor:
             assert CONTEXT.get() is None
         self.a.close()
         self.b.close()
+
+        async def serving():
+            for kind in ("http", "grpc", "batch", "stream"):
+                response = await reporting_serving_request(
+                    kind,
+                    "serving-" + kind,
+                    lambda: emit("tributo.fix3.serving.request"),
+                )
+                if kind == "stream":
+                    await anext(response)
+                    await response.aclose()
+                assert CONTEXT.get() is None
+
+        logging.getLogger("tributo.serving.grpc_deployment").setLevel(logging.INFO)
+        asyncio.run(serving())
         assert active_session()._sender is self.sender
         assert self.sender.flush(5.0)
         return outputs

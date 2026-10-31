@@ -555,9 +555,10 @@ def reporting_context(**attributes: Any) -> Iterator[None]:
     if session is None or session._sender is None:
         yield
         return
-    from tributo._common.reporting.sender import context_scope
+    from tributo._common.reporting.sender import CONTEXT, context_scope
 
-    with context_scope(**attributes):
+    inherited = session._sender.attributes if CONTEXT.get() is None else {}
+    with context_scope(**{**inherited, **attributes}):
         yield
 
 

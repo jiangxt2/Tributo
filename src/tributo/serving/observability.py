@@ -158,7 +158,7 @@ def log_inference_audit(
         **(
             {
                 "extra": {
-                    "event": "tributo.serving.request.finished",
+                    "event": "tributo.serving.inference.audit",
                     "request_id": context.request_id,
                     "trace_id": context.trace_id,
                     "bundle_id": bundle_id,

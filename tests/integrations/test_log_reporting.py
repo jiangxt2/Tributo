@@ -702,12 +702,27 @@ def _run_review_regressions(config: ReportingConfig) -> None:
                             entry["operation_id"] == "op-kernel-b"
                             and "attempt_id" not in entry
                         )
+            serving_rows = _wait_rows("tributo.fix3.serving.request", 4)
+            assert {json.loads(row[1])["request_id"] for row in serving_rows} == {
+                "serving-" + kind for kind in ("http", "grpc", "batch", "stream")
+            }
+            assert all(
+                json.loads(row[1])["trace_id"] == "1" * 32 for row in serving_rows
+            )
+            assert all(
+                json.loads(row[1])["run_id"] == "run-kernel-a" for row in serving_rows
+            )
+            terminal = _wait_rows("tributo.serving.stream.finished")
+            assert len(terminal) == 1
+            assert json.loads(terminal[0][1])["status"] == "cancelled"
             _evidence(
                 "review-regressions",
                 caller_job=caller_job,
                 worker_rows=worker_rows,
                 reducer_rows=reducer_rows,
                 kernels=rows,
+                serving_rows=serving_rows,
+                stream_terminal=terminal,
             )
         assert collector.poll() is not None and ray.is_initialized()
     finally:

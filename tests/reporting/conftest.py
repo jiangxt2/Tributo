@@ -94,3 +94,60 @@ def reporting_kernel(policy, emit):
         )
     }
     return KernelBatchPredictor(factory, *_bindings(), _reporting_policy=policy), batch
+
+
+async def reporting_serving_request(kind, identity, emit, *, invalid=False):
+    """Real serving entry points with one small model double, reused by Ray IT."""
+    import asyncio
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from tests.serving.test_grpc_deployment import _RpcContext
+    from tests.serving.test_model_deployment import _http_request
+    from tributo.serving.grpc_deployment import gRPCInferenceService
+    from tributo.serving.model_deployment import ONNXModel
+    from tributo.serving.proto import inference_pb2
+
+    def predict(outputs, inputs):
+        emit()
+        return [np.array([0.25, 0.75])]
+
+    cls = ONNXModel if kind == "http" else gRPCInferenceService
+    service = cls.__new__(cls)
+    service._runtime = None
+    service._session = SimpleNamespace(run=predict)
+    service._input_names = ("input",)
+    service._input_dtypes = service._input_shapes = ()
+    service.input_name = "input"
+    service.model_path = "test-model"
+    service._bundle_id = service._model_version = "test-bundle"
+    traceparent = "00-" + "1" * 32 + "-" + "2" * 16 + "-01"
+    metadata = (("x-request-id", identity), ("traceparent", traceparent))
+    if kind == "http":
+        return await service(
+            _http_request(
+                b'{"features":[[0,1]]}',
+                headers=[(key.encode(), value.encode()) for key, value in metadata],
+            )
+        )
+    request = inference_pb2.PredictRequest()
+    if not invalid:
+        request.inputs.add(
+            schema_version=1,
+            name="input",
+            shape=[2, 1],
+            datatype="float32",
+            data=[0, 1],
+        )
+    context = _RpcContext(metadata)
+    if kind == "stream":
+        return service.StreamPredict(request, context)
+    if kind == "grpc":
+        return await service.Predict(request, context)
+
+    async def requests():
+        await asyncio.sleep(0)
+        yield request
+
+    return await service.BatchPredict(requests(), context)

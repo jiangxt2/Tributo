@@ -193,6 +193,19 @@ its existing formatting and levels; the reporting branch does not raise source
 logger levels. SSE completion is emitted at iterator termination, with request
 correlation held per request.
 
+HTTP and gRPC handlers bind the existing request/trace identity while validating
+and executing a request, so ordinary selected Python logs share that identity.
+They restore the caller's context on return or failure, retaining the execution
+identity when entering from a process-local sender. An explicitly scoped absence
+of an execution identifier remains authoritative.
+
+`tributo.serving.inference.audit` records the existing computation audit. Its
+timing and process-local metrics retain their original meaning. For gRPC server
+streams, a separate `tributo.serving.stream.finished` event records generator
+completion, early close, cancellation or failure without counting another
+inference. Context is restored before each yield, including when another task
+closes the stream. Generator completion does not prove client receipt.
+
 Streaming binds request context only while advancing the generator and while
 recording its terminal event, then restores it before yielding to ASGI. Client
 disconnects, send failures and cleanup in another task preserve the caller's

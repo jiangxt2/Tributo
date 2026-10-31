@@ -20,7 +20,7 @@ from tributo._common.model_input_contract import (
     normalize_model_shape,
     validate_named_inputs,
 )
-from tributo._common.reporting.session import bootstrap_producer
+from tributo._common.reporting.session import bootstrap_producer, reporting_context
 from tributo.serving.observability import InferenceContext, log_inference_audit
 from tributo.serving.schema import PredictRequest, PredictResponse, request_to_inputs
 
@@ -147,6 +147,14 @@ class ONNXModel:
         names — return 400 instead of bubbling up as a 500 server error.
         """
         context = InferenceContext.from_http(request)
+        with reporting_context(
+            request_id=context.request_id, trace_id=context.trace_id
+        ):
+            return await self._handle_request(request, context)
+
+    async def _handle_request(
+        self, request: Request, context: InferenceContext
+    ) -> JSONResponse:
         started = time.perf_counter()
         try:
             body = await request.json()
