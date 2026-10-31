@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import ClassVar, Literal, TypedDict
 
+from tributo._common.logging import active_logging_policy
 from tributo.data import IngestionPlanReceipt
 from tributo.exceptions import ResultMaterializationError, ResultWriteError
 from tributo.inference.contracts import (
@@ -135,6 +136,9 @@ class RayMapBatchesExecutor:
                     plan.input_binding,
                     plan.output_binding,
                 ),
+                fn_constructor_kwargs={
+                    "_logging_policy": active_logging_policy().serialize()
+                },
                 batch_format="numpy",
                 batch_size=plan.execution.batch_size,
                 compute=ray.data.ActorPoolStrategy(size=plan.execution.concurrency),

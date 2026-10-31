@@ -64,6 +64,22 @@ def test_repository_policy_audit_is_clean(
     assert ci_test_plan.audit_repository(manifest) == []
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "src/tributo/_common/logging.py",
+        "src/tributo/_common/serve_utils.py",
+        "src/tributo/inference/kernel.py",
+        "src/tributo/integrations/algorithm_runtimes/ray_train_torch.py",
+    ],
+)
+def test_logging_changes_select_existing_runtime_environment_gate(manifest, path):
+    plan = ci_test_plan.build_plan(
+        manifest, event="pull_request", mode="pr", changed_paths=[path]
+    )
+    assert "ray-runtime-environment" in plan["selected"]["manual_external"]
+
+
 def test_manifest_rejects_non_positive_suite_budget(tmp_path: Path) -> None:
     payload = json.loads((ROOT / "ci" / "test-suites.json").read_text(encoding="utf-8"))
     payload["suites"][0]["budget_seconds"] = 0

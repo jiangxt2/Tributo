@@ -12,6 +12,9 @@ from typing import Any
 import ray
 from ray import serve
 
+from tributo._common.logging import active_logging_policy, apply_logging_policy
+from tributo._common.logging_policy import logging_runtime_env, override_logging_policy
+
 logger = logging.getLogger(__name__)
 
 
@@ -63,6 +66,25 @@ def deploy_serve_app(
     Returns:
         The deployed application name.
     """
+    logging_policy = active_logging_policy()
+    apply_logging_policy(logging_policy)
+
+    options = (
+        dict(deployment_cls.ray_actor_options or {})
+        if hasattr(deployment_cls, "bind")
+        else {}
+    )
+    existing_runtime = dict(options.get("runtime_env") or {})
+    merged_runtime = {**existing_runtime, **(runtime_env or {})}
+    merged_runtime["env_vars"] = {
+        **existing_runtime.get("env_vars", {}),
+        **(runtime_env or {}).get("env_vars", {}),
+    }
+    replica_policy = override_logging_policy(logging_policy, merged_runtime["env_vars"])
+    if callable(merged_runtime.get("worker_process_setup_hook")):
+        raise ValueError("Ray Serve logging setup requires a string hook")
+    options["runtime_env"] = logging_runtime_env(merged_runtime, policy=replica_policy)
+
     if not ray.is_initialized():
         ray.init(address=ray_address, ignore_reinit_error=True)
 
@@ -86,16 +108,13 @@ def deploy_serve_app(
     # Check if deployment_cls is already a Deployment object (decorated by @serve.deployment)
     if hasattr(deployment_cls, "bind"):
         # Already a Deployment object, use directly
-        deployment = deployment_cls
+        deployment = deployment_cls.options(ray_actor_options=options)
     else:
         # Regular class, needs decoration
-        ray_actor_options = {}
-        if runtime_env:
-            ray_actor_options["runtime_env"] = runtime_env
         deployment = serve.deployment(
             num_replicas=num_replicas,
             user_config=user_config,
-            ray_actor_options=ray_actor_options or None,
+            ray_actor_options=options,
         )(deployment_cls)
 
     # gRPC proxy relies on ROUTE_TABLE to discover applications, but deployments

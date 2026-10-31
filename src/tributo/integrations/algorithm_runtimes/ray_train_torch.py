@@ -13,7 +13,8 @@ import json
 import logging
 import math
 import tempfile
-from collections.abc import Mapping
+import time
+from collections.abc import Callable, Mapping
 from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
@@ -1749,15 +1750,70 @@ def _recipe_worker(config: Mapping[str, Any]) -> None:
         shutil.rmtree(checkpoint_dir, ignore_errors=True)
 
 
+def _run_logged_worker(
+    config: Mapping[str, Any], worker: Callable[[Mapping[str, Any]], None], mode: str
+) -> None:
+    import ray.train
+
+    from tributo._common.logging import apply_logging_policy, emit_event
+    from tributo._common.logging_policy import LoggingPolicy, resolve_policy
+    from tributo.training.lifecycle import _is_cancellation
+
+    raw = config.get("_core_logging_policy")
+    apply_logging_policy(
+        LoggingPolicy.deserialize(raw) if isinstance(raw, str) else resolve_policy()
+    )
+    fields = {
+        "phase": "training_worker",
+        "mode": mode,
+        "rank": ray.train.get_context().get_world_rank(),
+        "world_size": ray.train.get_context().get_world_size(),
+    }
+    started = time.monotonic()
+    emit_event(
+        logger,
+        "tributo.training.started",
+        level=logging.DEBUG,
+        status="started",
+        **fields,
+    )
+    try:
+        worker(config)
+    except BaseException as exc:
+        cancelled = _is_cancellation(exc) or not isinstance(exc, Exception)
+        emit_event(
+            logger,
+            "tributo.training.finished",
+            level=logging.INFO if cancelled else logging.ERROR,
+            status="cancelled" if cancelled else "failed",
+            error_type=type(exc).__name__,
+            duration_ms=(time.monotonic() - started) * 1000,
+            **fields,
+        )
+        raise
+    else:
+        emit_event(
+            logger,
+            "tributo.training.finished",
+            status="succeeded",
+            duration_ms=(time.monotonic() - started) * 1000,
+            **fields,
+        )
+
+
 @DeveloperAPI
 def torch_recipe_train_loop_per_worker(config: Mapping[str, Any]) -> None:
     """Run the Core-selected Recipe Worker wrapper."""
-    _recipe_worker(config)
+    _run_logged_worker(config, _recipe_worker, "recipe")
 
 
 @DeveloperAPI
 def ray_torch_adapter_train_loop_per_worker(config: Mapping[str, Any]) -> None:
     """Run the Core-selected Adapter Worker wrapper."""
+    _run_logged_worker(config, _adapter_worker, "adapter")
+
+
+def _adapter_worker(config: Mapping[str, Any]) -> None:
     reference = config.get("_core_implementation_ref")
     if not isinstance(reference, str):
         raise AlgorithmConfigurationError(
@@ -2032,6 +2088,11 @@ class RayTrainTorchRuntime:
                     "stage_dependency" if initial_checkpoint is not None else "none"
                 )
                 train_config = _torch_algorithm_context_config(base.plan)
+                from tributo._common.logging import active_logging_policy
+
+                train_config["_core_logging_policy"] = (
+                    active_logging_policy().serialize()
+                )
                 stage_binding = base.plan.input_bindings.get(stage.input_roles[0])
                 if stage_binding is None:
                     raise AlgorithmConfigurationError(

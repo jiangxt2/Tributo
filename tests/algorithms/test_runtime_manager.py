@@ -6,12 +6,24 @@ from typing import Any
 
 import pytest
 
+from tributo._common.logging_policy import POLICY_ENV, SETUP_HOOK, LoggingPolicy
 from tributo.algorithms.api import (
     AlgorithmConfigurationError,
     ExecutionProfile,
     WorkerResources,
 )
 from tributo.algorithms.core import LocalRuntimeOptions, RayRuntimeManager
+
+
+def assert_runtime_call(ray: Any, **expected: Any) -> None:
+    assert len(ray.init_calls) == 1
+    actual = dict(ray.init_calls[0])
+    runtime = actual.pop("runtime_env")
+    assert actual == expected
+    assert runtime["worker_process_setup_hook"] == SETUP_HOOK
+    assert isinstance(
+        LoggingPolicy.deserialize(runtime["env_vars"][POLICY_ENV]), LoggingPolicy
+    )
 
 
 class FakeRay:
@@ -49,7 +61,7 @@ def test_local_runtime_uses_ray_detection_by_default_and_shuts_owned_connection(
     with manager.open(ExecutionProfile.LOCAL) as session:
         assert session.owned is True
         assert session.runtime_owned is True
-        assert ray.init_calls == [{"address": "local"}]
+        assert_runtime_call(ray, address="local")
         assert ray.shutdown_calls == 0
 
     assert ray.shutdown_calls == 1
@@ -64,7 +76,7 @@ def test_local_runtime_passes_only_explicit_resource_overrides() -> None:
         local_options=LocalRuntimeOptions(num_cpus=4, num_gpus=0),
     ).close()
 
-    assert ray.init_calls == [{"address": "local", "num_cpus": 4.0, "num_gpus": 0.0}]
+    assert_runtime_call(ray, address="local", num_cpus=4.0, num_gpus=0.0)
 
 
 def test_local_runtime_rejects_fractional_raylet_resource_overrides() -> None:
@@ -81,7 +93,7 @@ def test_local_runtime_uses_constructor_resource_overrides() -> None:
 
     manager.open(ExecutionProfile.LOCAL).close()
 
-    assert ray.init_calls == [{"address": "local", "num_cpus": 3.0, "num_gpus": 0.0}]
+    assert_runtime_call(ray, address="local", num_cpus=3.0, num_gpus=0.0)
 
 
 def test_nested_owned_leases_shutdown_only_after_the_last_release() -> None:
@@ -132,7 +144,7 @@ def test_cluster_connection_uses_ray_auto_without_provider_detection() -> None:
         worker_count=16,
     )
 
-    assert ray.init_calls == [{"address": "auto"}]
+    assert_runtime_call(ray, address="auto")
     assert session.owned is True
     assert session.runtime_owned is False
     assert session.resource_preflight == "deferred_to_ray"
