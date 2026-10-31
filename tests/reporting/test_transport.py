@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from opentelemetry._logs import LogRecord
@@ -15,7 +17,7 @@ from opentelemetry.sdk._logs.export import LogRecordExportResult
 from opentelemetry.sdk.resources import Resource
 
 from tests.reporting.conftest import Endpoint
-from tributo._common.reporting.config import SenderConfig
+from tributo._common.reporting.config import ReportingError, SenderConfig
 from tributo._common.reporting.transport import (
     MAX_RESPONSE_BYTES,
     DeliveryOutcome,
@@ -158,6 +160,7 @@ def test_explicit_headers_and_disabled_environment_inheritance(
     monkeypatch.setenv("TEST_REPORT_HEADERS", '{"Authorization":"test-token"}')
     monkeypatch.setenv("HTTP_PROXY", "http://unreachable.invalid:1")
     monkeypatch.setenv("REQUESTS_CA_BUNDLE", "/does/not/exist")
+    monkeypatch.setenv("SSL_CERT_FILE", "/does/not/exist")
     exporter = ValidatingExporter(
         SenderConfig(
             endpoint=otlp_endpoint.url, headers_ref="env://TEST_REPORT_HEADERS"
@@ -174,3 +177,57 @@ def test_explicit_headers_and_disabled_environment_inheritance(
         assert exporter.session.trust_env is False
     finally:
         exporter.shutdown()
+
+
+@pytest.mark.parametrize("slow", ["headers", "body"])
+def test_total_response_deadline_cancels_io_and_releases_export_thread(
+    otlp_endpoint, slow
+):
+    outcomes = []
+    exporter = ValidatingExporter(
+        SenderConfig(endpoint=otlp_endpoint.url, send_timeout=0.25), outcomes.append
+    )
+    otlp_endpoint.slow = slow
+    otlp_endpoint.responses = [
+        (200, "application/x-protobuf", _reply(0, "slow-warning"))
+    ]
+    batch = [ReadableLogRecord(LogRecord(body="safe.event"), Resource({}))]
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            began = time.monotonic()
+            assert (
+                executor.submit(exporter.export, batch).result(timeout=0.8)
+                is LogRecordExportResult.FAILURE
+            )
+            assert time.monotonic() - began < 0.8
+            assert otlp_endpoint.disconnected.wait(0.8)
+            assert len(otlp_endpoint.requests) == 1
+            assert (
+                outcomes[0].kind == "transport_error" and outcomes[0].accepted is None
+            )
+            otlp_endpoint.slow = None
+            assert (
+                executor.submit(exporter.export, batch).result(timeout=0.8)
+                is LogRecordExportResult.SUCCESS
+            )
+            assert len(otlp_endpoint.requests) == 2 and outcomes[-1].accepted == 1
+    finally:
+        exporter.shutdown()
+
+
+@pytest.mark.parametrize(
+    "tls",
+    [
+        {"ca_file": "/private/test-secret-ca.pem"},
+        {
+            "client_certificate": "/private/test-secret-cert.pem",
+            "client_key": "/private/test-secret-key.pem",
+        },
+    ],
+)
+def test_tls_configuration_failure_keeps_paths_private(tls):
+    with pytest.raises(ReportingError, match="^reporting.config.tls$"):
+        ValidatingExporter(
+            SenderConfig(endpoint="https://localhost:1/v1/logs", **tls),
+            lambda outcome: None,
+        )

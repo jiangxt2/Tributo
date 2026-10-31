@@ -18,12 +18,16 @@ class Stream(module.StreamingInferenceService):
     async def _generate_stream(
         self, input_data: dict[str, Any]
     ) -> AsyncGenerator[str, None]:
-        await asyncio.sleep(0)
-        if input_data.get("fail"):
-            raise ValueError("test-private-failure")
-        yield str((CONTEXT.get() or {}).get("request_id"))
-        await asyncio.sleep(0)
-        yield str((CONTEXT.get() or {}).get("request_id"))
+        try:
+            await asyncio.sleep(0)
+            if input_data.get("fail"):
+                raise ValueError("test-private-failure")
+            yield str((CONTEXT.get() or {}).get("request_id"))
+            await asyncio.sleep(0)
+            yield str((CONTEXT.get() or {}).get("request_id"))
+        finally:
+            await asyncio.sleep(0)
+            self.closed_context = dict(CONTEXT.get() or {})
 
 
 def request(identity: str, *, fail: bool = False, invalid: bool = False) -> Request:
@@ -40,10 +44,11 @@ def request(identity: str, *, fail: bool = False, invalid: bool = False) -> Requ
 
 @pytest.fixture
 def enabled(monkeypatch: pytest.MonkeyPatch) -> list[logging.LogRecord]:
-    from contextlib import contextmanager
+    from types import SimpleNamespace
 
-    from tributo._common.reporting.sender import context_scope
-    from tributo.serving import grpc_deployment, observability
+    from tributo._common.reporting import session as sessions
+    from tributo.observability import SenderConfig
+    from tributo.serving import grpc_deployment
 
     records: list[logging.LogRecord] = []
 
@@ -51,19 +56,16 @@ def enabled(monkeypatch: pytest.MonkeyPatch) -> list[logging.LogRecord]:
         def emit(self, record: logging.LogRecord) -> None:
             record.correlated_request_id = (CONTEXT.get() or {}).get("request_id")
             record.correlated_trace_id = (CONTEXT.get() or {}).get("trace_id")
+            record.reported_context = dict(CONTEXT.get() or {})
             records.append(record)
 
-    @contextmanager
-    def scope(**values: Any) -> Any:
-        with context_scope(**values):
-            yield
-
-    monkeypatch.setattr(observability, "active_session", lambda: object())
+    owner = sessions.ReportingSession(producer=SenderConfig())
+    monkeypatch.setattr(
+        owner, "_sender", SimpleNamespace(attributes={"operation_id": "service-op"})
+    )
+    monkeypatch.setattr(sessions, "_ACTIVE", owner)
     for target in (module, grpc_deployment):
-        monkeypatch.setattr(target, "active_session", lambda: object())
-        monkeypatch.setattr(target, "reporting_context", scope)
         monkeypatch.setattr(target.logger, "level", logging.DEBUG)
-    monkeypatch.setattr(module, "bootstrap_producer", lambda: None)
     handler = Capture()
     for target in (module, grpc_deployment):
         target.logger.addHandler(handler)
@@ -166,39 +168,62 @@ async def test_grpc_stream_terminal_preserves_computation_audit_and_metrics(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["sse", "grpc"])
+@pytest.mark.parametrize("execution", [None, "original-execution"])
 async def test_cross_task_close_restores_each_callers_context(
-    enabled: list[logging.LogRecord],
+    enabled: list[logging.LogRecord], kind, execution
 ) -> None:
+    from tests.reporting.conftest import reporting_serving_request
     from tributo._common.reporting.sender import context_scope
 
-    response = await Stream()(request("stream-a"))
-    assert (
-        await asyncio.create_task(anext(response.body_iterator)) == "data: stream-a\n\n"
-    )
+    identity = {"run_id": "original-run", "execution_id": execution}
+    with context_scope(**identity):
+        stream = (
+            (await Stream()(request("stream-a"))).body_iterator
+            if kind == "sse"
+            else await reporting_serving_request("stream", "stream-a", lambda: None)
+        )
+        await asyncio.create_task(anext(stream))
     assert CONTEXT.get() is None
-    with context_scope(request_id="closing-task"):
-        await asyncio.create_task(response.body_iterator.aclose())
-        assert CONTEXT.get()["request_id"] == "closing-task"
+    with context_scope(
+        request_id="closing-task",
+        run_id="foreign-run",
+        execution_id="foreign-execution",
+    ):
+        caller = dict(CONTEXT.get())
+        await asyncio.create_task(stream.aclose())
+        assert CONTEXT.get() == caller
     ends = [r for r in enabled if getattr(r, "event", "").endswith("finished")]
     assert len(ends) == 1 and ends[0].status == "cancelled"
-    assert ends[0].request_id == ends[0].correlated_request_id == "stream-a"
+    assert ends[0].correlated_request_id == "stream-a"
+    assert ends[0].reported_context["run_id"] == "original-run"
+    assert ends[0].reported_context.get("execution_id") == execution
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("spec", ["2.0", "2.4"])
+@pytest.mark.parametrize(
+    ("spec", "failure_at"),
+    [
+        ("2.0", "http.response.body"),
+        ("2.4", "http.response.body"),
+        ("2.4", "http.response.start"),
+    ],
+)
 async def test_asgi_send_disconnect_and_foreign_task_cleanup(
-    enabled: list[logging.LogRecord], spec: str
+    enabled: list[logging.LogRecord], spec: str, failure_at: str
 ) -> None:
     from starlette.requests import ClientDisconnect
 
     from tributo._common.reporting.sender import context_scope
 
-    response = await Stream()(request("send-failure"))
+    service = Stream()
+    with context_scope(run_id="original-run", execution_id="original-execution"):
+        response = await service(request("send-failure"))
     sent = asyncio.Event()
 
     async def send(message: dict[str, Any]) -> None:
-        if message["type"] == "http.response.body":
-            assert CONTEXT.get() is None
+        if message["type"] == failure_at:
+            assert CONTEXT.get() == caller
             sent.set()
             if spec == "2.4":
                 raise OSError("test client disconnected")
@@ -208,23 +233,34 @@ async def test_asgi_send_disconnect_and_foreign_task_cleanup(
         await sent.wait()
         return {"type": "http.disconnect"}
 
-    call = response({"type": "http", "asgi": {"spec_version": spec}}, receive, send)
-    if spec == "2.4":
-        with pytest.raises(ClientDisconnect):
+    with context_scope(
+        request_id="foreign-request",
+        run_id="foreign-run",
+        execution_id="foreign-execution",
+    ):
+        caller = dict(CONTEXT.get())
+        call = response({"type": "http", "asgi": {"spec_version": spec}}, receive, send)
+        if spec == "2.4":
+            with pytest.raises(ClientDisconnect):
+                await asyncio.wait_for(call, 2)
+        else:
             await asyncio.wait_for(call, 2)
-    else:
-        await asyncio.wait_for(call, 2)
-    with context_scope(request_id="foreign-request"):
-        await asyncio.create_task(response.body_iterator.aclose())
-        assert CONTEXT.get()["request_id"] == "foreign-request"
+        assert CONTEXT.get() == caller
+    if failure_at == "http.response.body":
+        assert service.closed_context["run_id"] == "original-run"
+        assert service.closed_context["execution_id"] == "original-execution"
     ends = [r for r in enabled if getattr(r, "event", "").endswith("finished")]
     assert len(ends) == 1 and ends[0].status == "cancelled"
     assert ends[0].correlated_request_id == "send-failure"
+    assert ends[0].reported_context["run_id"] == "original-run"
+    assert ends[0].reported_context["execution_id"] == "original-execution"
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cleanup_error", [ValueError, asyncio.CancelledError])
 async def test_user_cleanup_runs_in_request_scope_without_masking_disconnect(
     enabled: list[logging.LogRecord],
+    cleanup_error,
 ) -> None:
     seen = []
 
@@ -236,7 +272,7 @@ async def test_user_cleanup_runs_in_request_scope_without_masking_disconnect(
                 yield "token"
             finally:
                 seen.append((CONTEXT.get() or {}).get("request_id"))
-                raise ValueError("test cleanup error")
+                raise cleanup_error("test cleanup error")
 
     response = await CleanupStream()(request("cleanup-request"))
     await asyncio.create_task(anext(response.body_iterator))

@@ -549,17 +549,40 @@ def reporting_operation(function: Callable[_P, _R]) -> Callable[_P, _R]:
 
 
 @contextmanager
-def reporting_context(**attributes: Any) -> Iterator[None]:
+def reporting_context(
+    snapshot: Mapping[str, Any] | None = None, /, **attributes: Any
+) -> Iterator[None]:
     """Record-scoped correlation; inactive calls import no optional SDK."""
     session = active_session()
     if session is None or session._sender is None:
         yield
         return
-    from tributo._common.reporting.sender import CONTEXT, context_scope
+    from tributo._common.reporting.sender import CONTEXT, safe_attributes
 
-    inherited = session._sender.attributes if CONTEXT.get() is None else {}
-    with context_scope(**{**inherited, **attributes}):
+    current = CONTEXT.get()
+    inherited = (
+        snapshot
+        if snapshot is not None
+        else session._sender.attributes
+        if current is None
+        else current
+    )
+    token = CONTEXT.set({**inherited, **safe_attributes(attributes)})
+    try:
         yield
+    finally:
+        CONTEXT.reset(token)
+
+
+def capture_reporting_context() -> dict[str, Any] | None:
+    """Copy the effective identity; an empty scope must remain distinct from None."""
+    session = active_session()
+    if session is None or session._sender is None:
+        return None
+    from tributo._common.reporting.sender import CONTEXT
+
+    current = CONTEXT.get()
+    return dict(session._sender.attributes if current is None else current)
 
 
 @contextmanager

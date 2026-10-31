@@ -206,6 +206,12 @@ completion, early close, cancellation or failure without counting another
 inference. Context is restored before each yield, including when another task
 closes the stream. Generator completion does not prove client receipt.
 
+Streams retain the complete execution identity captured at request start,
+including intentionally absent fields. A task closing another request's stream
+does not replace its run/execution identity. The SSE response owns iterator
+closure: ASGI returns only after its cleanup has run, including failed response
+sends and disconnect cancellation.
+
 Streaming binds request context only while advancing the generator and while
 recording its terminal event, then restores it before yielding to ASGI. Client
 disconnects, send failures and cleanup in another task preserve the caller's
@@ -222,6 +228,13 @@ validated accepted/rejected counts and is never replayed as a whole batch.
 Malformed/error bodies, 201/204 and redirects fail explicitly. Retryable
 transport/status failures use the SDK's single bounded retry layer. Runtime
 delivery failures make reporting visibly degraded and preserve business results.
+
+The SDK Session adapter reuses Core's locked `aiohttp` client for HTTP I/O
+that supports cancellation. Its total deadline covers headers and the complete body,
+using the SDK's remaining export budget. A slow trickle cannot keep a response
+reader occupied beyond that deadline. TLS uses explicit CA/client settings or
+the Requests certifi roots; ambient proxy/CA settings remain excluded. Protocol
+encoding, batching and retries remain owned by the OTel SDK.
 
 `snapshot()` exposes offered records, adjacent OTLP acceptance/rejection,
 failed batches, observed queue-overflow events and safe local diagnoses. It does

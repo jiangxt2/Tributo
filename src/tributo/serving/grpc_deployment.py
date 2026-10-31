@@ -27,6 +27,7 @@ from tributo._common.model_input_contract import (
 from tributo._common.reporting.session import (
     active_session,
     bootstrap_producer,
+    capture_reporting_context,
     reporting_context,
 )
 from tributo.serving.observability import InferenceContext, log_inference_audit
@@ -465,10 +466,11 @@ class gRPCInferenceService:
         """
         context = InferenceContext.from_grpc(grpc_context)
         began = time.perf_counter()
+        snapshot = capture_reporting_context()
         status = "cancelled"
         try:
             with reporting_context(
-                request_id=context.request_id, trace_id=context.trace_id
+                snapshot, request_id=context.request_id, trace_id=context.trace_id
             ):
                 predictions = self._stream_predictions(request, grpc_context, context)
             if predictions is None:
@@ -476,7 +478,7 @@ class gRPCInferenceService:
                 return
             for pred in predictions:
                 with reporting_context(
-                    request_id=context.request_id, trace_id=context.trace_id
+                    snapshot, request_id=context.request_id, trace_id=context.trace_id
                 ):
                     response = self._response([pred], context=context)
                     response.confidence = pred
@@ -488,7 +490,7 @@ class gRPCInferenceService:
         finally:
             if active_session() is not None:
                 with reporting_context(
-                    request_id=context.request_id, trace_id=context.trace_id
+                    snapshot, request_id=context.request_id, trace_id=context.trace_id
                 ):
                     logger.info(
                         "Serving stream finished",

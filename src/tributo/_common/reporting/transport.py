@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
+import io
 import json
 import re
+import ssl
 import threading
-import time
 from collections.abc import Callable, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit
 
+import aiohttp
 import requests
 from opentelemetry.exporter.otlp.proto.http import Compression
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
@@ -90,6 +94,71 @@ class ControlledSession(requests.Session):
         self._config = config
         if config.proxy:
             self.proxies = {"http": config.proxy, "https": config.proxy}
+        self._tls: ssl.SSLContext | bool = True
+        if any(
+            urlsplit(url).scheme == "https"
+            for url in (config.endpoint, config.proxy or "")
+        ):
+            try:
+                self._tls = ssl.create_default_context(
+                    cafile=config.ca_file or requests.certs.where()
+                )
+                if config.client_certificate:
+                    self._tls.load_cert_chain(
+                        config.client_certificate, config.client_key
+                    )
+            except (OSError, ValueError):
+                self.close()
+                raise ReportingError("reporting.config.tls") from None
+
+    async def _post(
+        self,
+        data: bytes,
+        headers: Mapping[str, str],
+        timeout: float,
+        outcome: DeliveryOutcome,
+    ) -> tuple[requests.Response, bytes]:
+        # Run in the SDK's synchronous export thread. The async timeout cancels
+        # the socket read itself; no detached response-reader thread survives it.
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=timeout, ceil_threshold=float("inf")),
+            trust_env=False,
+            cookie_jar=aiohttp.DummyCookieJar(),
+        ) as client:
+            async with client.post(
+                self._config.endpoint,
+                data=data,
+                headers=headers,
+                proxy=self._config.proxy,
+                ssl=self._tls,
+                allow_redirects=False,
+            ) as incoming:
+                outcome.status_code = incoming.status
+                response = requests.Response()
+                response.status_code = incoming.status
+                # Never forward a server-provided reason string into SDK logs.
+                response.reason = str(incoming.status)
+                response.headers.update(incoming.headers)
+                body = bytearray()
+                if incoming.status == 200:
+                    outcome.kind = "protocol_error"
+                    media = (
+                        response.headers.get("Content-Type", "")
+                        .split(";", 1)[0]
+                        .strip()
+                        .lower()
+                    )
+                    if media != "application/x-protobuf":
+                        raise ProtocolResponseError("reporting.protocol.content_type")
+                    async for chunk in incoming.content.iter_chunked(65536):
+                        if len(body) + len(chunk) > MAX_RESPONSE_BYTES:
+                            raise ProtocolResponseError(
+                                "reporting.protocol.response_limit"
+                            )
+                        body.extend(chunk)
+                response.raw = io.BytesIO(body)
+        await asyncio.sleep(0)
+        return response, bytes(body)
 
     def request(
         self, method: str, url: str | bytes, *args: Any, **kwargs: Any
@@ -106,52 +175,35 @@ class ControlledSession(requests.Session):
         if not isinstance(data, bytes) or len(data) > self._config.max_request_bytes:
             outcome.kind = "protocol_error"
             raise ProtocolResponseError("reporting.protocol.request_size")
-        kwargs["allow_redirects"] = False
-        kwargs["stream"] = True
-        deadline = time.monotonic() + self._config.send_timeout
+        headers = self.headers.copy()
+        headers.update(kwargs.get("headers") or {})
         try:
-            response = super().request(method, url, **kwargs)
-        except requests.RequestException as error:
-            # Preserve retry classification without disclosing the original URL,
-            # request headers, proxy details, or underlying exception representation.
-            if isinstance(error, (requests.ConnectionError, requests.Timeout)):
-                raise requests.ConnectionError(
-                    "reporting.transport.unavailable"
-                ) from None
-            outcome.kind = "protocol_error"
-            raise ProtocolResponseError("reporting.protocol.http_request") from None
+            # The SDK passes its remaining export budget on every retry.
+            timeout = min(
+                self._config.send_timeout,
+                float(kwargs.get("timeout", self._config.send_timeout)),
+            )
+            if timeout <= 0:
+                raise TimeoutError
+            response, body = asyncio.run(self._post(data, headers, timeout, outcome))
+        except (aiohttp.ClientConnectionError, TimeoutError):
+            outcome.kind = "transport_error"
+            raise requests.ConnectionError("reporting.transport.unavailable") from None
+        except ProtocolResponseError:
+            raise
         except Exception:
             outcome.kind = "protocol_error"
             raise ProtocolResponseError("reporting.protocol.http_request") from None
         try:
-            outcome.status_code = response.status_code
-            # Do not let arbitrary server-provided reason text reach SDK logging.
-            response.reason = str(response.status_code)
             if response.status_code != 200:
                 if response.status_code < 400:
                     outcome.kind = "protocol_error"
                     raise ProtocolResponseError("reporting.protocol.status")
                 return response
             outcome.kind = "protocol_error"
-            media = (
-                response.headers.get("Content-Type", "")
-                .split(";", 1)[0]
-                .strip()
-                .lower()
-            )
-            if media != "application/x-protobuf":
-                raise ProtocolResponseError("reporting.protocol.content_type")
-            body = bytearray()
-            for chunk in response.iter_content(chunk_size=65536):
-                if (
-                    time.monotonic() >= deadline
-                    or len(body) + len(chunk) > MAX_RESPONSE_BYTES
-                ):
-                    raise ProtocolResponseError("reporting.protocol.response_limit")
-                body.extend(chunk)
             reply = ExportLogsServiceResponse()
             try:
-                reply.ParseFromString(bytes(body))
+                reply.ParseFromString(body)
             except Exception:
                 raise ProtocolResponseError("reporting.protocol.protobuf") from None
             rejected = reply.partial_success.rejected_log_records
@@ -166,14 +218,6 @@ class ControlledSession(requests.Session):
                 "warning" if reply.partial_success.error_message else "accepted"
             )
             return response
-        except requests.RequestException as error:
-            outcome.kind = "transport_error"
-            if isinstance(error, (requests.ConnectionError, requests.Timeout)):
-                raise requests.ConnectionError(
-                    "reporting.transport.unavailable"
-                ) from None
-            outcome.kind = "protocol_error"
-            raise ProtocolResponseError("reporting.protocol.http_response") from None
         finally:
             response.close()
 

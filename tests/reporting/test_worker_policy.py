@@ -244,6 +244,60 @@ def _trusted_failing_hook() -> None:
 
 
 @pytest.mark.parametrize(
+    "module", ["inference.batch_job", "explainability.batch_job", "vector_index.job"]
+)
+@pytest.mark.parametrize(
+    "user_hook", [None, "tests.reporting.test_worker_policy._trusted_failing_hook"]
+)
+def test_public_job_submit_composes_hooks_once(
+    monkeypatch, isolated_logging, tmp_path, module, user_hook
+):
+    import logging
+    from copy import deepcopy
+    from importlib import import_module
+
+    from tributo import job
+    from tributo._common import worker_logging
+    from tributo._common.runtime_env import build_runtime_env
+
+    client = MagicMock()
+    client.submit_job.return_value = "job-id"
+    monkeypatch.setattr(job, "JobSubmissionClient", lambda *args, **kwargs: client)
+    monkeypatch.setattr(worker_logging, "_dispatched", None)
+    monkeypatch.setenv("TRIBUTO_LOG_REPORTING_CONFIG", "/remote/reporting-config.json")
+    (tmp_path / "tributo").mkdir()
+    runtime = build_runtime_env(
+        project_root=tmp_path,
+        env_vars={"TRIBUTO_LOG_REPORTING_ENABLED": "1", "TRIBUTO_LOG_LEVEL": "DEBUG"},
+    )
+    assert (
+        runtime["env_vars"]["TRIBUTO_LOG_REPORTING_CONFIG"]
+        == "/remote/reporting-config.json"
+    )
+    if user_hook:
+        runtime["worker_process_setup_hook"] = user_hook
+    original = deepcopy(runtime)
+    assert (
+        job.TributoClient("http://unused.invalid:8265").submit(
+            "python -m tributo." + module, runtime_env=runtime
+        )
+        == "job-id"
+    )
+    assert runtime == original
+    submitted = client.submit_job.call_args.kwargs["runtime_env"]
+    for key, value in submitted["env_vars"].items():
+        monkeypatch.setenv(key, value)
+    name, _, attribute = submitted["worker_process_setup_hook"].rpartition(".")
+    hook = getattr(import_module(name), attribute)
+    if user_hook:
+        with pytest.raises(RuntimeError, match="trusted-hook-failure"):
+            hook()
+    else:
+        hook()
+    assert logging.getLogger("tributo").level == logging.DEBUG
+
+
+@pytest.mark.parametrize(
     ("supplied", "expected"),
     [
         (None, "original-run"),

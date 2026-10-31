@@ -124,8 +124,11 @@ class PolicyScopeActor:
     def run(self) -> list[list[int]]:
         import asyncio
 
+        from starlette.requests import ClientDisconnect
+
         from tests.reporting.conftest import reporting_serving_request
-        from tributo._common.reporting.sender import CONTEXT
+        from tests.reporting.test_streaming import Stream, request
+        from tributo._common.reporting.sender import CONTEXT, context_scope
         from tributo._common.reporting.session import active_session
 
         outputs = []
@@ -143,11 +146,38 @@ class PolicyScopeActor:
                     lambda: emit("tributo.fix3.serving.request"),
                 )
                 if kind == "stream":
-                    await anext(response)
-                    await response.aclose()
+                    with context_scope(run_id="grpc-run"):
+                        await anext(response)
+                    with context_scope(
+                        run_id="foreign-run", execution_id="foreign-execution"
+                    ):
+                        await asyncio.create_task(response.aclose())
+                        assert CONTEXT.get()["run_id"] == "foreign-run"
                 assert CONTEXT.get() is None
 
+            service = Stream()
+            with context_scope(run_id="sse-run", execution_id="sse-execution"):
+                response = await service(request("serving-sse"))
+
+            async def send(message):
+                if message["type"] == "http.response.body":
+                    raise OSError("test disconnect")
+
+            async def receive():
+                return {"type": "http.disconnect"}
+
+            with context_scope(run_id="foreign-run", execution_id="foreign-execution"):
+                try:
+                    await response(
+                        {"type": "http", "asgi": {"spec_version": "2.4"}}, receive, send
+                    )
+                except ClientDisconnect:
+                    pass
+                assert CONTEXT.get()["run_id"] == "foreign-run"
+            assert service.closed_context["run_id"] == "sse-run"
+
         logging.getLogger("tributo.serving.grpc_deployment").setLevel(logging.INFO)
+        logging.getLogger("tributo.serving.streaming_deployment").setLevel(logging.INFO)
         asyncio.run(serving())
         assert active_session()._sender is self.sender
         assert self.sender.flush(5.0)

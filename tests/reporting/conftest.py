@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -15,6 +16,8 @@ class Endpoint:
     url: str = ""
     responses: list[tuple[int, str, bytes]] = field(default_factory=list)
     requests: list[tuple[dict[str, str], bytes]] = field(default_factory=list)
+    slow: str | None = None
+    disconnected: threading.Event = field(default_factory=threading.Event)
 
 
 @pytest.fixture
@@ -30,13 +33,28 @@ def otlp_endpoint() -> Iterator[Endpoint]:
                 if endpoint.responses
                 else (200, "application/x-protobuf", b"")
             )
-            self.send_response(status)
-            self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(len(reply)))
-            self.send_header("Retry-After", "0")
-            self.send_header("Location", endpoint.url + "/redirected")
-            self.end_headers()
-            self.wfile.write(reply)
+            try:
+                if endpoint.slow == "headers":
+                    reply = (
+                        f"HTTP/1.0 {status} OK\r\nContent-Type: {content_type}\r\nContent-Length: {len(reply)}\r\n\r\n".encode()
+                        + reply
+                    )
+                else:
+                    self.send_response(status)
+                    self.send_header("Content-Type", content_type)
+                    self.send_header("Content-Length", str(len(reply)))
+                    self.send_header("Retry-After", "0")
+                    self.send_header("Location", endpoint.url + "/redirected")
+                    self.end_headers()
+                if endpoint.slow:
+                    for byte in reply:
+                        time.sleep(0.05)
+                        self.wfile.write(bytes([byte]))
+                        self.wfile.flush()
+                else:
+                    self.wfile.write(reply)
+            except (BrokenPipeError, ConnectionResetError):
+                endpoint.disconnected.set()
 
         def log_message(self, format: str, *args: object) -> None:
             pass

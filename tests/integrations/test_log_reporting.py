@@ -709,12 +709,23 @@ def _run_review_regressions(config: ReportingConfig) -> None:
             assert all(
                 json.loads(row[1])["trace_id"] == "1" * 32 for row in serving_rows
             )
-            assert all(
-                json.loads(row[1])["run_id"] == "run-kernel-a" for row in serving_rows
-            )
-            terminal = _wait_rows("tributo.serving.stream.finished")
-            assert len(terminal) == 1
-            assert json.loads(terminal[0][1])["status"] == "cancelled"
+            for _, raw in serving_rows:
+                entry = json.loads(raw)
+                assert entry["run_id"] == (
+                    "grpc-run"
+                    if entry["request_id"] == "serving-stream"
+                    else "run-kernel-a"
+                )
+            terminal = _wait_rows("tributo.serving.stream.finished", 2)
+            assert len(terminal) == 2
+            identities = {
+                json.loads(row[1])["request_id"]: json.loads(row[1]) for row in terminal
+            }
+            assert identities["serving-stream"]["run_id"] == "grpc-run"
+            assert "execution_id" not in identities["serving-stream"]
+            assert identities["serving-sse"]["run_id"] == "sse-run"
+            assert identities["serving-sse"]["execution_id"] == "sse-execution"
+            assert all(row["status"] == "cancelled" for row in identities.values())
             _evidence(
                 "review-regressions",
                 caller_job=caller_job,
