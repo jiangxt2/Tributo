@@ -232,3 +232,23 @@ The entrypoint uses a unique Compose project, shared locked runtime image,
 two Ray nodes and isolated Doris FE/BE. It retains SQL evidence, exact source
 snapshot identity, JUnit results and resource cleanup records. It needs Docker
 access and must run outside a restrictive process/network sandbox.
+
+## Run manually in GitHub Actions
+
+After `log-reporting-e2e.yml` exists on the default branch, select **Log
+Reporting E2E → Run workflow** and choose the branch to validate, or run:
+
+```bash
+gh workflow run log-reporting-e2e.yml --ref YOUR_BRANCH
+```
+
+The workflow provisions and checksum-verifies Contrib 0.163.2, then runs the
+same eight cases through `tools.reporting_it --cases all` on Linux ARM64 with
+Python 3.12. CI uses `--build-input-mode canonical`; local execution defaults
+to `local-mirror`. Images remain digest-pinned in either mode.
+
+Download the seven-day evidence artifact for JUnit, SQL records, service/build
+logs and `result.json`. Success requires all cases without skips and no
+`cleanup_errors`; failures retain diagnostics too. This workflow is manually
+triggered only and is separate from the PR's required checks. It needs no
+production database credentials.

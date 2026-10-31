@@ -493,6 +493,7 @@
         "tools/build_reporting_collector.py", "tests/integrations/reporting*.py",
         "tests/integrations/test_log_reporting.py",
         "tests/integrations/docker-compose.log-reporting.yml",
+        ".github/workflows/log-reporting-e2e.yml",
         "tests/integrations/runtime-profiles.json", "pyproject.toml", "uv.lock"
       ],
       "requires": ["docker", "multi_node_ray", "doris"],
@@ -500,7 +501,7 @@
       "ci_allowed": false,
       "forbid_skips": true,
       "log_contract": "Explicit --log-dir: tests.log, junit.xml, evidence.jsonl, versions.json, cleanup.log, result.json",
-      "rationale": "Requires a pre-provisioned platform-matching Collector binary and owned real Doris/Ray services."
+      "rationale": "Requires a verified platform-matching Collector and owned Doris/Ray services. The dedicated log-reporting-e2e workflow permits explicit workflow_dispatch only; automatic CI selection remains disabled."
     },
     {
       "id": "data-ingestion-cluster",

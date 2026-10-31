@@ -25,7 +25,13 @@ from tools.database_filter_it import (
 )
 
 
-def run(binary_dir: Path, directory: Path, *, cases: str = "all") -> None:
+def run(
+    binary_dir: Path,
+    directory: Path,
+    *,
+    cases: str = "all",
+    build_input_mode: it.RuntimeBuildInputMode = it.RuntimeBuildInputMode.LOCAL_MIRROR,
+) -> None:
     """Own the exact Compose project and retain evidence on success or failure."""
     binary = binary_dir.resolve() / "otelcol-contrib"
     if not binary.is_file() or not os.access(binary, os.X_OK):
@@ -60,11 +66,16 @@ def run(binary_dir: Path, directory: Path, *, cases: str = "all") -> None:
     previous = {s: signal.signal(s, interrupt) for s in (signal.SIGTERM, signal.SIGINT)}
     try:
         _image_diagnostics(directory, "before")
-        prepared = it.prepare_runtime(profile, platform=it.docker_platform())
+        prepared = it.prepare_runtime(
+            profile, platform=it.docker_platform(), build_input_mode=build_input_mode
+        )
         images = {}
         for name in ("doris_fe_image", "doris_be_image"):
             ref = str(profile.definition[name])
-            it.ensure_digest_image(ref, use_mirror=True)
+            it.ensure_digest_image(
+                ref,
+                use_mirror=build_input_mode == it.RuntimeBuildInputMode.LOCAL_MIRROR,
+            )
             images[name] = it._local_digest_reference(ref)
         subnet = _available_subnet()
         with binary.open("rb") as stream:
@@ -203,9 +214,20 @@ if __name__ == "__main__":
     parser.add_argument("--binary-dir", type=Path, required=True)
     parser.add_argument("--log-dir", type=Path, required=True)
     parser.add_argument(
+        "--build-input-mode",
+        type=it.RuntimeBuildInputMode,
+        choices=tuple(it.RuntimeBuildInputMode),
+        default=it.RuntimeBuildInputMode.LOCAL_MIRROR,
+    )
+    parser.add_argument(
         "--cases",
         choices=("all", "ray", "local", "collector", "matrix", "light", "regressions"),
         default="all",
     )
     arguments = parser.parse_args()
-    run(arguments.binary_dir, arguments.log_dir, cases=arguments.cases)
+    run(
+        arguments.binary_dir,
+        arguments.log_dir,
+        cases=arguments.cases,
+        build_input_mode=arguments.build_input_mode,
+    )
