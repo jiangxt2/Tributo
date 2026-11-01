@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING, Any
 
 import grpc
@@ -22,6 +23,12 @@ from tributo._common.model_input_contract import (
     is_onnx_invalid_argument,
     normalize_model_shape,
     validate_named_inputs,
+)
+from tributo._common.reporting.session import (
+    active_session,
+    bootstrap_producer,
+    capture_reporting_context,
+    reporting_context,
 )
 from tributo.serving.observability import InferenceContext, log_inference_audit
 from tributo.serving.proto import inference_pb2
@@ -235,6 +242,7 @@ class gRPCInferenceService:
                 "exactly one of 'model_path' (legacy) or 'bundle_uri' must be provided"
             )
 
+        bootstrap_producer()
         self._runtime: Any = None
         self._session: Any = None
         self._input_name = ""
@@ -370,6 +378,17 @@ class gRPCInferenceService:
             Predict result.
         """
         context = InferenceContext.from_grpc(grpc_context)
+        with reporting_context(
+            request_id=context.request_id, trace_id=context.trace_id
+        ):
+            return await self._predict_request(request, grpc_context, context)
+
+    async def _predict_request(
+        self,
+        request: inference_pb2.PredictRequest,
+        grpc_context: RayServegRPCContext,
+        context: InferenceContext,
+    ) -> inference_pb2.PredictResponse:
         started = time.perf_counter()
         inputs = _prepare_inputs_or_invalid(
             request,
@@ -435,7 +454,7 @@ class gRPCInferenceService:
         self,
         request: inference_pb2.PredictRequest,
         grpc_context: RayServegRPCContext,
-    ):
+    ) -> AsyncGenerator[inference_pb2.PredictResponse, None]:
         """Server streaming inference (batched response).
 
         Args:
@@ -446,6 +465,50 @@ class gRPCInferenceService:
             Batched predict results.
         """
         context = InferenceContext.from_grpc(grpc_context)
+        began = time.perf_counter()
+        snapshot = capture_reporting_context()
+        status = "cancelled"
+        try:
+            with reporting_context(
+                snapshot, request_id=context.request_id, trace_id=context.trace_id
+            ):
+                predictions = self._stream_predictions(request, grpc_context, context)
+            if predictions is None:
+                status = "invalid_argument"
+                return
+            for pred in predictions:
+                with reporting_context(
+                    snapshot, request_id=context.request_id, trace_id=context.trace_id
+                ):
+                    response = self._response([pred], context=context)
+                    response.confidence = pred
+                yield response
+            status = "succeeded"
+        except Exception:
+            status = "failed"
+            raise
+        finally:
+            if active_session() is not None:
+                with reporting_context(
+                    snapshot, request_id=context.request_id, trace_id=context.trace_id
+                ):
+                    logger.info(
+                        "Serving stream finished",
+                        extra={
+                            "event": "tributo.serving.stream.finished",
+                            "phase": "stream",
+                            "status": status,
+                            "bundle_id": self._bundle_id,
+                            "duration_ms": (time.perf_counter() - began) * 1000,
+                        },
+                    )
+
+    def _stream_predictions(
+        self,
+        request: inference_pb2.PredictRequest,
+        grpc_context: RayServegRPCContext,
+        context: InferenceContext,
+    ) -> list[Any] | None:
         started = time.perf_counter()
         inputs = _prepare_inputs_or_invalid(
             request,
@@ -497,11 +560,7 @@ class gRPCInferenceService:
             duration_ms=(time.perf_counter() - started) * 1000,
         )
 
-        # Server streaming: return predictions one by one, suitable for real-time intermediate result display
-        for pred in predictions:
-            response = self._response([pred], context=context)
-            response.confidence = pred
-            yield response
+        return predictions
 
     async def BatchPredict(
         self,
@@ -518,6 +577,19 @@ class gRPCInferenceService:
             Merged predict results.
         """
         context = InferenceContext.from_grpc(grpc_context)
+        with reporting_context(
+            request_id=context.request_id, trace_id=context.trace_id
+        ):
+            return await self._batch_predict_request(
+                request_stream, grpc_context, context
+            )
+
+    async def _batch_predict_request(
+        self,
+        request_stream: gRPCInputStream,
+        grpc_context: RayServegRPCContext,
+        context: InferenceContext,
+    ) -> inference_pb2.PredictResponse:
         started = time.perf_counter()
         inputs_list = []
         async for request in request_stream:

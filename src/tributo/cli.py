@@ -19,6 +19,8 @@ import click
 from tributo import JobConfig
 from tributo._common import DEFAULT_DASHBOARD_URL
 from tributo._common.logging import bootstrap_logging
+from tributo._common.reporting.config import ReportingError
+from tributo._common.reporting.session import session_scope
 from tributo.exceptions import (
     JobConfigurationError,
     JobExecutionError,
@@ -39,6 +41,13 @@ logger = logging.getLogger(__name__)
 
 class _LazyTributoGroup(click.Group):
     """Load the broker command module only when that command is selected."""
+
+    def invoke(self, ctx: click.Context) -> Any:
+        try:
+            with session_scope():
+                return super().invoke(ctx)
+        except ReportingError as exc:
+            raise click.ClickException(str(exc)) from None
 
     def get_command(self, ctx: click.Context, cmd_name: str) -> click.Command | None:
         if cmd_name == "broker":

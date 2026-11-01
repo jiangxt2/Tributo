@@ -22,6 +22,10 @@ from urllib.parse import urlsplit
 import requests
 from ray.job_submission import JobSubmissionClient
 
+from tributo._common.reporting.session import (
+    active_session,
+    local_reporting_operation,
+)
 from tributo.exceptions import JobConfigurationError, JobExecutionError
 from tributo.runtime import RuntimeTarget
 from tributo.util.annotations import DeveloperAPI, PublicAPI
@@ -297,6 +301,7 @@ class RayClusterLauncherProvider:
 
 
 @DeveloperAPI
+@local_reporting_operation
 def run_local_entrypoint(
     entrypoint: str,
     *,
@@ -354,6 +359,11 @@ def run_local_entrypoint(
             raise JobConfigurationError("owned Ray runtime did not provide an address")
         child_env = os.environ.copy()
         child_env.update(env_vars or {})
+        reporting = active_session()
+        if reporting is not None:
+            reporting_policy = reporting.producer_policy()
+            if reporting_policy:
+                child_env["_TRIBUTO_REPORTING_POLICY"] = reporting_policy
         child_env["RAY_ADDRESS"] = address
         child_env[POLICY_ENV] = policy.serialize()
         child_env.pop(JOB_HOOK_ENV, None)

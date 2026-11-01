@@ -12,7 +12,7 @@ from typing import Annotated, Literal, TypeAlias, cast
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from tributo._common.logging import bootstrap_logging
-from tributo._common.logging_policy import driver_logging_runtime_env
+from tributo._common.reporting.session import ray_options, reporting_operation
 from tributo._common.runtime_env import build_runtime_env
 from tributo._common.submission_id import generate_submission_id
 from tributo.job import TributoClient
@@ -237,6 +237,7 @@ def _failure_payload(exc: BaseException) -> str:
     )
 
 
+@reporting_operation
 def main(argv: list[str] | None = None) -> int:
     """Cluster entrypoint with structured, credential-safe diagnostics."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -251,9 +252,7 @@ def main(argv: list[str] | None = None) -> int:
         job_request = decode_job_request(encoded)
         import ray
 
-        ray.init(
-            address="auto", ignore_reinit_error=True, **driver_logging_runtime_env()
-        )
+        ray.init(address="auto", ignore_reinit_error=True, **ray_options(driver=True))
         result = run_job_request(job_request)
         print(RESULT_MARKER + result.model_dump_json(exclude_none=True), flush=True)
         return 0

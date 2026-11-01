@@ -32,6 +32,8 @@ STABILITY_MAP: dict[str, str] = {
     "tributo.exceptions": "stable",
     # Core — alpha
     "tributo.ray_jobs": "alpha",
+    "tributo.observability": "alpha",
+    "tributo._common.reporting.config": "alpha",
     "tributo.kuberay_submission": "alpha",
     # Core — beta
     "tributo.cli": "beta",

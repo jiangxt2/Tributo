@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
-from typing import ClassVar, Literal, TypedDict
+from typing import Any, ClassVar, Literal, TypedDict
 
 from tributo._common.logging import active_logging_policy
+from tributo._common.reporting.session import current_policy
 from tributo.data import IngestionPlanReceipt
 from tributo.exceptions import ResultMaterializationError, ResultWriteError
 from tributo.inference.contracts import (
@@ -129,6 +130,12 @@ class RayMapBatchesExecutor:
         try:
             import ray.data
 
+            constructor_options: dict[str, Any] = {
+                "_logging_policy": active_logging_policy().serialize()
+            }
+            policy = current_policy()
+            if policy:
+                constructor_options["_reporting_policy"] = policy
             predicted = opened.dataset.map_batches(
                 KernelBatchPredictor,
                 fn_constructor_args=(
@@ -136,9 +143,7 @@ class RayMapBatchesExecutor:
                     plan.input_binding,
                     plan.output_binding,
                 ),
-                fn_constructor_kwargs={
-                    "_logging_policy": active_logging_policy().serialize()
-                },
+                fn_constructor_kwargs=constructor_options,
                 batch_format="numpy",
                 batch_size=plan.execution.batch_size,
                 compute=ray.data.ActorPoolStrategy(size=plan.execution.concurrency),

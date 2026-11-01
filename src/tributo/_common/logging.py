@@ -201,6 +201,7 @@ def _external_handlers(logger: logging.Logger) -> list[logging.Handler]:
         h
         for h in _handlers(logger)
         if not isinstance(h, (_ConsoleHandler, logging.NullHandler))
+        and getattr(h, "_tributo_reporting_handler", False) is not True
     ]
 
 

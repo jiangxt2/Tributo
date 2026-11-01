@@ -1,0 +1,89 @@
+x-ray: &ray
+  image: ${REPORTING_RUNTIME:?runtime required}
+  pull_policy: never
+  init: true
+  shm_size: 1gb
+  working_dir: /workspace/tributo-src
+  environment: &environment
+    PYTHONPATH: /workspace/tributo-src/src:/workspace/tributo-src
+    PYTHONDONTWRITEBYTECODE: "1"
+    TRIBUTO_DOCKER_REPORTING_TEST: "1"
+    REPORTING_COLLECTOR_SHA: ${REPORTING_COLLECTOR_SHA:?checksum required}
+    RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO: "0"
+    RAY_USAGE_STATS_ENABLED: "0"
+  volumes:
+    - source:/workspace/tributo-src:ro
+    - work:/workspace/tributo-work
+    - ${REPORTING_BINARY_DIR:?pre-provisioned binary required}:/opt/reporting:ro
+
+services:
+  source-init:
+    <<: *ray
+    user: "0:0"
+    entrypoint: [python, /host-source/tools/tributo_it.py]
+    command: [create-source-snapshot, --source, /host-source, --destination, /snapshot]
+    environment:
+      PYTHONPATH: /host-source
+    volumes:
+      - ${REPORTING_SOURCE:?source required}:/host-source:ro
+      - source:/snapshot
+  work-init:
+    <<: *ray
+    user: "0:0"
+    entrypoint: [bash, -ec]
+    command: ["mkdir -p /workspace/tributo-work/artifacts && chown -R 1000:100 /workspace/tributo-work"]
+  ray-head:
+    <<: *ray
+    command: [ray, start, --head, --num-cpus=2, --include-dashboard=true, --dashboard-host=0.0.0.0, --disable-usage-stats, --block]
+    depends_on:
+      source-init: {condition: service_completed_successfully}
+      work-init: {condition: service_completed_successfully}
+  ray-worker:
+    <<: *ray
+    command: [bash, -ec, "sleep 5; exec ray start --address=ray-head:6379 --num-cpus=2 --disable-usage-stats --block"]
+    depends_on: [ray-head]
+  driver:
+    <<: *ray
+    command: [sleep, infinity]
+    depends_on:
+      source-init: {condition: service_completed_successfully}
+      work-init: {condition: service_completed_successfully}
+  fe:
+    image: ${REPORTING_FE_IMAGE:?Doris FE required}
+    pull_policy: never
+    entrypoint: [bash, -ec]
+    command: ["cp /config/fe.conf /opt/apache-doris/fe/conf/fe.conf; exec bash init_fe.sh"]
+    environment:
+      FE_SERVERS: fe1:${REPORTING_FE_IP:?FE IP required}:9010
+      FE_ID: "1"
+    volumes:
+      - ${REPORTING_SOURCE}/tests/integrations/database-filter:/config:ro
+    networks:
+      default: {ipv4_address: "${REPORTING_FE_IP}"}
+    mem_limit: 3g
+    ulimits:
+      nofile: {soft: 200000, hard: 200000}
+  be:
+    image: ${REPORTING_BE_IMAGE:?Doris BE required}
+    pull_policy: never
+    entrypoint: [bash, -ec]
+    command: ["cp /config/be.conf /opt/apache-doris/be/conf/be.conf; exec bash entry_point.sh"]
+    environment:
+      FE_SERVERS: fe1:${REPORTING_FE_IP}:9010
+      BE_ADDR: ${REPORTING_BE_IP:?BE IP required}:9050
+    depends_on: [fe]
+    volumes:
+      - ${REPORTING_SOURCE}/tests/integrations/database-filter:/config:ro
+    networks:
+      default: {ipv4_address: "${REPORTING_BE_IP}"}
+    mem_limit: 3g
+    ulimits:
+      nofile: {soft: 200000, hard: 200000}
+
+networks:
+  default:
+    ipam:
+      config: [{subnet: "${REPORTING_SUBNET:?subnet required}"}]
+volumes:
+  source:
+  work:

@@ -36,6 +36,28 @@ documentation for every public stability tier.
 ```
 
 
+## `tributo._common.reporting.config`
+
+```{autoclass} tributo.observability.CollectorConfig
+:no-members:
+```
+
+```{autoclass} tributo.observability.DorisProfile
+:no-members:
+```
+
+```{autoclass} tributo.observability.ReportingConfig
+:no-members:
+```
+
+```{autoexception} tributo.observability.ReportingError
+```
+
+```{autoclass} tributo.observability.SenderConfig
+:no-members:
+```
+
+
 ## `tributo._common.storage_profiles`
 
 ```{autoclass} tributo._common.storage_profiles.StorageProfile

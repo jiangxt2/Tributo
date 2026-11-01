@@ -20,6 +20,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from tributo._common.reporting.session import current_policy, reporting_worker
+
 if TYPE_CHECKING:
     import torch
 
@@ -1802,12 +1804,14 @@ def _run_logged_worker(
 
 
 @DeveloperAPI
+@reporting_worker
 def torch_recipe_train_loop_per_worker(config: Mapping[str, Any]) -> None:
     """Run the Core-selected Recipe Worker wrapper."""
     _run_logged_worker(config, _recipe_worker, "recipe")
 
 
 @DeveloperAPI
+@reporting_worker
 def ray_torch_adapter_train_loop_per_worker(config: Mapping[str, Any]) -> None:
     """Run the Core-selected Adapter Worker wrapper."""
     _run_logged_worker(config, _adapter_worker, "adapter")
@@ -2190,6 +2194,8 @@ class RayTrainTorchRuntime:
                     )
                     owned_storage_dirs.append(owned_storage)
                     storage_path = owned_storage.name
+                if current_policy():
+                    train_config["_core_reporting_policy"] = current_policy()
                 trainer = TorchTrainer(
                     train_loop_per_worker=loop,
                     train_loop_config=train_config,

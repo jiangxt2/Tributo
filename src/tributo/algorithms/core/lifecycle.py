@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from tributo._common.reporting.session import reporting_operation
 from tributo.algorithms.api import (
     AlgorithmExecutionError,
     AlgorithmExecutionResult,
@@ -21,6 +22,7 @@ from tributo.util.annotations import DeveloperAPI
 class BatchLifecycle:
     """Invoke exactly one operation capability on a Worker executable."""
 
+    @reporting_operation
     def execute(
         self,
         operation: AlgorithmOperation,

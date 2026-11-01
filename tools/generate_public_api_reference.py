@@ -54,6 +54,11 @@ COMPONENTS: Final[tuple[Component, ...]] = (
 )
 
 _ROOT_ALIASES: Final[dict[str, str]] = {
+    "tributo._common.reporting.config.CollectorConfig": "tributo.observability.CollectorConfig",
+    "tributo._common.reporting.config.DorisProfile": "tributo.observability.DorisProfile",
+    "tributo._common.reporting.config.ReportingConfig": "tributo.observability.ReportingConfig",
+    "tributo._common.reporting.config.ReportingError": "tributo.observability.ReportingError",
+    "tributo._common.reporting.config.SenderConfig": "tributo.observability.SenderConfig",
     "tributo.config.JobConfig": "tributo.JobConfig",
     "tributo.exceptions.DataSourceError": "tributo.DataSourceError",
     "tributo.exceptions.JobConfigurationError": "tributo.JobConfigurationError",

@@ -84,6 +84,16 @@ documentation for every public stability tier.
 ```
 
 
+## `tributo.observability`
+
+```{autoclass} tributo.observability.ReportingHandle
+:no-members:
+```
+
+```{autofunction} tributo.observability.reporting_session
+```
+
+
 ## `tributo.plugin`
 
 ```{autofunction} tributo.plugin.validate_distributed_algorithm_descriptor

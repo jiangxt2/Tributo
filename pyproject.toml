@@ -41,7 +41,13 @@ Repository = "https://github.com/jiangxt2/tributo"
 Issues = "https://github.com/jiangxt2/tributo/issues"
 
 [project.optional-dependencies]
+log-reporting = [
+    "opentelemetry-exporter-otlp-proto-http==1.45.1",
+    "opentelemetry-sdk==1.45.1",
+    "PyMySQL>=1.2,<1.3",
+]
 dev = [
+    "tributo[log-reporting]",
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
     "pytest-timeout>=2.1.0",

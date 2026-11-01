@@ -1,0 +1,56 @@
+name: Log Reporting E2E
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: log-reporting-e2e-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  reporting:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+        with:
+          version: "0.11.23"
+          python-version: "3.12"
+      - name: Provision the verified Collector
+        env:
+          COLLECTOR_DIR: ${{ runner.temp }}/log-reporting-collector
+        run: |
+          set -euo pipefail
+          mkdir -p "$COLLECTOR_DIR"
+          curl --fail --silent --show-error --location --retry 3 --connect-timeout 15 --max-time 180 \
+            https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v0.163.2/otelcol-contrib_0.163.2_linux_arm64.tar.gz \
+            --output "$COLLECTOR_DIR/collector.tar.gz" 2>&1 | tee "$RUNNER_TEMP/log-reporting-e2e-setup.log"
+          printf '%s  %s\n' d239e219cf81993213fda2fd6de7dc1f9229d32698c45d2dd7bec31b69c1c004 "$COLLECTOR_DIR/collector.tar.gz" \
+            | sha256sum --check 2>&1 | tee -a "$RUNNER_TEMP/log-reporting-e2e-setup.log"
+          tar -xzf "$COLLECTOR_DIR/collector.tar.gz" -C "$COLLECTOR_DIR" otelcol-contrib
+          chmod +x "$COLLECTOR_DIR/otelcol-contrib"
+      - name: Run real Collector to Doris and Ray acceptance
+        env:
+          COLLECTOR_DIR: ${{ runner.temp }}/log-reporting-collector
+          EVIDENCE_DIR: ${{ runner.temp }}/log-reporting-e2e
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=60s 30m \
+            uv run --no-project --python 3.12 python -m tools.reporting_it \
+            --binary-dir "$COLLECTOR_DIR" --log-dir "$EVIDENCE_DIR" \
+            --cases all --build-input-mode canonical \
+            2>&1 | tee "$RUNNER_TEMP/log-reporting-e2e.log"
+      - name: Upload execution evidence and diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: log-reporting-e2e-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/log-reporting-e2e/
+            ${{ runner.temp }}/log-reporting-e2e*.log
+          if-no-files-found: error
+          retention-days: 7

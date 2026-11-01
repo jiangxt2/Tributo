@@ -19,6 +19,7 @@ import warnings
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Protocol
 
+from tributo._common.reporting.session import reporting_operation
 from tributo.training.algorithm_spec import AlgorithmSpec
 from tributo.util.annotations import PublicAPI
 
@@ -195,6 +196,7 @@ class BaseTrainer(ABC):
 
     # -- Template Method -------------------------------------------------------
 
+    @reporting_operation
     def run(
         self,
         output_path: str = "",
