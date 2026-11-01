@@ -261,21 +261,39 @@ async def test_cancelled_dns_waiter_consumes_late_exception(monkeypatch):
         release.set()
 
 
-@pytest.mark.parametrize("mode", ["send", "close"])
+@pytest.mark.parametrize("mode", ["send", "close", "shutdown-error"])
 def test_slow_dns_bounds_sender_and_process_exit(mode):
     code = """
-import socket, sys, threading, time
+import asyncio, gc, socket, sys, threading, time
 from tributo._common.reporting.sender import Sender
 from tributo._common.reporting.config import SenderConfig
 
 entered, failed = threading.Event(), threading.Event()
+release, window = threading.Event(), threading.Event()
+workers = []
 calls = 0
 def slow_dns(*args, **kwargs):
     global calls
     calls += 1
     entered.set()
-    time.sleep(10)
+    if sys.argv[1] == "shutdown-error":
+        workers.append(threading.current_thread())
+        assert release.wait(2)
+    else:
+        time.sleep(10)
     raise socket.gaierror("private-dns-error")
+class ClosingLoop(asyncio.SelectorEventLoop):
+    def close(self):
+        if workers and not release.is_set():
+            release.set()
+            workers[0].join(timeout=1)
+            assert not workers[0].is_alive()
+            self.call_soon(self.stop)
+            self.run_forever()
+            window.set()
+        super().close()
+if sys.argv[1] == "shutdown-error":
+    asyncio.events.new_event_loop = ClosingLoop
 socket.getaddrinfo = slow_dns
 sender = Sender(SenderConfig(endpoint="http://localhost:1/v1/logs",
     send_timeout=0.1, shutdown_timeout=0.1, queue_size=1, batch_size=1),
@@ -287,17 +305,25 @@ if sys.argv[1] == "send":
     sender.emit("safe.event", {})
     assert sender.flush(0.5)
     assert calls == 1, "repeated sends accumulated DNS queries"
+elif sys.argv[1] == "shutdown-error":
+    assert failed.wait(0.5) and window.is_set()
 began = time.monotonic()
-sender.close()
+stopped = sender.close()
 assert time.monotonic() - began < 0.5
+if sys.argv[1] == "shutdown-error":
+    assert stopped
+    del sender
+    gc.collect()
 """
-    subprocess.run(
+    result = subprocess.run(
         [sys.executable, "-c", code, mode],
         check=True,
         capture_output=True,
         text=True,
         timeout=3,
     )
+    if mode == "shutdown-error":
+        assert "Future exception was never retrieved" not in result.stderr
 
 
 @pytest.mark.parametrize(

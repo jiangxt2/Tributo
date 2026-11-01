@@ -102,6 +102,8 @@ class _Resolver(AbstractResolver):
             if self._pending is not None and not self._pending.done():
                 raise OSError("reporting.transport.dns_busy")
             pending: Future[list[ResolveResult]] = Future()
+            # Async cancellation must not release a running native DNS query.
+            pending.set_running_or_notify_cancel()
             self._pending = pending
 
         def lookup() -> None:
@@ -134,11 +136,14 @@ class _Resolver(AbstractResolver):
         except Exception as error:
             pending.set_exception(error)
         wrapped = asyncio.wrap_future(pending)
-        # Observe late failures even after shield's waiter has been cancelled.
-        wrapped.add_done_callback(
-            lambda done: None if done.cancelled() else done.exception()
-        )
-        return await asyncio.shield(wrapped)
+        try:
+            return await asyncio.shield(wrapped)
+        finally:
+            # Finish the bridge before loop.close can discard its callbacks.
+            if wrapped.done() and not wrapped.cancelled():
+                wrapped.exception()
+            else:
+                wrapped.cancel()
 
     async def close(self) -> None:
         # System DNS cannot be interrupted; its single daemon never blocks exit.
