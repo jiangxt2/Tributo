@@ -128,7 +128,7 @@ tune = [
     "bayesian-optimization==1.4.3",
 ]
 explainability = [
-    "shap>=0.52.0,<0.53.0",
+    "shap>=0.52.0,<0.55.0",
     "numpy>=2.0.0,<3.0.0",
 ]
 identity = [
