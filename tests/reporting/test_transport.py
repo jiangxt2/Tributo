@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
+import gc
 import json
 import logging
+import socket
 import subprocess
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import Mock
 
 import pytest
 from opentelemetry._logs import LogRecord
@@ -24,6 +29,7 @@ from tributo._common.reporting.transport import (
     MAX_RESPONSE_BYTES,
     DeliveryOutcome,
     ValidatingExporter,
+    _Resolver,
 )
 
 
@@ -216,6 +222,43 @@ def test_total_response_deadline_cancels_io_and_releases_export_thread(
             assert len(otlp_endpoint.requests) == 2 and outcomes[-1].accepted == 1
     finally:
         exporter.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_dns_waiter_consumes_late_exception(monkeypatch):
+    loop = asyncio.get_running_loop()
+    entered, completed = asyncio.Event(), asyncio.Event()
+    release = threading.Event()
+    workers = []
+    handler = Mock(wraps=loop.call_exception_handler)
+    monkeypatch.setattr(loop, "call_exception_handler", handler)
+
+    def fail_dns(*args, **kwargs):
+        workers.append(threading.current_thread())
+        loop.call_soon_threadsafe(entered.set)
+        assert release.wait(2)
+        raise socket.gaierror("private-dns-error")
+
+    monkeypatch.setattr(socket, "getaddrinfo", fail_dns)
+    resolver = _Resolver()
+    task = asyncio.create_task(resolver.resolve("collector.invalid"))
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        resolver._pending.add_done_callback(
+            lambda _: loop.call_soon_threadsafe(completed.set)
+        )
+        release.set()
+        await asyncio.wait_for(completed.wait(), 1)
+        workers[0].join(timeout=1)
+        assert not workers[0].is_alive()
+        del task, resolver
+        gc.collect()
+        assert not handler.called
+    finally:
+        release.set()
 
 
 @pytest.mark.parametrize("mode", ["send", "close"])

@@ -133,7 +133,12 @@ class _Resolver(AbstractResolver):
             ).start()
         except Exception as error:
             pending.set_exception(error)
-        return await asyncio.shield(asyncio.wrap_future(pending))
+        wrapped = asyncio.wrap_future(pending)
+        # Observe late failures even after shield's waiter has been cancelled.
+        wrapped.add_done_callback(
+            lambda done: None if done.cancelled() else done.exception()
+        )
+        return await asyncio.shield(wrapped)
 
     async def close(self) -> None:
         # System DNS cannot be interrupted; its single daemon never blocks exit.
