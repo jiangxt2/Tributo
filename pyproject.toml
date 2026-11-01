@@ -72,7 +72,7 @@ hive-ray = [
 ]
 vector-index = [
     "tributo[data,s3]",
-    "pyarrow==19.0.1",
+    "pyarrow==26.0.0",
 ]
 kuberay = [
     "kubernetes>=35.0.0,<37.0.0",
