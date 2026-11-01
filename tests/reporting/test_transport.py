@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import subprocess
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -163,7 +165,8 @@ def test_explicit_headers_and_disabled_environment_inheritance(
     monkeypatch.setenv("SSL_CERT_FILE", "/does/not/exist")
     exporter = ValidatingExporter(
         SenderConfig(
-            endpoint=otlp_endpoint.url, headers_ref="env://TEST_REPORT_HEADERS"
+            endpoint=otlp_endpoint.url.replace("127.0.0.1", "localhost"),
+            headers_ref="env://TEST_REPORT_HEADERS",
         ),
         lambda outcome: None,
     )
@@ -213,6 +216,45 @@ def test_total_response_deadline_cancels_io_and_releases_export_thread(
             assert len(otlp_endpoint.requests) == 2 and outcomes[-1].accepted == 1
     finally:
         exporter.shutdown()
+
+
+@pytest.mark.parametrize("mode", ["send", "close"])
+def test_slow_dns_bounds_sender_and_process_exit(mode):
+    code = """
+import socket, sys, threading, time
+from tributo._common.reporting.sender import Sender
+from tributo._common.reporting.config import SenderConfig
+
+entered, failed = threading.Event(), threading.Event()
+calls = 0
+def slow_dns(*args, **kwargs):
+    global calls
+    calls += 1
+    entered.set()
+    time.sleep(10)
+    raise socket.gaierror("private-dns-error")
+socket.getaddrinfo = slow_dns
+sender = Sender(SenderConfig(endpoint="http://localhost:1/v1/logs",
+    send_timeout=0.1, shutdown_timeout=0.1, queue_size=1, batch_size=1),
+    lambda code: failed.set() if code == "sender.transport_error" else None)
+sender.emit("safe.event", {})
+assert entered.wait(1)
+if sys.argv[1] == "send":
+    assert failed.wait(0.5), "DNS exceeded the send budget"
+    sender.emit("safe.event", {})
+    assert sender.flush(0.5)
+    assert calls == 1, "repeated sends accumulated DNS queries"
+began = time.monotonic()
+sender.close()
+assert time.monotonic() - began < 0.5
+"""
+    subprocess.run(
+        [sys.executable, "-c", code, mode],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=3,
+    )
 
 
 @pytest.mark.parametrize(

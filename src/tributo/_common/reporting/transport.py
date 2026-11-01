@@ -6,9 +6,11 @@ import asyncio
 import io
 import json
 import re
+import socket
 import ssl
 import threading
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import Future
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
@@ -16,6 +18,7 @@ from urllib.parse import urlsplit
 
 import aiohttp
 import requests
+from aiohttp.abc import AbstractResolver, ResolveResult
 from opentelemetry.exporter.otlp.proto.http import Compression
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.metrics import NoOpMeterProvider
@@ -85,6 +88,58 @@ def _headers(
         raise ReportingError("reporting.config.headers") from None
 
 
+class _Resolver(AbstractResolver):
+    """Limit each sender to one daemon lookup, outside exit-joined executors."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._pending: Future[list[ResolveResult]] | None = None
+
+    async def resolve(
+        self, host: str, port: int = 0, family: socket.AddressFamily = socket.AF_INET
+    ) -> list[ResolveResult]:
+        with self._lock:
+            if self._pending is not None and not self._pending.done():
+                raise OSError("reporting.transport.dns_busy")
+            pending: Future[list[ResolveResult]] = Future()
+            self._pending = pending
+
+        def lookup() -> None:
+            try:
+                addresses = socket.getaddrinfo(
+                    host, port, family=family, type=socket.SOCK_STREAM
+                )
+                pending.set_result(
+                    [
+                        ResolveResult(
+                            hostname=host,
+                            host=socket.getnameinfo(
+                                address, socket.NI_NUMERICHOST | socket.NI_NUMERICSERV
+                            )[0],
+                            port=port,
+                            family=resolved_family,
+                            proto=proto,
+                            flags=socket.AI_NUMERICHOST | socket.AI_NUMERICSERV,
+                        )
+                        for resolved_family, _, proto, _, address in addresses
+                    ]
+                )
+            except Exception as error:
+                pending.set_exception(error)
+
+        try:
+            threading.Thread(
+                target=lookup, name="tributo-reporting-dns", daemon=True
+            ).start()
+        except Exception as error:
+            pending.set_exception(error)
+        return await asyncio.shield(asyncio.wrap_future(pending))
+
+    async def close(self) -> None:
+        # System DNS cannot be interrupted; its single daemon never blocks exit.
+        pass
+
+
 class ControlledSession(requests.Session):
     """An owned Session that never follows redirects or reads implicit credentials."""
 
@@ -92,6 +147,7 @@ class ControlledSession(requests.Session):
         super().__init__()
         self.trust_env = False
         self._config = config
+        self._resolver = _Resolver()
         if config.proxy:
             self.proxies = {"http": config.proxy, "https": config.proxy}
         self._tls: ssl.SSLContext | bool = True
@@ -121,6 +177,7 @@ class ControlledSession(requests.Session):
         # Run in the SDK's synchronous export thread. The async timeout cancels
         # the socket read itself; no detached response-reader thread survives it.
         async with aiohttp.ClientSession(
+            connector=aiohttp.TCPConnector(resolver=self._resolver),
             timeout=aiohttp.ClientTimeout(total=timeout, ceil_threshold=float("inf")),
             trust_env=False,
             cookie_jar=aiohttp.DummyCookieJar(),
