@@ -7,6 +7,7 @@ from collections.abc import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from starlette.requests import Request
 
 from tributo.serving.streaming_deployment import (
     LLMStreamingService,
@@ -44,7 +45,7 @@ async def test_sse_format():
     service = DummyStreamingService()
 
     # 构造 mock request
-    mock_request = AsyncMock()
+    mock_request = MagicMock(spec=Request, headers={})
     mock_request.json = AsyncMock(return_value={"prompt": "test"})
 
     response = await service(mock_request)
@@ -66,7 +67,7 @@ async def test_invalid_json():
     """Invalid JSON 请求返回 400 错误。"""
     service = DummyStreamingService()
 
-    mock_request = AsyncMock()
+    mock_request = MagicMock(spec=Request, headers={})
     mock_request.json = AsyncMock(side_effect=ValueError("Invalid JSON"))
 
     response = await service(mock_request)
@@ -93,7 +94,7 @@ async def test_streaming_error():
             yield  # pragma: no cover
 
     service = ErrorStreamingService()
-    mock_request = AsyncMock()
+    mock_request = MagicMock(spec=Request, headers={})
     mock_request.json = AsyncMock(return_value={"prompt": "test"})
 
     response = await service(mock_request)
@@ -303,7 +304,7 @@ async def test_llm_service_model_loaded_generate():
 async def test_sse_headers():
     """U-01: SSE 响应 Headers 正确性。"""
     service = DummyStreamingService()
-    mock_request = AsyncMock()
+    mock_request = MagicMock(spec=Request, headers={})
     mock_request.json = AsyncMock(return_value={"prompt": "test"})
 
     response = await service(mock_request)
@@ -318,7 +319,7 @@ async def test_sse_headers():
 async def test_openai_messages_format():
     """U-02: OpenAI messages 格式透传到 _generate_stream。"""
     service = DummyStreamingService()
-    mock_request = AsyncMock()
+    mock_request = MagicMock(spec=Request, headers={})
     mock_request.json = AsyncMock(
         return_value={
             "messages": [
@@ -344,7 +345,7 @@ async def test_openai_messages_format():
 async def test_simple_prompt_format():
     """U-03: 简化 prompt 格式解析。"""
     service = DummyStreamingService()
-    mock_request = AsyncMock()
+    mock_request = MagicMock(spec=Request, headers={})
     mock_request.json = AsyncMock(return_value={"prompt": "直接输入"})
 
     response = await service(mock_request)
@@ -370,7 +371,7 @@ async def test_max_tokens_and_temperature_passthrough():
             yield json.dumps({"choices": [{"delta": {"content": "ok"}}]})
 
     service = ParamCaptureService()
-    mock_request = AsyncMock()
+    mock_request = MagicMock(spec=Request, headers={})
     mock_request.json = AsyncMock(
         return_value={"prompt": "test", "max_tokens": 100, "temperature": 0.5}
     )
@@ -388,7 +389,7 @@ async def test_max_tokens_and_temperature_passthrough():
 async def test_chunk_concatenation():
     """U-05: 多 chunk 拼接等于完整结果。"""
     service = DummyStreamingService()
-    mock_request = AsyncMock()
+    mock_request = MagicMock(spec=Request, headers={})
     mock_request.json = AsyncMock(return_value={"prompt": "test"})
 
     response = await service(mock_request)
