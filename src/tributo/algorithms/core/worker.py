@@ -92,7 +92,9 @@ def _actual_environment_versions(
         compatible = (
             tributo_version_matches(actual, str(requirement.specifier))
             if canonicalize_name(requirement.name) == "tributo"
-            else actual in requirement.specifier
+            else requirement.specifier.contains(
+                actual, prereleases=bool(requirement.specifier.prereleases)
+            )
         )
         if requirement.specifier and not compatible:
             raise AlgorithmDependencyError(

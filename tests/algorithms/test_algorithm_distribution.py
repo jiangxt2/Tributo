@@ -593,6 +593,8 @@ def test_offline_bundle_core_development_version_range(
         ("tributo-helper", "1.2.0", ">=1,<2", True),
         ("tributo-helper", "1.2.0.dev0", ">=1,<2", False),
         ("tributo-helper", "1.2.0rc1", ">=1,<2", False),
+        ("tributo-helper", "1.2.0.dev0", "==1.2.0.dev0", True),
+        ("tributo-helper", "1.2.0rc1", ">=1.2.0rc1,<2", True),
     ],
 )
 def test_offline_bundle_requires_dist_version_policy(

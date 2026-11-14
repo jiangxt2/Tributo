@@ -352,7 +352,9 @@ def _requirement_version_matches(requirement: Requirement, version: str) -> bool
     """Apply the Core version policy only to dependencies on Tributo itself."""
     if canonicalize_name(requirement.name) == "tributo":
         return tributo_version_matches(version, str(requirement.specifier))
-    return Version(version) in requirement.specifier
+    return requirement.specifier.contains(
+        version, prereleases=bool(requirement.specifier.prereleases)
+    )
 
 
 def _profile_distribution(

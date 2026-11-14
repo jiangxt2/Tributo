@@ -36,6 +36,58 @@ def _excluded_markers(expression: str) -> set[str]:
     return set(re.findall(r"\bnot\s+(\w+)", expression))
 
 
+@pytest.mark.parametrize(
+    ("author", "signoff", "accepted"),
+    [
+        (
+            "dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+            "Signed-off-by: dependabot[bot] <support@github.com>",
+            True,
+        ),
+        (
+            "dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+            "",
+            False,
+        ),
+        (
+            "other <other@example.com>",
+            "Signed-off-by: dependabot[bot] <support@github.com>",
+            False,
+        ),
+        (
+            "dependabot[bot] <other@example.com>",
+            "Signed-off-by: dependabot[bot] <support@github.com>",
+            False,
+        ),
+        (
+            "jiangxt2 <jiangxt2@vip.qq.com>",
+            "Signed-off-by: jiangxt2 <jiangxt2@vip.qq.com>",
+            True,
+        ),
+    ],
+)
+def test_commit_signoff_distinguishes_dependabot(
+    author, signoff, accepted, monkeypatch
+):
+    precheck = _load_precheck()
+
+    def run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        if command[1] == "rev-parse":
+            output = "base\n"
+        elif command[1] == "cat-file":
+            output = f"tree abc\nparent base\nauthor {author} 1234567890 +0000\n\n"
+        elif "--format=%H" in command:
+            output = "0123456789abcdef\n"
+        else:
+            output = f"chore: update dependencies\n\n{signoff}\n"
+        return subprocess.CompletedProcess(command, 0, stdout=output, stderr="")
+
+    monkeypatch.setattr(precheck.subprocess, "run", run)
+    monkeypatch.setattr(precheck, "_check_commit_claims_vs_diff", lambda *_: [])
+    issues = precheck.check_commit_messages("unused")
+    assert (not issues) is accepted
+
+
 def test_changed_test_filter_matches_the_default_ci_suite() -> None:
     precheck = _load_precheck()
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())
