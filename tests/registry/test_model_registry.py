@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, call, patch
 
 import pytest
+from pydantic import ValidationError
 
 from tributo.registry.model_registry import ModelRegistry
 from tributo.registry.schema import ModelVersion
@@ -51,7 +52,11 @@ class TestModelRegistryInit:
 class TestRegisterModel:
     """register_model 方法测试。"""
 
-    def test_registers_and_returns_model_version(self):
+    @pytest.mark.parametrize(
+        ("model_uri", "run_id"),
+        [("runs:/run-001/model", "run-001"), ("s3://bucket/model", None)],
+    )
+    def test_registers_and_returns_model_version(self, model_uri, run_id):
         mock_client = MagicMock()
         mock_mv = _make_model_version()
         mock_client.create_model_version.return_value = mock_mv
@@ -62,7 +67,7 @@ class TestRegisterModel:
         ):
             reg = ModelRegistry()
             result = reg.register_model(
-                model_uri="runs:/run-001/model",
+                model_uri=model_uri,
                 name="test-model",
                 tags={"team": "ml"},
                 description="A test model",
@@ -71,8 +76,9 @@ class TestRegisterModel:
         assert isinstance(result, ModelVersion)
         assert result.name == "test-model"
         assert result.version == 1
+        expected = {"run_id": run_id} if run_id else {}
         mock_client.create_model_version.assert_called_once_with(
-            name="test-model", source="runs:/run-001/model"
+            name="test-model", source=model_uri, **expected
         )
         mock_client.set_model_version_tag.assert_called_once_with(
             "test-model", "1", "team", "ml"
@@ -250,6 +256,29 @@ class TestGetModel:
                 reg.get_model(name="test-model")
 
 
+@pytest.mark.parametrize("operation", ["register", "get"])
+@pytest.mark.parametrize(
+    ("mlflow_field", "schema_field"),
+    [("current_stage", "stage"), ("run_id", "run_id"), ("source", "artifact_uri")],
+)
+def test_rejects_missing_model_version_fields(operation, mlflow_field, schema_field):
+    mock_client = MagicMock()
+    mv = _make_model_version()
+    setattr(mv, mlflow_field, None)
+    mock_client.get_model_version.return_value = mv
+    mock_client.create_model_version.return_value = mv
+    with patch(
+        "tributo.registry.model_registry.MlflowClient", return_value=mock_client
+    ):
+        registry = ModelRegistry()
+        with pytest.raises(ValidationError) as error:
+            if operation == "register":
+                registry.register_model("runs:/run-001/model", "test-model")
+            else:
+                registry.get_model("test-model", version=1)
+    assert error.value.errors()[0]["loc"] == (schema_field,)
+
+
 class TestListModels:
     """list_models 方法测试。"""
 
@@ -390,6 +419,18 @@ class TestCompareModels:
 
         mock_client.get_run.assert_called_once_with("run-abc")
         assert result == {1: 0.5}
+
+    def test_skips_version_without_run_id_or_source(self):
+        mock_client = MagicMock()
+        mv = _make_model_version(version=1, run_id="")
+        mv.source = None
+        mock_client.get_model_version.return_value = mv
+        with patch(
+            "tributo.registry.model_registry.MlflowClient", return_value=mock_client
+        ):
+            result = ModelRegistry().compare_models("test-model", [1])
+        assert result == {}
+        mock_client.get_run.assert_not_called()
 
 
 class TestDeleteModel:

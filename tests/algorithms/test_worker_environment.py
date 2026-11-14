@@ -25,6 +25,8 @@ from tributo.algorithms.core.worker import _actual_environment_versions
         ("tributo", "1.3.0.dev0", ">=1.1,!=1.3.0.dev0", False),
         ("other-library", "1.3.0.dev0", ">=1.1", False),
         ("other-library", "1.3.0.dev0", "==1.3.0.dev0", True),
+        ("other-library", "1.3.0rc1", ">=1.1", False),
+        ("other-library", "1.3.0rc1", ">=1.3.0rc1", True),
     ],
 )
 def test_dependency_version_policy(

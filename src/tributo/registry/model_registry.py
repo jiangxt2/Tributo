@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any
+from typing import Any, cast
 
 from tributo._common.reporting.session import reporting_operation
 from tributo.registry.schema import ModelVersion
@@ -81,7 +81,13 @@ class ModelRegistry:
 
         mv = None
         try:
-            mv = self._client.create_model_version(name=name, source=model_uri)
+            match = _RUNS_URI_RE.match(model_uri)
+            if match:
+                mv = self._client.create_model_version(
+                    name=name, source=model_uri, run_id=match.group(1)
+                )
+            else:
+                mv = self._client.create_model_version(name=name, source=model_uri)
 
             if tags:
                 for key, value in tags.items():
@@ -98,12 +104,13 @@ class ModelRegistry:
             self._cleanup_partial_registration(name, mv, model_existed)
             raise
 
+        # Pydantic validates these fields even though MLflow marks them optional.
         return ModelVersion(
             name=mv.name,
             version=int(mv.version),
-            stage=mv.current_stage,
-            run_id=mv.run_id,
-            artifact_uri=mv.source,
+            stage=cast(str, mv.current_stage),
+            run_id=cast(str, mv.run_id),
+            artifact_uri=cast(str, mv.source),
             creation_timestamp=mv.creation_timestamp,
             description=description,
             tags=tags or {},
@@ -184,9 +191,9 @@ class ModelRegistry:
         return ModelVersion(
             name=mv.name,
             version=int(mv.version),
-            stage=mv.current_stage,
-            run_id=mv.run_id,
-            artifact_uri=mv.source,
+            stage=cast(str, mv.current_stage),
+            run_id=cast(str, mv.run_id),
+            artifact_uri=cast(str, mv.source),
             creation_timestamp=mv.creation_timestamp,
             description=mv.description or None,
             tags=dict(mv.tags) if mv.tags else {},
@@ -275,8 +282,9 @@ class ModelRegistry:
                 mv = self._client.get_model_version(name=name, version=str(version))
                 # Prefer run_id, fall back to extracting from source URI
                 run_id = mv.run_id
-                if not run_id:
-                    match = _RUNS_URI_RE.match(mv.source)
+                source = mv.source
+                if not run_id and source is not None:
+                    match = _RUNS_URI_RE.match(source)
                     if match:
                         run_id = match.group(1)
                 if not run_id:
