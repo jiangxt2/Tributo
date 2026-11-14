@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+from fnmatch import fnmatchcase
 from pathlib import Path
+
+import yaml
 
 from tests.support.runtime_versions import RAY_VERSION
 
@@ -31,13 +34,27 @@ def test_inference_it_versions_are_explicit_and_immutable() -> None:
     assert "minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:" in versions
     for expected in (
         f"TRIBUTO_EXPECTED_RAY_VERSION={RAY_VERSION}",
-        "TRIBUTO_EXPECTED_MLFLOW_VERSION=2.22.5",
+        "TRIBUTO_EXPECTED_MLFLOW_VERSION=3.17.2",
         "TRIBUTO_EXPECTED_ONNX_VERSION=1.22.0",
         "TRIBUTO_EXPECTED_ONNXRUNTIME_VERSION=1.28.0",
         "TRIBUTO_EXPECTED_PYARROW_VERSION=19.0.1",
         "TRIBUTO_EXPECTED_XGBOOST_VERSION=3.3.0",
     ):
         assert expected in versions
+
+
+def test_mlflow_compose_hosts_allow_only_required_services() -> None:
+    data_compose = (
+        _ROOT / "tests" / "integrations" / "docker-compose.data-ingestion.yml"
+    )
+    for compose in (_COMPOSE, data_compose):
+        command = yaml.safe_load(compose.read_text())["services"]["mlflow"]["command"]
+        hosts = command[command.index("--allowed-hosts") + 1].split(",")
+        for host in ("mlflow:5000", "127.0.0.1:5000"):
+            assert any(fnmatchcase(host, pattern) for pattern in hosts)
+        assert not any(
+            fnmatchcase("untrusted.example:5000", pattern) for pattern in hosts
+        )
 
 
 def test_inference_image_uses_one_locked_project_environment() -> None:
