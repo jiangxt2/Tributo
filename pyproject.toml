@@ -145,7 +145,7 @@ grpc = [
     "grpcio>=1.60.0",
 ]
 registry = [
-    "mlflow>=2.18.0,<3.0.0",
+    "mlflow>=3.17.2,<4.0.0",
 ]
 graph = [
     "tributo[model-export-torch]",
