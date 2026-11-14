@@ -845,20 +845,8 @@ def check_commit_messages(root: str) -> list[str]:
         short = commit_hash[:10]
         first_line = msg.strip().split("\n")[0]
 
-        # 3a: Signed-off-by. Dependabot signs its own commits with its bot identity.
-        dependabot_author = any(
-            line.startswith(
-                "author dependabot[bot] "
-                "<49699333+dependabot[bot]@users.noreply.github.com> "
-            )
-            for line in header.splitlines()
-        )
-        dependabot_signoff = re.search(
-            r"(?m)^Signed-off-by: dependabot\[bot\] <support@github\.com>$", msg
-        )
-        if "Signed-off-by: jiangxt2" not in msg and not (
-            dependabot_author and dependabot_signoff
-        ):
+        # 3a: Signed-off-by
+        if "Signed-off-by: jiangxt2" not in msg:
             issues.append(
                 f"FAIL: Commit {short} missing "
                 f"'Signed-off-by: jiangxt2 <jiangxt2@vip.qq.com>'"
