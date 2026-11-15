@@ -119,6 +119,7 @@ hf = [
 ]
 model-export-hf = [
     "tributo[model-export-torch,hf]",
+    "onnxscript>=0.7.1",
 ]
 training = [
     "tributo[clickhouse,data,data-daft,model-export,mysql,postgresql,s3]",
