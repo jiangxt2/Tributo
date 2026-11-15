@@ -19,6 +19,7 @@ from tributo.exporting.models import (
     ExportSource,
     ExportTarget,
     LogicalArtifact,
+    PlannedTarget,
     ProducerInfo,
     ResolvedArtifact,
     SupportRequest,
@@ -506,3 +507,115 @@ def test_serveable_first_party_onnx_validation_is_required() -> None:
             if binding.validator_id == "onnx-runtime-v1"
         )
         assert runtime_binding.required is True
+
+
+@pytest.mark.integration
+@pytest.mark.filterwarnings(
+    r"ignore:`isinstance\(treespec, LeafSpec\)` is deprecated:FutureWarning"
+)
+@pytest.mark.filterwarnings(r"ignore:# 'dynamic_axes' is not recommended:UserWarning")
+@pytest.mark.filterwarnings(
+    r"ignore:# The axis name\x3a.*will not be used, since it shares the same shape constraints:UserWarning"
+)
+@pytest.mark.parametrize(
+    ("model_name", "task", "output_names", "use_sample"),
+    [
+        ("BertForSequenceClassification", "sequence-classification", ["logits"], False),
+        (
+            "BertForQuestionAnswering",
+            "question-answering",
+            ["start_logits", "end_logits"],
+            True,
+        ),
+    ],
+)
+def test_real_hf_export_with_segment_inputs(
+    tmp_path: Path,
+    model_name: str,
+    task: str,
+    output_names: list[str],
+    use_sample: bool,
+) -> None:
+    np = pytest.importorskip("numpy")
+    ort = pytest.importorskip("onnxruntime")
+    torch = pytest.importorskip("torch")
+    transformers = pytest.importorskip("transformers")
+    tokenizers = pytest.importorskip("tokenizers")
+    torch.set_num_threads(1)
+    raw = tokenizers.Tokenizer(
+        tokenizers.models.WordLevel(
+            {"[PAD]": 0, "[UNK]": 1, "hello": 2, "world": 3}, unk_token="[UNK]"
+        )
+    )
+    raw.pre_tokenizer = tokenizers.pre_tokenizers.Whitespace()
+    tokenizer = transformers.PreTrainedTokenizerFast(
+        tokenizer_object=raw, unk_token="[UNK]", pad_token="[PAD]"
+    )
+    config = transformers.BertConfig(
+        vocab_size=8,
+        hidden_size=16,
+        num_hidden_layers=1,
+        num_attention_heads=2,
+        intermediate_size=32,
+        num_labels=2,
+        attn_implementation="eager",
+    )
+    model = getattr(transformers, model_name)(config).train()
+    model.bert.encoder.layer[0].eval()
+    sample = dict(
+        tokenizer(
+            ["hello world", "hello"],
+            ["world", "hello world"],
+            padding=True,
+            return_tensors="pt",
+            return_token_type_ids=True,
+        )
+    )
+    source = ExportSource(
+        source_kind="hf_model",
+        model_object=model,
+        metadata={"preprocessor": tokenizer},
+        sample_inputs=sample if use_sample else {},
+    )
+    planned = PlannedTarget(
+        target=ExportTarget(name="model", format="onnx"),
+        exporter_id="hf-onnx-v1",
+        typed_options={"task": task},
+    )
+    draft = HuggingFaceONNXExporter().export(
+        ExportContext(execution_id="e", node_id="n", artifact_dir=tmp_path),
+        source,
+        {},
+        planned,
+    )
+    assert model.training and not model.bert.encoder.layer[0].training
+    assert draft.producer.effective_options["opset"] == 18
+    assert {item.relative_path for item in draft.files} == {
+        str(path.relative_to(tmp_path))
+        for path in tmp_path.rglob("*")
+        if path.is_file()
+    }
+    options = ort.SessionOptions()
+    from tributo.exporting.executor import _materialize_artifact
+
+    assert len(_materialize_artifact(draft, tmp_path, "n").files) == len(draft.files)
+    options.intra_op_num_threads = options.inter_op_num_threads = 1
+    session = ort.InferenceSession(
+        str(tmp_path / draft.entrypoint),
+        sess_options=options,
+        providers=["CPUExecutionProvider"],
+    )
+    assert [item.name for item in session.get_outputs()] == output_names
+    input_names = [item.name for item in session.get_inputs()]
+    assert "token_type_ids" in input_names
+    model.eval()
+    changed = {
+        name: torch.cat((value, value[:1]), dim=0)[:, :2]
+        for name, value in sample.items()
+    }
+    for batch in (sample, changed):
+        with torch.no_grad():
+            expected = model(**batch).to_tuple()
+        actual = session.run(None, {name: batch[name].numpy() for name in input_names})
+        for left, right in zip(expected, actual, strict=True):
+            np.testing.assert_allclose(left.numpy(), right, rtol=1e-3, atol=1e-4)
