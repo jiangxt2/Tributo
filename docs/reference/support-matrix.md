@@ -150,6 +150,12 @@ text sample cannot be inferred safely. The 4.x path continues to use the
 preprocessor and retains its dependency security risks. External tensor files
 are included in the artifact.
 
+The `model-export-hf` extra permits Transformers 4.40+ within 4.x and 5.19
+through 5.22; the 5.20–5.22 exporter API was inspected but not exercised in the
+real-model tests. Transformers 5.x export requires PyTorch 2.11 or newer, while
+the shared PyTorch extra retains its lower minimum for 4.x compatibility. The
+general `hf` extra does not impose these exporter-specific bounds.
+
 The ONNX entries describe execution of validated tensors. DNN/PU Bundle
 publication includes digest-protected preprocessing state, and
 `IdentityPredictor` consumes it for raw-feature online inference. In v1.0.0,

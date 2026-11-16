@@ -16,6 +16,18 @@ from tools.tributo_it import load_profile
 ROOT = Path(__file__).parents[2]
 
 
+def test_hf_export_dependency_version_boundaries() -> None:
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
+    requirements = project["optional-dependencies"]["model-export-hf"]
+    requirement = next(
+        Requirement(text) for text in requirements if text.startswith("transformers")
+    )
+    for version in ("4.40.0", "4.57.6", "5.19.0", "5.20.0", "5.21.0", "5.22.0"):
+        assert version in requirement.specifier
+    for version in ("5.0.0", "5.10.0", "5.18.0", "5.23.0", "6.0.0"):
+        assert version not in requirement.specifier
+
+
 def _locked_versions() -> dict[str, str]:
     lock = tomllib.loads((ROOT / "uv.lock").read_text())
     return {package["name"]: package["version"] for package in lock["package"]}

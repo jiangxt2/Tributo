@@ -3427,6 +3427,7 @@ requires-dist = [
     { name = "torch", marker = "extra == 'streaming'", url = "https://download-r2.pytorch.org/whl/cpu/torch-2.13.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl" },
     { name = "torch-geometric", marker = "extra == 'graph'", specifier = ">=2.5.0" },
     { name = "transformers", marker = "extra == 'hf'", specifier = ">=4.40.0" },
+    { name = "transformers", marker = "extra == 'model-export-hf'", specifier = ">=4.40.0,!=5.0.*,!=5.1.*,!=5.2.*,!=5.3.*,!=5.4.*,!=5.5.*,!=5.6.*,!=5.7.*,!=5.8.*,!=5.9.*,!=5.10.*,!=5.11.*,!=5.12.*,!=5.13.*,!=5.14.*,!=5.15.*,!=5.16.*,!=5.17.*,!=5.18.*,<5.23" },
     { name = "tributo", extras = ["clickhouse", "data", "data-daft", "model-export", "mysql", "postgresql", "s3"], marker = "extra == 'training'" },
     { name = "tributo", extras = ["data", "model-export"], marker = "extra == 'identity'" },
     { name = "tributo", extras = ["data", "s3"], marker = "extra == 'vector-index'" },
