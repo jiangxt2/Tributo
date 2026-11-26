@@ -6,7 +6,7 @@ import hashlib
 import json
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any
+from typing import Any, cast
 
 import ray
 
@@ -648,6 +648,22 @@ class FrameworkNativeRuntime:
                 plan.algorithm_config,
                 datasets,
             )
+            if distribution.result_policy is ResultPolicy.FIT_ONLY:
+                from tributo.training.portable_tune import _trial_reporter
+
+                reporter = _trial_reporter.get()
+                if reporter is not None:
+                    from ray.train.v2.api.callback import UserCallback
+                    from ray.train.v2.api.config import RunConfig as TrainRunConfig
+                    from ray.train.v2.api.data_parallel_trainer import (
+                        DataParallelTrainer,
+                    )
+
+                    if isinstance(trainer, DataParallelTrainer):
+                        config = cast(TrainRunConfig, trainer.run_config)
+                        # Ray Train V2 initializes callbacks to a list.
+                        callbacks = cast(list[UserCallback], config.callbacks)
+                        callbacks.append(reporter)
             fit = getattr(trainer, "fit", None)
             if not callable(fit):
                 raise AlgorithmConfigurationError(

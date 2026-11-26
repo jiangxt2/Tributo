@@ -29,6 +29,8 @@ class TuneSearchConfig(BaseModel):
         time_budget_s: Global time budget in seconds, None means unlimited.
         search_alg: Search algorithm, supports "random" and "bayesopt".
         scheduler: Scheduler, supports "fifo", "asha" and "hyperband".
+        progress_attr: Reported training progress used by portable Tune trials.
+        scheduler_max_t: Maximum progress for portable Tune's ASHA scheduler.
         fail_fast: Whether to abort the experiment immediately on first trial failure.
     """
 
@@ -91,6 +93,8 @@ class TuneSearchConfig(BaseModel):
         default="fifo",
         description="Scheduler: fifo / asha / hyperband",
     )
+    progress_attr: str | None = Field(default=None, min_length=1)
+    scheduler_max_t: int | None = Field(default=None, ge=1)
     fail_fast: bool = Field(
         default=False,
         description="Abort immediately on first trial failure",
