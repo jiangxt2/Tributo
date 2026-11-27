@@ -269,89 +269,58 @@ def test_portable_tune_requires_tunable_descriptor_and_cluster_profile() -> None
         profile=ExecutionProfile.CLUSTER,
         worker_count=2,
     )
-    runner = PortableTuneRunner(
-        distributed,
-        request,
-        TuneSearchConfig(metric="loss", num_samples=1),
-        SearchSpaceSpec(
-            parameters=(
-                SearchParamSpec(
-                    path="learning_rate",
-                    kind="uniform",
-                    lower=0.01,
-                    upper=0.1,
-                ),
-            )
-        ),
-        InputExecutionContext({}),
-        InputResolutionContext({}),
+    search_space = SearchSpaceSpec(
+        parameters=(
+            SearchParamSpec(
+                path="learning_rate", kind="uniform", lower=0.01, upper=0.1
+            ),
+        )
     )
-    assert runner is not None
 
-    configured = PortableTuneRunner(
-        distributed,
-        request,
+    def make_runner(config: TuneSearchConfig) -> PortableTuneRunner:
+        return PortableTuneRunner(
+            distributed,
+            request,
+            config,
+            search_space,
+            InputExecutionContext({}),
+            InputResolutionContext({}),
+        )
+
+    assert make_runner(TuneSearchConfig(metric="loss", num_samples=1)) is not None
+
+    configured = make_runner(
         TuneSearchConfig(
             metric="loss", scheduler="asha", progress_attr="round", scheduler_max_t=200
-        ),
-        runner._search_space,
-        InputExecutionContext({}),
-        InputResolutionContext({}),
+        )
     )
     assert configured._scheduler._time_attr == "round"
     assert configured._scheduler._max_t == 200
     assert configured._scheduler.set_search_properties("loss", "min")
 
     with pytest.raises(JobConfigurationError, match="requires scheduler_max_t"):
-        PortableTuneRunner(
-            distributed,
-            request,
-            TuneSearchConfig(metric="loss", scheduler="asha", progress_attr="round"),
-            runner._search_space,
-            InputExecutionContext({}),
-            InputResolutionContext({}),
+        make_runner(
+            TuneSearchConfig(metric="loss", scheduler="asha", progress_attr="round")
         )
 
-    legacy_asha = PortableTuneRunner(
-        distributed,
-        request,
-        TuneSearchConfig(metric="loss", scheduler="asha"),
-        runner._search_space,
-        InputExecutionContext({}),
-        InputResolutionContext({}),
-    )
+    legacy_asha = make_runner(TuneSearchConfig(metric="loss", scheduler="asha"))
     assert legacy_asha._scheduler._time_attr == "training_iteration"
     assert legacy_asha._scheduler._max_t == 100
 
-    fifo = PortableTuneRunner(
-        distributed,
-        request,
-        TuneSearchConfig(metric="loss", scheduler="fifo", progress_attr="round"),
-        runner._search_space,
-        InputExecutionContext({}),
-        InputResolutionContext({}),
+    fifo = make_runner(
+        TuneSearchConfig(metric="loss", scheduler="fifo", progress_attr="round")
     )
     assert fifo._scheduler.set_search_properties("loss", "min")
 
     with pytest.raises(JobConfigurationError, match="do not support HyperBand"):
-        PortableTuneRunner(
-            distributed,
-            request,
+        make_runner(
             TuneSearchConfig(
                 metric="loss", scheduler="hyperband", progress_attr="round"
-            ),
-            runner._search_space,
-            InputExecutionContext({}),
-            InputResolutionContext({}),
+            )
         )
 
-    legacy_hyperband = PortableTuneRunner(
-        distributed,
-        request,
-        TuneSearchConfig(metric="loss", scheduler="hyperband"),
-        runner._search_space,
-        InputExecutionContext({}),
-        InputResolutionContext({}),
+    legacy_hyperband = make_runner(
+        TuneSearchConfig(metric="loss", scheduler="hyperband")
     )
     assert legacy_hyperband._scheduler._time_attr == "training_iteration"
     assert legacy_hyperband._scheduler.set_search_properties("loss", "min")

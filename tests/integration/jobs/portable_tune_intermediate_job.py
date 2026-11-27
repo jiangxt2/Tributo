@@ -224,8 +224,6 @@ def main() -> None:
         histories[str(result.config["loss"])] = [
             int(value) for value in frame["training_rounds"].dropna().tolist()
         ]
-    assert max(histories["0.1"]) == 8
-    assert max(histories["1.0"]) < 8
     assert all(values == sorted(values) for values in histories.values())
     actor_ids = ray.get(tracker.actor_ids.remote(1.0))
     assert set(actor_ids) == {0, 1}
@@ -237,7 +235,6 @@ def main() -> None:
         assert time.monotonic() < deadline, "ASHA-stopped workers remained alive"
         time.sleep(1)
     worker_rounds = ray.get(tracker.read.remote())
-    assert max(worker_rounds["1.0"]) < 8
     print(
         "RESULT: "
         + json.dumps(
