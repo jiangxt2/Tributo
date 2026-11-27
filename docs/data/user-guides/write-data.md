@@ -50,6 +50,49 @@ receipt = default_write_gateway().execute(request, RayDataHandle(dataset))
 This adapter supports append to an existing table only. ClickHouse writes have
 no Tributo exactly-once guarantee; an ambiguous native write fails closed.
 
+## Write a Ray Dataset to Doris
+
+Install `ray-doris` with `uv sync --locked --no-dev --extra mysql`. Use a
+credential-free Doris target URI whose port is the FE HTTP port. The password
+reference names an environment variable available to the driver and Ray workers.
+
+```python
+from tributo.data import RayDataHandle
+from tributo.data.writing import WriteMode, WriteRequest, default_write_gateway
+
+request = WriteRequest(
+    engine="ray",
+    target_kind="doris",
+    target="doris://fe.example:8030/analytics/results",
+    binding_id="tributo.ray.doris",
+    mode=WriteMode.APPEND,
+    options={"operation": "upsert", "mysql_port": 9030},
+    runtime_options={"user": "writer", "credential_ref": "env://DORIS_PASSWORD"},
+)
+receipt = default_write_gateway().execute(request, RayDataHandle(dataset))
+```
+
+`operation` defaults to `load`; `upsert` requires a Unique Key table and
+`partial_update` requires a Merge-on-Write Unique Key table. The connector
+validates the table and schema and chooses the required format. Tables must
+already exist. The binding forwards its declared batching, connection, TLS,
+redirect, and Stream Load options to `ray-doris`; inspect `plan()` for the
+supported option names. Redirect hosts and ports must be included in the allowed
+lists when the FE redirects to a different endpoint.
+
+For a confirmed success, `rows_written` and `bytes_written` contain Doris
+loaded rows and uploaded bytes; receipt metadata includes batch, attempted and
+filtered row counts. A publish timeout means Doris completed the load, but
+visibility may be delayed. Wait or check visibility; do not resubmit the write.
+The same applies when some batches succeeded and others returned publish
+timeouts. For an uncertain batch outcome or a Ray worker crash,
+`WriteAmbiguousError` requires callers to reconcile what was written before
+deciding whether to retry. Known failures raise `WriteBindingError`. Multiple
+batches can partially succeed even when a failure is known, so callers must
+reconcile the target before retrying the dataset. The connector disables Ray
+write-task retries; no whole-dataset atomicity or exactly-once guarantee is
+provided.
+
 ## Interpret the receipt
 
 `WriteReceipt.committed` reports the binding's terminal result. Row and byte

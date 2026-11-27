@@ -38,6 +38,7 @@ from tributo.data.writing._native import (
 )
 from tributo.data.writing.capabilities import WriteCapability
 from tributo.data.writing.contracts import (
+    WriteAmbiguousError,
     WriteCapabilityError,
     WriteDescriptor,
     WriteExecutionContext,
@@ -57,6 +58,8 @@ def _ray_descriptor(
         if target_kind == "lance"
         else ("ray-clickhouse",)
         if target_kind == "clickhouse"
+        else ("ray-doris",)
+        if target_kind == "doris"
         else ()
     )
     return descriptor(
@@ -69,6 +72,8 @@ def _ray_descriptor(
         installation_hint=(
             "Install ray-clickhouse: uv sync --locked --extra clickhouse"
             if target_kind == "clickhouse"
+            else "Install ray-doris: uv sync --locked --extra mysql"
+            if target_kind == "doris"
             else None
         ),
     )
@@ -112,6 +117,31 @@ _CLICKHOUSE_OPTIONS = frozenset(
         "insert_mode",
         "query_timeout_seconds",
         "secure",
+    }
+)
+_DORIS_CONNECTION_OPTIONS = frozenset(
+    {
+        "mysql_port",
+        "http_secure",
+        "http_ca_file",
+        "mysql_ca_file",
+        "connect_timeout_seconds",
+        "redirect_hosts",
+        "redirect_ports",
+        "redirect_policy",
+    }
+)
+_DORIS_WRITE_OPTIONS = frozenset(
+    {
+        "operation",
+        "format",
+        "batch_rows",
+        "batch_bytes",
+        "max_filter_ratio",
+        "strict_mode",
+        "request_timeout_seconds",
+        "load_properties",
+        "concurrency",
     }
 )
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -400,6 +430,115 @@ class RayClickHouseWriteBinding:
         )
 
 
+class RayDorisWriteBinding:
+    """Delegate writes to the public ray-doris Stream Load facade."""
+
+    binding_id = "tributo.ray.doris"
+    _descriptor = _ray_descriptor(
+        "doris",
+        binding_id,
+        WriteCapability(
+            supported_modes=frozenset({WriteMode.APPEND}),
+            supported_options=_DORIS_CONNECTION_OPTIONS | _DORIS_WRITE_OPTIONS,
+            distributed=True,
+            native_metrics=True,
+            requires_existing_target=True,
+            can_create_target=False,
+            supports_empty_input=True,
+        ),
+    )
+
+    def describe(
+        self, plan: LogicalWritePlan, input_handle: WriteHandle
+    ) -> WriteDescriptor:
+        _require_ray(plan, input_handle, "doris")
+        _doris_target(plan.target)
+        _doris_username(plan.runtime_options)
+        _doris_password_env(plan.runtime_options)
+        return self._descriptor.model_copy(deep=True)
+
+    def execute(
+        self,
+        plan: LogicalWritePlan,
+        input_handle: WriteHandle,
+        context: WriteExecutionContext,
+    ) -> WriteReceipt:
+        handle = _require_ray(plan, input_handle, "doris")
+        host, port, database, table = _doris_target(plan.target)
+        from ray.exceptions import RayTaskError, WorkerCrashedError
+        from ray_doris import (
+            DorisAmbiguousWriteError,
+            DorisConnection,
+            DorisTable,
+            write_doris,
+        )
+
+        connection = DorisConnection(
+            host=host,
+            http_port=port,
+            username=_doris_username(context.runtime_options),
+            password_env=_doris_password_env(context.runtime_options),
+            **{
+                name: plan.options[name]
+                for name in _DORIS_CONNECTION_OPTIONS
+                if name in plan.options
+            },
+        )
+        try:
+            result = write_doris(
+                handle.dataset,
+                connection=connection,
+                table=DorisTable(database, table),
+                **{
+                    name: plan.options[name]
+                    for name in _DORIS_WRITE_OPTIONS
+                    if name in plan.options
+                },
+            )
+        except Exception as exc:
+            cause = exc.cause if isinstance(exc, RayTaskError) else exc
+            if isinstance(cause, DorisAmbiguousWriteError):
+                raise WriteAmbiguousError(
+                    "Doris may have accepted a batch; reconcile before retrying",
+                    source_error_type="DorisAmbiguousWriteError",
+                ) from None
+            if isinstance(cause, WorkerCrashedError):
+                raise WriteAmbiguousError(
+                    "A Ray worker exited during the write; reconcile before retrying",
+                    source_error_type="WorkerCrashedError",
+                ) from None
+            raise
+        if result.status in {"publish_timeout", "mixed"}:
+            raise WriteAmbiguousError(
+                "Doris completed the load, but visibility may be delayed; "
+                "wait or check visibility and do not resubmit the write",
+                source_error_type="DorisPublishTimeout",
+            )
+        if result.status != "success":
+            raise WriteAmbiguousError(
+                "Doris returned an unrecognized write status; reconcile before retrying",
+                source_error_type="DorisWriteResult",
+            )
+        return WriteReceipt(
+            request_digest=plan.request_digest,
+            engine_id=plan.engine_id,
+            binding_id=self.binding_id,
+            target_kind=plan.target_kind,
+            target_ref=plan.target,
+            mode=plan.mode,
+            committed=True,
+            rows_written=result.loaded_rows,
+            bytes_written=result.uploaded_bytes,
+            diagnostics=("ray_doris.write_doris",),
+            metadata={
+                "native_status": result.status,
+                "batches": result.batches,
+                "attempted_rows": result.attempted_rows,
+                "filtered_rows": result.filtered_rows,
+            },
+        )
+
+
 class DaftParquetWriteBinding:
     """Delegate Parquet writes to ``daft.DataFrame.write_parquet``."""
 
@@ -614,6 +753,59 @@ def _clickhouse_target(target: str) -> tuple[str, int, str, str]:
             "ClickHouse write target database/table must be path segments"
         )
     return parsed.hostname, port, path[0], path[1]
+
+
+def _doris_target(target: str) -> tuple[str, int, str, str]:
+    parsed = urlsplit(target)
+    if (
+        parsed.scheme.lower() != "doris"
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.hostname is None
+    ):
+        raise WriteCapabilityError(
+            "Doris write target must be doris://host:port/database/table without credentials, query, or fragment"
+        )
+    try:
+        port = 8030 if parsed.port is None else parsed.port
+    except ValueError:
+        raise WriteCapabilityError("Doris write target port is invalid") from None
+    parts = parsed.path.split("/")
+    if not 1 <= port <= 65535 or len(parts) != 3 or not parts[1] or not parts[2]:
+        raise WriteCapabilityError(
+            "Doris write target must contain a valid port and database/table"
+        )
+    database, table = (unquote(part) for part in parts[1:])
+    if any("/" in part or "\x00" in part for part in (database, table)):
+        raise WriteCapabilityError(
+            "Doris write target database/table must be path segments"
+        )
+    return parsed.hostname, port, database, table
+
+
+def _doris_username(runtime_options: Mapping[str, Any]) -> str:
+    user = runtime_options.get("user", os.getenv("TRIBUTO_DORIS_USER", "root"))
+    if not isinstance(user, str) or not user:
+        raise WriteCapabilityError("Doris write user must be a non-empty string")
+    return user
+
+
+def _doris_password_env(runtime_options: Mapping[str, Any]) -> str | None:
+    reference = runtime_options.get("credential_ref")
+    if reference is None:
+        return (
+            "TRIBUTO_DORIS_PASSWORD" if "TRIBUTO_DORIS_PASSWORD" in os.environ else None
+        )
+    if not isinstance(reference, str) or not reference.startswith("env://"):
+        raise WriteCapabilityError("Doris write credential_ref must use env://VARIABLE")
+    name = reference.removeprefix("env://")
+    if _ENV_NAME.fullmatch(name) is None:
+        raise WriteCapabilityError(
+            "Doris write credential_ref must name a portable environment variable"
+        )
+    return name
 
 
 def _clickhouse_password_env(runtime_options: Mapping[str, Any]) -> str | None:
