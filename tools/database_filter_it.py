@@ -22,6 +22,13 @@ _COMPOSE = it.ROOT / "tests/integrations/docker-compose.database-filter.yml"
 _PREFIX = "tributo-database-filter-"
 
 
+def _test_paths(database: str) -> list[str]:
+    return [
+        "tests/integrations/test_database_filter_pushdown.py",
+        f"tests/integrations/test_ray_{database}_write.py",
+    ]
+
+
 def _image_source() -> it.RuntimeBuildInputMode:
     value = os.environ.get("TRIBUTO_FILTER_IMAGE_SOURCE", "local-mirror")
     try:
@@ -336,12 +343,7 @@ def _run_database_filter(
                 "python",
                 "-m",
                 "pytest",
-                "tests/integrations/test_database_filter_pushdown.py",
-                *(
-                    ["tests/integrations/test_ray_doris_write.py"]
-                    if database == "doris"
-                    else []
-                ),
+                *_test_paths(database),
                 "-o",
                 "addopts=",
                 "-o",

@@ -165,6 +165,22 @@ def test_database_workflow_selects_canonical_images() -> None:
     assert controlled_step["env"]["TRIBUTO_FILTER_IMAGE_SOURCE"] == "canonical"
 
 
+@pytest.mark.parametrize(
+    ("database", "write_test"),
+    [
+        ("clickhouse", "tests/integrations/test_ray_clickhouse_write.py"),
+        ("doris", "tests/integrations/test_ray_doris_write.py"),
+    ],
+)
+def test_database_runner_selects_matching_write_test(
+    database: str, write_test: str
+) -> None:
+    assert database_filter_it._test_paths(database) == [
+        "tests/integrations/test_database_filter_pushdown.py",
+        write_test,
+    ]
+
+
 @pytest.mark.parametrize("source", ["local", "concurrent-local", "registry"])
 def test_runtime_cleanup_preserves_reused_images(
     monkeypatch: pytest.MonkeyPatch, source: str
@@ -277,6 +293,7 @@ def test_incomplete_proof_cannot_pass(tmp_path: Path, failure: str) -> None:
     [
         "src/tributo/data/bindings/ray_doris.py",
         "src/tributo/data/writing/native_bindings.py",
+        "tests/integrations/test_ray_clickhouse_write.py",
         "tests/integrations/test_ray_doris_write.py",
     ],
 )
