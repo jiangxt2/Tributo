@@ -339,6 +339,11 @@ class WriteBindingError(WriteError):
         super().__init__(message)
 
 
+@PublicAPI(stability="alpha")
+class WriteAmbiguousError(WriteBindingError):
+    """Raised when a write may have taken effect without confirmation."""
+
+
 WriteHandle: TypeAlias = RayDataHandle | DaftDataFrameHandle
 
 
