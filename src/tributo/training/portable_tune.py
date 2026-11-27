@@ -2,18 +2,23 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from contextvars import ContextVar
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import ray
 from ray.tune import ResultGrid, RunConfig, Tuner
+from ray.tune.integration.ray_train import TuneReportCallback
+from ray.tune.schedulers import ASHAScheduler
 
 from tributo._common.immutable import deep_thaw
 from tributo.algorithms.api import (
     DistributedAlgorithmDescriptor,
     DistributionStrategy,
     ExecutionRequest,
+    FrameworkNativePolicy,
     ResolvedAlgorithmPlan,
     ResultPolicy,
     canonical_digest,
@@ -32,6 +37,46 @@ from tributo.training.tune_runner import (
 )
 from tributo.training.tune_space import SearchSpaceSpec, to_ray_param_space
 from tributo.util.annotations import PublicAPI
+
+_trial_reporter: ContextVar[TuneReportCallback | None] = ContextVar(
+    "portable_tune_reporter", default=None
+)
+_XGBOOST_REPORT_KEY = "_tributo_xgboost_recovery"
+
+
+class _IntermediateReportCallback(TuneReportCallback):
+    """Forward XGBoost training reports without forwarding its final report."""
+
+    def __init__(self, metric: str, progress_attr: str) -> None:
+        super().__init__()
+        self._metric = metric
+        self._progress_attr = progress_attr
+        self._last_progress: float | None = None
+
+    def after_report(
+        self, run_context: Any, metrics: list[dict[str, Any]], checkpoint: Any
+    ) -> None:
+        values = metrics[0]
+        phase = values.get(_XGBOOST_REPORT_KEY)
+        if not isinstance(phase, Mapping) or phase.get("phase") != "training":
+            return
+        if self._progress_attr not in values:
+            raise JobExecutionError(
+                f"XGBoost training report is missing progress attribute "
+                f"{self._progress_attr!r}"
+            )
+        if self._metric not in values:
+            return
+        progress = _extract_target_metric(values, self._progress_attr)
+        if self._last_progress is not None and progress <= self._last_progress:
+            return
+        objective = _extract_target_metric(values, self._metric)
+        self._last_progress = progress
+        super().after_report(
+            run_context,
+            [{self._metric: objective, self._progress_attr: progress}],
+            None,
+        )
 
 
 def _fit_only_plan(plan: ResolvedAlgorithmPlan) -> ResolvedAlgorithmPlan:
@@ -153,19 +198,44 @@ class PortableTuneRunner:
             if search_factory is not None
             else None
         )
-        self._scheduler = scheduler_factory(tune_config.metric, tune_config.mode)
+        if tune_config.progress_attr and tune_config.scheduler == "hyperband":
+            raise JobConfigurationError(
+                "portable Tune intermediate metrics do not support HyperBand "
+                "pause and resume; use ASHA or FIFO"
+            )
+        if (
+            tune_config.scheduler == "asha"
+            and tune_config.progress_attr
+            and tune_config.scheduler_max_t is None
+        ):
+            raise JobConfigurationError(
+                "portable Tune ASHA requires scheduler_max_t with progress_attr"
+            )
+        if tune_config.scheduler == "asha" and (
+            tune_config.progress_attr or tune_config.scheduler_max_t is not None
+        ):
+            options: dict[str, Any] = {}
+            if tune_config.progress_attr:
+                options["time_attr"] = tune_config.progress_attr
+            if tune_config.scheduler_max_t is not None:
+                options["max_t"] = tune_config.scheduler_max_t
+            self._scheduler = ASHAScheduler(**options)
+        else:
+            self._scheduler = scheduler_factory(None, None)
 
     def _trainable(self) -> Any:
         request = self._request
         input_context = self._input_context
         resolution_context = self._resolution_context
         metric_name = self._tune_config.metric
+        progress_attr = self._tune_config.progress_attr
 
         def trainable(sampled_values: dict[str, Any]) -> None:
             from ray import tune as ray_tune
             from ray.train import Checkpoint
 
             from tributo.algorithms import build_algorithm_dispatcher
+            from tributo.training.portable_tune import _trial_reporter
 
             trial_dir = Path(ray_tune.get_context().get_trial_dir())
             checkpoint_dir = trial_dir / "algorithm-checkpoint"
@@ -176,12 +246,27 @@ class PortableTuneRunner:
             )
             dispatcher = build_algorithm_dispatcher()
             plan = dispatcher.plan(trial_request, resolution_context)
-            result = dispatcher.execute_plan(
-                _fit_only_plan(plan),
-                input_context,
+            reporter = (
+                _IntermediateReportCallback(metric_name, progress_attr)
+                if progress_attr
+                and plan.distribution_spec is not None
+                and plan.distribution_spec.strategy
+                is DistributionStrategy.FRAMEWORK_NATIVE
+                and isinstance(plan.distribution_spec.policy, FrameworkNativePolicy)
+                and plan.distribution_spec.policy.framework == "xgboost-rabit"
+                else None
             )
+            token = _trial_reporter.set(reporter)
+            try:
+                result = dispatcher.execute_plan(_fit_only_plan(plan), input_context)
+            finally:
+                _trial_reporter.reset(token)
             metric = _extract_target_metric(result.execution.metrics, metric_name)
             metrics = {metric_name: metric}
+            if progress_attr and progress_attr in result.execution.metrics:
+                metrics[progress_attr] = _extract_target_metric(
+                    result.execution.metrics, progress_attr
+                )
             if not _trial_checkpoint_enabled(plan):
                 ray_tune.report(metrics)
                 return

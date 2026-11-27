@@ -339,10 +339,25 @@ def test_framework_native_input_snapshot_rejects_missing_required_role_before_co
         )
 
 
+_TUNE_REPORTER = object()
+
+
+@pytest.mark.parametrize(
+    ("reporter", "additional_callbacks"),
+    [
+        pytest.param(None, (), id="without-tune"),
+        pytest.param(_TUNE_REPORTER, (_TUNE_REPORTER,), id="with-tune"),
+    ],
+)
 def test_framework_native_runtime_counts_routes_before_trainer_and_fit(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, reporter: object, additional_callbacks: tuple
 ) -> None:
+    from ray.train.v2.api import data_parallel_trainer
+
+    from tributo.training.portable_tune import _trial_reporter
+
     events: list[str] = []
+    existing_callback = object()
 
     class CountedDataset:
         def __init__(self, role: str, rows: int) -> None:
@@ -370,7 +385,14 @@ def test_framework_native_runtime_counts_routes_before_trainer_and_fit(
     )
 
     class Trainer:
+        def __init__(self) -> None:
+            self.run_config = SimpleNamespace(callbacks=[existing_callback])
+
         def fit(self) -> object:
+            assert self.run_config.callbacks == [
+                existing_callback,
+                *additional_callbacks,
+            ]
             events.append("fit")
             return SimpleNamespace(metrics={"score": 0.75})
 
@@ -433,6 +455,7 @@ def test_framework_native_runtime_counts_routes_before_trainer_and_fit(
         run_id="coverage-run",
     )
     algorithm = Algorithm()
+    monkeypatch.setattr(data_parallel_trainer, "DataParallelTrainer", Trainer)
     monkeypatch.setattr(framework_native_module.ray, "is_initialized", lambda: True)
     monkeypatch.setattr(framework_native_module, "_algorithm", lambda _env: algorithm)
     monkeypatch.setattr(
@@ -444,7 +467,11 @@ def test_framework_native_runtime_counts_routes_before_trainer_and_fit(
         framework_native_module, "_actual_environment_versions", lambda *_args: {}
     )
 
-    result = FrameworkNativeRuntime().execute(envelope)
+    token = _trial_reporter.set(reporter)
+    try:
+        result = FrameworkNativeRuntime().execute(envelope)
+    finally:
+        _trial_reporter.reset(token)
 
     assert events.index("build") > max(
         events.index("count:train"), events.index("count:validation")

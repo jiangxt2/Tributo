@@ -28,6 +28,21 @@ or `FrameworkNativeAlgorithm` and publish a
 group. Ray Joblib is not a formal distribution strategy. Arbitrary sklearn
 estimators are not automatically converted to distributed models.
 
+## Portable Tune Intermediate Metrics
+
+For XGBoost running with Ray Train V2, enable
+`training.checkpoint_interval_rounds` and set `TuneSearchConfig.progress_attr`
+to the reported progress field. ASHA requires `scheduler_max_t` in the same
+units. FIFO also receives intermediate reports. Use
+`progress_attr="training_rounds"` with an emitted metric such as
+`metric="train-logloss"`. Core recognizes the XGBoost recovery report's training
+phase; other algorithms and XGBoost runs without periodic reports retain their
+final metric report. A periodic XGBoost report missing the configured progress
+field fails the trial. Intermediate reports do not create Tune checkpoints.
+HyperBand cannot use intermediate reports because portable Tune does not yet
+restore a paused trial's training checkpoint; HyperBand without `progress_attr`
+retains its final-report behavior.
+
 ## Default Bundle Publication
 
 First-party XGBoost, DNN, and PU trainers publish an immutable Bundle by
