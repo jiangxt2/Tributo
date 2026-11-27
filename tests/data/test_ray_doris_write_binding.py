@@ -142,15 +142,33 @@ def test_gateway_delegates_operations_and_returns_native_receipt(
     assert "secret-value" not in receipt.model_dump_json()
 
 
-@pytest.mark.parametrize("status", ["publish_timeout", "mixed", "unexpected"])
+@pytest.mark.parametrize(
+    ("status", "message", "source_error_type"),
+    [
+        (
+            "publish_timeout",
+            "visibility may be delayed; wait or check visibility and do not resubmit",
+            "DorisPublishTimeout",
+        ),
+        (
+            "mixed",
+            "visibility may be delayed; wait or check visibility and do not resubmit",
+            "DorisPublishTimeout",
+        ),
+        ("unexpected", "reconcile", "DorisWriteResult"),
+    ],
+)
 def test_gateway_does_not_confirm_unsettled_status(
     native: SimpleNamespace,
     gateway: WriteGateway,
     status: str,
+    message: str,
+    source_error_type: str,
 ) -> None:
     native.write_doris.return_value.status = status
-    with pytest.raises(WriteAmbiguousError, match="reconcile"):
+    with pytest.raises(WriteAmbiguousError, match=message) as captured:
         gateway.execute(_request(), RayDataHandle(object()))
+    assert captured.value.source_error_type == source_error_type
 
 
 @pytest.mark.parametrize("wrapped", [False, True])

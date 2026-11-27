@@ -82,12 +82,16 @@ lists when the FE redirects to a different endpoint.
 
 For a confirmed success, `rows_written` and `bytes_written` contain Doris
 loaded rows and uploaded bytes; receipt metadata includes batch, attempted and
-filtered row counts. `WriteAmbiguousError` signals an uncertain batch outcome,
-publish timeout, or Ray worker crash and requires reconciliation before a
-retry. Known failures raise `WriteBindingError`. Multiple batches can partially
-succeed even when a failure is known, so callers must reconcile the target
-before retrying the dataset. The connector disables Ray write-task retries; no whole-dataset
-atomicity or exactly-once guarantee is provided.
+filtered row counts. A publish timeout means Doris completed the load, but
+visibility may be delayed. Wait or check visibility; do not resubmit the write.
+The same applies when some batches succeeded and others returned publish
+timeouts. For an uncertain batch outcome or a Ray worker crash,
+`WriteAmbiguousError` requires callers to reconcile what was written before
+deciding whether to retry. Known failures raise `WriteBindingError`. Multiple
+batches can partially succeed even when a failure is known, so callers must
+reconcile the target before retrying the dataset. The connector disables Ray
+write-task retries; no whole-dataset atomicity or exactly-once guarantee is
+provided.
 
 ## Interpret the receipt
 

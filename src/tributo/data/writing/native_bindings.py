@@ -510,7 +510,8 @@ class RayDorisWriteBinding:
             raise
         if result.status in {"publish_timeout", "mixed"}:
             raise WriteAmbiguousError(
-                "Doris returned a publish timeout; reconcile before retrying",
+                "Doris completed the load, but visibility may be delayed; "
+                "wait or check visibility and do not resubmit the write",
                 source_error_type="DorisPublishTimeout",
             )
         if result.status != "success":
