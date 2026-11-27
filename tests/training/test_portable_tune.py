@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from ray import cloudpickle
-from ray.tune.integration.ray_train import TuneReportCallback
+from ray.tune.integration import ray_train
 
 from tests.algorithms.conftest import map_reduce_registration, request_for
 from tributo.algorithms.api import (
@@ -113,19 +113,26 @@ def test_intermediate_report_uses_objective_and_actual_progress(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     forwarded = []
-    monkeypatch.setattr(TuneReportCallback, "__init__", lambda self: None)
+    monkeypatch.setattr(ray_train, "_in_tune_session", lambda: True)
+    queue = SimpleNamespace(put=forwarded.append)
     monkeypatch.setattr(
-        TuneReportCallback,
-        "after_report",
-        lambda self, context, metrics, checkpoint: forwarded.append(metrics[0]),
+        ray_train,
+        "get_session",
+        lambda: SimpleNamespace(_get_or_create_inter_actor_queue=lambda: queue),
     )
     callback = _IntermediateReportCallback("loss", "round")
     training = {"_tributo_xgboost_recovery": {"phase": "training"}}
-    callback.after_report(None, [{"loss": 0.9, "round": 0, **training}], None)
+    callback.after_report(None, [{"loss": 0.9, "round": 0, **training}], object())
     callback.after_report(None, [{"loss": 0.8, "round": 2, **training}], None)
     callback.after_report(None, [{"loss": 0.7, "round": 5, **training}], None)
     callback.after_report(None, [{"loss": 0.7, "round": 5, **training}], None)
     callback.after_report(None, [{"round": 6, **training}], None)
+    callback.after_report(None, [{"loss": 0.4, "round": 5}], None)
+    callback.after_report(
+        None,
+        [{"loss": 0.3, "round": 6, "_tributo_xgboost_recovery": {"phase": "final"}}],
+        None,
+    )
     assert forwarded == [
         {"loss": 0.9, "round": 0},
         {"loss": 0.8, "round": 2},
@@ -139,99 +146,61 @@ def test_intermediate_report_uses_objective_and_actual_progress(
         callback.after_report(None, [{"loss": 0.6, **training}], None)
 
 
-def test_xgboost_final_reports_are_not_forwarded_before_validation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    forwarded = []
-    monkeypatch.setattr(TuneReportCallback, "__init__", lambda self: None)
-    monkeypatch.setattr(
-        TuneReportCallback,
-        "after_report",
-        lambda self, context, metrics, checkpoint: forwarded.append(metrics[0]),
-    )
-    callback = _IntermediateReportCallback("loss", "round")
-    callback.after_report(None, [{"loss": 0.4, "round": 5}], None)
-    callback.after_report(
-        None,
-        [{"loss": 0.3, "round": 6, "_tributo_xgboost_recovery": {"phase": "final"}}],
-        None,
-    )
-    assert forwarded == []
-
-
-def test_trainable_reports_final_metric_without_intermediate_reports(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
-) -> None:
-    from ray import tune
-
-    import tributo.algorithms
-
-    class Dispatcher:
-        def plan(self, *_args):
-            return _resolved_plan()
-
-        def execute_plan(self, *_args):
-            assert _trial_reporter.get() is None
-            return SimpleNamespace(execution=SimpleNamespace(metrics={"loss": 0.3}))
-
-    monkeypatch.setattr(tributo.algorithms, "build_algorithm_dispatcher", Dispatcher)
-    monkeypatch.setattr(
-        tune,
-        "get_context",
-        lambda: SimpleNamespace(get_trial_dir=lambda: str(tmp_path)),
-    )
-    reports = []
-    monkeypatch.setattr(
-        tune, "report", lambda metrics, **kwargs: reports.append(metrics)
-    )
-    _runner_for_trainable()._trainable()({})
-    assert reports == [{"loss": 0.3}]
-    assert _trial_reporter.get() is None
-
-
 def test_trainable_can_be_serialized_for_ray_tune() -> None:
     assert callable(
         cloudpickle.loads(cloudpickle.dumps(_runner_for_trainable()._trainable()))
     )
 
 
+def _framework_distribution(framework: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        strategy=DistributionStrategy.FRAMEWORK_NATIVE,
+        policy=FrameworkNativePolicy(
+            framework=framework, evidence_collector_ref="tests.example:collect"
+        ),
+    )
+
+
+_REPORTER = object()
+
+
 @pytest.mark.parametrize(
-    ("framework", "supports_reporting"),
+    ("distribution", "expected_reporter"),
     [
-        pytest.param("xgboost-rabit", True, id="xgboost"),
-        pytest.param("other-framework", False, id="other-framework"),
+        pytest.param(
+            map_reduce_registration().distribution_spec, None, id="non-framework"
+        ),
+        pytest.param(_framework_distribution("xgboost-rabit"), _REPORTER, id="xgboost"),
+        pytest.param(
+            _framework_distribution("other-framework"), None, id="other-framework"
+        ),
     ],
 )
 def test_trainable_only_attaches_reporter_for_supported_framework(
-    monkeypatch: pytest.MonkeyPatch, tmp_path, framework: str, supports_reporting: bool
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+    distribution: object,
+    expected_reporter: object,
 ) -> None:
     from ray import tune
 
     import tributo.algorithms
     import tributo.training.portable_tune as portable_tune
 
-    reporter = object()
-    plan = SimpleNamespace(
-        distribution_spec=SimpleNamespace(
-            strategy=DistributionStrategy.FRAMEWORK_NATIVE,
-            policy=FrameworkNativePolicy(
-                framework=framework, evidence_collector_ref="tests.example:collect"
-            ),
-        )
-    )
+    plan = SimpleNamespace(distribution_spec=distribution)
 
     class Dispatcher:
         def plan(self, *_args):
             return plan
 
         def execute_plan(self, *_args):
-            assert _trial_reporter.get() is (reporter if supports_reporting else None)
+            assert _trial_reporter.get() is expected_reporter
             return SimpleNamespace(execution=SimpleNamespace(metrics={"loss": 0.3}))
 
     monkeypatch.setattr(tributo.algorithms, "build_algorithm_dispatcher", Dispatcher)
     monkeypatch.setattr(portable_tune, "_fit_only_plan", lambda value: value)
     monkeypatch.setattr(
-        portable_tune, "_IntermediateReportCallback", lambda *_args: reporter
+        portable_tune, "_IntermediateReportCallback", lambda *_args: _REPORTER
     )
     monkeypatch.setattr(
         tune,

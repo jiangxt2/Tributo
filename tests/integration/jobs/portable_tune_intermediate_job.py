@@ -48,86 +48,42 @@ def trainable(config: dict, tracker: object, inner_runner: Any) -> None:
     from ray.train.v2.api.data_parallel_trainer import DataParallelTrainer
 
     import tributo.algorithms
-    import tributo.integrations.algorithm_runtimes.framework_native as native
     import tributo.training.portable_tune as portable_tune
-    from tributo.algorithms.api import (
-        DistributionStrategy,
-        FrameworkNativePolicy,
-        ResultPolicy,
-    )
-    from tributo.algorithms.spi import (
-        PreparedInput,
-    )
+    from tributo.algorithms.api import DistributionStrategy, FrameworkNativePolicy
 
     trial_id = tune.get_context().get_trial_id()
-    policy = FrameworkNativePolicy(
-        framework="xgboost-rabit", evidence_collector_ref="tests.example:collect"
-    )
     plan = SimpleNamespace(
-        input_bindings=SimpleNamespace(bindings=(SimpleNamespace(name="train"),)),
         distribution_spec=SimpleNamespace(
             strategy=DistributionStrategy.FRAMEWORK_NATIVE,
-            result_policy=ResultPolicy.FIT_ONLY,
-            policy=policy,
+            policy=FrameworkNativePolicy(
+                framework="xgboost-rabit",
+                evidence_collector_ref="tests.example:collect",
+            ),
         ),
-        runtime=SimpleNamespace(
-            worker_input_adapter_ref=None,
-            worker_count=2,
-            num_cpus=1.0,
-            num_gpus=0.0,
-            memory_bytes=None,
-            custom_resources={},
-        ),
-        algorithm_config={},
-        environment=SimpleNamespace(python="3.12", dependencies=()),
     )
 
-    class Dataset:
-        def count(self) -> int:
-            return 8
-
-    class Algorithm:
-        def validate_environment(self) -> None:
-            pass
-
-        def bind_datasets(self, _views: object) -> dict:
-            return {"train": Dataset()}
-
-        def build_trainer(self, _config: object, _datasets: object) -> object:
-            return DataParallelTrainer(
-                train_worker,
-                train_loop_config={**config, "tracker": tracker},
-                scaling_config=train.ScalingConfig(num_workers=2),
-                run_config=train.RunConfig(
-                    name=f"inner-train-{trial_id}",
-                    storage_path="/workspace/tributo-work",
-                ),
-            )
-
-        def collect_evidence(self, _result: object) -> dict:
-            return {}
-
-    class Dispatcher:
-        def plan(self, *_args: object) -> object:
-            return plan
-
-        def execute_plan(self, _plan: object, _context: object) -> object:
-            envelope = SimpleNamespace(
-                cancelled=False, plan=plan, input_payloads=(None,), run_id="test"
-            )
-            return native.FrameworkNativeRuntime().execute(envelope)
+    def execute_plan(*_args: object) -> object:
+        trainer = DataParallelTrainer(
+            train_worker,
+            train_loop_config={**config, "tracker": tracker},
+            scaling_config=train.ScalingConfig(num_workers=2),
+            run_config=train.RunConfig(
+                name=f"inner-train-{trial_id}",
+                storage_path="/workspace/tributo-work",
+                callbacks=[portable_tune._trial_reporter.get()],
+            ),
+        )
+        return SimpleNamespace(execution=SimpleNamespace(metrics=trainer.fit().metrics))
 
     with (
-        patch.object(tributo.algorithms, "build_algorithm_dispatcher", Dispatcher),
-        patch.object(portable_tune, "_fit_only_plan", lambda value: value),
-        patch.object(native, "_algorithm", lambda _envelope: Algorithm()),
         patch.object(
-            native,
-            "_load_reference",
-            lambda _reference: lambda _payload: PreparedInput({"train": object()}),
+            tributo.algorithms,
+            "build_algorithm_dispatcher",
+            return_value=SimpleNamespace(
+                plan=lambda *_: plan, execute_plan=execute_plan
+            ),
         ),
-        patch.object(native, "_validated_framework_evidence", lambda *a, **k: ([], {})),
-        patch.object(native, "_actual_environment_versions", lambda *a: {}),
+        patch.object(portable_tune, "_fit_only_plan", lambda value: value),
     ):
         inner_runner._trainable()(config)
 

@@ -339,10 +339,25 @@ def test_framework_native_input_snapshot_rejects_missing_required_role_before_co
         )
 
 
+_TUNE_REPORTER = object()
+
+
+@pytest.mark.parametrize(
+    ("reporter", "additional_callbacks"),
+    [
+        pytest.param(None, (), id="without-tune"),
+        pytest.param(_TUNE_REPORTER, (_TUNE_REPORTER,), id="with-tune"),
+    ],
+)
 def test_framework_native_runtime_counts_routes_before_trainer_and_fit(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, reporter: object, additional_callbacks: tuple
 ) -> None:
+    from ray.train.v2.api import data_parallel_trainer
+
+    from tributo.training.portable_tune import _trial_reporter
+
     events: list[str] = []
+    existing_callback = object()
 
     class CountedDataset:
         def __init__(self, role: str, rows: int) -> None:
@@ -370,7 +385,14 @@ def test_framework_native_runtime_counts_routes_before_trainer_and_fit(
     )
 
     class Trainer:
+        def __init__(self) -> None:
+            self.run_config = SimpleNamespace(callbacks=[existing_callback])
+
         def fit(self) -> object:
+            assert self.run_config.callbacks == [
+                existing_callback,
+                *additional_callbacks,
+            ]
             events.append("fit")
             return SimpleNamespace(metrics={"score": 0.75})
 
@@ -433,6 +455,7 @@ def test_framework_native_runtime_counts_routes_before_trainer_and_fit(
         run_id="coverage-run",
     )
     algorithm = Algorithm()
+    monkeypatch.setattr(data_parallel_trainer, "DataParallelTrainer", Trainer)
     monkeypatch.setattr(framework_native_module.ray, "is_initialized", lambda: True)
     monkeypatch.setattr(framework_native_module, "_algorithm", lambda _env: algorithm)
     monkeypatch.setattr(
@@ -444,7 +467,11 @@ def test_framework_native_runtime_counts_routes_before_trainer_and_fit(
         framework_native_module, "_actual_environment_versions", lambda *_args: {}
     )
 
-    result = FrameworkNativeRuntime().execute(envelope)
+    token = _trial_reporter.set(reporter)
+    try:
+        result = FrameworkNativeRuntime().execute(envelope)
+    finally:
+        _trial_reporter.reset(token)
 
     assert events.index("build") > max(
         events.index("count:train"), events.index("count:validation")
@@ -453,83 +480,6 @@ def test_framework_native_runtime_counts_routes_before_trainer_and_fit(
     assert result.execution.status == "succeeded"
     assert result.worker_metadata["input_complete"] is True
     assert prepared.closed
-
-
-def test_framework_native_fit_only_attaches_tune_reporter(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A portable Tune reporter reaches a Ray Train trainer before fit."""
-    from ray.train.v2.api import data_parallel_trainer
-
-    from tributo.training.portable_tune import _trial_reporter
-
-    class Dataset:
-        def count(self) -> int:
-            return 8
-
-    reporter = object()
-    existing_callback = object()
-
-    class Trainer:
-        def __init__(self) -> None:
-            self.run_config = SimpleNamespace(callbacks=[existing_callback])
-
-        def fit(self) -> object:
-            assert self.run_config.callbacks == [existing_callback, reporter]
-            return SimpleNamespace(metrics={"score": 0.75})
-
-    class Algorithm:
-        def validate_environment(self) -> None:
-            pass
-
-        def bind_datasets(self, _views: object) -> dict[str, Dataset]:
-            return {"train": Dataset()}
-
-        def build_trainer(self, _config: object, _datasets: object) -> Trainer:
-            return Trainer()
-
-        def collect_evidence(self, _result: object) -> dict[str, object]:
-            return _evidence()
-
-    plan = SimpleNamespace(
-        input_bindings=SimpleNamespace(bindings=(SimpleNamespace(name="train"),)),
-        distribution_spec=SimpleNamespace(
-            result_policy=ResultPolicy.FIT_ONLY,
-            policy=FrameworkNativePolicy(
-                framework="example", evidence_collector_ref="tests.example:collect"
-            ),
-        ),
-        runtime=SimpleNamespace(
-            worker_input_adapter_ref=object(),
-            worker_count=2,
-            num_cpus=1.0,
-            num_gpus=0.0,
-            memory_bytes=None,
-            custom_resources={},
-        ),
-        algorithm_config={},
-        environment=SimpleNamespace(python="3.12", dependencies=()),
-    )
-    envelope = SimpleNamespace(
-        cancelled=False, plan=plan, input_payloads=(object(),), run_id="tune-test"
-    )
-    monkeypatch.setattr(data_parallel_trainer, "DataParallelTrainer", Trainer)
-    monkeypatch.setattr(framework_native_module.ray, "is_initialized", lambda: True)
-    monkeypatch.setattr(framework_native_module, "_algorithm", lambda _env: Algorithm())
-    monkeypatch.setattr(
-        framework_native_module,
-        "_load_reference",
-        lambda _reference: lambda _payload: PreparedInput({"train": object()}),
-    )
-    monkeypatch.setattr(
-        framework_native_module, "_actual_environment_versions", lambda *_args: {}
-    )
-    token = _trial_reporter.set(reporter)
-    try:
-        result = FrameworkNativeRuntime().execute(envelope)
-    finally:
-        _trial_reporter.reset(token)
-    assert result.execution.metrics["score"] == 0.75
 
 
 def test_staged_framework_evidence_validates_each_component_and_composes_digest() -> (
