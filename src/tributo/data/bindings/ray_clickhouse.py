@@ -9,6 +9,7 @@ from typing import Any
 
 import pyarrow as pa
 
+from tributo.data._clickhouse_query import query_params_digest
 from tributo.data.bindings._shared import canonical_engine_schema
 from tributo.data.bindings._sql_filters import (
     _SqlFilters,
@@ -66,9 +67,14 @@ def _split_options(
                 error_type=JobConfigurationError,
                 diagnostic_code="single_sql_read_rejects_parallelism_hint",
                 diagnostic=(
-                    "A single ClickHouse read cannot honor target_parallelism; "
-                    "set partitioning.mode to 'auto' or 'parallel', or remove "
-                    "target_parallelism"
+                    "A ClickHouse query cannot honor target_parallelism; "
+                    "remove target_parallelism"
+                    if isinstance(plan.target, ParameterizedQuery)
+                    else (
+                        "A single ClickHouse read cannot honor target_parallelism; "
+                        "set partitioning.mode to 'auto' or 'parallel', or remove "
+                        "target_parallelism"
+                    )
                 ),
             )
         return {"split": "single"}
@@ -137,7 +143,7 @@ class RayClickHouseBinding:
                 raise JobConfigurationError(
                     "ClickHouse query parameters must be a mapping"
                 )
-            if (digest(params) if params else None) != plan.options.get(
+            if (query_params_digest(params) if params else None) != plan.options.get(
                 "params_digest"
             ):
                 raise JobConfigurationError(

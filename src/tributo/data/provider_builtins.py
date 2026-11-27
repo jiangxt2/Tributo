@@ -24,6 +24,7 @@ from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 from pydantic import ValidationError
 
+from tributo.data._clickhouse_query import query_params_digest
 from tributo.data._s3 import resolve_endpoint
 from tributo.data.base import S3Config
 from tributo.data.provider import DataSourceProvider, ResolvedSource
@@ -288,17 +289,20 @@ def _identity_catalog_properties(
     return identity
 
 
-def _params_digest(provider_id: str, params: Mapping[str, Any]) -> str:
+def _params_digest(
+    provider_id: str, params: Mapping[str, Any], *, clickhouse_query: bool = False
+) -> str:
     """SHA-256 digest of bound query parameters with a clear error.
 
-    datetime/date/time/Decimal are serialized deterministically by
-    ``refs._jsonable`` — they are legal bound-parameter values.  Anything
-    else non-JSON-serializable is a configuration error surfaced here
-    (ref_id time), not a raw ``TypeError``.
+    ClickHouse query parameters retain scalar type information in the digest.
+    Other SQL sources retain the existing serialization. Unsupported values
+    raise a credential-safe configuration error.
     """
     invalid = False
     try:
-        params_digest = digest(params)
+        params_digest = (
+            query_params_digest(params) if clickhouse_query else digest(params)
+        )
     except TypeError:
         invalid = True
     if invalid:
@@ -1160,7 +1164,11 @@ class _SqlProvider(DataSourceProvider):
                 {"sql_digest": digest(str(sql))} if has_sql else {"table": str(table)}
             )
             if params is not None:
-                identity["params_digest"] = _params_digest(self.provider_id, params)
+                identity["params_digest"] = _params_digest(
+                    self.provider_id,
+                    params,
+                    clickhouse_query=self._dialect() == "clickhouse" and has_sql,
+                )
             if columns:
                 identity["columns"] = list(columns)
             schema = options.get("schema")
@@ -1231,7 +1239,10 @@ class _SqlProvider(DataSourceProvider):
             )
             if source.params is not None:
                 builtin_identity["params_digest"] = _params_digest(
-                    self.provider_id, source.params
+                    self.provider_id,
+                    source.params,
+                    clickhouse_query=self._dialect() == "clickhouse"
+                    and bool(source.sql.strip()),
                 )
             if source.columns:
                 builtin_identity["columns"] = list(source.columns)
