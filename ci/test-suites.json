@@ -430,6 +430,7 @@
       "extras": [],
       "test_paths": [
         "tests/integrations/test_database_filter_pushdown.py",
+        "tests/integrations/test_ray_clickhouse_write.py",
         "tests/integrations/test_ray_doris_write.py",
         "tests/integrations/database_filter_trace.py",
         "scripts/run_database_filter_it.sh"
@@ -453,6 +454,7 @@
         "tests/data/test_sql_filters.py",
         "tests/data/test_source_bindings.py",
         "tests/data/test_ray_doris_write_binding.py",
+        "tests/integrations/test_ray_clickhouse_write.py",
         "tests/integrations/test_ray_doris_write.py",
         "tests/integrations/*database*filter*",
         "tests/integrations/database-filter/**",
@@ -473,7 +475,7 @@
       "ci_allowed": true,
       "forbid_skips": true,
       "log_contract": "result.json, versions.json, evidence.jsonl, junit.xml, tests.log and services.log in the explicit job evidence directory",
-      "rationale": "Owned single-node real database proof of filter forwarding and native source results; no external credentials or multi-node cluster."
+      "rationale": "Owned single-node real database proof of filter forwarding, native source results, and ClickHouse and Doris writes; no external credentials or multi-node cluster."
     },
     {
       "id": "log-reporting-cluster",
