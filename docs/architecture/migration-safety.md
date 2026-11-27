@@ -73,10 +73,9 @@ Compatibility:
   `open()` for them. Canonical planning fails closed at `plan()` with a clear
   `JobConfigurationError`; the removed adapter's `FutureWarning` is not
   re-created in `IngestionGateway`.
-- Legacy ClickHouse and Doris raw-SQL shapes remain parseable only to produce a
-  credential-free migration error. Built-in execution supports structured
-  table/projection/partitioning requests; Tributo does not restore an arbitrary
-  SQL reader.
+- ClickHouse SQL inputs use the Ray Binding's trusted, single read-only query
+  mode. Doris raw-SQL inputs produce a credential-free migration error; its
+  built-in execution supports structured table/projection/partitioning requests.
 
 Deprecation window:
 

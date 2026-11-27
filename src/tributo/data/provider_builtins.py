@@ -1275,6 +1275,7 @@ class _SqlProvider(DataSourceProvider):
     def plan(self, resolved: ResolvedSource) -> "LogicalScanPlan":
         """Describe a bounded SQL query without exposing SQL text or credentials."""
         from tributo.data.scan_plan import (
+            ParameterizedQuery,
             SourceCapability,
             SqlScan,
             SqlShardMode,
@@ -1285,6 +1286,35 @@ class _SqlProvider(DataSourceProvider):
         query_digest = resolved.identity_options.get("sql_digest")
         table = resolved.identity_options.get("table")
         if isinstance(query_digest, str):
+            if self._dialect() == "clickhouse":
+                partitioning = resolved.identity_options.get("partitioning")
+                if resolved.identity_options.get("columns") or (
+                    isinstance(partitioning, Mapping)
+                    and partitioning.get("mode") != "single"
+                ):
+                    raise JobConfigurationError(
+                        "ClickHouse query reads do not support columns or "
+                        "non-single partitioning; express projection in SQL"
+                    )
+                params = resolved.runtime_options.get("params")
+                if isinstance(params, Mapping) and any(
+                    isinstance(value, (Mapping, tuple)) for value in params.values()
+                ):
+                    raise JobConfigurationError(
+                        "ClickHouse query parameters must be scalar; "
+                        "list, tuple, and mapping values are not supported"
+                    )
+                params_digest = resolved.identity_options.get("params_digest")
+                return SqlScan(
+                    provider_id=self.provider_id,
+                    connector_id="clickhouse",
+                    target=ParameterizedQuery(query_digest),
+                    options=(
+                        {"params_digest": params_digest}
+                        if params_digest is not None
+                        else {}
+                    ),
+                )
             raise JobConfigurationError(
                 f"{self.provider_id}: raw SQL ingestion is not supported by the "
                 "engine-neutral read contract; configure a structured 'table' "

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.metadata
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -14,20 +15,27 @@ from tributo.data.bindings._sql_filters import (
     compile_sql_filters,
     require_transform_filters,
 )
-from tributo.data.bindings._sql_shared import require_sql_table, resolve_sql_target
+from tributo.data.bindings._sql_shared import (
+    SqlBindingConnection,
+    SqlBindingTarget,
+    require_sql_table,
+    resolve_sql_connection,
+    resolve_sql_target,
+)
 from tributo.data.engine_binding import (
     BindingCompilation,
     BindingCompileRequest,
     BindingStageError,
     binding_stage,
+    classify_transform_decisions,
 )
 from tributo.data.ingestion import (
     PhysicalSplitSummary,
     RayDataHandle,
     TransformDecision,
 )
-from tributo.data.refs import schema_fingerprint
-from tributo.data.scan_plan import SqlScan, SqlShardMode
+from tributo.data.refs import digest, schema_fingerprint
+from tributo.data.scan_plan import ParameterizedQuery, SqlScan, SqlShardMode
 from tributo.data.transform_compiler import (
     CompiledPipeline,
     ConcreteTransformCompiler,
@@ -87,12 +95,25 @@ def _split_options(
 
 
 class RayClickHouseBinding:
-    """Compile ClickHouse table reads into ray-clickhouse native Datasets."""
+    """Compile ClickHouse table and query reads into native Datasets."""
 
     def compile(self, request: BindingCompileRequest) -> BindingCompilation:
         with binding_stage("validate_capabilities"):
-            plan = require_sql_table(request.plan, "clickhouse")
+            if (
+                isinstance(request.plan, SqlScan)
+                and request.plan.connector_id == "clickhouse"
+                and isinstance(request.plan.target, ParameterizedQuery)
+            ):
+                plan = request.plan
+            else:
+                plan = require_sql_table(request.plan, "clickhouse")
             require_transform_filters(plan)
+            if isinstance(plan.target, ParameterizedQuery) and (
+                plan.sharding.mode is not SqlShardMode.SINGLE
+            ):
+                raise JobConfigurationError(
+                    "ClickHouse query reads require single mode"
+                )
             split_options = _split_options(request, plan)
         with binding_stage("build_native_plan"):
             native_plan = self._build(request, plan, split_options)
@@ -105,17 +126,38 @@ class RayClickHouseBinding:
         plan: SqlScan,
         split_options: dict[str, Any],
     ) -> _RayClickHouseNativePlan:
-        from ray_clickhouse import read_clickhouse
-
-        target = resolve_sql_target(plan, request.runtime_options)
+        is_query = isinstance(plan.target, ParameterizedQuery)
+        connection: SqlBindingConnection | SqlBindingTarget
+        if isinstance(plan.target, ParameterizedQuery):
+            query = request.runtime_options.get("sql")
+            params = request.runtime_options.get("params")
+            if not isinstance(query, str) or digest(query) != plan.target.query_digest:
+                raise JobConfigurationError("ClickHouse query does not match its plan")
+            if params is not None and not isinstance(params, Mapping):
+                raise JobConfigurationError(
+                    "ClickHouse query parameters must be a mapping"
+                )
+            if (digest(params) if params else None) != plan.options.get(
+                "params_digest"
+            ):
+                raise JobConfigurationError(
+                    "ClickHouse query parameters do not match its plan"
+                )
+            connection = resolve_sql_connection("clickhouse", request.runtime_options)
+            source_options: dict[str, Any] = {"query": query}
+            if params is not None:
+                source_options["query_parameters"] = dict(params)
+        else:
+            target = resolve_sql_target(plan, request.runtime_options)
+            connection = target
+            source_options = {"table": target.table, "columns": target.columns or None}
         options: dict[str, Any] = {
-            "host": target.host,
-            "port": target.port,
-            "database": target.database,
-            "table": target.table,
-            "username": target.username,
-            "password": target.password,
-            "columns": target.columns or None,
+            "host": connection.host,
+            "port": connection.port,
+            "database": connection.database,
+            "username": connection.username,
+            "password": connection.password,
+            **source_options,
             **split_options,
         }
         read_options = request.read_options
@@ -137,13 +179,19 @@ class RayClickHouseBinding:
                 }
             )
 
+        from ray_clickhouse import read_clickhouse
+
         dataset = read_clickhouse(**options)
         schema = canonical_engine_schema(dataset.schema(fetch_if_missing=False))
         transforms = ConcreteTransformCompiler().compile(
             request.transforms, TransformBackend.RAY, schema
         )
         with binding_stage("classify_transforms"):
-            filters = compile_sql_filters(request.transforms, schema, "clickhouse")
+            filters = (
+                _SqlFilters(None, {}, classify_transform_decisions(request.transforms))
+                if is_query
+                else compile_sql_filters(request.transforms, schema, "clickhouse")
+            )
         if filters.predicate is not None:
             dataset = read_clickhouse(
                 **options,

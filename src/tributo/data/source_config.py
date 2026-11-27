@@ -120,10 +120,9 @@ class SqlSourceConfig(StrictConfigModel):
         database_schema: Optional schema for structured table reads.
         user: Username (``None`` = env fallback).
         password: Password (``None`` = env fallback).
-        sql: Compatibility raw-query input. New ingestion Bindings accept
-            structured table reads unless they explicitly advertise a safe
-            parameterized-query capability.
-        params: Query parameters for the compatibility raw-query input.
+        sql: Trusted read query. ClickHouse supports the SELECT/WITH subset
+            accepted by ray-clickhouse; other SQL sources require table reads.
+        params: Scalar named query parameters for ClickHouse query reads.
             ``None`` means no parameters.
         columns: Column names to project in the SQL reader (``None`` = all
             columns).

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from tributo.data.scan_plan import LogicalScanPlan, SqlScan, SqlTableRead
@@ -28,6 +28,15 @@ class SqlBindingTarget:
     columns: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class SqlBindingConnection:
+    host: str
+    port: int
+    database: str
+    username: str
+    password: str = field(repr=False)
+
+
 def require_sql_table(plan: LogicalScanPlan, connector_id: str) -> SqlScan:
     if (
         not isinstance(plan, SqlScan)
@@ -46,7 +55,25 @@ def resolve_sql_target(
 ) -> SqlBindingTarget:
     if not isinstance(plan.target, SqlTableRead):
         raise JobConfigurationError("Structured SQL table target is required")
-    dialect = plan.connector_id
+    connection = resolve_sql_connection(
+        plan.connector_id, runtime_options, schema=plan.target.schema
+    )
+    if not plan.target.table:
+        raise JobConfigurationError(f"{plan.connector_id} Binding requires a table")
+    return SqlBindingTarget(
+        host=connection.host,
+        port=connection.port,
+        database=connection.database,
+        table=plan.target.table,
+        username=connection.username,
+        password=connection.password,
+        columns=plan.target.projection,
+    )
+
+
+def resolve_sql_connection(
+    dialect: str, runtime_options: Mapping[str, Any], *, schema: str | None = None
+) -> SqlBindingConnection:
     prefix = f"TRIBUTO_{dialect.upper()}"
     host = str(runtime_options.get("host") or os.getenv(f"{prefix}_HOST", "localhost"))
     port_value = runtime_options.get("port")
@@ -64,7 +91,8 @@ def resolve_sql_target(
     database = str(
         runtime_options.get("database")
         or os.getenv(f"{prefix}_DB", "")
-        or (plan.target.schema if dialect != "postgresql" else "")
+        or (schema if dialect != "postgresql" else None)
+        or ""
     )
     username = str(
         runtime_options.get("user")
@@ -73,16 +101,12 @@ def resolve_sql_target(
     password = str(
         runtime_options.get("password") or os.getenv(f"{prefix}_PASSWORD", "")
     )
-    if not host or not database or not plan.target.table:
-        raise JobConfigurationError(
-            f"{dialect} Binding requires host, database, and table"
-        )
-    return SqlBindingTarget(
+    if not host or not database:
+        raise JobConfigurationError(f"{dialect} Binding requires host and database")
+    return SqlBindingConnection(
         host=host,
         port=port,
         database=database,
-        table=plan.target.table,
         username=username,
         password=password,
-        columns=plan.target.projection,
     )

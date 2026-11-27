@@ -36,12 +36,14 @@ from tributo.data import (
     TransformPipeline,
     open_ingestion,
 )
+from tributo.data.bindings._shared import canonical_engine_schema
 from tributo.data.transform_compiler import (
     ConcreteTransformCompiler,
     TransformBackend,
     apply_pipeline_to_ray_ds,
 )
 from tributo.data.transform_ir import TransformSpec
+from tributo.exceptions import DataSourceError
 
 pytestmark = pytest.mark.integration
 _DATABASE = os.environ.get("TRIBUTO_FILTER_DATABASE", "")
@@ -246,6 +248,65 @@ def _consume(
             receipt = result.receipt
     assert calls
     return rows, receipt
+
+
+if _DATABASE == "clickhouse":
+
+    def test_clickhouse_query_join_aggregation_and_residual_transform(
+        table: str,
+    ) -> None:
+        source = SqlSourceConfig(
+            dialect="clickhouse",
+            host="clickhouse",
+            database="tributo_filters",
+            user="tributo",
+            sql=(
+                f"SELECT a.id AS id, count() AS event_count FROM `{table}` AS a "
+                f"JOIN `{table}` AS b ON a.id = b.id "
+                "WHERE a.id < %(upper)s GROUP BY a.id"
+            ),
+            params={"upper": 4},
+        )
+        request = IngestionRequest(
+            source=source,
+            engine="ray",
+            transforms=TransformPipeline(
+                steps=(FilterComparison(column="id", operator="gte", value=2),)
+            ),
+        )
+        with open_ingestion(request) as result:
+            rows = sorted(result.handle.dataset.take_all(), key=lambda row: row["id"])
+            assert rows == [{"id": 2, "event_count": 1}, {"id": 3, "event_count": 1}]
+            assert result.receipt.transform_decisions[0].residual_required
+
+    def test_clickhouse_query_empty_result_preserves_column_types(table: str) -> None:
+        source = SqlSourceConfig(
+            dialect="clickhouse",
+            host="clickhouse",
+            database="tributo_filters",
+            user="tributo",
+            sql=f"SELECT id AS id, 'x' AS label FROM `{table}` WHERE id < 0",
+        )
+        with open_ingestion(IngestionRequest(source=source, engine="ray")) as result:
+            dataset = result.handle.dataset
+            schema = canonical_engine_schema(dataset.schema(fetch_if_missing=False))
+            assert schema == pa.schema([("id", pa.int64()), ("label", pa.string())])
+            assert dataset.take_all() == []
+
+    def test_clickhouse_query_invalid_column_fails_without_exposing_sql(
+        table: str,
+    ) -> None:
+        sql = f"SELECT missing_column FROM `{table}`"
+        source = SqlSourceConfig(
+            dialect="clickhouse",
+            host="clickhouse",
+            database="tributo_filters",
+            user="tributo",
+            sql=sql,
+        )
+        with pytest.raises(DataSourceError) as exc_info:
+            open_ingestion(IngestionRequest(source=source, engine="ray"))
+        assert sql not in str(exc_info.value)
 
 
 @pytest.mark.parametrize("mode", _MODES)

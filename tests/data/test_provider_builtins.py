@@ -782,7 +782,7 @@ class TestSqlProviderNormalize:
         assert isinstance(plan, SqlScan)
         assert plan.target == SqlTableRead(schema="feature_store", table="events")
 
-    @pytest.mark.parametrize("provider", [ClickHouseProvider(), DorisProvider()])
+    @pytest.mark.parametrize("provider", [DorisProvider(), PostgreSqlProvider()])
     def test_raw_sql_has_actionable_migration_error(
         self, provider: DataSourceProvider
     ) -> None:
@@ -805,6 +805,79 @@ class TestSqlProviderNormalize:
 
         assert raw_sql not in str(exc_info.value)
         assert "top-secret" not in str(exc_info.value)
+
+    @pytest.mark.parametrize("provider_shape", [False, True])
+    def test_clickhouse_query_plan_contains_only_digests(
+        self, provider_shape: bool
+    ) -> None:
+        from tributo.data.scan_plan import ParameterizedQuery, SqlShardMode
+
+        query = "SELECT id FROM events WHERE id = %(id)s"
+        source = (
+            ProviderSourceConfig(
+                provider="tributo.clickhouse",
+                uri="clickhouse://localhost/analytics",
+                options={"sql": query, "params": {"id": 7}},
+            )
+            if provider_shape
+            else SqlSourceConfig(
+                dialect="clickhouse", database="analytics", sql=query, params={"id": 7}
+            )
+        )
+        provider = ClickHouseProvider()
+        resolved = provider.normalize(source)
+        plan = provider.plan(resolved)
+        assert isinstance(plan.target, ParameterizedQuery)
+        assert plan.target.query_digest == digest(query)
+        assert plan.options["params_digest"] == digest({"id": 7})
+        assert plan.sharding.mode is SqlShardMode.SINGLE
+        assert query not in repr(plan)
+        assert query not in repr(resolved)
+
+    @pytest.mark.parametrize(
+        "extra",
+        [{"columns": ["id"]}, {"partitioning": {"mode": "auto"}}],
+    )
+    def test_clickhouse_query_rejects_table_only_options(self, extra: dict) -> None:
+        provider = ClickHouseProvider()
+        resolved = provider.normalize(
+            cfg({"type": "sql", "dialect": "clickhouse", "sql": "SELECT 1", **extra})
+        )
+        with pytest.raises(JobConfigurationError, match="columns or non-single"):
+            provider.plan(resolved)
+
+    @pytest.mark.parametrize("provider_shape", [False, True])
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param([1, 2], id="list"),
+            pytest.param((1, 2), id="tuple"),
+            pytest.param({"key": "sensitive-value"}, id="mapping"),
+        ],
+    )
+    def test_clickhouse_query_rejects_composite_parameter_values(
+        self, provider_shape: bool, value: object
+    ) -> None:
+        query = "SELECT %(value)s AS result"
+        params = {"value": value}
+        source = (
+            ProviderSourceConfig(
+                provider="tributo.clickhouse",
+                uri="clickhouse://localhost/analytics",
+                options={"sql": query, "params": params},
+            )
+            if provider_shape
+            else SqlSourceConfig(
+                dialect="clickhouse", database="analytics", sql=query, params=params
+            )
+        )
+        provider = ClickHouseProvider()
+        resolved = provider.normalize(source)
+        with pytest.raises(
+            JobConfigurationError, match="parameters must be scalar"
+        ) as error:
+            provider.plan(resolved)
+        assert "sensitive-value" not in str(error.value)
 
     def test_doris_builtin_shape(self) -> None:
         resolved = DorisProvider().normalize(
