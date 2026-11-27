@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import sys
+from datetime import datetime
+from decimal import Decimal
 from types import ModuleType
 from typing import Any
 
@@ -11,8 +13,9 @@ import pytest
 from fsspec.implementations.webhdfs import WebHDFS as RealWebHDFS
 
 from tests.support.runtime_versions import DAFT_VERSION, RAY_VERSION
+from tributo.data._clickhouse_query import query_params_digest
 from tributo.data.bindings._postgresql import compile_table_query
-from tributo.data.bindings._sql_shared import resolve_sql_target
+from tributo.data.bindings._sql_shared import resolve_sql_connection, resolve_sql_target
 from tributo.data.bindings.daft_csv import DaftCsvBinding
 from tributo.data.bindings.daft_doris import DaftDorisBinding
 from tributo.data.bindings.daft_iceberg import DaftIcebergBinding
@@ -39,10 +42,12 @@ from tributo.data.ingestion import (
     RayDataHandle,
     ReadOptions,
 )
+from tributo.data.refs import digest
 from tributo.data.scan_plan import (
     CatalogTableRef,
     FileScan,
     NumericVersionRef,
+    ParameterizedQuery,
     SnapshotVersionRef,
     SqlScan,
     SqlShardMode,
@@ -712,6 +717,143 @@ def test_ray_clickhouse_binding_delegates_bounded_range_read(
     assert "range" in result.physical_splits.detail
 
 
+def test_ray_clickhouse_query_delegates_parameters_and_keeps_transforms_residual(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tributo.data.transform_ir import FilterEq
+
+    calls: list[dict[str, Any]] = []
+    module = ModuleType("ray_clickhouse")
+    module.read_clickhouse = lambda **kwargs: calls.append(kwargs) or _RayDataset()
+    monkeypatch.setitem(sys.modules, "ray_clickhouse", module)
+    monkeypatch.setattr(
+        "tributo.data.bindings.ray_clickhouse.importlib.metadata.version",
+        lambda name: RAY_VERSION,
+    )
+    applied: list[set[int]] = []
+    monkeypatch.setattr(
+        "tributo.data.bindings.ray_clickhouse.apply_pipeline_to_ray_ds",
+        lambda compiled, dataset, *, ordinals: applied.append(ordinals) or dataset,
+    )
+    query = "SELECT id FROM events WHERE id = %(id)s"
+    params = {"id": 7}
+    plan = SqlScan(
+        provider_id="tributo.clickhouse",
+        connector_id="clickhouse",
+        target=ParameterizedQuery(digest(query)),
+        options={"params_digest": query_params_digest(params)},
+    )
+    request = _request(
+        plan, runtime_options={"database": "analytics", "sql": query, "params": params}
+    )
+    request = BindingCompileRequest(
+        plan=request.plan,
+        runtime_options=request.runtime_options,
+        transforms=TransformPipeline(steps=(FilterEq(column="id", value=7),)),
+        read_options=request.read_options,
+        source_ref=request.source_ref,
+        runtime_context=request.runtime_context,
+    )
+    result = RayClickHouseBinding().compile(request)
+    assert len(calls) == 1
+    assert calls[0]["query"] == query
+    assert calls[0]["query_parameters"] == params
+    assert calls[0]["split"] == "single"
+    assert "table" not in calls[0] and "columns" not in calls[0]
+    assert applied == [{0}]
+    assert result.transform_decisions[0].residual_required
+
+
+@pytest.mark.parametrize(
+    ("planned_value", "runtime_value", "runtime_query"),
+    [
+        pytest.param(7, 7, "SELECT 2", id="query"),
+        pytest.param(7, 8, None, id="different-value"),
+        pytest.param(Decimal("1.25"), "1.25", None, id="decimal-and-string"),
+        pytest.param(
+            datetime(2026, 1, 1, 8, 30),
+            "2026-01-01T08:30:00",
+            None,
+            id="datetime-and-string",
+        ),
+    ],
+)
+def test_ray_clickhouse_query_rejects_runtime_plan_mismatch(
+    planned_value: Any, runtime_value: Any, runtime_query: str | None
+) -> None:
+    query = "SELECT %(id)s AS id"
+    params = {"id": planned_value}
+    plan = SqlScan(
+        provider_id="tributo.clickhouse",
+        connector_id="clickhouse",
+        target=ParameterizedQuery(digest(query)),
+        options={"params_digest": query_params_digest(params)},
+    )
+    runtime = {
+        "database": "analytics",
+        "sql": runtime_query or query,
+        "params": {"id": runtime_value},
+    }
+    with pytest.raises(BindingStageError, match="invalid_configuration"):
+        RayClickHouseBinding().compile(_request(plan, runtime_options=runtime))
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        pytest.param(
+            ParameterizedQuery(digest("SELECT 1 AS id")),
+            id="query",
+        ),
+        pytest.param(
+            SqlTableRead(schema="analytics", table="events"),
+            id="table",
+        ),
+    ],
+)
+def test_ray_clickhouse_single_read_rejects_parallelism_hint(
+    target: ParameterizedQuery | SqlTableRead,
+) -> None:
+    plan = SqlScan(
+        provider_id="tributo.clickhouse",
+        connector_id="clickhouse",
+        target=target,
+    )
+    with pytest.raises(BindingStageError) as exc_info:
+        RayClickHouseBinding().compile(
+            _request(
+                plan,
+                read_options=ReadOptions(target_parallelism=2),
+            )
+        )
+    assert exc_info.value.diagnostic_code == "single_sql_read_rejects_parallelism_hint"
+    diagnostic = exc_info.value.diagnostic or ""
+    assert "remove target_parallelism" in diagnostic
+    assert ("'auto'" in diagnostic) is isinstance(target, SqlTableRead)
+    assert ("'parallel'" in diagnostic) is isinstance(target, SqlTableRead)
+
+
+def test_ray_clickhouse_query_requires_a_database(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("TRIBUTO_CLICKHOUSE_DB", raising=False)
+    query = "SELECT 1 AS id"
+    plan = SqlScan(
+        provider_id="tributo.clickhouse",
+        connector_id="clickhouse",
+        target=ParameterizedQuery(digest(query)),
+    )
+    with pytest.raises(BindingStageError, match="invalid_configuration"):
+        RayClickHouseBinding().compile(_request(plan, runtime_options={"sql": query}))
+
+
+def test_sql_connection_repr_hides_password() -> None:
+    connection = resolve_sql_connection(
+        "clickhouse", {"database": "analytics", "password": "secret-password"}
+    )
+    assert "secret-password" not in repr(connection)
+
+
 def test_ray_clickhouse_binding_maps_auto_to_partition(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -738,23 +880,6 @@ def test_ray_clickhouse_binding_maps_auto_to_partition(
     assert calls[0]["split"] == "partition"
     assert calls[0]["target_tasks"] == 6
     assert calls[0]["override_num_blocks"] == 6
-
-
-def test_ray_clickhouse_single_read_rejects_parallelism_hint() -> None:
-    plan = SqlScan(
-        provider_id="tributo.clickhouse",
-        connector_id="clickhouse",
-        target=SqlTableRead(schema="analytics", table="events"),
-    )
-
-    with pytest.raises(BindingStageError) as exc_info:
-        RayClickHouseBinding().compile(
-            _request(plan, read_options=ReadOptions(target_parallelism=2))
-        )
-
-    assert exc_info.value.diagnostic_code == (
-        "single_sql_read_rejects_parallelism_hint"
-    )
 
 
 def test_ray_clickhouse_range_rejects_multiple_columns() -> None:

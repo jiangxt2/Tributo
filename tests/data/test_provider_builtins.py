@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime, time
+from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import TypeAdapter
@@ -28,6 +31,20 @@ from tributo.exceptions import JobConfigurationError
 
 def cfg(source: dict) -> CanonicalSourceInput:
     return TypeAdapter(CanonicalSourceInput).validate_python(source)
+
+
+def _clickhouse_query_source(
+    provider_shape: bool, query: str, params: dict[str, Any]
+) -> CanonicalSourceInput:
+    if provider_shape:
+        return ProviderSourceConfig(
+            provider="tributo.clickhouse",
+            uri="clickhouse://localhost/analytics",
+            options={"sql": query, "params": params},
+        )
+    return SqlSourceConfig(
+        dialect="clickhouse", database="analytics", sql=query, params=params
+    )
 
 
 class TestFileProviderNormalize:
@@ -572,8 +589,6 @@ class TestSqlProviderNormalize:
         assert resolved.canonical_uri == "clickhouse://uri-host.example/analytics"
 
     def test_provider_shape_params_datetime_supported(self) -> None:
-        from datetime import datetime
-
         ts = datetime(2026, 1, 1, 8, 30)
         resolved = ClickHouseProvider().normalize(
             ProviderSourceConfig(
@@ -582,8 +597,17 @@ class TestSqlProviderNormalize:
                 options={"sql": "SELECT 1", "params": {"ts": ts}},
             )
         )
-        assert resolved.identity_options["params_digest"] == digest({"ts": ts})
+        assert len(resolved.identity_options["params_digest"]) == 64
+        assert resolved.runtime_options["params"]["ts"] == ts
         assert len(resolved.ref_id()) == 64
+        table = ClickHouseProvider().normalize(
+            SqlSourceConfig(dialect="clickhouse", table="events", params={"ts": ts})
+        )
+        doris = DorisProvider().normalize(
+            SqlSourceConfig(dialect="doris", sql="SELECT 1", params={"ts": ts})
+        )
+        assert table.identity_options["params_digest"] == digest({"ts": ts})
+        assert doris.identity_options["params_digest"] == digest({"ts": ts})
 
     def test_provider_shape_params_unserializable_rejected(self) -> None:
         # A non-JSON-serializable bound parameter is a configuration error —
@@ -685,7 +709,7 @@ class TestSqlProviderNormalize:
         )
         assert resolved.provider_id == "tributo.clickhouse"
         assert resolved.identity_options["sql_digest"] == digest("SELECT * FROM t")
-        assert resolved.identity_options["params_digest"] == digest({"x": 1})
+        assert len(resolved.identity_options["params_digest"]) == 64
         assert resolved.identity_options["columns"] == ("id", "score")
         assert "password" not in resolved.identity_options
         assert resolved.runtime_options["password"] == "p@ss"
@@ -782,7 +806,7 @@ class TestSqlProviderNormalize:
         assert isinstance(plan, SqlScan)
         assert plan.target == SqlTableRead(schema="feature_store", table="events")
 
-    @pytest.mark.parametrize("provider", [ClickHouseProvider(), DorisProvider()])
+    @pytest.mark.parametrize("provider", [DorisProvider(), PostgreSqlProvider()])
     def test_raw_sql_has_actionable_migration_error(
         self, provider: DataSourceProvider
     ) -> None:
@@ -805,6 +829,88 @@ class TestSqlProviderNormalize:
 
         assert raw_sql not in str(exc_info.value)
         assert "top-secret" not in str(exc_info.value)
+
+    @pytest.mark.parametrize("provider_shape", [False, True])
+    @pytest.mark.parametrize(
+        ("value", "different_value"),
+        [
+            pytest.param(7, 8, id="different-integers"),
+            pytest.param(Decimal("1.25"), "1.25", id="decimal-and-string"),
+            pytest.param(date(2026, 1, 1), "2026-01-01", id="date-and-string"),
+            pytest.param(time(8, 30), "08:30:00", id="time-and-string"),
+            pytest.param(
+                datetime(2026, 1, 1, 8, 30),
+                "2026-01-01T08:30:00",
+                id="datetime-and-string",
+            ),
+        ],
+    )
+    def test_clickhouse_query_plan_contains_only_digests(
+        self, provider_shape: bool, value: Any, different_value: Any
+    ) -> None:
+        from tributo.data.scan_plan import ParameterizedQuery, SqlShardMode
+
+        query = "SELECT id FROM events WHERE id = %(id)s"
+        provider = ClickHouseProvider()
+        source = _clickhouse_query_source(provider_shape, query, {"id": value})
+        resolved = provider.normalize(source)
+        plan = provider.plan(resolved)
+        assert isinstance(plan.target, ParameterizedQuery)
+        assert plan.target.query_digest == digest(query)
+        assert (
+            plan.options["params_digest"] == resolved.identity_options["params_digest"]
+        )
+        assert len(plan.options["params_digest"]) == 64
+        assert plan.sharding.mode is SqlShardMode.SINGLE
+        assert query not in repr(plan)
+        assert query not in repr(resolved)
+        equivalent = provider.normalize(
+            _clickhouse_query_source(not provider_shape, query, {"id": value})
+        )
+        assert resolved.ref_id() == equivalent.ref_id()
+        different = provider.normalize(
+            _clickhouse_query_source(provider_shape, query, {"id": different_value})
+        )
+        assert (
+            resolved.identity_options["params_digest"]
+            != different.identity_options["params_digest"]
+        )
+        assert resolved.ref_id() != different.ref_id()
+
+    @pytest.mark.parametrize(
+        "extra",
+        [{"columns": ["id"]}, {"partitioning": {"mode": "auto"}}],
+    )
+    def test_clickhouse_query_rejects_table_only_options(self, extra: dict) -> None:
+        provider = ClickHouseProvider()
+        resolved = provider.normalize(
+            cfg({"type": "sql", "dialect": "clickhouse", "sql": "SELECT 1", **extra})
+        )
+        with pytest.raises(JobConfigurationError, match="columns or non-single"):
+            provider.plan(resolved)
+
+    @pytest.mark.parametrize("provider_shape", [False, True])
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param([1, 2], id="list"),
+            pytest.param((1, 2), id="tuple"),
+            pytest.param({"key": "sensitive-value"}, id="mapping"),
+        ],
+    )
+    def test_clickhouse_query_rejects_composite_parameter_values(
+        self, provider_shape: bool, value: object
+    ) -> None:
+        query = "SELECT %(value)s AS result"
+        params = {"value": value}
+        source = _clickhouse_query_source(provider_shape, query, params)
+        provider = ClickHouseProvider()
+        resolved = provider.normalize(source)
+        with pytest.raises(
+            JobConfigurationError, match="parameters must be scalar"
+        ) as error:
+            provider.plan(resolved)
+        assert "sensitive-value" not in str(error.value)
 
     def test_doris_builtin_shape(self) -> None:
         resolved = DorisProvider().normalize(
@@ -950,7 +1056,7 @@ class TestSqlProviderNormalize:
         assert resolved.identity_options["sql_digest"] == digest(
             "SELECT * FROM events WHERE p = %(p)s"
         )
-        assert resolved.identity_options["params_digest"] == digest({"p": 7})
+        assert len(resolved.identity_options["params_digest"]) == 64
         assert "s3cr3t" not in repr(resolved)
         assert resolved.runtime_options["password"] == "s3cr3t"
 

@@ -199,7 +199,33 @@ partition splitting, and `parallel` maps its one declared integer column to
 range splitting. Views and Distributed tables must use `single`; physical
 partition and range splitting are limited to eligible direct MergeTree-family
 tables. `batch_size` and `target_split_size_bytes` become the connector's row
-and byte block targets. Raw SQL remains outside Tributo's ingestion contract.
+and byte block targets.
+
+## Read a ClickHouse query with Ray Data
+
+Set `sql` instead of `table` for a trusted, single read-only query. Named
+scalar parameters use the connector's client-side `%(name)s` syntax. List,
+tuple, and mapping parameter values are rejected:
+
+```python
+source = SqlSourceConfig(
+    dialect="clickhouse",
+    host="clickhouse.example",
+    database="analytics",
+    sql="SELECT category, count() AS event_count FROM events WHERE id >= %(min_id)s GROUP BY category",
+    params={"min_id": 100},
+)
+with open_ingestion(IngestionRequest(source=source, engine="ray")) as result:
+    dataset = result.handle.dataset
+```
+
+The connector accepts its documented SELECT/WITH subset with unique simple
+result column aliases and enforces `readonly=1`. It discovers the schema and
+uses one data-read task; metadata requests and the data read do not share a
+snapshot. Put projection, filtering and ordering in the query: `columns` and
+non-single partitioning are not supported for query reads. Tributo applies
+subsequent ingestion transforms in Ray, without rewriting the query. SQL text
+and parameter values remain in runtime options; plans and receipts use digests.
 
 ## Filter Doris and ClickHouse reads at the source
 

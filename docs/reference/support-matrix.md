@@ -55,7 +55,8 @@ platform, not a Tributo profile or control plane.
 | Local/S3 Lance reads | Verified | Native Ray Data or Daft table reader; numeric versions and tags are supported, Daft also supports as-of, and Iceberg snapshot references fail closed |
 | Ray Lance scanner options | Verified | Ray Data accepts the validated `batch_size`, positive `batch_readahead`, non-negative `fragment_readahead`, `io_buffer_size`, and `late_materialization` subset as execution options; cluster binary-image conformance passed. Daft rejects them, and they are not a hard memory limit |
 | PostgreSQL structured table reads | Verified | Ray uses a single public SQL read and fails closed on parallel shard requirements; Daft may use native partition hints |
-| ClickHouse/Doris raw SQL | Unsupported | Legacy shapes return a credential-free migration error; use structured table input or execute SQL outside Tributo ingestion |
+| ClickHouse query reads | Ray adapter | Trusted single read-only SELECT/WITH query via `SqlSourceConfig.sql` and `ray-clickhouse`; query transforms remain in Ray |
+| Doris raw SQL | Unsupported | Legacy shapes return a credential-free migration error; use structured table input or execute SQL outside Tributo ingestion |
 | HDFS Parquet/CSV reads | Adapter only | Ray binding exists; real HDFS/JVM/worker gate is pending |
 | ClickHouse reads | Ray filter path verified on one node | Locked `ray-clickhouse==1.1` owns single, physical-partition, integer-range reads and bounded Arrow blocks. ClickHouse 26.8.1.2041 single-node tests verify actual filtered SQL and native output; broader read and multi-node Conformance remain separate |
 | Doris reads | Ray filter path verified on one node; Daft adapter only | Locked `ray-doris==1.3` MySQL/Flight reads passed Doris 4.0.6 single-node filter tests. Tablet planning remains connector-owned; Daft uses `daft-doris==1.1` and retains its separate real-database Conformance requirement |

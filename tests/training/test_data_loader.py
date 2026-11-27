@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
-from tributo.data import CsvSourceConfig, ParquetSourceConfig
+from tributo.data import CsvSourceConfig, ParquetSourceConfig, SqlSourceConfig
 from tributo.data.ingestion import RayDataHandle
 from tributo.exceptions import EngineNotAvailableError, JobConfigurationError
 from tributo.training.data_loader import (
@@ -136,7 +136,34 @@ def test_doris_requires_independent_ray_doris_binding(
         )
 
 
-@pytest.mark.parametrize("dialect", ["clickhouse", "doris", "postgresql"])
+def test_clickhouse_sql_uses_ray_ingestion_gateway() -> None:
+    dataset = MagicMock()
+    result = MagicMock(handle=RayDataHandle(dataset))
+    query = "SELECT id FROM events WHERE id >= %(minimum)s"
+    with patch(
+        "tributo.training.data_loader.open_ingestion", return_value=result
+    ) as open_:
+        actual = load_ray_dataset_from_source(
+            {
+                "type": "sql",
+                "dialect": "clickhouse",
+                "database": "analytics",
+                "sql": query,
+                "params": {"minimum": 7},
+            }
+        )
+
+    request = open_.call_args.args[0]
+    assert isinstance(request.source, SqlSourceConfig)
+    assert request.source.dialect == "clickhouse"
+    assert request.source.sql == query
+    assert request.source.params == {"minimum": 7}
+    assert request.engine == "tributo.ray_data"
+    assert actual is dataset
+    result.close.assert_called_once_with()
+
+
+@pytest.mark.parametrize("dialect", ["doris", "postgresql"])
 def test_legacy_raw_sql_has_structured_source_migration_error(dialect: str) -> None:
     with pytest.raises(JobConfigurationError, match="structured 'table' source"):
         load_ray_dataset_from_source(
