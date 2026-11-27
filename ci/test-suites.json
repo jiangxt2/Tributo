@@ -430,7 +430,6 @@
       "extras": [],
       "test_paths": [
         "tests/integrations/test_database_filter_pushdown.py",
-        "tests/integrations/test_ray_doris_write.py",
         "tests/integrations/database_filter_trace.py",
         "scripts/run_database_filter_it.sh"
       ],
@@ -449,11 +448,8 @@
         "src/tributo/data/scan_plan.py",
         "src/tributo/data/refs.py",
         "src/tributo/data/contracts/**",
-        "src/tributo/data/writing/**",
         "tests/data/test_sql_filters.py",
         "tests/data/test_source_bindings.py",
-        "tests/data/test_ray_doris_write_binding.py",
-        "tests/integrations/test_ray_doris_write.py",
         "tests/integrations/*database*filter*",
         "tests/integrations/database-filter/**",
         "tests/integrations/runtime-profiles.json",

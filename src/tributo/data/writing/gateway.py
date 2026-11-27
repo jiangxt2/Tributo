@@ -5,7 +5,6 @@ from __future__ import annotations
 from tributo.data.contracts.handles import DaftDataFrameHandle, RayDataHandle
 from tributo.data.writing.bindings import WriteBinding
 from tributo.data.writing.contracts import (
-    WriteAmbiguousError,
     WriteBindingError,
     WriteCapabilityError,
     WriteDescriptor,
@@ -73,11 +72,6 @@ class WriteGateway:
         )
         try:
             receipt = binding.execute(plan, input_handle, context)
-        except WriteAmbiguousError as exc:
-            raise WriteAmbiguousError(
-                f"Write outcome is ambiguous: {_safe_exception_summary(exc)}",
-                source_error_type=exc.source_error_type,
-            ) from None
         except Exception as exc:
             raise WriteBindingError(
                 f"Write binding failed during execute with {type(exc).__name__}: "
