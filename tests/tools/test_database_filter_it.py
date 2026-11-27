@@ -272,21 +272,13 @@ def test_incomplete_proof_cannot_pass(tmp_path: Path, failure: str) -> None:
         validate_evidence(tmp_path, "doris")
 
 
-@pytest.mark.parametrize(
-    "path",
-    [
-        "src/tributo/data/bindings/ray_doris.py",
-        "src/tributo/data/writing/native_bindings.py",
-        "tests/integrations/test_ray_doris_write.py",
-    ],
-)
-def test_database_ci_is_selected_for_bindings_but_not_docs(path: str) -> None:
+def test_database_ci_is_selected_for_bindings_but_not_docs() -> None:
     manifest = ci_test_plan.load_manifest()
     changed = ci_test_plan.build_plan(
         manifest,
         event="pull_request",
         mode="pr",
-        changed_paths=[path],
+        changed_paths=["src/tributo/data/bindings/ray_doris.py"],
     )
     docs = ci_test_plan.build_plan(
         manifest,

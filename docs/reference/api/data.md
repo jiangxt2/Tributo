@@ -310,9 +310,6 @@ documentation for every public stability tier.
 :no-members:
 ```
 
-```{autoexception} tributo.data.writing.contracts.WriteAmbiguousError
-```
-
 ```{autoexception} tributo.data.writing.contracts.WriteBindingError
 ```
 

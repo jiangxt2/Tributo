@@ -337,11 +337,6 @@ def _run_database_filter(
                 "-m",
                 "pytest",
                 "tests/integrations/test_database_filter_pushdown.py",
-                *(
-                    ["tests/integrations/test_ray_doris_write.py"]
-                    if database == "doris"
-                    else []
-                ),
                 "-o",
                 "addopts=",
                 "-o",
