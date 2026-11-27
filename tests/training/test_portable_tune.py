@@ -52,6 +52,19 @@ def _resolved_plan():
     )
 
 
+def _runner_for_trainable() -> PortableTuneRunner:
+    runner = object.__new__(PortableTuneRunner)
+    runner._request = ExecutionRequest(
+        algorithm_request=request_for("external_map_reduce", AlgorithmOperation.FIT),
+        profile=ExecutionProfile.CLUSTER,
+        worker_count=2,
+    )
+    runner._input_context = InputExecutionContext({})
+    runner._resolution_context = InputResolutionContext({})
+    runner._tune_config = TuneSearchConfig(metric="loss", progress_attr="round")
+    return runner
+
+
 def test_fit_only_plan_rebinds_runtime_digest_and_disables_output_contract() -> None:
     plan = _fit_only_plan(_resolved_plan())
     assert plan.distribution_spec is not None
@@ -112,7 +125,7 @@ def test_intermediate_report_uses_objective_and_actual_progress(
     callback.after_report(None, [{"loss": 0.8, "round": 2, **training}], None)
     callback.after_report(None, [{"loss": 0.7, "round": 5, **training}], None)
     callback.after_report(None, [{"loss": 0.7, "round": 5, **training}], None)
-    callback.after_report(None, [{"loss": 0.6, **training}], None)
+    callback.after_report(None, [{"round": 6, **training}], None)
     assert forwarded == [
         {"loss": 0.9, "round": 0},
         {"loss": 0.8, "round": 2},
@@ -122,6 +135,8 @@ def test_intermediate_report_uses_objective_and_actual_progress(
         callback.after_report(
             None, [{"loss": 0.6, "round": float("nan"), **training}], None
         )
+    with pytest.raises(JobExecutionError, match="missing progress attribute 'round'"):
+        callback.after_report(None, [{"loss": 0.6, **training}], None)
 
 
 def test_xgboost_final_reports_are_not_forwarded_before_validation(
@@ -169,38 +184,23 @@ def test_trainable_reports_final_metric_without_intermediate_reports(
     monkeypatch.setattr(
         tune, "report", lambda metrics, **kwargs: reports.append(metrics)
     )
-    runner = object.__new__(PortableTuneRunner)
-    runner._request = ExecutionRequest(
-        algorithm_request=request_for("external_map_reduce", AlgorithmOperation.FIT),
-        profile=ExecutionProfile.CLUSTER,
-        worker_count=2,
-    )
-    runner._input_context = InputExecutionContext({})
-    runner._resolution_context = InputResolutionContext({})
-    runner._tune_config = TuneSearchConfig(metric="loss", progress_attr="round")
-
-    runner._trainable()({})
+    _runner_for_trainable()._trainable()({})
     assert reports == [{"loss": 0.3}]
     assert _trial_reporter.get() is None
 
 
 def test_trainable_can_be_serialized_for_ray_tune() -> None:
-    runner = object.__new__(PortableTuneRunner)
-    runner._request = ExecutionRequest(
-        algorithm_request=request_for("external_map_reduce", AlgorithmOperation.FIT),
-        profile=ExecutionProfile.CLUSTER,
-        worker_count=2,
+    assert callable(
+        cloudpickle.loads(cloudpickle.dumps(_runner_for_trainable()._trainable()))
     )
-    runner._input_context = InputExecutionContext({})
-    runner._resolution_context = InputResolutionContext({})
-    runner._tune_config = TuneSearchConfig(metric="loss", progress_attr="round")
-
-    assert callable(cloudpickle.loads(cloudpickle.dumps(runner._trainable())))
 
 
 @pytest.mark.parametrize(
     ("framework", "supports_reporting"),
-    [("xgboost-rabit", True), ("other-framework", False)],
+    [
+        pytest.param("xgboost-rabit", True, id="xgboost"),
+        pytest.param("other-framework", False, id="other-framework"),
+    ],
 )
 def test_trainable_only_attaches_reporter_for_supported_framework(
     monkeypatch: pytest.MonkeyPatch, tmp_path, framework: str, supports_reporting: bool
@@ -242,17 +242,7 @@ def test_trainable_only_attaches_reporter_for_supported_framework(
     monkeypatch.setattr(
         tune, "report", lambda values, **_kwargs: reports.append(values)
     )
-    runner = object.__new__(PortableTuneRunner)
-    runner._request = ExecutionRequest(
-        algorithm_request=request_for("external_map_reduce", AlgorithmOperation.FIT),
-        profile=ExecutionProfile.CLUSTER,
-        worker_count=2,
-    )
-    runner._input_context = InputExecutionContext({})
-    runner._resolution_context = InputResolutionContext({})
-    runner._tune_config = TuneSearchConfig(metric="loss", progress_attr="round")
-
-    runner._trainable()({})
+    _runner_for_trainable()._trainable()({})
     assert reports == [{"loss": 0.3}]
     assert _trial_reporter.get() is None
 
@@ -311,6 +301,27 @@ def test_portable_tune_requires_tunable_descriptor_and_cluster_profile() -> None
     assert configured._scheduler._time_attr == "round"
     assert configured._scheduler._max_t == 200
     assert configured._scheduler.set_search_properties("loss", "min")
+
+    with pytest.raises(JobConfigurationError, match="requires scheduler_max_t"):
+        PortableTuneRunner(
+            distributed,
+            request,
+            TuneSearchConfig(metric="loss", scheduler="asha", progress_attr="round"),
+            runner._search_space,
+            InputExecutionContext({}),
+            InputResolutionContext({}),
+        )
+
+    legacy_asha = PortableTuneRunner(
+        distributed,
+        request,
+        TuneSearchConfig(metric="loss", scheduler="asha"),
+        runner._search_space,
+        InputExecutionContext({}),
+        InputResolutionContext({}),
+    )
+    assert legacy_asha._scheduler._time_attr == "training_iteration"
+    assert legacy_asha._scheduler._max_t == 100
 
     fifo = PortableTuneRunner(
         distributed,

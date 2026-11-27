@@ -7,8 +7,11 @@ import os
 import tempfile
 import time
 import uuid
+from copy import copy
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import patch
 
 
@@ -40,28 +43,21 @@ def train_worker(config: dict) -> None:
         time.sleep(0.3)
 
 
-def trainable(config: dict, tracker: object) -> None:
+def trainable(config: dict, tracker: object, inner_runner: Any) -> None:
     from ray import train, tune
     from ray.train.v2.api.data_parallel_trainer import DataParallelTrainer
 
     import tributo.algorithms
     import tributo.integrations.algorithm_runtimes.framework_native as native
     import tributo.training.portable_tune as portable_tune
-    from tests.algorithms.conftest import request_for
     from tributo.algorithms.api import (
-        AlgorithmOperation,
         DistributionStrategy,
-        ExecutionProfile,
-        ExecutionRequest,
         FrameworkNativePolicy,
         ResultPolicy,
     )
     from tributo.algorithms.spi import (
-        InputExecutionContext,
-        InputResolutionContext,
         PreparedInput,
     )
-    from tributo.training.tune_config import TuneSearchConfig
 
     trial_id = tune.get_context().get_trial_id()
     policy = FrameworkNativePolicy(
@@ -121,17 +117,6 @@ def trainable(config: dict, tracker: object) -> None:
             )
             return native.FrameworkNativeRuntime().execute(envelope)
 
-    runner = object.__new__(portable_tune.PortableTuneRunner)
-    runner._request = ExecutionRequest(
-        algorithm_request=request_for("external_map_reduce", AlgorithmOperation.FIT),
-        profile=ExecutionProfile.CLUSTER,
-        worker_count=2,
-    )
-    runner._input_context = InputExecutionContext({})
-    runner._resolution_context = InputResolutionContext({})
-    runner._tune_config = TuneSearchConfig(
-        metric="train-logloss", progress_attr="training_rounds"
-    )
     with (
         patch.object(tributo.algorithms, "build_algorithm_dispatcher", Dispatcher),
         patch.object(portable_tune, "_fit_only_plan", lambda value: value),
@@ -144,18 +129,29 @@ def trainable(config: dict, tracker: object) -> None:
         patch.object(native, "_validated_framework_evidence", lambda *a, **k: ([], {})),
         patch.object(native, "_actual_environment_versions", lambda *a: {}),
     ):
-        runner._trainable()({})
+        inner_runner._trainable()(config)
 
 
 def main() -> None:
     import ray
     from ray import tune
-    from ray.tune.execution.placement_groups import PlacementGroupFactory
-    from ray.tune.logger import CSVLoggerCallback
-    from ray.tune.schedulers import ASHAScheduler
     from ray.util.state import get_actor
 
+    from tests.algorithms.conftest import map_reduce_registration, request_for
+    from tributo.algorithms.api import (
+        AlgorithmOperation,
+        DistributedAlgorithmDescriptor,
+        ExecutionProfile,
+        ExecutionRequest,
+    )
+    from tributo.algorithms.spi import InputExecutionContext, InputResolutionContext
+    from tributo.training.algorithm_spec import Capability
+    from tributo.training.portable_tune import PortableTuneRunner
+    from tributo.training.tune_config import TuneSearchConfig
+    from tributo.training.tune_space import SearchParamSpec, SearchSpaceSpec
+
     os.chdir("/workspace/tributo-work")
+    ray.init(address="auto")
     storage = Path.cwd() / f"portable-tune-{uuid.uuid4().hex}"
 
     @ray.remote(num_cpus=0)
@@ -177,31 +173,49 @@ def main() -> None:
             return self.actors[str(loss)]
 
     tracker = Tracker.remote()
-    scheduler = ASHAScheduler(
-        time_attr="training_rounds",
-        max_t=16,
-        grace_period=1,
-        reduction_factor=2,
-    )
-    tuner = tune.Tuner(
-        tune.with_resources(
-            tune.with_parameters(trainable, tracker=tracker),
-            PlacementGroupFactory([{"CPU": 1}, {"CPU": 1}, {"CPU": 1}]),
+    registration = map_reduce_registration()
+    descriptor = DistributedAlgorithmDescriptor(
+        package_name="tests-portable-tune",
+        package_version="1.0.0",
+        tributo_version_spec=">=1,<2",
+        registration=replace(
+            registration,
+            spec=replace(
+                registration.spec,
+                capabilities=(*registration.spec.capabilities, Capability.TUNABLE),
+            ),
         ),
-        param_space={"loss": tune.grid_search([0.1, 1.0])},
-        tune_config=tune.TuneConfig(
+    )
+    runner = PortableTuneRunner(
+        descriptor,
+        ExecutionRequest(
+            algorithm_request=request_for(
+                "external_map_reduce", AlgorithmOperation.FIT
+            ),
+            profile=ExecutionProfile.CLUSTER,
+            worker_count=2,
+        ),
+        TuneSearchConfig(
             metric="train-logloss",
             mode="min",
-            scheduler=scheduler,
+            scheduler="asha",
+            progress_attr="training_rounds",
+            scheduler_max_t=16,
             max_concurrent_trials=1,
         ),
-        run_config=tune.RunConfig(
-            name="intermediate",
-            storage_path=str(storage),
-            callbacks=[CSVLoggerCallback()],
+        SearchSpaceSpec(
+            parameters=(
+                SearchParamSpec(path="loss", kind="grid_search", values=(0.1, 1.0)),
+            )
         ),
+        InputExecutionContext({}),
+        InputResolutionContext({}),
     )
-    results = tuner.fit()
+    inner_runner = copy(runner)
+    runner._trainable = lambda: tune.with_parameters(
+        trainable, tracker=tracker, inner_runner=inner_runner
+    )
+    results = runner.run(output_path=str(storage), experiment_name="intermediate")
     assert results.num_errors == 0
     histories = {}
     for result in results:

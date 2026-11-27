@@ -45,8 +45,8 @@ def _run_tune_job(
         env_vars={
             "PYTHONPATH": "/opt/tributo/.venv/lib/python3.12/site-packages",
             "RAY_ENABLE_UV_RUN_RUNTIME_ENV": "0",
-            # TensorBoard logging is outside this Gate and imports optional Torch.
-            "TUNE_DISABLE_AUTO_CALLBACK_LOGGERS": "1",
+            # The intermediate-report Gate reads Tune's CSV result history.
+            "TUNE_DISABLE_AUTO_CALLBACK_LOGGERS": "0" if train_v2 else "1",
             **({"RAY_TRAIN_V2_ENABLED": "1"} if train_v2 else {}),
             **load_it_component_versions(),
         },

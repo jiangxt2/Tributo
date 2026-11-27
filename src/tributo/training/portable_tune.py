@@ -60,7 +60,12 @@ class _IntermediateReportCallback(TuneReportCallback):
         phase = values.get(_XGBOOST_REPORT_KEY)
         if not isinstance(phase, Mapping) or phase.get("phase") != "training":
             return
-        if self._metric not in values or self._progress_attr not in values:
+        if self._progress_attr not in values:
+            raise JobExecutionError(
+                f"XGBoost training report is missing progress attribute "
+                f"{self._progress_attr!r}"
+            )
+        if self._metric not in values:
             return
         progress = _extract_target_metric(values, self._progress_attr)
         if self._last_progress is not None and progress <= self._last_progress:
@@ -197,6 +202,14 @@ class PortableTuneRunner:
             raise JobConfigurationError(
                 "portable Tune intermediate metrics do not support HyperBand "
                 "pause and resume; use ASHA or FIFO"
+            )
+        if (
+            tune_config.scheduler == "asha"
+            and tune_config.progress_attr
+            and tune_config.scheduler_max_t is None
+        ):
+            raise JobConfigurationError(
+                "portable Tune ASHA requires scheduler_max_t with progress_attr"
             )
         if tune_config.scheduler == "asha" and (
             tune_config.progress_attr or tune_config.scheduler_max_t is not None
