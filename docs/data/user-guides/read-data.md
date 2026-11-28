@@ -20,6 +20,8 @@ Replace `engine="daft"` with `engine="ray"` and consume the returned
 and the `tributo.daft_to_ray` adapter are no longer available. Check the
 selected Ray binding's capabilities: for example, the PostgreSQL binding
 rejects parallel shard requirements and supports a single read.
+For Lance, Ray does not support `asof` reads. Select an explicit numeric
+version or tag corresponding to the required point in time.
 
 ## Choose a source
 

@@ -554,7 +554,7 @@
       "ci_allowed": false,
       "forbid_skips": true,
       "log_contract": "/tmp/tributo-it-logs/<project>-test.log and services.log",
-      "rationale": "Distributed Ray Data and Daft semantics require the owned Docker Ray cluster."
+      "rationale": "Distributed Ray Data semantics require the owned Docker Ray cluster."
     },
     {
       "id": "hdfs-ingestion-cluster",

@@ -73,7 +73,7 @@ esac
 export TRIBUTO_RUNTIME_PLATFORM="$runtime_platform"
 
 docker_compose --project-name "$PROJECT" --file "$COMPOSE_FILE" up \
-    --detach --no-build --wait --wait-timeout 180
+    --detach --wait --wait-timeout 180
 docker_compose --project-name "$PROJECT" --file "$COMPOSE_FILE" exec --no-TTY ray-head \
     ray job submit \
     --address http://127.0.0.1:8265 \

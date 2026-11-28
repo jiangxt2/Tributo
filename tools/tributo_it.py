@@ -955,15 +955,11 @@ def _prepare_mirrored_image(
     local: str,
     platform: str,
 ) -> None:
-    """Verify and locally tag one digest-pinned domestic mirror image."""
-    local_only = os.environ.get("TRIBUTO_LOCAL_IMAGES_ONLY") == "1"
-    if not local_only:
-        _run(["docker", "pull", "--platform", platform, mirror], capture_output=False)
+    """Pull, verify, and locally tag one digest-pinned domestic mirror image."""
+    _run(["docker", "pull", "--platform", platform, mirror], capture_output=False)
     inspected = _image_inspect(mirror)
     if inspected is None:
-        raise TributoITError(
-            f"required mirror image is not available locally: {mirror}"
-        )
+        raise TributoITError(f"mirror image is unavailable after pull: {mirror}")
     actual_platform = f"{inspected.get('Os', '')}/{inspected.get('Architecture', '')}"
     if normalize_platform(actual_platform) != normalize_platform(platform):
         raise TributoITError(
@@ -977,19 +973,6 @@ def _prepare_mirrored_image(
             f"mirror image digest mismatch for {mirror}: "
             f"expected={expected_digest}, repo_digests={repo_digests}"
         )
-    if local_only:
-        image_id = str(inspected.get("Id") or "")
-        if not image_id:
-            raise TributoITError(f"local image has no ID: {mirror}")
-        existing = _image_inspect(local)
-        if existing is not None:
-            if existing.get("Id") != image_id:
-                raise TributoITError(
-                    f"local base tag already points to another image: {local}"
-                )
-            return
-        _run(["docker", "tag", image_id, local])
-        return
     _run(["docker", "tag", mirror, local])
 
 
@@ -1001,18 +984,12 @@ def _prepare_runtime_build_inputs(
     """Resolve builder-visible inputs under the selected image source policy."""
     profile = identity.profile
     if build_input_mode == RuntimeBuildInputMode.CANONICAL:
-        if os.environ.get("TRIBUTO_LOCAL_IMAGES_ONLY") == "1":
-            raise TributoITError(
-                "canonical build inputs are disabled in local-only mode"
-            )
         return profile.base_image, profile.uv_image
     if build_input_mode != RuntimeBuildInputMode.LOCAL_MIRROR:
         raise TributoITError(
             f"unsupported runtime build input mode: {build_input_mode!r}"
         )
     if profile.base_image_mirror is None and profile.uv_image_mirror is None:
-        if os.environ.get("TRIBUTO_LOCAL_IMAGES_ONLY") == "1":
-            raise TributoITError("local-only mode requires a pinned mirror image")
         return profile.base_image, profile.uv_image
     if profile.base_image_mirror is None:
         raise TributoITError(
@@ -1173,10 +1150,6 @@ def prepare_runtime(
                 source="concurrent-local",
             )
 
-        if registry and os.environ.get("TRIBUTO_LOCAL_IMAGES_ONLY") == "1":
-            raise TributoITError(
-                "registry runtime lookup is disabled in local-only mode"
-            )
         if registry:
             remote = _registry_reference(registry, identity)
             pull, pinned_remote = _pull_registry_runtime(
@@ -1235,10 +1208,6 @@ def ensure_digest_image(reference: str, *, use_mirror: bool = True) -> str:
 
     inspected = _image_inspect(reference) or _image_inspect(pull_reference) or tagged
     if inspected is None:
-        if os.environ.get("TRIBUTO_LOCAL_IMAGES_ONLY") == "1":
-            raise TributoITError(
-                f"required image is not available locally: {reference}"
-            )
         _run(
             ["docker", "pull", "--platform", docker_platform(), pull_reference],
             capture_output=False,
@@ -1253,16 +1222,6 @@ def ensure_digest_image(reference: str, *, use_mirror: bool = True) -> str:
         raise TributoITError(
             f"third-party image digest mismatch for {reference}: {repo_digests}"
         )
-    if os.environ.get("TRIBUTO_LOCAL_IMAGES_ONLY") == "1":
-        actual_platform = (
-            f"{inspected.get('Os', '')}/{inspected.get('Architecture', '')}"
-        )
-        expected_platform = docker_platform()
-        if normalize_platform(actual_platform) != normalize_platform(expected_platform):
-            raise TributoITError(
-                f"third-party image platform mismatch for {reference}: "
-                f"expected={expected_platform}, actual={actual_platform}"
-            )
     image_id = str(inspected["Id"])
     if tagged is not None and tagged.get("Id") != image_id:
         raise TributoITError(
