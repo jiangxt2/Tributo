@@ -227,6 +227,31 @@ non-single partitioning are not supported for query reads. Tributo applies
 subsequent ingestion transforms in Ray, without rewriting the query. SQL text
 and parameter values remain in runtime options; plans and receipts use digests.
 
+## Read a Doris query with Ray Data
+
+The Ray Doris route accepts a trusted query through `SqlSourceConfig.sql` with
+`ray-doris>=2.0`. Use fully qualified table names: an optional configured database
+identifies the source but is not selected as the query's default database. The
+caller must provide a single read-only query and an appropriately restricted
+database account; the connector does not
+classify SQL or check the number of statements.
+
+```python
+source = SqlSourceConfig(
+    dialect="doris",
+    host="doris-fe.example",
+    database="analytics",
+    sql="SELECT category, COUNT(*) AS total FROM analytics.events GROUP BY category",
+)
+```
+
+Query reads use one MySQL task. Parameters, source columns, Flight and parallel
+partitioning are not supported for this route; put projection in the query.
+Subsequent ingestion transforms run in Ray. Schema discovery or retries can
+execute the query again. The connector infers result types from MySQL metadata;
+types with ambiguous metadata can require an explicit connector schema, which
+this Tributo route does not currently expose.
+
 ## Filter Doris and ClickHouse reads at the source
 
 Use the existing structured Transform pipeline. The Ray bindings forward a

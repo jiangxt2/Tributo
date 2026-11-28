@@ -21,6 +21,8 @@ from tributo.data.engine_binding import (
 )
 from tributo.data.ingestion import (
     HandleOwnership,
+    IngestionGateway,
+    IngestionRequest,
     IngestionRuntimeContext,
     RayDataHandle,
     ReadOptions,
@@ -33,6 +35,7 @@ from tributo.data.scan_plan import (
     SourceCapability,
     TableScan,
 )
+from tributo.data.source_config import SqlSourceConfig
 from tributo.data.transform_ir import FilterEq, Limit, SelectColumns, TransformPipeline
 from tributo.exceptions import (
     DataSourceError,
@@ -148,6 +151,35 @@ def test_explicit_third_party_descriptor_is_resolved() -> None:
     bindings.register(_descriptor())
 
     assert bindings.resolve(_descriptor().key).distribution_name == "test-binding"
+
+
+def test_doris_query_requires_binding_query_capability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    existing_version = importlib.metadata.version
+    versions = {"ray-doris": "2.0", "daft-doris": "1.1", "PyMySQL": "1.2.3"}
+
+    def version(name: str) -> str:
+        return versions[name] if name in versions else existing_version(name)
+
+    monkeypatch.setattr(importlib.metadata, "version", version)
+    bindings = EngineBindings()
+    bindings.register(builtin_bindings._ray_doris_descriptor())
+    bindings.register(builtin_bindings._daft_doris_descriptor())
+    gateway = IngestionGateway(bindings)
+    query = SqlSourceConfig(dialect="doris", host="doris.example", sql="SELECT 1")
+
+    ray_descriptor = gateway.describe(IngestionRequest(source=query, engine="ray"))
+    assert ray_descriptor.required_capabilities == ("sql_query",)
+    assert ray_descriptor.binding_id == "ray_doris.ray.doris"
+    with pytest.raises(JobConfigurationError, match="sql_query"):
+        gateway.describe(IngestionRequest(source=query, engine="daft"))
+
+    table = SqlSourceConfig(
+        dialect="doris", host="doris.example", database="analytics", table="events"
+    )
+    daft_descriptor = gateway.describe(IngestionRequest(source=table, engine="daft"))
+    assert daft_descriptor.binding_id == "daft_doris.daft.doris"
 
 
 def test_plan_constraints_select_non_conflicting_bindings() -> None:

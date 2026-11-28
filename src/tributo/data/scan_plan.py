@@ -110,6 +110,7 @@ class ScanKind(str, Enum):
 class SourceCapability(str, Enum):
     PROJECTION = "projection"
     PREDICATE_PUSHDOWN = "predicate_pushdown"
+    SQL_QUERY = "sql_query"
     SNAPSHOT = "snapshot"
     SCHEMA_EVOLUTION = "schema_evolution"
     PARTITION_PRUNING = "partition_pruning"

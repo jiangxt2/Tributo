@@ -136,40 +136,52 @@ def test_doris_requires_independent_ray_doris_binding(
         )
 
 
-def test_clickhouse_sql_uses_ray_ingestion_gateway() -> None:
+@pytest.mark.parametrize(
+    ("dialect", "query", "params"),
+    [
+        pytest.param(
+            "clickhouse",
+            "SELECT id FROM events WHERE id >= %(minimum)s",
+            {"minimum": 7},
+            id="clickhouse",
+        ),
+        pytest.param("doris", "SELECT id FROM analytics.events", None, id="doris"),
+    ],
+)
+def test_sql_query_uses_ray_ingestion_gateway(
+    dialect: str, query: str, params: dict[str, int] | None
+) -> None:
     dataset = MagicMock()
     result = MagicMock(handle=RayDataHandle(dataset))
-    query = "SELECT id FROM events WHERE id >= %(minimum)s"
     with patch(
         "tributo.training.data_loader.open_ingestion", return_value=result
     ) as open_:
         actual = load_ray_dataset_from_source(
             {
                 "type": "sql",
-                "dialect": "clickhouse",
+                "dialect": dialect,
                 "database": "analytics",
                 "sql": query,
-                "params": {"minimum": 7},
+                "params": params,
             }
         )
 
     request = open_.call_args.args[0]
     assert isinstance(request.source, SqlSourceConfig)
-    assert request.source.dialect == "clickhouse"
+    assert request.source.dialect == dialect
     assert request.source.sql == query
-    assert request.source.params == {"minimum": 7}
+    assert request.source.params == params
     assert request.engine == "tributo.ray_data"
     assert actual is dataset
     result.close.assert_called_once_with()
 
 
-@pytest.mark.parametrize("dialect", ["doris", "postgresql"])
-def test_legacy_raw_sql_has_structured_source_migration_error(dialect: str) -> None:
+def test_postgresql_raw_sql_has_structured_source_migration_error() -> None:
     with pytest.raises(JobConfigurationError, match="structured 'table' source"):
         load_ray_dataset_from_source(
             {
                 "type": "sql",
-                "dialect": dialect,
+                "dialect": "postgresql",
                 "sql": "SELECT * FROM events",
             }
         )

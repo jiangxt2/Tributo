@@ -89,14 +89,14 @@ clickhouse = [
 mysql = [
     "PyMySQL>=1.2,<1.3",
     "daft-doris[doris]>=1.1",
-    "ray-doris>=1.3",
+    "ray-doris>=2.0",
 ]
 doris-flight = [
     "PyMySQL>=1.2,<1.3",
     "adbc-driver-manager>=1.6,<2",
     "adbc-driver-flightsql>=1.6,<2",
     "daft-doris[doris-flight]>=1.1",
-    "ray-doris[flight]>=1.3",
+    "ray-doris[flight]>=2.0",
 ]
 s3 = [
     "boto3>=1.42.91",

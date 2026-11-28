@@ -6,12 +6,12 @@
   "torch_url": "https://download-r2.pytorch.org/whl/cpu/torch-2.13.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl",
   "torch_sha256": "6f307c2c32d764ffc6ff6893b801fad6d4752f3e67966cb8abf1843427c02604",
   "inputs": {
-    "pyproject.toml": "4d1136e6822c35a06efa910abce7409c4be5cf5572929ed5e717cd877e49e4e8",
-    "uv.lock": "92231f86df6de5325b6291ad7053bf406ecff9c9a31dd8f323f6c0dd4da856c3"
+    "pyproject.toml": "a936ff3bb2a6383206bbcdedb67b0c1dc93080b4f93d3599a306cb1bfc323da7",
+    "uv.lock": "3fc16d98143a84cd939da0ff8ea9c85fd25f4c2afcb65ab4b6d6c99e65cecf8f"
   },
   "files": {
-    "pyproject.toml": "51b50cc069d13c0ba47b9a77edb019a171d31852e8d0b8166ba6b7d20d2639ed",
-    "uv.lock": "00f271fedf1a8a723e86fbd6fc3e64cb7a79ef22378e6286bd824cdcc13b9fb2",
+    "pyproject.toml": "b52e7c6258d1cac9121678c82fd4071c128bc6d03960b6daa4e2eaae1a2bedae",
+    "uv.lock": "7c8a721ca1828e20eaf09ef83bf53ee7ac2af5399af411a9d35d5d20a69c0705",
     "README.md": "a4db7f16c81e6ee91676e10d069d56d29643bdcc256b3026684d3d896cc145f5"
   }
 }

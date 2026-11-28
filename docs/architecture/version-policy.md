@@ -226,7 +226,7 @@ to those references; historical recipes retain the versions actually tested.
   support a second FileIO by inheriting backend-specific string semantics;
   that requires a separately declared and tested Connector/Binding.
 - Connector extras declare minimum stable versions: `daft-doris>=1.1`,
-  `ray-hive>=1.2`, `ray-doris>=1.3`, and `ray-clickhouse>=1.1`. These minimums
+  `ray-hive>=1.2`, `ray-doris>=2.0`, and `ray-clickhouse>=1.1`. These minimums
   apply to master and release branches and increase only when required APIs or
   fixes justify a change. SDK bindings record installed versions and retain
   driver/worker consistency checks; exact versions and hashes belong to the

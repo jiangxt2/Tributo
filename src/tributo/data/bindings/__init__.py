@@ -349,7 +349,11 @@ def _ray_doris_descriptor() -> BindingDescriptor:
         ),
         factory=RayDorisBinding,
         capabilities=frozenset(
-            {SourceCapability.PROJECTION, SourceCapability.PREDICATE_PUSHDOWN}
+            {
+                SourceCapability.PROJECTION,
+                SourceCapability.PREDICATE_PUSHDOWN,
+                SourceCapability.SQL_QUERY,
+            }
         ),
         distribution_name="ray-doris",
         distribution_version=_require_distribution_version("ray-doris"),

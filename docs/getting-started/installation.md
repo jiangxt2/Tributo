@@ -22,7 +22,7 @@ determine which patch or minor release will be published next.
 The optional profiles below describe this documentation's source tree.
 
 The development source targets Ray 2.59.0 and Daft 0.7.26. Connector extras
-declare minimum stable versions: `ray-doris>=1.3`, `ray-hive>=1.2`,
+declare minimum stable versions: `ray-doris>=2.0`, `ray-hive>=1.2`,
 `ray-clickhouse>=1.1`, and `daft-doris>=1.1`. These packages are available on
 PyPI. The committed `uv.lock` selects their exact versions and hashes for the
 development, CI, and image environment. Use the locked `uv sync` commands
@@ -93,7 +93,7 @@ optional BayesOpt search implementation. In this locked checkout, the `clickhous
 shared ClickHouse driver and locked `ray-clickhouse==1.1` for the
 explicit Ray read/write route. `mysql`
 installs `daft-doris==1.1` and
-`ray-doris==1.3` for their explicit engine routes, while `doris-flight` adds
+`ray-doris==2.0` for their explicit engine routes, while `doris-flight` adds
 their Flight dependencies. The `hive-ray` extra installs `ray-hive==1.2` for
 the built-in Ray-only HiveServer2 Provider/Binding route. This does not add
 Daft Hive, native ORC/HDFS access, raw SQL, or Hive writes.

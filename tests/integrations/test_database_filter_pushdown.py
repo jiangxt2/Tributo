@@ -250,6 +250,72 @@ def _consume(
     return rows, receipt
 
 
+if _DATABASE == "doris":
+
+    def test_doris_query_without_default_database(
+        table: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("TRIBUTO_DORIS_DB", raising=False)
+        source = SqlSourceConfig(
+            dialect="doris",
+            host="fe",
+            user="root",
+            sql=f"SELECT id FROM tributo_filters.`{table}` WHERE id = 7",
+        )
+        with open_ingestion(IngestionRequest(source=source, engine="ray")) as result:
+            assert result.handle.dataset.take_all() == [{"id": 7}]
+
+    def test_doris_query_join_aggregation_and_residual_transform(table: str) -> None:
+        source = SqlSourceConfig(
+            dialect="doris",
+            host="fe",
+            database="tributo_filters",
+            user="root",
+            sql=(
+                f"SELECT a.id AS id, COUNT(*) AS event_count "
+                f"FROM tributo_filters.`{table}` AS a "
+                f"JOIN tributo_filters.`{table}` AS b ON a.id = b.id "
+                "WHERE a.id < 4 GROUP BY a.id"
+            ),
+        )
+        request = IngestionRequest(
+            source=source,
+            engine="ray",
+            transforms=TransformPipeline(
+                steps=(FilterComparison(column="id", operator="gte", value=2),)
+            ),
+        )
+        with open_ingestion(request) as result:
+            rows = sorted(result.handle.dataset.take_all(), key=lambda row: row["id"])
+            assert rows == [{"id": 2, "event_count": 1}, {"id": 3, "event_count": 1}]
+            assert result.receipt.transform_decisions[0].residual_required
+
+    def test_doris_query_empty_result_preserves_column_types(table: str) -> None:
+        source = SqlSourceConfig(
+            dialect="doris",
+            host="fe",
+            database="tributo_filters",
+            user="root",
+            sql=f"SELECT id, text FROM tributo_filters.`{table}` WHERE id < 0",
+        )
+        with open_ingestion(IngestionRequest(source=source, engine="ray")) as result:
+            dataset = result.handle.dataset
+            schema = canonical_engine_schema(dataset.schema(fetch_if_missing=False))
+            assert schema.names == ["id", "text"]
+            assert schema.field("id").type == pa.int64()
+            assert schema.field("text").type == pa.string()
+            assert dataset.take_all() == []
+
+    def test_doris_query_invalid_column_fails_without_exposing_sql(table: str) -> None:
+        sql = f"SELECT missing_column FROM tributo_filters.`{table}`"
+        source = SqlSourceConfig(
+            dialect="doris", host="fe", database="tributo_filters", user="root", sql=sql
+        )
+        with pytest.raises(DataSourceError) as exc_info:
+            open_ingestion(IngestionRequest(source=source, engine="ray"))
+        assert sql not in str(exc_info.value)
+
+
 if _DATABASE == "clickhouse":
 
     def test_clickhouse_query_join_aggregation_and_residual_transform(

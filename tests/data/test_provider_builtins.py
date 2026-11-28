@@ -806,7 +806,7 @@ class TestSqlProviderNormalize:
         assert isinstance(plan, SqlScan)
         assert plan.target == SqlTableRead(schema="feature_store", table="events")
 
-    @pytest.mark.parametrize("provider", [DorisProvider(), PostgreSqlProvider()])
+    @pytest.mark.parametrize("provider", [PostgreSqlProvider()])
     def test_raw_sql_has_actionable_migration_error(
         self, provider: DataSourceProvider
     ) -> None:
@@ -829,6 +829,52 @@ class TestSqlProviderNormalize:
 
         assert raw_sql not in str(exc_info.value)
         assert "top-secret" not in str(exc_info.value)
+
+    @pytest.mark.parametrize("provider_shape", [False, True])
+    def test_doris_query_plan_contains_only_digest(self, provider_shape: bool) -> None:
+        from tributo.data.scan_plan import (
+            ParameterizedQuery,
+            SourceCapability,
+            SqlShardMode,
+        )
+
+        query = "SELECT id FROM analytics.events WHERE secret = 'private'"
+        source = (
+            ProviderSourceConfig(
+                provider="tributo.doris",
+                uri="doris://localhost/analytics",
+                options={"sql": query},
+            )
+            if provider_shape
+            else SqlSourceConfig(dialect="doris", database="analytics", sql=query)
+        )
+        provider = DorisProvider()
+        resolved = provider.normalize(source)
+        plan = provider.plan(resolved)
+        assert plan.target == ParameterizedQuery(digest(query))
+        assert plan.sharding.mode is SqlShardMode.SINGLE
+        assert plan.required_capabilities == frozenset({SourceCapability.SQL_QUERY})
+        assert query not in repr(plan)
+        assert query not in repr(resolved)
+
+    @pytest.mark.parametrize(
+        "extra",
+        [
+            pytest.param({"params": {"id": 1}}, id="parameters"),
+            pytest.param({"columns": ["id"]}, id="columns"),
+            pytest.param({"database_schema": "analytics"}, id="schema"),
+            pytest.param({"partitioning": {"mode": "auto"}}, id="parallelism"),
+        ],
+    )
+    def test_doris_query_rejects_unsupported_options(self, extra: dict) -> None:
+        provider = DorisProvider()
+        resolved = provider.normalize(
+            cfg({"type": "sql", "dialect": "doris", "sql": "SELECT 1", **extra})
+        )
+        with pytest.raises(
+            JobConfigurationError, match="Doris query reads do not support"
+        ):
+            provider.plan(resolved)
 
     @pytest.mark.parametrize("provider_shape", [False, True])
     @pytest.mark.parametrize(
