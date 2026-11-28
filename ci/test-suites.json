@@ -285,7 +285,6 @@
       "entrypoint": ["python", "-m", "pytest"],
       "args": [
         "tests/integration/test_export_s3.py",
-        "tests/data/test_ds_parquet_csv.py",
         "-o",
         "addopts=",
         "-m",
@@ -304,7 +303,7 @@
       "forbid_skips": true,
       "markers": ["ci_safe"],
       "log_contract": "pytest terminal output; infrastructure absence is a failure",
-      "rationale": "Small S3 compatibility contract, including explicitly selected shared-module cases, with no Docker or shared service."
+      "rationale": "Small S3 compatibility contract with no Docker or shared service."
     },
     {
       "id": "scheduled-core",

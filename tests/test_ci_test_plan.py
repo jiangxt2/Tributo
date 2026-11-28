@@ -379,7 +379,7 @@ def test_governed_marker_modules_have_controlled_owners_or_selectors(
     manifest: ci_test_plan.Manifest,
     tmp_path: Path,
 ) -> None:
-    shared_path = "tests/data/test_ds_parquet_csv.py"
+    shared_path = "tests/integration/test_export_s3.py"
     selectors = ci_test_plan._shared_marker_selectors(
         manifest, shared_path, "s3_contract"
     )
@@ -407,12 +407,12 @@ def test_shared_s3_marker_requires_exactly_one_controlled_selector(
         args=tuple(
             argument
             for argument in suite.args
-            if argument != "tests/data/test_ds_parquet_csv.py"
+            if argument != "tests/integration/test_export_s3.py"
         ),
     )
 
     assert any(
-        "tests/data/test_ds_parquet_csv.py marker s3_contract must have exactly "
+        "tests/integration/test_export_s3.py marker s3_contract must have exactly "
         "one controlled CI selector" in error
         for error in ci_test_plan.audit_repository(without_shared_path)
     )
@@ -428,7 +428,7 @@ def test_shared_s3_marker_requires_exactly_one_controlled_selector(
         ),
     )
     assert any(
-        "tests/data/test_ds_parquet_csv.py marker s3_contract must have exactly "
+        "tests/integration/test_export_s3.py marker s3_contract must have exactly "
         "one controlled CI selector" in error
         for error in ci_test_plan.audit_repository(incompatible_expression)
     )
