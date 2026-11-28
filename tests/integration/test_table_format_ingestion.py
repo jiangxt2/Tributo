@@ -1,4 +1,4 @@
-"""Real local Iceberg and Lance conformance for Ray Data and Daft."""
+"""Real local Iceberg and Lance conformance for Ray Data."""
 
 from __future__ import annotations
 
@@ -14,17 +14,15 @@ import pytest
 # when the optional engine/connector dependencies are absent. The dedicated
 # integration jobs install them via their extras.
 try:
-    import daft
     import lance
     import pyarrow as pa
     import pyarrow.fs as pafs
     from pyiceberg.catalog.sql import SqlCatalog
 except ModuleNotFoundError:
-    pytest.skip("requires the data and data-daft extras", allow_module_level=True)
+    pytest.skip("requires the data extra", allow_module_level=True)
 
-from tests.data.ingestion_conformance import assert_dual_engine_conformance
+from tests.data.ingestion_conformance import assert_ray_conformance
 from tributo.data import (
-    DaftDataFrameHandle,
     IcebergSourceConfig,
     IngestionRequest,
     IngestionRuntimeContext,
@@ -36,7 +34,7 @@ from tributo.data import (
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.ingestion_conformance,
-    pytest.mark.usefixtures("native_daft_ray_local_runtime"),
+    pytest.mark.usefixtures("ray_local_runtime"),
     pytest.mark.filterwarnings(
         "ignore:Tip.*future versions of Ray.*:FutureWarning",
         "ignore::pytest.PytestUnraisableExceptionWarning",
@@ -59,7 +57,6 @@ def _assert_table_conformance(
     expected_rows: list[dict[str, Any]] | None = None,
     storage_profile: str | None = None,
 ) -> None:
-    assert daft.get_or_create_runner().name == "native"
     context = IngestionRuntimeContext()
     ray_result = open_ingestion(
         IngestionRequest(
@@ -69,22 +66,12 @@ def _assert_table_conformance(
         ),
         context,
     )
-    daft_result = open_ingestion(
-        IngestionRequest(
-            source=source,
-            engine="daft",
-            storage_profile=storage_profile,
-        ),
-        context,
-    )
     try:
         assert isinstance(ray_result.handle, RayDataHandle)
-        assert isinstance(daft_result.handle, DaftDataFrameHandle)
-        assert_dual_engine_conformance(
+        assert ray_result.handle.dataset.schema().names == ["id", "category"]
+        assert_ray_conformance(
             ray_result,
             ray_result.handle.dataset.take_all(),
-            daft_result,
-            daft_result.handle.dataframe.to_pylist(),
             expected_rows=(
                 _input_table().to_pylist() if expected_rows is None else expected_rows
             ),
@@ -92,10 +79,9 @@ def _assert_table_conformance(
         )
     finally:
         ray_result.close()
-        daft_result.close()
 
 
-def test_local_iceberg_dual_engine_conformance(tmp_path: Path) -> None:
+def test_local_iceberg_ray_conformance(tmp_path: Path) -> None:
     warehouse = tmp_path / "iceberg-warehouse"
     catalog_uri = f"sqlite:///{tmp_path / 'iceberg.db'}"
     catalog = SqlCatalog(
@@ -121,7 +107,7 @@ def test_local_iceberg_dual_engine_conformance(tmp_path: Path) -> None:
     )
 
 
-def test_empty_local_iceberg_preserves_schema_for_both_engines(tmp_path: Path) -> None:
+def test_empty_local_iceberg_preserves_schema_for_ray(tmp_path: Path) -> None:
     warehouse = tmp_path / "empty-iceberg-warehouse"
     catalog_uri = f"sqlite:///{tmp_path / 'empty-iceberg.db'}"
     catalog = SqlCatalog(
@@ -147,7 +133,7 @@ def test_empty_local_iceberg_preserves_schema_for_both_engines(tmp_path: Path) -
     )
 
 
-def test_local_iceberg_row_filter_matches_across_engines(tmp_path: Path) -> None:
+def test_local_iceberg_row_filter_matches_ray(tmp_path: Path) -> None:
     warehouse = tmp_path / "filtered-iceberg-warehouse"
     catalog_uri = f"sqlite:///{tmp_path / 'filtered-iceberg.db'}"
     catalog = SqlCatalog(
@@ -180,7 +166,7 @@ def test_local_iceberg_row_filter_matches_across_engines(tmp_path: Path) -> None
 
 @pytest.mark.minio_compat
 @pytest.mark.usefixtures("s3_environment")
-def test_s3_iceberg_dual_engine_conformance(tmp_path: Path) -> None:
+def test_s3_iceberg_ray_conformance(tmp_path: Path) -> None:
     endpoint = os.environ["S3_ENDPOINT"]
     access_key = os.environ["AWS_ACCESS_KEY_ID"]
     secret_key = os.environ["AWS_SECRET_ACCESS_KEY"]
@@ -303,7 +289,7 @@ def test_s3_iceberg_named_profile_and_path_style_conformance(
         filesystem.delete_dir(bucket)
 
 
-def test_local_lance_dual_engine_conformance(tmp_path: Path) -> None:
+def test_local_lance_ray_conformance(tmp_path: Path) -> None:
     path = tmp_path / "events.lance"
     dataset = lance.write_dataset(_input_table(), path)
 
@@ -318,7 +304,7 @@ def test_local_lance_dual_engine_conformance(tmp_path: Path) -> None:
 
 @pytest.mark.minio_compat
 @pytest.mark.usefixtures("s3_environment")
-def test_s3_lance_dual_engine_conformance() -> None:
+def test_s3_lance_ray_conformance() -> None:
     endpoint = os.environ["S3_ENDPOINT"]
     access_key = os.environ["AWS_ACCESS_KEY_ID"]
     secret_key = os.environ["AWS_SECRET_ACCESS_KEY"]

@@ -41,7 +41,6 @@ def worker_probe() -> dict[str, object]:
         "ray": importlib.metadata.version("ray"),
         "tributo": importlib.metadata.version("tributo"),
         "ray-hive": importlib.metadata.version("ray-hive"),
-        "daft-doris": importlib.metadata.version("daft-doris"),
         "ray-doris": importlib.metadata.version("ray-doris"),
         "thrift": importlib.metadata.version("thrift"),
     }
@@ -76,7 +75,6 @@ def main() -> None:
             "ray": RAY_VERSION,
             "tributo": expected_tributo_version,
             "ray-hive": REQUIRED_DISTRIBUTION_VERSIONS["ray-hive"],
-            "daft-doris": REQUIRED_DISTRIBUTION_VERSIONS["daft-doris"],
             "ray-doris": REQUIRED_DISTRIBUTION_VERSIONS["ray-doris"],
             "thrift": REQUIRED_DISTRIBUTION_VERSIONS["thrift"],
         }

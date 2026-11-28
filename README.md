@@ -22,7 +22,7 @@ implementations, records credential-free provenance, and publishes verified
 model bundles.
 
 - Submit and manage workloads through Ray Jobs.
-- Read bounded data through explicit Ray Data or Daft bindings.
+- Read bounded data through explicit Ray Data bindings.
 - Run distributed XGBoost, DNN, positive-unlabeled learning, and the formal
   algorithm execution contract through separately installed official algorithm
   Wheels.
@@ -123,8 +123,8 @@ uv sync --locked --no-dev --extra vector-index
 # Development dependencies
 uv sync --locked --extra dev
 
-# Dual-engine files/tables and PostgreSQL
-uv sync --locked --no-dev --extra data --extra data-daft --extra postgresql
+# Files/tables and PostgreSQL
+uv sync --locked --no-dev --extra data --extra postgresql
 ```
 
 ---
@@ -145,12 +145,12 @@ driver/worker consistency checks.
 
 | Source | Physical reader | Extra | Status |
 |---|---|---|---|
-| Local/S3 Parquet and CSV | Ray Data / Daft public readers | core / `tributo[data-daft]` | Alpha; real dual-engine Conformance |
-| Local/S3 Iceberg and Lance | Ray Data / Daft public readers | `tributo[data,data-daft]` | Alpha; real dual-engine Conformance |
-| PostgreSQL structured table | Ray Data / Daft SQL readers | `tributo[postgresql,data-daft]` | Alpha; real PostgreSQL Conformance |
+| Local/S3 Parquet and CSV | Ray Data public readers | core | Alpha; real Ray Conformance |
+| Local/S3 Iceberg and Lance | Ray Data public readers | `tributo[data]` | Alpha; real Ray Conformance |
+| PostgreSQL structured table | Ray Data SQL reader | `tributo[postgresql]` | Alpha; real PostgreSQL Conformance |
 | HDFS Parquet/CSV | Ray Data + PyArrow Hadoop filesystem | Ray runtime with HDFS libraries | Adapter present; cluster gate pending |
 | ClickHouse | `ray-clickhouse` | `tributo[clickhouse]` | Adapter only; real-database Tributo Conformance remains the support gate |
-| Doris | `ray-doris` / `daft-doris` | `tributo[mysql]` or `tributo[doris-flight]` | Adapter only; Ray routes require `ray-doris`, Daft routes require `daft-doris`, and real-database Conformance remains the support gate |
+| Doris | `ray-doris` | `tributo[mysql]` or `tributo[doris-flight]` | Adapter only; real-database Conformance remains the support gate |
 | HiveServer2 structured tables | `ray-hive` through the built-in Ray Binding | `tributo[hive-ray]` or `uv sync --locked --no-dev --extra hive-ray` | Alpha; real Hive 4.2.0 structured-projection Conformance |
 | Native ORC files | no built-in reader | — | Unsupported; use an engine or table service that owns ORC decoding |
 
@@ -162,8 +162,8 @@ See the [installation requirements](docs/getting-started/installation.md).
 These paths remain adapter-only until their real-database Conformance gates
 pass.
 HDFS still requires its own infrastructure gate. Hive is Ray-only, uses binary
-HiveServer2 transport, and does not imply native ORC/HDFS access or a Daft Hive
-route. Tributo never installs optional providers or bindings at runtime.
+HiveServer2 transport, and does not imply native ORC/HDFS access. Tributo never
+installs optional providers or bindings at runtime.
 
 ---
 

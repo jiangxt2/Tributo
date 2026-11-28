@@ -16,6 +16,4 @@ def _version(name: str) -> str:
 
 
 SUPPORTED_RAY_VERSION = _version("ray")
-SUPPORTED_DAFT_VERSION = _version("daft")
 RAY_VERSION_SPEC = f"=={SUPPORTED_RAY_VERSION}"
-DAFT_SQL_VERSION_SPEC = _version("daft_sql_spec")

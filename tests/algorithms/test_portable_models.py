@@ -780,14 +780,8 @@ def test_builders_offer_production_defaults_without_runtime_objects() -> None:
     )
     for registration in (sklearn_registration, function_registration):
         compatibility = registration.implementation.input_compatibility
-        assert compatibility.accepted_input_views == (
-            "daft_dataframe",
-            "ray_data",
-        )
-        assert compatibility.accepted_ingestion_engines == (
-            "tributo.daft",
-            "tributo.ray_data",
-        )
+        assert compatibility.accepted_input_views == ("ray_data",)
+        assert compatibility.accepted_ingestion_engines == ("tributo.ray_data",)
         assert all(
             "tributo.algorithms.input.fake" not in str(reference)
             for reference in compatibility.supported_explicit_adapters

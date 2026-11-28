@@ -56,8 +56,7 @@ class RayPostgreSqlBinding:
                     diagnostic_code="unsupported_postgresql_parallel_read",
                     diagnostic=(
                         "Ray Data PostgreSQL binding cannot honor automatic or "
-                        "parallel shard requirements; select Daft with an "
-                        "explicit partition column or use a single read"
+                        "parallel shard requirements; use a single read"
                     ),
                 )
         with binding_stage("classify_transforms"):

@@ -106,7 +106,7 @@ would change object-key or credential semantics.
 
 Third-party sources do not use the deprecated `open()` exception. An
 installed package publishes a versioned logical Provider through
-`tributo.ingestion_providers` and physical Ray/Daft Bindings through
+`tributo.ingestion_providers` and physical Ray Bindings through
 `tributo.ingestion_bindings`. Provider-declared projection and relative-path
 metadata replace consumer-side provider maps. Catalog and storage-format
 Binding constraints allow Hive tables backed by Parquet, ORC, or Iceberg
@@ -120,20 +120,20 @@ The write path uses one control-plane path:
 ```
 WriteRequest → WriteTargetRegistry → WriteBindingRegistry
   ↓
-Ray/Daft typed handle → native Dataset/DataFrame writer
+Ray typed handle → native Dataset writer
 ```
 
 All bounded writers and Parquet/Lance inference sinks use `WriteGateway`
 directly. The Gateway carries only credential-free request/digest/descriptor/
 receipt data. Engine-native runtime configuration is resolved inside the
-binding and is passed to Ray or Daft according to that engine's supported
+binding and is passed to Ray according to its supported
 worker/runtime mechanism.
 
 Current exit-gate status:
 
-- [x] Ray/Daft Parquet and CSV native bindings are covered by contract tests and
+- [x] Ray Parquet and CSV native bindings are covered by contract tests and
   Docker cluster/MinIO IT.
-- [x] Iceberg and Ray/Daft Lance use native engine data-plane writers; PyIceberg
+- [x] Iceberg and Ray Lance use native engine data-plane writers; PyIceberg
   usage in Tributo is limited to catalog/table control-plane preflight.
 - [x] Static boundaries reject Tributo-owned Lance fragment/commit and other
   direct storage data-plane markers.

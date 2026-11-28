@@ -69,7 +69,7 @@ def load_ray_dataset_from_source(
     ``source`` accepts the typed ``type/path/dialect`` and ``provider/uri``
     shapes. Unknown fields fail Pydantic validation. This adapter always
     returns Ray Data for existing training consumers; new code that needs an
-    explicit Ray/Daft choice should use ``IngestionGateway``.
+    explicit engine selection should use ``IngestionGateway``.
     """
     _check_data_backend()
     adapter: TypeAdapter[Any] = TypeAdapter(CanonicalSourceInput)
@@ -86,7 +86,7 @@ def load_ray_dataset_from_config(
 
     .. deprecated::
         Use ``load_ray_dataset_from_source()`` for a canonical Ray adapter or
-        ``IngestionGateway`` for an explicit dual-engine request.
+        ``IngestionGateway`` for an explicit ingestion request.
     """
     _check_data_backend()
     warnings.warn(
@@ -130,8 +130,7 @@ def _load_via_ingestion(
     try:
         if not isinstance(result.handle, RayDataHandle):
             raise JobConfigurationError(
-                "Training data loading requires a RayDataHandle; "
-                "implicit Daft-to-Ray conversion is disabled"
+                "Training data loading requires a RayDataHandle"
             )
         return result.handle.dataset
     finally:

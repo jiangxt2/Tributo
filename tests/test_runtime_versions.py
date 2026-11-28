@@ -12,9 +12,8 @@ from pathlib import Path
 
 import pytest
 from packaging.requirements import Requirement
-from packaging.specifiers import SpecifierSet
 
-from tests.support.runtime_versions import DAFT_VERSION, RAY_VERSION, locked_version
+from tests.support.runtime_versions import RAY_VERSION, locked_version
 from tools import build_algorithm_bundle, runtime_image_contract, tributo_it
 from tributo._common import runtime_versions
 from tributo.algorithms.api.artifacts import AlgorithmBundleManifest, ImageProfile
@@ -33,12 +32,9 @@ def test_sdk_defaults_match_dependency_declarations_and_lock() -> None:
     )
     assert str(ray.specifier) == f"=={runtime_versions.SUPPORTED_RAY_VERSION}"
     assert runtime_versions.SUPPORTED_RAY_VERSION == RAY_VERSION
-    assert runtime_versions.SUPPORTED_DAFT_VERSION == DAFT_VERSION
-    assert DAFT_VERSION in SpecifierSet(runtime_versions.DAFT_SQL_VERSION_SPEC)
     for model in (ImageProfile, AlgorithmBundleManifest, KubeRayDeploymentConfig):
         assert model.model_fields["ray_version"].default == RAY_VERSION
     assert native_bindings.RAY_ENGINE_VERSION == RAY_VERSION
-    assert native_bindings.DAFT_ENGINE_VERSION == DAFT_VERSION
     assert build_algorithm_bundle.RAY_VERSION == RAY_VERSION
 
 

@@ -88,19 +88,16 @@ def test_plan_records_backend_and_resolver_input_compatibility_facts() -> None:
 
     assert payload["implementation"]["input_compatibility"] == {
         "accepted_input_views": [
-            "daft_dataframe",
             "materialized_tabular",
             "ray_data",
         ],
         "accepted_ingestion_engines": [
-            "tributo.daft",
             "tributo.fake_tabular",
             "tributo.ray_data",
         ],
         "required_input_capabilities": ["materializable"],
         "supported_explicit_adapters": [
             "tributo.algorithms.input.fake:prepare_input",
-            "tributo.integrations.algorithm_inputs.ingestion:prepare_daft_input",
             "tributo.integrations.algorithm_inputs.ingestion:prepare_ingestion_input",
             "tributo.integrations.algorithm_inputs.ingestion:prepare_ray_data_input",
         ],

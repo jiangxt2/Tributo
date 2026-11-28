@@ -89,7 +89,6 @@ STABILITY_MAP: dict[str, str] = {
     # Data — alpha candidate ingestion contract
     "tributo.data.scan_plan": "developer",
     "tributo.data.ingestion": "alpha",
-    "tributo.data.handle_adapters": "alpha",
     "tributo.data.contracts.handles": "alpha",
     "tributo.data.contracts.modes": "beta",
     "tributo.data.contracts.storage": "stable",

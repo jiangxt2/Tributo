@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 import pyarrow as pa
 import pytest
 
-from tributo.data import DaftDataFrameHandle, RayDataHandle
+from tributo.data import RayDataHandle
 from tributo.data.base import S3Config
 from tributo.data.contracts.modes import WriteMode
 from tributo.data.writing import (
@@ -23,7 +23,6 @@ from tributo.data.writing import (
     default_write_gateway,
 )
 from tributo.data.writing.native_bindings import (
-    DaftLanceWriteBinding,
     RayClickHouseWriteBinding,
     RayLanceWriteBinding,
 )
@@ -43,24 +42,10 @@ class _RayDataset:
         return pa.schema([("id", pa.int64())])
 
 
-class _DaftDataFrame:
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
-
-    def write_parquet(self, *args: Any, **kwargs: Any) -> None:
-        self.calls.append(("parquet", args, kwargs))
-
-    def write_csv(self, *args: Any, **kwargs: Any) -> None:
-        self.calls.append(("csv", args, kwargs))
-
-    def write_lance(self, *args: Any, **kwargs: Any) -> None:
-        self.calls.append(("lance", args, kwargs))
-
-
 def _execute_optional_binding(
     binding: Any,
     request: WriteRequest,
-    handle: RayDataHandle | DaftDataFrameHandle,
+    handle: RayDataHandle,
 ) -> Any:
     plan = GenericWriteTargetProvider(request.target_kind).plan(request)
     context = WriteExecutionContext(
@@ -74,10 +59,6 @@ def test_lance_bindings_declare_native_dependency_distributions() -> None:
     assert RayLanceWriteBinding._descriptor.dependency_distributions == (
         "lance-ray",
         "pylance",
-    )
-    assert DaftLanceWriteBinding._descriptor.dependency_distributions == (
-        "pylance",
-        "daft-lance",
     )
 
 
@@ -114,8 +95,6 @@ def test_clickhouse_binding_requires_installed_connector(
     [
         ("ray", "parquet", RayDataHandle, "parquet", "mode"),
         ("ray", "csv", RayDataHandle, "csv", "mode"),
-        ("daft", "parquet", DaftDataFrameHandle, "parquet", "write_mode"),
-        ("daft", "csv", DaftDataFrameHandle, "csv", "write_mode"),
     ],
 )
 def test_builtin_binding_calls_only_native_writer(
@@ -126,7 +105,7 @@ def test_builtin_binding_calls_only_native_writer(
     method: str,
     mode_key: str,
 ) -> None:
-    native = _RayDataset() if engine == "ray" else _DaftDataFrame()
+    native = _RayDataset()
     handle = handle_type(native)
     request = WriteRequest(
         engine=engine,
@@ -141,30 +120,7 @@ def test_builtin_binding_calls_only_native_writer(
     assert receipt.committed is True
     assert native.calls[0][0] == method
     observed_mode = native.calls[0][2][mode_key]
-    assert (observed_mode.value if engine == "ray" else observed_mode) == "overwrite"
-
-
-def test_daft_lance_binding_delegates_to_native_writer(tmp_path: Path) -> None:
-    native = _DaftDataFrame()
-    request = WriteRequest(
-        engine="daft",
-        target_kind="lance",
-        target=str(tmp_path / "lance"),
-        mode=WriteMode.OVERWRITE,
-    )
-
-    receipt = _execute_optional_binding(
-        DaftLanceWriteBinding(), request, DaftDataFrameHandle(native)
-    )
-
-    assert receipt.committed is True
-    assert native.calls == [
-        (
-            "lance",
-            (str(tmp_path / "lance"),),
-            {"mode": "overwrite", "io_config": None},
-        )
-    ]
+    assert observed_mode.value == "overwrite"
 
 
 @pytest.mark.parametrize("mode", tuple(WriteMode))
@@ -250,8 +206,6 @@ def test_ray_lance_binding_preserves_s3_uri_and_runtime_credentials(
     [
         ("ray", "parquet", RayDataHandle, "parquet", "mode"),
         ("ray", "csv", RayDataHandle, "csv", "mode"),
-        ("daft", "parquet", DaftDataFrameHandle, "parquet", "write_mode"),
-        ("daft", "csv", DaftDataFrameHandle, "csv", "write_mode"),
     ],
 )
 def test_builtin_file_binding_preserves_explicit_append(
@@ -262,7 +216,7 @@ def test_builtin_file_binding_preserves_explicit_append(
     method: str,
     mode_key: str,
 ) -> None:
-    native = _RayDataset() if engine == "ray" else _DaftDataFrame()
+    native = _RayDataset()
     request = WriteRequest(
         engine=engine,
         target_kind=target_kind,
@@ -276,7 +230,7 @@ def test_builtin_file_binding_preserves_explicit_append(
     assert receipt.committed is True
     assert native.calls[0][0] == method
     observed_mode = native.calls[0][2][mode_key]
-    assert (observed_mode.value if engine == "ray" else observed_mode) == "append"
+    assert observed_mode.value == "append"
 
 
 def test_native_binding_receives_engine_runtime_credentials_without_receipt_leak(

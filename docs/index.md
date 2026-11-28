@@ -18,7 +18,7 @@ credential-free evidence, and publishes verified model bundles.
 
 | Component | What you can do |
 | --- | --- |
-| Data | Plan bounded reads, run portable transforms, and delegate native writes to Ray Data or Daft |
+| Data | Plan bounded reads, run portable transforms, and delegate native writes to Ray Data |
 | Algorithms and training | Run distributed XGBoost, X-Learner causal uplift, DNN, PU, Multinomial Naive Bayes, and Ray Tune workflows |
 | Model lifecycle | Export, validate, publish, read, and govern model Bundles |
 | Inference and serving | Run Bundle-backed batch inference, explainability jobs, and Ray Serve transports |

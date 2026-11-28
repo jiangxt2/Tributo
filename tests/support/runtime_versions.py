@@ -18,4 +18,3 @@ def locked_version(name: str) -> str:
 
 
 RAY_VERSION = locked_version("ray")
-DAFT_VERSION = locked_version("daft")

@@ -46,7 +46,7 @@ covered by the external `runtime-image` suite.
 | Surface | Level | Notes |
 |--------|-------|-------|
 | `tools/build_tributo_image.py` | `alpha` | JSON-only Buildx builder for the pinned image validated for CPU execution by default, with explicit `linux/amd64`/`linux/arm64` targeting; it performs dependency-closure discovery, manifest sealing, and fail-closed import checks |
-| `tools/tributo-runtime-full.json` | `alpha` | Pinned Ray base and host uv export, native-platform default, complete first-party runtime-extra closure including locked stable Daft Doris, Ray Doris, Ray Hive and Ray ClickHouse packages; the CPU image/Ray Jobs gate passed on Linux arm64, while native `amd64` and GPU execution remain unverified |
+| `tools/tributo-runtime-full.json` | `alpha` | Pinned Ray base and host uv export, native-platform default, complete first-party runtime-extra closure including locked stable Ray Doris, Ray Hive and Ray ClickHouse packages; the CPU image/Ray Jobs gate passed on Linux arm64, while native `amd64` and GPU execution remain unverified |
 | `manifest.json` / `image-profile.json` | `alpha` | Build attestations consumed for immutable image selection and algorithm artifact compatibility; not a registry or deployment API |
 | `tools/publish_tributo_image.py` | `alpha` | Builds and publishes one platform image to Docker Hub; reuses a tag only when its registry manifest points to the same local image config, and emits a registry-backed `ImageProfile` |
 | `.github/workflows/publish-runtime-image.yml` | `alpha` | Manual `master` dispatch for Tributo 1.2.0 and automatic publication on stable GitHub Releases; checks out the release source, verifies its package version, then builds and publishes the arm64 CPU image; the Ray Jobs gate is separately recorded in the support matrix |
@@ -120,11 +120,10 @@ from the legacy setup-only propagation rule.
 | `tributo.data.source_config` — legacy conversion and `RawSourceConfig` | `beta` | Compatibility input conversion and unknown-source passthrough |
 | `tributo.data.provider` — `DataSourceProvider` | `beta` | Logical normalization/planning contract; `normalize()` and `plan()` drive canonical ingestion, while `open()`/`DatasetHandle` remain an independent Provider SPI |
 | `tributo.data.transform_ir` | `alpha` | Versioned engine-neutral ETL contract |
-| `tributo.data.transform_compiler` | `developer` | Internal Ray/Daft expression translation |
+| `tributo.data.transform_compiler` | `developer` | Internal Ray expression translation |
 | `tributo.data.scan_plan` | `developer` | Internal engine-neutral scan SPI; downstream consumers use `IngestionGateway` |
 | `tributo.data.ingestion` | `alpha` | Two-stage Gateway, explicit request, typed handles, and receipt |
-| `tributo.data.handle_adapters` | `alpha` | Explicit native-handle conversions with conversion evidence; never a routing fallback |
-| `tributo.data.contracts.handles` | `alpha` | Typed Ray and Daft handle contracts shared by ingestion and writing |
+| `tributo.data.contracts.handles` | `alpha` | Typed Ray handle contracts shared by ingestion and writing |
 | `tributo.data.contracts.modes` | `beta` | Canonical shared `WriteMode` contract; `tributo.data.base` remains a narrow re-export |
 | `tributo.data.contracts.storage` | `stable` | Canonical shared `S3Config` contract; credentials are hidden from repr and identity material |
 | `tributo.data.writing` | `alpha` | Unified bounded-write Gateway package |
@@ -134,7 +133,7 @@ from the legacy setup-only propagation rule.
 | `tributo.data.engine_binding` | `developer` | Third-party extension SPI; not exported from the consumer-facing `tributo.data` root |
 | `tributo.data.binding_plugins` | `developer` | Descriptor-only `tributo.ingestion_bindings` discovery SPI |
 | `tributo.data.provider_plugins` | `developer` | Versioned descriptor-only `tributo.ingestion_providers` discovery SPI |
-| `tributo.data.bindings.*` | `developer` | Thin adapters over public Ray Data, Daft, or installed engine APIs |
+| `tributo.data.bindings.*` | `developer` | Thin adapters over public Ray Data or installed engine APIs |
 | `tributo.data.graph` | `beta` | Graph data abstraction (GNN; @PublicAPI says beta) |
 | `tributo.data.base` | `legacy` | Narrow compatibility re-export for `S3Config` and `WriteMode`; no reader, writer, registry, or Connector class |
 | `tributo.data.provider_registry` | `beta` | Data source provider registry |
@@ -242,7 +241,7 @@ custom Flavor execution follows its own declared contract.
 
 | Module | Level | Notes |
 |--------|-------|-------|
-| `tributo.integrations.algorithm_inputs` | `alpha` | Production IngestionGateway bridge with invocation-scoped request refs and explicit Ray/Daft Worker adapters |
+| `tributo.integrations.algorithm_inputs` | `alpha` | Production IngestionGateway bridge with invocation-scoped request refs and explicit Ray Worker adapters |
 | `tributo.integrations.algorithm_inputs.ingestion` | `alpha` | Ingestion input bridge |
 | `tributo.integrations.algorithm_runtimes.legacy_descriptors` | `developer` | Internal lightweight descriptors for the bounded Trainer compatibility bridge |
 | `tributo.integrations.algorithm_runtimes.legacy_trainer` | `developer` | Internal Worker-only execution adapter; not a native first-party runtime |
@@ -377,7 +376,7 @@ This is informative only — `STABILITY.md` is the canonical reference.
 ### Marked as alpha
 
 - `tributo.data.transform_ir` — versioned engine-neutral ETL contract
-- `tributo.data.ingestion` — candidate dual-engine ingestion API
+- `tributo.data.ingestion` — candidate Ray Data ingestion API
 - `tributo.training.graph_trainer` — "Alpha; GNN training"
 - `tributo.serving.streaming_deployment` — "Alpha; streaming inference service"
 

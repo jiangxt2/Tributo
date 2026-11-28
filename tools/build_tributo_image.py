@@ -73,7 +73,6 @@ RUNTIME_IMAGE = re.compile(r"^[^\s@]+:[^\s@]+$")
 
 RUNTIME_EXTRAS = (
     "data",
-    "data-daft",
     "hive-ray",
     "vector-index",
     "postgresql",
@@ -595,13 +594,48 @@ def _prepare_pinned_image(
     platform: str,
     log: _CommandLog | None = None,
 ) -> None:
-    """Pull a mirror image, verify its digest/platform, and create a local tag."""
+    """Verify the pinned mirror image and create a local build tag."""
     mirror_tag = mirror.rsplit("@", 1)[0]
+    expected_digest = canonical.rsplit("@", 1)[-1]
+    if os.environ.get("TRIBUTO_LOCAL_IMAGES_ONLY") == "1":
+        try:
+            inspected = _inspect_image(mirror_tag, log=log)
+        except ImageBuildError:
+            raise ImageBuildError(
+                f"required image is not available locally: {mirror}"
+            ) from None
+        repo_digests = [str(value) for value in inspected.get("RepoDigests") or []]
+        if not any(value.endswith(f"@{expected_digest}") for value in repo_digests):
+            raise ImageBuildError(f"local image digest mismatch for {mirror}")
+        actual_platform = (
+            f"{inspected.get('Os', '')}/{inspected.get('Architecture', '')}"
+        )
+        if actual_platform != platform:
+            raise ImageBuildError(
+                f"local image platform mismatch for {mirror}: "
+                f"expected={platform}, actual={actual_platform}"
+            )
+        image_id = str(inspected.get("Id") or "")
+        if not image_id:
+            raise ImageBuildError(f"local image has no ID: {mirror}")
+        try:
+            existing = _inspect_image(local, log=log)
+        except ImageBuildError as exc:
+            if "No such image" not in str(exc):
+                raise
+            existing = None
+        if existing is not None:
+            if existing.get("Id") != image_id:
+                raise ImageBuildError(
+                    f"local base tag already points to another image: {local}"
+                )
+            return
+        _run(["docker", "tag", image_id, local], log=log)
+        return
     pull_result = _run(
         ["docker", "pull", "--platform", platform, mirror_tag],
         log=log,
     )
-    expected_digest = canonical.rsplit("@", 1)[-1]
     pull_output = "\n".join(
         part for part in (pull_result.stdout, pull_result.stderr) if part
     )

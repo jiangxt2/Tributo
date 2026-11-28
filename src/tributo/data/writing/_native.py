@@ -1,8 +1,8 @@
-"""Shared helpers for thin Ray and Daft native write bindings.
+"""Shared helpers for thin Ray native write bindings.
 
 This module prepares engine-native configuration and target metadata only.  It
 does not write files, construct fragments, or commit table snapshots; those
-operations remain owned by the selected Ray or Daft writer API.
+operations remain owned by the selected Ray writer API.
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ from urllib.parse import unquote, urlsplit
 
 from tributo.data._s3 import (
     merge_iceberg_properties,
-    to_daft_s3_kwargs,
     to_lance_storage_options,
     to_pyarrow_s3_kwargs,
 )
@@ -78,14 +77,6 @@ def native_path(target: str) -> str:
     return target
 
 
-def daft_path(target: str) -> str:
-    """Preserve S3 URIs for Daft and decode local file URIs."""
-    parsed = urlsplit(target)
-    if parsed.scheme.lower() == "file":
-        return unquote(parsed.path)
-    return target
-
-
 def lance_path(target: str) -> str:
     """Preserve object-store URIs and decode local file URIs for Lance."""
     parsed = urlsplit(target)
@@ -103,19 +94,6 @@ def ray_filesystem(
     import pyarrow.fs as pafs
 
     return pafs.S3FileSystem(**to_pyarrow_s3_kwargs(runtime_s3(runtime_options)))
-
-
-def daft_io_config(
-    runtime_options: Mapping[str, Any], *, required: bool = False
-) -> Any | None:
-    """Build Daft's public IOConfig for an S3 target."""
-    if runtime_s3(runtime_options) is None and not required:
-        return None
-    import daft
-
-    return daft.io.IOConfig(
-        s3=daft.io.S3Config(**to_daft_s3_kwargs(runtime_s3(runtime_options)))
-    )
 
 
 def lance_storage_options(runtime_options: Mapping[str, Any]) -> dict[str, str] | None:

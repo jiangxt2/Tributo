@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tributo.data.contracts.handles import DaftDataFrameHandle, RayDataHandle
+from tributo.data.contracts.handles import RayDataHandle
 from tributo.data.writing.bindings import WriteBinding
 from tributo.data.writing.contracts import (
     WriteAmbiguousError,
@@ -146,10 +146,6 @@ class WriteGateway:
             input_handle, RayDataHandle
         ):
             raise WriteCapabilityError("Ray writes require a RayDataHandle")
-        if request.engine == "tributo.daft" and not isinstance(
-            input_handle, DaftDataFrameHandle
-        ):
-            raise WriteCapabilityError("Daft writes require a DaftDataFrameHandle")
         registered = self._registry.resolve(request)
         try:
             binding = registered.factory()

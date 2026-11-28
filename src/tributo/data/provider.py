@@ -6,7 +6,7 @@ The canonical runtime boundary (ADR 001)::
     provider.normalize(source) -> ResolvedSource
     provider.plan(resolved) -> LogicalScanPlan
     IngestionGateway.open(request) -> IngestionOpenResult
-    EngineBinding -> Ray Data / Daft / installed engine integration
+    EngineBinding -> Ray Data / installed engine integration
 
 ``ResolvedSource`` separates *identity* options (everything that changes the
 data — columns, snapshot, SQL digest, partition/filter) from *runtime*

@@ -162,9 +162,8 @@ def arrow_schema(value: Any) -> pa.Schema:
 def canonical_engine_schema(value: Any) -> pa.Schema:
     """Return a conservative engine-neutral Arrow schema.
 
-    Ray Data and Daft can expose different nullability and private metadata
-    for the same Parquet schema. Neither distinction is portable across the
-    two public readers, so the ingestion contract retains field order/types,
+    Engine schemas may contain different nullability and private metadata.
+    The ingestion contract retains field order/types,
     widens fields to nullable, and drops engine-specific metadata.
     """
     schema = arrow_schema(value)

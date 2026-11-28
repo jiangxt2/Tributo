@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 import tributo.data.bindings as builtin_bindings
-from tests.support.runtime_versions import DAFT_VERSION, RAY_VERSION
+from tests.support.runtime_versions import RAY_VERSION
 from tributo.data.engine_binding import (
     BindingCompilation,
     BindingDescriptor,
@@ -46,7 +46,6 @@ _TEST_BINDING_ID = "test.ray.parquet"
 @pytest.fixture(autouse=True)
 def installed_versions(monkeypatch: pytest.MonkeyPatch) -> None:
     versions = {
-        "daft": DAFT_VERSION,
         "pyiceberg": "0.11.1",
         "ray": RAY_VERSION,
         "test-binding": "1.2.3",
@@ -297,7 +296,7 @@ def test_declared_connector_distribution_must_match_installed(
 
 
 def test_missing_binding_reports_install_hint() -> None:
-    key = BindingKey("tributo.daft", ScanKind.SQL, "doris", "test.daft.doris")
+    key = BindingKey("tributo.ray_data", ScanKind.SQL, "doris", "test.ray.doris")
     bindings = EngineBindings()
     bindings.register_requirement(key, "pip install tributo-doris")
 
@@ -623,7 +622,6 @@ def test_first_party_binding_can_publish_framework_diagnostic() -> None:
     ("engine_id", "descriptor_factory"),
     [
         ("tributo.ray_data", builtin_bindings._ray_iceberg_descriptor),
-        ("tributo.daft", builtin_bindings._daft_iceberg_descriptor),
     ],
 )
 def test_builtin_iceberg_file_io_rejection_preserves_diagnostic(
@@ -689,7 +687,7 @@ def test_binding_metadata_and_install_hints_reject_credentials() -> None:
     bindings = EngineBindings()
     with pytest.raises(ValueError, match="credential-free"):
         bindings.register_requirement(
-            BindingKey("tributo.daft", ScanKind.SQL, "doris", "test.daft.doris"),
+            BindingKey("tributo.ray_data", ScanKind.SQL, "doris", "test.ray.doris"),
             "pip install connector --token=top-secret",
         )
 
@@ -742,18 +740,12 @@ def test_external_sql_descriptors_use_package_identity(
         builtin_bindings,
         "_distribution_version",
         lambda name: {
-            "daft-doris": "1.1",
             "ray-clickhouse": "1.1",
         }.get(name),
     )
 
-    doris = builtin_bindings._daft_doris_descriptor()
     ray_clickhouse = builtin_bindings._ray_clickhouse_descriptor()
 
-    assert doris.key.binding_id == "daft_doris.daft.doris"
-    assert doris.distribution_name == "daft-doris"
-    assert doris.distribution_version == "1.1"
-    assert doris.dependency_distributions == ("PyMySQL",)
     assert ray_clickhouse.key.binding_id == "ray_clickhouse.ray.clickhouse"
     assert ray_clickhouse.distribution_name == "ray-clickhouse"
     assert ray_clickhouse.distribution_version == "1.1"
@@ -768,7 +760,6 @@ def test_missing_external_sql_packages_report_install_hints(
 ) -> None:
     monkeypatch.setattr(builtin_bindings, "_DEFAULT_BINDINGS", None)
     versions = {
-        "daft": DAFT_VERSION,
         "ray": RAY_VERSION,
         "tributo": "1.0.0",
     }
@@ -784,21 +775,6 @@ def test_missing_external_sql_packages_report_install_hints(
 
     with pytest.raises(
         EngineNotAvailableError,
-        match=(
-            r"No installed binding for "
-            r"tributo\.daft/sql/clickhouse/daft_clickhouse\.daft\.clickhouse"
-        ),
-    ):
-        bindings.resolve(
-            BindingKey(
-                "tributo.daft",
-                ScanKind.SQL,
-                "clickhouse",
-                "daft_clickhouse.daft.clickhouse",
-            )
-        )
-    with pytest.raises(
-        EngineNotAvailableError,
         match=r"ray_clickhouse\.ray\.clickhouse.*ray-clickhouse.*--extra clickhouse",
     ):
         bindings.resolve(
@@ -809,18 +785,6 @@ def test_missing_external_sql_packages_report_install_hints(
                 "ray_clickhouse.ray.clickhouse",
             )
         )
-    with pytest.raises(
-        EngineNotAvailableError,
-        match=r"daft_doris\.daft\.doris.*daft-doris.*uv sync.*--extra mysql",
-    ):
-        bindings.resolve(
-            BindingKey(
-                "tributo.daft",
-                ScanKind.SQL,
-                "doris",
-                "daft_doris.daft.doris",
-            )
-        )
 
 
 @pytest.mark.parametrize(
@@ -829,7 +793,6 @@ def test_missing_external_sql_packages_report_install_hints(
         ("ray-clickhouse", "tributo.ray_data", "ray_clickhouse.ray.clickhouse"),
         ("ray-doris", "tributo.ray_data", "ray_doris.ray.doris"),
         ("ray-hive", "tributo.ray_data", "tributo.ray.hive"),
-        ("daft-doris", "tributo.daft", "daft_doris.daft.doris"),
     ],
 )
 @pytest.mark.parametrize("version", ["1.0", "1.4", "1.4.dev0"])
@@ -843,7 +806,6 @@ def test_external_connectors_register_and_record_installed_versions(
     monkeypatch.setattr(builtin_bindings, "_DEFAULT_BINDINGS", None)
     versions = {
         "clickhouse-connect": "1.5.0",
-        "daft": DAFT_VERSION,
         "pyarrow": "19.0.1",
         "ray": RAY_VERSION,
         package: version,
@@ -883,7 +845,6 @@ def test_external_connectors_register_and_record_installed_versions(
         "_ray_clickhouse_descriptor",
         "_ray_doris_descriptor",
         "_ray_hive_descriptor",
-        "_daft_doris_descriptor",
     ],
 )
 def test_external_connector_descriptors_do_not_invent_missing_versions(
@@ -897,54 +858,11 @@ def test_external_connector_descriptors_do_not_invent_missing_versions(
         getattr(builtin_bindings, factory)()
 
 
-def test_incompatible_optional_daft_does_not_disable_ray(
+def test_incompatible_ray_version_fails_closed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(builtin_bindings, "_DEFAULT_BINDINGS", None)
-    monkeypatch.setattr(
-        builtin_bindings,
-        "_distribution_version",
-        lambda name: {
-            "daft": "0.6.0",
-            "ray": RAY_VERSION,
-            "tributo": "1.0.0",
-        }.get(name),
-    )
-    versions = {"ray": RAY_VERSION, "tributo": "1.0.0"}
-    monkeypatch.setattr(
-        "tributo.data.engine_binding.importlib.metadata.version",
-        lambda name: versions[name],
-    )
-
-    bindings = builtin_bindings.default_engine_bindings()
-
-    assert (
-        bindings.resolve(
-            BindingKey(
-                "tributo.ray_data",
-                ScanKind.FILE,
-                "parquet",
-                "tributo.ray.parquet",
-            )
-        ).key.engine_id
-        == "tributo.ray_data"
-    )
-    with pytest.raises(EngineNotAvailableError, match="data-daft"):
-        bindings.resolve(
-            BindingKey(
-                "tributo.daft",
-                ScanKind.FILE,
-                "parquet",
-                "tributo.daft.parquet",
-            )
-        )
-
-
-def test_incompatible_ray_does_not_disable_daft(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(builtin_bindings, "_DEFAULT_BINDINGS", None)
-    versions = {"ray": "2.54.0", "daft": DAFT_VERSION, "tributo": "1.0.0"}
+    versions = {"ray": "2.54.0", "tributo": "1.0.0"}
     monkeypatch.setattr(
         builtin_bindings, "_distribution_version", lambda name: versions.get(name)
     )
@@ -952,20 +870,8 @@ def test_incompatible_ray_does_not_disable_daft(
         "tributo.data.engine_binding.importlib.metadata.version",
         lambda name: versions[name],
     )
-
     bindings = builtin_bindings.default_engine_bindings()
 
-    assert (
-        bindings.resolve(
-            BindingKey(
-                "tributo.daft",
-                ScanKind.FILE,
-                "parquet",
-                "tributo.daft.parquet",
-            )
-        ).key.engine_id
-        == "tributo.daft"
-    )
     with pytest.raises(
         EngineNotAvailableError,
         match=r"installed ray 2\.54\.0; required ==2\.59\.0",
@@ -976,50 +882,6 @@ def test_incompatible_ray_does_not_disable_daft(
                 ScanKind.FILE,
                 "parquet",
                 "tributo.ray.parquet",
-            )
-        )
-
-
-def test_missing_postgresql_dependency_does_not_disable_daft(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(builtin_bindings, "_DEFAULT_BINDINGS", None)
-    versions = {
-        "ray": RAY_VERSION,
-        "daft": DAFT_VERSION,
-        "tributo": "1.0.0",
-        "psycopg": "3.3.4",
-        "psycopg-binary": "3.3.4",
-        "SQLAlchemy": "2.0.51",
-    }
-    monkeypatch.setattr(
-        builtin_bindings, "_distribution_version", lambda name: versions.get(name)
-    )
-    monkeypatch.setattr(
-        "tributo.data.engine_binding.importlib.metadata.version",
-        lambda name: versions[name],
-    )
-
-    bindings = builtin_bindings.default_engine_bindings()
-
-    assert (
-        bindings.resolve(
-            BindingKey(
-                "tributo.daft",
-                ScanKind.FILE,
-                "parquet",
-                "tributo.daft.parquet",
-            )
-        ).key.engine_id
-        == "tributo.daft"
-    )
-    with pytest.raises(EngineNotAvailableError, match=r"tributo\[postgresql\]"):
-        bindings.resolve(
-            BindingKey(
-                "tributo.daft",
-                ScanKind.SQL,
-                "postgresql",
-                "tributo.daft.postgresql",
             )
         )
 

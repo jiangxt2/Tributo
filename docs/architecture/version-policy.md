@@ -152,7 +152,7 @@ specifier; this rule does not automatically admit them.
 Plugin package versions, descriptor API versions, Wheel digests, and support
 evidence identity remain strict. Matching a development version does not award
 execution support, change the version recorded in evidence, or certify a
-different Core/Wheel combination. Ray, Daft, and Python version checks retain
+different Core/Wheel combination. Ray and Python version checks retain
 their independent policies. Development installations must select Core source
 or a Core Wheel explicitly; this runtime rule does not change package-index
 resolution.
@@ -220,13 +220,12 @@ to those references; historical recipes retain the versions actually tested.
 - Ray 2.59.0 still accepts Iceberg `row_filter` and `selected_fields`, but both
   reader arguments are deprecated. Before adopting a Ray release that removes these arguments, move filtering and
   projection to the replacement public Dataset APIs and rerun local/S3,
-  empty-table, and dual-engine Iceberg Conformance before widening the pin.
+  empty-table, and Ray Iceberg Conformance before widening the pin.
 - A PyIceberg range change must rerun named-profile, session-token, path-style,
   FileIO rejection, empty-table, and MinIO Iceberg tests. Tributo must not
   support a second FileIO by inheriting backend-specific string semantics;
   that requires a separately declared and tested Connector/Binding.
-- Connector extras declare minimum stable versions: `daft-doris>=1.1`,
-  `ray-hive>=1.2`, `ray-doris>=1.3`, and `ray-clickhouse>=1.1`. These minimums
+- Connector extras declare minimum stable versions: `ray-hive>=1.2`, `ray-doris>=1.3`, and `ray-clickhouse>=1.1`. These minimums
   apply to master and release branches and increase only when required APIs or
   fixes justify a change. SDK bindings record installed versions and retain
   driver/worker consistency checks; exact versions and hashes belong to the

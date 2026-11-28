@@ -74,9 +74,11 @@ class TestCompilationSuccess:
             ]
         )
 
-    def test_all_specs_compile_daft(self, compiler: ConcreteTransformCompiler) -> None:
+    def test_all_specs_compile_schema_trace(
+        self, compiler: ConcreteTransformCompiler
+    ) -> None:
         pipeline = self._all_specs()
-        compiled = compiler.compile(pipeline, TransformBackend.DAFT, SCHEMA)
+        compiled = compiler.compile(pipeline, TransformBackend.RAY, SCHEMA)
         assert len(compiled.steps) == len(pipeline.steps)
         for i, step in enumerate(compiled.steps):
             assert step.ordinal == i
@@ -92,7 +94,7 @@ class TestCompilationSuccess:
         self, compiler: ConcreteTransformCompiler
     ) -> None:
         pipeline = TransformPipeline(steps=[SelectColumns(columns=["name", "id"])])
-        compiled = compiler.compile(pipeline, TransformBackend.DAFT, SCHEMA)
+        compiled = compiler.compile(pipeline, TransformBackend.RAY, SCHEMA)
         out_schema = compiled.steps[0].output_schema
         assert out_schema.names == ["name", "id"]
         assert out_schema.field("name").type == pa.string()
@@ -110,35 +112,35 @@ class TestColumnNotFound:
     ) -> None:
         pipeline = TransformPipeline(steps=[FilterEq(column="z", value=1)])
         with pytest.raises(ValueError, match="Column 'z' not found"):
-            compiler.compile(pipeline, TransformBackend.DAFT, SCHEMA)
+            compiler.compile(pipeline, TransformBackend.RAY, SCHEMA)
 
     def test_filter_range_missing_column(
         self, compiler: ConcreteTransformCompiler
     ) -> None:
         pipeline = TransformPipeline(steps=[FilterRange(column="z", low=0, high=100)])
         with pytest.raises(ValueError, match="Column 'z' not found"):
-            compiler.compile(pipeline, TransformBackend.DAFT, SCHEMA)
+            compiler.compile(pipeline, TransformBackend.RAY, SCHEMA)
 
     def test_filter_isin_missing_column(
         self, compiler: ConcreteTransformCompiler
     ) -> None:
         pipeline = TransformPipeline(steps=[FilterIsIn(column="z", values=[1])])
         with pytest.raises(ValueError, match="Column 'z' not found"):
-            compiler.compile(pipeline, TransformBackend.DAFT, SCHEMA)
+            compiler.compile(pipeline, TransformBackend.RAY, SCHEMA)
 
     def test_filter_null_missing_column(
         self, compiler: ConcreteTransformCompiler
     ) -> None:
         pipeline = TransformPipeline(steps=[FilterNull(column="z")])
         with pytest.raises(ValueError, match="Column 'z' not found"):
-            compiler.compile(pipeline, TransformBackend.DAFT, SCHEMA)
+            compiler.compile(pipeline, TransformBackend.RAY, SCHEMA)
 
     def test_select_columns_missing_column(
         self, compiler: ConcreteTransformCompiler
     ) -> None:
         pipeline = TransformPipeline(steps=[SelectColumns(columns=["z"])])
         with pytest.raises(ValueError, match="Column 'z' not found"):
-            compiler.compile(pipeline, TransformBackend.DAFT, SCHEMA)
+            compiler.compile(pipeline, TransformBackend.RAY, SCHEMA)
 
     def test_select_then_filter_removed_column(
         self, compiler: ConcreteTransformCompiler
@@ -151,7 +153,7 @@ class TestColumnNotFound:
             ]
         )
         with pytest.raises(ValueError, match="Column 'name' not found"):
-            compiler.compile(pipeline, TransformBackend.DAFT, SCHEMA)
+            compiler.compile(pipeline, TransformBackend.RAY, SCHEMA)
 
 
 # ---------------------------------------------------------------------------
@@ -211,7 +213,7 @@ class TestFrozenSemantics:
         self, compiler: ConcreteTransformCompiler
     ) -> None:
         pipeline = TransformPipeline()
-        compiled = compiler.compile(pipeline, TransformBackend.DAFT, SCHEMA)
+        compiled = compiler.compile(pipeline, TransformBackend.RAY, SCHEMA)
         assert len(compiled.steps) == 0
 
     def test_empty_isin_always_false(self) -> None:
@@ -272,7 +274,7 @@ class TestFrozenSemantics:
             steps=[CastColumn(column="id", target_type="timestamp[us, tz=UTC]")]
         )
 
-        compiled = compiler.compile(pipeline, TransformBackend.DAFT, SCHEMA)
+        compiled = compiler.compile(pipeline, TransformBackend.RAY, SCHEMA)
 
         assert compiled.steps[0].output_schema.field("id").type == pa.timestamp(
             "us", tz="UTC"

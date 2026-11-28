@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.support.runtime_versions import DAFT_VERSION, RAY_VERSION
+from tests.support.runtime_versions import RAY_VERSION
 from tools import tributo_it
 from tributo._common.runtime_env import find_project_root
 
@@ -30,20 +30,20 @@ def _write_profile(root: Path) -> tributo_it.RuntimeProfile:
     digest_c = "c" * 64
     digest_d = "d" * 64
     dockerfile.write_text(
-        f"FROM example:1@sha256:{digest_a}\nRUN uv sync --extra data-daft\n"
+        f"FROM example:1@sha256:{digest_a}\nRUN uv sync --extra data\n"
     )
     (root / ".dockerignore").write_text("root-only\n")
     dockerfile.with_name(f"{dockerfile.name}.dockerignore").write_text("src/**\n")
     definition = {
         "base_image": f"example:1@sha256:{digest_a}",
         "dockerfile": "tests/integrations/Dockerfile.data-ingestion",
-        "extras": ["data-daft"],
+        "extras": ["data"],
         "minio_image": f"example:2@sha256:{digest_b}",
         "python_version": "3.12",
         "runtime_repository": "tributo-it-runtime",
         "tool_image": f"python:3@sha256:{digest_c}",
         "uv_image": f"uv:1@sha256:{digest_d}",
-        "version_contract": {"daft_prefix": "0.7.", "ray": RAY_VERSION},
+        "version_contract": {"ray": RAY_VERSION},
     }
     (integration_dir / "runtime-profiles.json").write_text(
         json.dumps({"schema_version": 1, "profiles": {"data-ingestion": definition}})
@@ -56,7 +56,7 @@ def _write_host_uv_profile(root: Path) -> tributo_it.RuntimeProfile:
     integration_dir.mkdir(parents=True)
     (root / "src").mkdir()
     (root / "pyproject.toml").write_text(
-        f"[project]\nname='example'\n[project.optional-dependencies]\ndata-daft=['daft=={DAFT_VERSION}']\n"
+        "[project]\nname='example'\n[project.optional-dependencies]\ndata=['example-dependency==1.0']\n"
     )
     (root / "uv.lock").write_text("version = 1\n")
     dockerfile = integration_dir / "Dockerfile.data-ingestion"
@@ -73,12 +73,12 @@ def _write_host_uv_profile(root: Path) -> tributo_it.RuntimeProfile:
         "base_image_mirror": f"mirror/example:1@sha256:{digest_a}",
         "dependency_mode": "host-uv-export",
         "dockerfile": "tests/integrations/Dockerfile.data-ingestion",
-        "extras": ["data-daft"],
+        "extras": ["data"],
         "minio_image": f"example:2@sha256:{digest_b}",
         "python_version": "3.12",
         "runtime_repository": "tributo-it-runtime",
         "uv_version": "0.11.23",
-        "version_contract": {"daft_prefix": "0.7.", "ray": RAY_VERSION},
+        "version_contract": {"ray": RAY_VERSION},
     }
     (integration_dir / "runtime-profiles.json").write_text(
         json.dumps({"schema_version": 1, "profiles": {"data-ingestion": definition}})
@@ -118,7 +118,7 @@ def _fake_host_uv(
             output.write_text(
                 exported_content
                 if exported_content is not None
-                else f"daft=={DAFT_VERSION} --hash=sha256:" + "c" * 64 + "\n"
+                else "example-dependency==1.0 --hash=sha256:" + "c" * 64 + "\n"
             )
             if mutate_lock:
                 (cwd / "uv.lock").write_text("version = 2\n")
@@ -372,12 +372,12 @@ def test_host_uv_profile_rejects_unhashed_or_local_requirements(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     profile = _write_host_uv_profile(tmp_path)
-    _fake_host_uv(monkeypatch, exported_content=f"daft=={DAFT_VERSION}\n")
+    _fake_host_uv(monkeypatch, exported_content="example-dependency==1.0\n")
     with pytest.raises(tributo_it.TributoITError, match="hashed requirements"):
         tributo_it.runtime_identity(profile, "linux/amd64")
 
     local_reference = (
-        f"local-package @ file:///Users/collaborator/local-package\ndaft=={DAFT_VERSION} --hash=sha256:"
+        "local-package @ file:///Users/collaborator/local-package\nexample-dependency==1.0 --hash=sha256:"
         + "c" * 64
         + "\n"
     )
@@ -431,6 +431,133 @@ def test_host_uv_build_inputs_prepare_only_the_ray_base(
             "platform": "linux/arm64",
         }
     ]
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        "matching",
+        "tag_missing",
+        "missing",
+        "digest",
+        "platform",
+        "tag_conflict",
+        "missing_id",
+    ],
+)
+def test_local_only_mirrored_base_never_pulls(
+    monkeypatch: pytest.MonkeyPatch, state: str
+) -> None:
+    digest = "a" * 64
+    mirror = f"docker.m.daocloud.io/example/runtime:1@sha256:{digest}"
+    image = {
+        "Id": "" if state == "missing_id" else "sha256:source",
+        "Os": "linux",
+        "Architecture": "amd64" if state == "platform" else "arm64",
+        "RepoDigests": [
+            f"example/runtime@sha256:{'b' * 64 if state == 'digest' else digest}"
+        ],
+    }
+    monkeypatch.setenv("TRIBUTO_LOCAL_IMAGES_ONLY", "1")
+
+    def inspect(reference: str) -> dict[str, object] | None:
+        if reference == mirror:
+            return None if state == "missing" else image
+        if reference == "tributo-example:arm64":
+            if state == "tag_missing":
+                return None
+            return {"Id": "sha256:other"} if state == "tag_conflict" else image
+        return None
+
+    calls: list[list[str]] = []
+    monkeypatch.setattr(tributo_it, "_image_inspect", inspect)
+    monkeypatch.setattr(
+        tributo_it,
+        "_run",
+        lambda args, **_kwargs: calls.append(args),
+    )
+    kwargs = {
+        "mirror": mirror,
+        "canonical": f"example/runtime:1@sha256:{digest}",
+        "local": "tributo-example:arm64",
+        "platform": "linux/arm64",
+    }
+    if state in {"matching", "tag_missing"}:
+        tributo_it._prepare_mirrored_image(**kwargs)
+    else:
+        with pytest.raises(tributo_it.TributoITError):
+            tributo_it._prepare_mirrored_image(**kwargs)
+    assert calls == (
+        [["docker", "tag", "sha256:source", "tributo-example:arm64"]]
+        if state == "tag_missing"
+        else []
+    )
+
+
+@pytest.mark.parametrize("state", ["matching", "missing", "digest", "platform"])
+def test_local_only_third_party_image_never_pulls(
+    monkeypatch: pytest.MonkeyPatch, state: str
+) -> None:
+    digest = "b" * 64
+    reference = f"example/tool:1@sha256:{digest}"
+    image = {
+        "Id": "sha256:source",
+        "Os": "linux",
+        "Architecture": "amd64" if state == "platform" else "arm64",
+        "RepoDigests": [
+            f"example/tool@sha256:{'c' * 64 if state == 'digest' else digest}"
+        ],
+    }
+    monkeypatch.setenv("TRIBUTO_LOCAL_IMAGES_ONLY", "1")
+    monkeypatch.setattr(tributo_it, "docker_platform", lambda: "linux/arm64")
+    monkeypatch.setattr(
+        tributo_it,
+        "_image_inspect",
+        lambda _reference: None if state == "missing" else image,
+    )
+    monkeypatch.setattr(
+        tributo_it,
+        "_run",
+        lambda *_args, **_kwargs: pytest.fail("local image must not be pulled"),
+    )
+    if state == "matching":
+        assert tributo_it.ensure_digest_image(reference) == "sha256:source"
+    else:
+        with pytest.raises(tributo_it.TributoITError):
+            tributo_it.ensure_digest_image(reference)
+
+
+def test_local_only_rejects_registry_runtime_lookup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from contextlib import nullcontext
+
+    profile = _write_profile(tmp_path)
+    identity = tributo_it.runtime_identity(profile, "linux/arm64")
+    monkeypatch.setenv("TRIBUTO_LOCAL_IMAGES_ONLY", "1")
+    monkeypatch.setattr(tributo_it, "_image_inspect", lambda _reference: None)
+    monkeypatch.setattr(tributo_it, "runtime_lock", lambda _identity: nullcontext())
+    monkeypatch.setattr(
+        tributo_it,
+        "_pull_registry_runtime",
+        lambda *_args, **_kwargs: pytest.fail("registry lookup must not run"),
+    )
+    with pytest.raises(tributo_it.TributoITError, match="registry runtime lookup"):
+        tributo_it.prepare_runtime(
+            profile, platform=identity.platform, registry="ghcr.io/example"
+        )
+
+
+def test_local_only_rejects_canonical_build_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile = _write_profile(tmp_path)
+    identity = tributo_it.runtime_identity(profile, "linux/arm64")
+    monkeypatch.setenv("TRIBUTO_LOCAL_IMAGES_ONLY", "1")
+    with pytest.raises(tributo_it.TributoITError, match="canonical build inputs"):
+        tributo_it._prepare_runtime_build_inputs(
+            identity, build_input_mode=tributo_it.RuntimeBuildInputMode.CANONICAL
+        )
 
 
 def test_host_uv_runtime_build_uses_requirements_context_without_uv_image(

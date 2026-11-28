@@ -394,7 +394,7 @@ class TestCredentialBoundary:
         assert "must-not-leak" not in str(error.value)
 
     def test_daft_input_is_rejected_without_implicit_conversion(self) -> None:
-        with pytest.raises(ValidationError, match="Daft-to-Ray conversion"):
+        with pytest.raises(ValidationError, match="engine must be one of"):
             _request(
                 input=IngestionRequest(
                     source=ParquetSourceConfig(path="/data/input.parquet"),

@@ -9,7 +9,7 @@ from typing import Any, Literal, Mapping, TypeAlias, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 
-from tributo.data.contracts.handles import DaftDataFrameHandle, RayDataHandle
+from tributo.data.contracts.handles import RayDataHandle
 from tributo.data.contracts.modes import WriteMode
 from tributo.data.engine_ids import normalize_engine_id
 from tributo.data.refs import _credential_paths, digest
@@ -344,7 +344,7 @@ class WriteAmbiguousError(WriteBindingError):
     """Raised when a write may have taken effect without confirmation."""
 
 
-WriteHandle: TypeAlias = RayDataHandle | DaftDataFrameHandle
+WriteHandle: TypeAlias = RayDataHandle
 
 
 @DeveloperAPI

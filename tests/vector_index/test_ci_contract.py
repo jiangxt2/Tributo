@@ -67,8 +67,6 @@ def test_vector_runtime_is_exactly_versioned_in_the_shared_profile() -> None:
     profile = tributo_it.load_profile("data-ingestion").definition
     assert "vector-index" in profile["extras"]
     assert profile["version_contract"] == {
-        "daft_prefix": "0.7.",
-        "daft_doris": "1.1",
         "lance_ray": "0.5.0",
         "pyarrow": "19.0.1",
         "pylance": "9.0.0",
@@ -91,9 +89,8 @@ def test_vector_runtime_is_exactly_versioned_in_the_shared_profile() -> None:
         local_tag="test:1",
     )
     code = tributo_it._version_check_code(identity)
-    for name, version in profile["version_contract"].items():
-        if name != "daft_prefix":
-            assert repr(version) in code
+    for version in profile["version_contract"].values():
+        assert repr(version) in code
 
 
 def test_vector_project_names_are_scoped_and_cli_dispatches(monkeypatch) -> None:

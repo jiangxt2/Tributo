@@ -1,4 +1,4 @@
-"""Internal translation of Transform IR into Ray Data or Daft expressions."""
+"""Internal translation of Transform IR into Ray Data expressions."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Sequence, cast
+from typing import Any, Sequence
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -36,7 +36,6 @@ from tributo.util.annotations import DeveloperAPI
 class TransformBackend(Enum):
     """Native execution target for internal Transform compilation."""
 
-    DAFT = "daft"
     RAY = "ray"
 
 
@@ -82,7 +81,7 @@ class TransformCompiler(ABC):
 
 @DeveloperAPI
 class ConcreteTransformCompiler(TransformCompiler):
-    """Compile the complete P0 Transform IR to Ray or Daft operations."""
+    """Compile the complete P0 Transform IR to Ray operations."""
 
     def compile(
         self,
@@ -106,9 +105,7 @@ class ConcreteTransformCompiler(TransformCompiler):
         input_schema: pa.Schema,
     ) -> CompiledStep:
         _validate_spec(spec, input_schema)
-        if backend is TransformBackend.DAFT:
-            backend_op, output_schema = _compile_daft(spec, input_schema)
-        elif backend is TransformBackend.RAY:
+        if backend is TransformBackend.RAY:
             backend_op, output_schema = _compile_ray(spec, input_schema)
         else:
             raise ValueError(f"Unsupported backend: {backend!r}")
@@ -273,61 +270,6 @@ class _RayFillNullOperation:
         return table.set_column(index, table.schema.field(index), filled)
 
 
-def _compile_daft(spec: TransformSpec, schema: pa.Schema) -> tuple[Any, pa.Schema]:
-    import daft
-
-    column: Any = (
-        daft.col(spec.column) if isinstance(spec, _COLUMN_TRANSFORMS) else None
-    )
-    if isinstance(spec, FilterEq):
-        return column == spec.value, schema
-    if isinstance(spec, FilterNotEq):
-        return column != spec.value, schema
-    if isinstance(spec, FilterComparison):
-        return _comparison_expression(column, spec.operator, spec.value), schema
-    if isinstance(spec, FilterRange):
-        return (column >= cast(Any, spec.low)) & (
-            column <= cast(Any, spec.high)
-        ), schema
-    if isinstance(spec, FilterIsIn):
-        return (
-            daft.lit(False) if not spec.values else column.is_in(list(spec.values)),
-            schema,
-        )
-    if isinstance(spec, FilterNull):
-        return column.is_null(), schema
-    if isinstance(spec, FilterNotNull):
-        return ~column.is_null(), schema
-    if isinstance(spec, SelectColumns):
-        return tuple(spec.columns), pa.schema(
-            [schema.field(name) for name in spec.columns], metadata=schema.metadata
-        )
-    if isinstance(spec, DropColumns):
-        return tuple(spec.columns), _drop_schema(schema, spec.columns)
-    if isinstance(spec, RenameColumns):
-        return {item.source: item.target for item in spec.renames}, _rename_schema(
-            schema, spec
-        )
-    if isinstance(spec, CastColumn):
-        target = _parse_arrow_type(spec.target_type)
-        output = _replace_field(
-            schema,
-            spec.column,
-            pa.field(
-                spec.column,
-                target,
-                nullable=schema.field(spec.column).nullable,
-                metadata=schema.field(spec.column).metadata,
-            ),
-        )
-        return column.cast(daft.DataType.from_arrow_type(target)), output
-    if isinstance(spec, FillNull):
-        return column.fill_null(spec.value), schema
-    if isinstance(spec, Limit):
-        return spec.count, schema
-    raise ValueError(f"Unsupported spec: {type(spec).__name__}")
-
-
 def _compile_ray(spec: TransformSpec, schema: pa.Schema) -> tuple[Any, pa.Schema]:
     from ray.data.expressions import DataType, col
 
@@ -384,45 +326,6 @@ def _compile_ray(spec: TransformSpec, schema: pa.Schema) -> tuple[Any, pa.Schema
 
 
 @DeveloperAPI
-def apply_pipeline_to_daft_df(
-    pipeline: CompiledPipeline,
-    df: Any,
-    *,
-    ordinals: set[int] | None = None,
-) -> Any:
-    """Apply compiled residual steps to a lazy Daft DataFrame."""
-    import daft
-
-    result = df
-    for step in pipeline.steps:
-        if ordinals is not None and step.ordinal not in ordinals:
-            continue
-        spec = step.spec
-        if isinstance(spec, SelectColumns):
-            result = result.select(*step.backend_op)
-        elif isinstance(spec, DropColumns):
-            result = result.exclude(*step.backend_op)
-        elif isinstance(spec, RenameColumns):
-            result = result.select(
-                *[
-                    daft.col(name).alias(step.backend_op.get(name, name))
-                    for name in step.input_schema.names
-                ]
-            )
-        elif isinstance(spec, (CastColumn, FillNull)):
-            result = result.with_column(spec.column, step.backend_op)
-        elif isinstance(spec, Limit):
-            result = result.limit(step.backend_op)
-        elif isinstance(step.backend_op, daft.Expression):
-            result = result.where(step.backend_op)
-        else:
-            raise ValueError(
-                f"Unknown backend operation for Daft: {type(step.backend_op).__name__}"
-            )
-    return result
-
-
-@DeveloperAPI
 def apply_pipeline_to_ray_ds(
     pipeline: CompiledPipeline,
     ds: Any,
@@ -464,6 +367,5 @@ __all__ = [
     "ConcreteTransformCompiler",
     "TransformBackend",
     "TransformCompiler",
-    "apply_pipeline_to_daft_df",
     "apply_pipeline_to_ray_ds",
 ]

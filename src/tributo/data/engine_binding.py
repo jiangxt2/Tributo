@@ -28,7 +28,6 @@ from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.version import InvalidVersion, Version
 
 from tributo.data.ingestion import (
-    DaftDataFrameHandle,
     DistributionVersionEvidence,
     HandleOwnership,
     IngestionHandle,
@@ -60,7 +59,6 @@ from tributo.util.annotations import DeveloperAPI
 
 _ENGINE_DISTRIBUTIONS: dict[str, str] = {
     "tributo.ray_data": "ray",
-    "tributo.daft": "daft",
 }
 
 PushdownLevel = Literal["exact", "inexact", "none"]
@@ -232,9 +230,7 @@ class BindingKey:
 
     def __post_init__(self) -> None:
         if self.engine_id not in _ENGINE_DISTRIBUTIONS:
-            raise ValueError(
-                "BindingKey.engine_id must be tributo.ray_data or tributo.daft"
-            )
+            raise ValueError("BindingKey.engine_id must be tributo.ray_data")
         if not isinstance(self.scan_kind, ScanKind):
             raise ValueError("BindingKey.scan_kind must be a ScanKind")
         if (
@@ -344,7 +340,7 @@ class BindingCompilation:
     )
 
     def __post_init__(self) -> None:
-        if not isinstance(self.handle, (RayDataHandle, DaftDataFrameHandle)):
+        if not isinstance(self.handle, RayDataHandle):
             raise ValueError("BindingCompilation.handle must be a typed native handle")
         if not isinstance(self.transform_decisions, tuple):
             raise ValueError("BindingCompilation.transform_decisions must be a tuple")
@@ -729,12 +725,7 @@ class EngineBindings:
         transforms: TransformPipeline,
     ) -> None:
         key = descriptor.key
-        expected_handle = (
-            RayDataHandle
-            if key.engine_id == "tributo.ray_data"
-            else DaftDataFrameHandle
-        )
-        if not isinstance(compilation.handle, expected_handle):
+        if not isinstance(compilation.handle, RayDataHandle):
             raise BindingStageError.framework_diagnostic(
                 "compile",
                 error_type=JobConfigurationError,
