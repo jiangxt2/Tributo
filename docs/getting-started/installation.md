@@ -22,7 +22,7 @@ determine which patch or minor release will be published next.
 The optional profiles below describe this documentation's source tree.
 
 The development source targets Ray 2.59.0. Connector extras
-declare minimum stable versions: `ray-doris>=1.3`, `ray-hive>=1.2`,
+declare minimum stable versions: `ray-doris>=2.0`, `ray-hive>=1.2`,
 and `ray-clickhouse>=1.1`. These packages are available on
 PyPI. The committed `uv.lock` selects their exact versions and hashes for the
 development, CI, and image environment. Use the locked `uv sync` commands
@@ -91,7 +91,7 @@ itself is included by the core Ray dependency; the `tune` extra adds the
 optional BayesOpt search implementation. In this locked checkout, the `clickhouse` extra installs the
 shared ClickHouse driver and locked `ray-clickhouse==1.1` for the
 explicit Ray read/write route. `mysql`
-installs `ray-doris==1.3`, while `doris-flight` adds
+installs `ray-doris==2.0`, while `doris-flight` adds
 its Flight dependencies. The `hive-ray` extra installs `ray-hive==1.2` for
 the built-in Ray-only HiveServer2 Provider/Binding route. This does not add
 native ORC/HDFS access, raw SQL, or Hive writes.

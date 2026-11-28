@@ -71,7 +71,7 @@ def test_vector_runtime_is_exactly_versioned_in_the_shared_profile() -> None:
         "pyarrow": "19.0.1",
         "pylance": "9.0.0",
         "ray": RAY_VERSION,
-        "ray_doris": "1.3",
+        "ray_doris": "2.0",
         "ray_hive": "1.2",
         "ray_clickhouse": "1.1",
         "thrift": "0.22.0",

@@ -72,7 +72,11 @@ def resolve_sql_target(
 
 
 def resolve_sql_connection(
-    dialect: str, runtime_options: Mapping[str, Any], *, schema: str | None = None
+    dialect: str,
+    runtime_options: Mapping[str, Any],
+    *,
+    schema: str | None = None,
+    require_database: bool = True,
 ) -> SqlBindingConnection:
     prefix = f"TRIBUTO_{dialect.upper()}"
     host = str(runtime_options.get("host") or os.getenv(f"{prefix}_HOST", "localhost"))
@@ -101,7 +105,7 @@ def resolve_sql_connection(
     password = str(
         runtime_options.get("password") or os.getenv(f"{prefix}_PASSWORD", "")
     )
-    if not host or not database:
+    if not host or (require_database and not database):
         raise JobConfigurationError(f"{dialect} Binding requires host and database")
     return SqlBindingConnection(
         host=host,

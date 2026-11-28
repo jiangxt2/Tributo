@@ -16,19 +16,26 @@ from tributo.data.bindings._sql_filters import (
     compile_sql_filters,
     require_transform_filters,
 )
-from tributo.data.bindings._sql_shared import require_sql_table, resolve_sql_target
+from tributo.data.bindings._sql_shared import (
+    SqlBindingConnection,
+    SqlBindingTarget,
+    require_sql_table,
+    resolve_sql_connection,
+    resolve_sql_target,
+)
 from tributo.data.engine_binding import (
     BindingCompilation,
     BindingCompileRequest,
     binding_stage,
+    classify_transform_decisions,
 )
 from tributo.data.ingestion import (
     PhysicalSplitSummary,
     RayDataHandle,
     TransformDecision,
 )
-from tributo.data.refs import schema_fingerprint
-from tributo.data.scan_plan import SqlScan
+from tributo.data.refs import digest, schema_fingerprint
+from tributo.data.scan_plan import ParameterizedQuery, SqlScan, SqlShardMode
 from tributo.data.source_config import RayReadTaskOptions
 from tributo.data.transform_compiler import (
     CompiledPipeline,
@@ -46,6 +53,7 @@ class _RayDorisNativePlan:
     transforms: CompiledPipeline
     transport_id: str
     filters: _SqlFilters
+    is_query: bool = False
 
 
 def _validated_doris_read_options(
@@ -91,11 +99,25 @@ def _validated_doris_read_options(
 
 
 class RayDorisBinding:
-    """Compile Doris table reads into ray-doris native Dataset plans."""
+    """Compile Doris table and query reads into ray-doris Dataset plans."""
 
     def compile(self, request: BindingCompileRequest) -> BindingCompilation:
         with binding_stage("validate_capabilities"):
-            plan = require_sql_table(request.plan, "doris")
+            if (
+                isinstance(request.plan, SqlScan)
+                and request.plan.connector_id == "doris"
+                and isinstance(request.plan.target, ParameterizedQuery)
+            ):
+                plan = request.plan
+                if (
+                    plan.sharding.mode is not SqlShardMode.SINGLE
+                    or request.read_options.target_parallelism is not None
+                ):
+                    raise JobConfigurationError(
+                        "Doris query reads require single mode without target_parallelism"
+                    )
+            else:
+                plan = require_sql_table(request.plan, "doris")
             require_transform_filters(plan)
         with binding_stage("build_native_plan"):
             native_plan = self._build(request, plan)
@@ -105,18 +127,44 @@ class RayDorisBinding:
     @staticmethod
     def _build(request: BindingCompileRequest, plan: SqlScan) -> _RayDorisNativePlan:
         validated_read_options = _validated_doris_read_options(request.runtime_options)
-        from ray_doris import read_doris
-
-        target = resolve_sql_target(plan, request.runtime_options)
+        is_query = isinstance(plan.target, ParameterizedQuery)
         protocol = str(request.runtime_options.get("protocol") or "mysql")
+        connection: SqlBindingConnection | SqlBindingTarget
+        if isinstance(plan.target, ParameterizedQuery):
+            query = request.runtime_options.get("sql")
+            if not isinstance(query, str) or digest(query) != plan.target.query_digest:
+                raise JobConfigurationError("Doris query does not match its plan")
+            if (
+                request.runtime_options.get("params") is not None
+                or protocol != "mysql"
+                or request.runtime_options.get("http_port") is not None
+                or request.runtime_options.get("flight_port") is not None
+                or validated_read_options.get("tablet_size") not in (None, 1)
+                or validated_read_options.get("on_query_plan_error")
+                not in (None, "single_task")
+            ):
+                raise JobConfigurationError(
+                    "Doris query reads require MySQL and do not support "
+                    "parameters or table-specific options"
+                )
+            connection = resolve_sql_connection(
+                "doris", request.runtime_options, require_database=False
+            )
+            source_options: dict[str, Any] = {"query": query}
+        else:
+            target = resolve_sql_target(plan, request.runtime_options)
+            connection = target
+            source_options = {
+                "table": f"{target.database}.{target.table}",
+                "columns": target.columns or None,
+                "transport": protocol,
+            }
         options: dict[str, Any] = {
-            "table": f"{target.database}.{target.table}",
-            "host": target.host,
-            "mysql_port": target.port,
-            "user": target.username,
-            "password": target.password,
-            "columns": target.columns or None,
-            "transport": protocol,
+            "host": connection.host,
+            "mysql_port": connection.port,
+            "user": connection.username,
+            "password": connection.password,
+            **source_options,
         }
         http_port = request.runtime_options.get("http_port")
         flight_port = request.runtime_options.get("flight_port")
@@ -134,13 +182,19 @@ class RayDorisBinding:
         )
         if target_parallelism is not None:
             options["override_num_blocks"] = target_parallelism
+        from ray_doris import read_doris
+
         dataset = read_doris(**options)
-        schema = canonical_engine_schema(dataset.schema(fetch_if_missing=False))
+        schema = canonical_engine_schema(dataset.schema(fetch_if_missing=is_query))
         transforms = ConcreteTransformCompiler().compile(
             request.transforms, TransformBackend.RAY, schema
         )
         with binding_stage("classify_transforms"):
-            filters = compile_sql_filters(request.transforms, schema, "doris")
+            filters = (
+                _SqlFilters(None, {}, classify_transform_decisions(request.transforms))
+                if is_query
+                else compile_sql_filters(request.transforms, schema, "doris")
+            )
         if filters.predicate is not None:
             dataset = read_doris(**options, filter=filters.predicate)
             filtered_schema = canonical_engine_schema(
@@ -150,7 +204,9 @@ class RayDorisBinding:
                 raise JobConfigurationError(
                     "Doris schema changed while planning the filtered read"
                 )
-        return _RayDorisNativePlan(dataset, schema, transforms, protocol, filters)
+        return _RayDorisNativePlan(
+            dataset, schema, transforms, protocol, filters, is_query
+        )
 
     @staticmethod
     def _wrap(
@@ -177,7 +233,11 @@ class RayDorisBinding:
             schema_fingerprint=schema_fingerprint(output_schema),
             metadata_fetched=True,
             physical_splits=PhysicalSplitSummary(
-                detail="Doris tablets and batches are delegated to ray-doris"
+                detail=(
+                    "Doris query uses one ray-doris read task"
+                    if native_plan.is_query
+                    else "Doris tablets and batches are delegated to ray-doris"
+                )
             ),
             diagnostics=("database metadata I/O was used for schema inference",),
         )

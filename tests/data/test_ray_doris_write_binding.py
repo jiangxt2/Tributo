@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 import pytest
 from ray.exceptions import RayTaskError, WorkerCrashedError
 
-from tests.support.runtime_versions import RAY_VERSION
+from tests.support.runtime_versions import RAY_VERSION, locked_version
 from tributo.data import RayDataHandle
 from tributo.data.writing import (
     WriteAmbiguousError,
@@ -55,9 +55,11 @@ def native(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
 def gateway(monkeypatch: pytest.MonkeyPatch) -> WriteGateway:
     monkeypatch.setattr(
         "tributo.data.writing.registry._installed_distribution_version",
-        lambda name: {"ray": RAY_VERSION, "tributo": "1.3.0.dev0", "ray-doris": "1.3"}[
-            name
-        ],
+        lambda name: {
+            "ray": RAY_VERSION,
+            "tributo": "1.3.0.dev0",
+            "ray-doris": locked_version("ray-doris"),
+        }[name],
     )
     registry = WriteBindingRegistry()
     registry.register(RayDorisWriteBinding._descriptor, RayDorisWriteBinding)
@@ -81,7 +83,11 @@ def test_default_gateway_registers_doris_binding(
     original_version = importlib.metadata.version
 
     def version(name: str) -> str:
-        return "1.3" if name == "ray-doris" else original_version(name)
+        return (
+            locked_version("ray-doris")
+            if name == "ray-doris"
+            else original_version(name)
+        )
 
     monkeypatch.setattr(importlib.metadata, "version", version)
     monkeypatch.setattr("tributo.data.writing.builtins._default_gateway", None)

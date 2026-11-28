@@ -36,7 +36,7 @@ def _locked_versions() -> dict[str, str]:
 def test_connector_extras_declare_minimum_supported_versions() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
     connectors = {
-        "ray-doris": ">=1.3",
+        "ray-doris": ">=2.0",
         "ray-hive": ">=1.2",
         "ray-clickhouse": ">=1.1",
     }

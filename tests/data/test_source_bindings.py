@@ -488,6 +488,143 @@ def test_ray_doris_binding_delegates_to_external_connector(
     assert result.transport_id == "mysql"
 
 
+def test_ray_doris_query_uses_single_reader_and_residual_transforms(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tributo.data.transform_ir import FilterEq
+
+    calls: list[dict[str, Any]] = []
+    schema_fetches: list[bool] = []
+
+    class QueryDataset(_RayDataset):
+        def schema(self, fetch_if_missing: bool = True) -> pa.Schema:
+            schema_fetches.append(fetch_if_missing)
+            return _SCHEMA
+
+    module = ModuleType("ray_doris")
+    module.read_doris = lambda **kwargs: calls.append(kwargs) or QueryDataset()
+    monkeypatch.setitem(sys.modules, "ray_doris", module)
+    monkeypatch.setattr(
+        "tributo.data.bindings.ray_doris.importlib.metadata.version",
+        lambda name: RAY_VERSION,
+    )
+    applied: list[set[int]] = []
+    monkeypatch.setattr(
+        "tributo.data.bindings.ray_doris.apply_pipeline_to_ray_ds",
+        lambda compiled, dataset, *, ordinals: applied.append(ordinals) or dataset,
+    )
+    query = "SELECT id FROM analytics.events"
+    plan = SqlScan(
+        provider_id="tributo.doris",
+        connector_id="doris",
+        target=ParameterizedQuery(digest(query)),
+    )
+    request = _request(plan, runtime_options={"database": "analytics", "sql": query})
+    request = BindingCompileRequest(
+        plan=request.plan,
+        runtime_options=request.runtime_options,
+        transforms=TransformPipeline(steps=(FilterEq(column="id", value=7),)),
+        read_options=request.read_options,
+        source_ref=request.source_ref,
+        runtime_context=request.runtime_context,
+    )
+    result = RayDorisBinding().compile(request)
+    assert len(calls) == 1
+    assert calls[0]["query"] == query
+    assert "table" not in calls[0] and "filter" not in calls[0]
+    assert schema_fetches == [True]
+    assert applied == [{0}]
+    assert result.transform_decisions[0].residual_required
+
+
+def test_ray_doris_query_does_not_require_database(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("TRIBUTO_DORIS_DB", raising=False)
+    calls: list[dict[str, Any]] = []
+    module = ModuleType("ray_doris")
+    module.read_doris = lambda **kwargs: calls.append(kwargs) or _RayDataset()
+    monkeypatch.setitem(sys.modules, "ray_doris", module)
+    monkeypatch.setattr(
+        "tributo.data.bindings.ray_doris.importlib.metadata.version",
+        lambda name: RAY_VERSION,
+    )
+    query = "SELECT 1 AS id"
+    plan = SqlScan(
+        provider_id="tributo.doris",
+        connector_id="doris",
+        target=ParameterizedQuery(digest(query)),
+    )
+    RayDorisBinding().compile(_request(plan, runtime_options={"sql": query}))
+    assert calls[0]["query"] == query
+    assert "database" not in calls[0]
+
+
+def test_ray_doris_table_still_requires_database(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("TRIBUTO_DORIS_DB", raising=False)
+    plan = SqlScan(
+        provider_id="tributo.doris",
+        connector_id="doris",
+        target=SqlTableRead(table="events"),
+    )
+    with pytest.raises(BindingStageError, match="invalid_configuration"):
+        RayDorisBinding().compile(_request(plan))
+
+
+@pytest.mark.parametrize(
+    ("runtime", "read_options"),
+    [
+        pytest.param({"sql": "SELECT 2"}, ReadOptions(), id="query-mismatch"),
+        pytest.param({"protocol": "flight"}, ReadOptions(), id="flight"),
+        pytest.param({"params": {"id": 1}}, ReadOptions(), id="parameters"),
+        pytest.param({"tablet_size": 2}, ReadOptions(), id="tablet-size"),
+        pytest.param({"on_query_plan_error": "error"}, ReadOptions(), id="policy"),
+        pytest.param({"http_port": 8031}, ReadOptions(), id="http-port"),
+        pytest.param({}, ReadOptions(target_parallelism=2), id="parallelism"),
+    ],
+)
+def test_ray_doris_query_rejects_incompatible_options(
+    runtime: dict[str, Any], read_options: ReadOptions
+) -> None:
+    query = "SELECT 1 AS id"
+    plan = SqlScan(
+        provider_id="tributo.doris",
+        connector_id="doris",
+        target=ParameterizedQuery(digest(query)),
+    )
+    runtime = {"database": "analytics", "sql": query, **runtime}
+    with pytest.raises(BindingStageError, match="invalid_configuration"):
+        RayDorisBinding().compile(
+            _request(plan, runtime_options=runtime, read_options=read_options)
+        )
+
+
+def test_doris_query_schema_error_does_not_expose_sql(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    query = "SELECT private_data FROM analytics.events"
+
+    class FailingDataset:
+        def schema(self, fetch_if_missing: bool = True) -> pa.Schema:
+            raise RuntimeError(query)
+
+    module = ModuleType("ray_doris")
+    module.read_doris = lambda **kwargs: FailingDataset()
+    monkeypatch.setitem(sys.modules, "ray_doris", module)
+    plan = SqlScan(
+        provider_id="tributo.doris",
+        connector_id="doris",
+        target=ParameterizedQuery(digest(query)),
+    )
+    with pytest.raises(BindingStageError) as exc_info:
+        RayDorisBinding().compile(
+            _request(plan, runtime_options={"database": "analytics", "sql": query})
+        )
+    assert query not in str(exc_info.value)
+
+
 def test_ray_clickhouse_binding_delegates_bounded_range_read(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

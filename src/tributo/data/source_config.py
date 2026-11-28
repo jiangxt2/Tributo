@@ -116,12 +116,14 @@ class SqlSourceConfig(StrictConfigModel):
         dialect: Database dialect.
         host: Hostname (``None`` = env fallback).
         port: Port (``None`` = dialect default).
-        database: Database name (``None`` = env fallback).
+        database: Database name (``None`` = env fallback). Doris query reads
+            can omit it when the query uses fully qualified table names.
         database_schema: Optional schema for structured table reads.
         user: Username (``None`` = env fallback).
         password: Password (``None`` = env fallback).
         sql: Trusted read query. ClickHouse supports the SELECT/WITH subset
-            accepted by ray-clickhouse; other SQL sources require table reads.
+            accepted by ray-clickhouse; Doris delegates trusted SQL to ray-doris.
+            Other SQL sources require table reads.
         params: Scalar named query parameters for ClickHouse query reads.
             ``None`` means no parameters.
         columns: Column names to project in the SQL reader (``None`` = all

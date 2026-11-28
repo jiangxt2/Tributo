@@ -205,6 +205,7 @@ def test_parameterized_query_round_trip_uses_digest_only() -> None:
         provider_id="tributo.doris",
         connector_id="doris",
         target=ParameterizedQuery("a" * 64),
+        required_capabilities=frozenset({SourceCapability.SQL_QUERY}),
     )
 
     encoded = logical_scan_plan_to_dict(plan)
@@ -213,6 +214,7 @@ def test_parameterized_query_round_trip_uses_digest_only() -> None:
         "type": "parameterized_query",
         "query_digest": "a" * 64,
     }
+    assert encoded["required_capabilities"] == ["sql_query"]
     assert logical_scan_plan_to_dict(logical_scan_plan_from_dict(encoded)) == encoded
 
 

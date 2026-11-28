@@ -1297,6 +1297,27 @@ class _SqlProvider(DataSourceProvider):
         query_digest = resolved.identity_options.get("sql_digest")
         table = resolved.identity_options.get("table")
         if isinstance(query_digest, str):
+            if self._dialect() == "doris":
+                partitioning = resolved.identity_options.get("partitioning")
+                if (
+                    resolved.identity_options.get("columns")
+                    or resolved.identity_options.get("schema")
+                    or resolved.runtime_options.get("params") is not None
+                    or (
+                        isinstance(partitioning, Mapping)
+                        and partitioning.get("mode") != "single"
+                    )
+                ):
+                    raise JobConfigurationError(
+                        "Doris query reads do not support parameters, columns, "
+                        "schema, or non-single partitioning"
+                    )
+                return SqlScan(
+                    provider_id=self.provider_id,
+                    connector_id="doris",
+                    target=ParameterizedQuery(query_digest),
+                    required_capabilities=frozenset({SourceCapability.SQL_QUERY}),
+                )
             if self._dialect() == "clickhouse":
                 partitioning = resolved.identity_options.get("partitioning")
                 if resolved.identity_options.get("columns") or (
