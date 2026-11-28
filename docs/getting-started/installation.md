@@ -5,23 +5,23 @@ your workload.
 
 ## Choose a source revision
 
-Tributo 1.2.0 is distributed through PyPI and GitHub Releases. To install
+Tributo 1.3.0 is distributed through PyPI and GitHub Releases. To install
 the source release, clone its tag and use its committed lock file:
 
 ```bash
-git clone --branch tributo-1.2.0 --depth 1 https://github.com/jiangxt2/Tributo.git
+git clone --branch tributo-1.3.0 --depth 1 https://github.com/jiangxt2/Tributo.git
 cd Tributo
 ```
 
 The tag and a development checkout can declare the same package version while
 containing different APIs in historical snapshots. Current `master` declares
-`1.3.0.dev0`, while release branches use their selected formal version. Select
+`1.4.0.dev0`, while release branches use their selected formal version. Select
 the checkout before preparing dependencies, and use the documentation,
 metadata, and lock file from that revision. The development version does not
 determine which patch or minor release will be published next.
 The optional profiles below describe this documentation's source tree.
 
-The development source targets Ray 2.59.0. Connector extras
+This release source targets Ray 2.59.0. Connector extras
 declare minimum stable versions: `ray-doris>=2.0`, `ray-hive>=1.2`,
 and `ray-clickhouse>=1.1`. These packages are available on
 PyPI. The committed `uv.lock` selects their exact versions and hashes for the
@@ -46,7 +46,7 @@ environment:
 
 ```bash
 python -m venv .venv
-.venv/bin/python -m pip install "tributo==1.2.0"
+.venv/bin/python -m pip install "tributo==1.3.0"
 .venv/bin/tributo --help
 ```
 

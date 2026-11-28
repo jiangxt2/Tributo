@@ -57,7 +57,7 @@ def gateway(monkeypatch: pytest.MonkeyPatch) -> WriteGateway:
         "tributo.data.writing.registry._installed_distribution_version",
         lambda name: {
             "ray": RAY_VERSION,
-            "tributo": "1.3.0.dev0",
+            "tributo": locked_version("tributo"),
             "ray-doris": locked_version("ray-doris"),
         }[name],
     )
