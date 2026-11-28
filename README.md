@@ -44,7 +44,7 @@ for verified paths and explicit boundaries.
 Tributo 1.2.0 is distributed through PyPI and GitHub Releases.
 The source checkout below uses its committed lockfile.
 
-Development checkouts on `master` declare `1.3.0.dev0`. This development
+Development checkouts on `master` declare `1.4.0.dev0`. This development
 version does not determine the next published patch or minor version. Use a
 release tag for a fixed source snapshot and that snapshot's documentation.
 
