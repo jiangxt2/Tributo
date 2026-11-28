@@ -15,7 +15,7 @@ cd Tributo
 
 The tag and a development checkout can declare the same package version while
 containing different APIs in historical snapshots. Current `master` declares
-`1.3.0.dev0`, while release branches use their selected formal version. Select
+`1.4.0.dev0`, while release branches use their selected formal version. Select
 the checkout before preparing dependencies, and use the documentation,
 metadata, and lock file from that revision. The development version does not
 determine which patch or minor release will be published next.

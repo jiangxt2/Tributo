@@ -97,6 +97,7 @@ def cluster() -> Any:
         + "\n"
     )
     deadline = time.monotonic() + 240
+    readiness_table = f"_readiness_{uuid.uuid4().hex}"
     while True:
         try:
             if _DATABASE == "clickhouse":
@@ -105,17 +106,31 @@ def cluster() -> Any:
                 client.close()
             else:
                 connection = _mysql()
-                with connection.cursor() as cursor:
-                    cursor.execute("SHOW BACKENDS")
-                    names = [column[0] for column in cursor.description]
-                    backends = [
-                        dict(zip(names, row, strict=True)) for row in cursor.fetchall()
-                    ]
-                    assert any(
-                        str(row["Alive"]).lower() in {"true", "1"} for row in backends
-                    )
-                    cursor.execute("CREATE DATABASE IF NOT EXISTS tributo_filters")
-                connection.close()
+                try:
+                    with connection.cursor() as cursor:
+                        cursor.execute("SHOW BACKENDS")
+                        names = [column[0] for column in cursor.description]
+                        backends = [
+                            dict(zip(names, row, strict=True))
+                            for row in cursor.fetchall()
+                        ]
+                        assert any(
+                            str(row["Alive"]).lower() in {"true", "1"}
+                            for row in backends
+                        )
+                        cursor.execute("CREATE DATABASE IF NOT EXISTS tributo_filters")
+                        # An alive BE may not have reported its storage disks yet.
+                        cursor.execute(
+                            f"CREATE TABLE IF NOT EXISTS tributo_filters.`{readiness_table}` "
+                            "(id BIGINT) DUPLICATE KEY(id) "
+                            "DISTRIBUTED BY HASH(id) BUCKETS 1 "
+                            "PROPERTIES('replication_num'='1')"
+                        )
+                        cursor.execute(
+                            f"DROP TABLE IF EXISTS tributo_filters.`{readiness_table}`"
+                        )
+                finally:
+                    connection.close()
             break
         except Exception:
             if time.monotonic() >= deadline:
