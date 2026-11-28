@@ -131,19 +131,14 @@ each sync reconciles the environment to its selected extras:
 ```bash
 uv sync --locked --no-dev --extra clickhouse
 # The clickhouse extra includes the fixed Ray ClickHouse source.
-uv sync --locked --no-dev --extra mysql          # Daft Doris + Ray Doris over MySQL
-uv sync --locked --no-dev --extra doris-flight   # Daft/Ray Doris Flight dependencies
+uv sync --locked --no-dev --extra mysql          # Ray Doris over MySQL
+uv sync --locked --no-dev --extra doris-flight   # Ray Doris Flight dependencies
 uv sync --locked --no-dev --extra hive-ray       # Ray HiveServer2 connector package
 ```
 
-A Doris test that selects
-`engine="tributo.daft"` needs `daft-doris`; a Ray Doris or generic training
-path that selects `engine="tributo.ray_data"` needs `ray-doris`.
-The Ray ClickHouse route uses `ray-clickhouse` installed by the
-existing `clickhouse` extra; it does not add a Daft ClickHouse route.
-`ray-hive` backs the built-in `tributo.hive` to `tributo.ray.hive` route. The
-request must still select Ray explicitly; no Daft, native ORC/HDFS, or automatic
-fallback route is added.
+Doris requests use `ray-doris`; ClickHouse requests use `ray-clickhouse`.
+The `ray-hive` package backs the built-in `tributo.hive` to
+`tributo.ray.hive` route. Requests select Ray explicitly.
 
 ## Run the image gate
 
@@ -172,8 +167,7 @@ The full image includes the first-party data, model export, training,
 Tune, serving, streaming, registry, vector-index, explainability, graph, and
 causal dependency closure, plus `ray-hive` for the built-in Ray
 HiveServer2 Binding. It does not include development/test dependencies, GPU
-compatibility or a GPU execution gate, HDFS/ORC file readers, a Daft Hive
-Binding, or a KubeRay control plane. Linux PyTorch dependencies may still contain
+compatibility or a GPU execution gate, HDFS/ORC file readers or a KubeRay control plane. Linux PyTorch dependencies may still contain
 CUDA/NVIDIA distributions; GPU drivers, GPU scheduling, and NCCL validation
 are outside this image contract.
 Kubernetes deployment remains the responsibility of the Ray/KubeRay

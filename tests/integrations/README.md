@@ -26,11 +26,11 @@ the stable package baseline does not imply validation of every platform.
 | Runtime image gate | `../../scripts/run_runtime_image_it.sh`, `jobs/runtime_image_gate_job.py` | `manual_external` | Pinned full image, first-party and Alpha imports on driver/worker, Ray Data, Ray Jobs, and image attestations | Docker Buildx + two-node Ray cluster on a matching native host architecture |
 | MLflow Hook | `test_e2e_mlflow.py` | `manual_external` | Committed Bundle upload, replay deduplication, explicit run reuse, and failure semantics | Isolated model-export runner |
 | Database filter and writes | `test_database_filter_pushdown.py`, `test_ray_clickhouse_write.py`, `test_ray_doris_write.py` | `ci_database` | ClickHouse and Doris source-side filtering and native writes; ClickHouse SQL query reads | Single-node Docker Ray and owned ClickHouse or Doris |
-| Data Ingestion Docker | `test_data_ingestion_dual_engine.py` | `manual_external` | Local/S3 Parquet, Iceberg-on-MinIO Ray/Daft reads, native writes, Ray HiveServer2 structured projection, and ClickHouse append/receipt/readback | Docker Ray cluster + Daft + MinIO + Hive 4.2.0 + ClickHouse 26.8.1.2041 |
+| Data Ingestion Docker | `test_data_ingestion_dual_engine.py` | `manual_external` | Local/S3 Parquet, Iceberg-on-MinIO Ray reads, native writes, Ray HiveServer2 structured projection, and ClickHouse append/receipt/readback | Docker Ray cluster + MinIO + Hive 4.2.0 + ClickHouse 26.8.1.2041 |
 | Lance vector index | `test_lance_vector_index.py` | `manual_external` | Distributed IVF_FLAT/IVF_PQ build, append coverage, global Top-K, fallback, optimization, compaction, Ray Jobs, and S3 result delivery | Docker Ray cluster + Lance-Ray + MinIO |
-| File conformance | `../integration/test_data_ingestion_conformance.py` | `manual_external` | Local/MinIO Parquet and CSV through Ray Data and Daft | Local Ray runtime + MinIO |
-| Table conformance | `../integration/test_table_format_ingestion.py` | `manual_external` | Local/MinIO Iceberg and Lance through Ray Data and Daft | Local Ray runtime + MinIO |
-| PostgreSQL conformance | `../integration/test_postgresql_ingestion.py` | `manual_external` | Structured table read through Ray Data and Daft | Data Ingestion Docker gate + PostgreSQL 16.14 |
+| File conformance | `../integration/test_data_ingestion_conformance.py` | `manual_external` | Local/MinIO Parquet and CSV through Ray Data | Local Ray runtime + MinIO |
+| Table conformance | `../integration/test_table_format_ingestion.py` | `manual_external` | Local/MinIO Iceberg and Lance through Ray Data | Local Ray runtime + MinIO |
+| PostgreSQL conformance | `../integration/test_postgresql_ingestion.py` | `manual_external` | Structured table read through Ray Data | Data Ingestion Docker gate + PostgreSQL 16.14 |
 | Inference Ray Jobs | `../integration/test_inference_ray_jobs.py`, `../integration/test_lance_result_sink_ray.py` | `manual_external` | Bundle, real post-training inline/detached inference, MLflow import, external artifacts, retry identity, credential domains, empty/NaN behavior, Lance-Ray local/S3 create/append/overwrite, and vector schemas | Isolated version-locked Docker Ray + Lance-Ray + MLflow + MinIO |
 | Streaming | `test_e2e_streaming.py` | `quarantine` | Streaming inference service | Model and service lifecycle pending |
 | Tune trial correctness | `../integration/test_tune_ray_cluster.py` | `manual_external` | Ray Jobs → two concurrent XGBoost Tune trials, strict target metric, isolated checkpoints, ResultGrid, and zero Bundle publication | Isolated version-locked Docker Ray cluster via `run_tune_it.sh` |
@@ -247,7 +247,7 @@ content-addressed runtime, starts one zero-CPU Ray head, one Ray worker, MinIO,
 PostgreSQL 16.14, and HiveServer2 4.2.0 with
 `docker-compose.data-ingestion.yml`, freezes the checkout in a run-scoped
 read-only volume, and requires Driver/Worker version, snapshot, Hive
-projection, PostgreSQL dual-engine conformance, and Iceberg-on-MinIO evidence.
+projection, PostgreSQL Ray conformance, and Iceberg-on-MinIO evidence.
 Infrastructure absence cannot be represented as passing evidence.
 
 ## Lance Vector Index External Validation Gate

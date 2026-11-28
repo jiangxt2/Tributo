@@ -199,11 +199,11 @@ def test_channels_share_the_bounded_execution_contract(
         (function_registration, "external_function"),
     ],
 )
-@pytest.mark.parametrize("engine", ["ray", "daft"])
+@pytest.mark.parametrize("engine", ["ray"])
 def test_channels_share_the_production_ingestion_contract(
     registration_factory: Callable[[], AlgorithmRegistration],
     algorithm: str,
-    engine: Literal["ray", "daft"],
+    engine: Literal["ray"],
 ) -> None:
     columns: dict[str, tuple[object, ...]] = {
         "x0": (-2.0, -1.5, -1.0, -0.5, 0.5, 1.0, 1.5, 2.0),
@@ -259,15 +259,9 @@ def test_channels_share_the_production_ingestion_contract(
 
     assert result.execution.status == "succeeded"
     assert result.input_provenance["resolver_id"] == INGESTION_RESOLVER_ID
-    assert (
-        result.input_provenance["engine_id"]
-        == f"tributo.{engine if engine == 'daft' else 'ray_data'}"
-    )
+    assert result.input_provenance["engine_id"] == "tributo.ray_data"
     assert (
         result.input_provenance["receipt"]["request_digest"]
         == (result.input_provenance["request_digest"])
     )
     assert gateway.lifecycle_events == ["closed"]
-    if engine == "daft":
-        assert gateway.last_daft_frame is not None
-        assert gateway.last_daft_frame.ray_conversion_calls == 0

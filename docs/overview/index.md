@@ -16,7 +16,7 @@ workflows.
 ## End-to-end workflow
 
 ```text
-bounded source -> Ray Data or Daft -> algorithm -> Bundle -> inference
+bounded source -> Ray Data -> algorithm -> Bundle -> inference
                                                 -> explainability
 Lance vector dataset -> vector-index job -> search or maintenance receipt
 ```

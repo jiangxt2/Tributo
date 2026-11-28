@@ -1,6 +1,6 @@
 # Read bounded data
 
-Use the ingestion gateway when a workflow needs Ray Data or Daft input.
+Use the ingestion gateway when a workflow needs Ray Data input.
 
 ## Read local Parquet with Ray Data
 
@@ -13,45 +13,15 @@ The caller owns the open result and closes it. The receipt describes the
 selected provider, binding, engine, source identity, and transform decision
 without containing credentials.
 
-## Select Daft explicitly
+## Migrate from Daft
 
-Set `engine="daft"` and install the `data-daft` extra. The result is a
-`DaftDataFrameHandle`. Tributo does not convert that handle to Ray Data unless
-the caller invokes an explicit documented adapter.
-
-## Bridge Daft input to Ray algorithms
-
-Configure Daft's official Ray runner once during Ray Job/Application startup,
-before creating or opening the Daft source:
-
-```python
-import daft
-
-daft.set_runner_ray(address="auto", noop_if_initialized=True)
-```
-
-Then request the conversion explicitly at the algorithm input boundary:
-
-```python
-from tributo.data import IngestionRequest, ParquetSourceConfig
-from tributo.integrations.algorithm_inputs import (
-    IngestionInputInvocation,
-)
-
-invocation = IngestionInputInvocation(
-    request=IngestionRequest(
-        source=ParquetSourceConfig(path="s3://bucket/train.parquet"),
-        engine="daft",
-    ),
-    handle_adapter_id="tributo.daft_to_ray",
-)
-```
-
-The adapter uses Daft's `DataFrame.to_ray_dataset()` API. It may execute the
-Daft lazy plan, does not preserve row order, and refuses the Native runner or
-an unconfigured runner. The adapter does not configure a runner or silently
-fall back between engines. The conversion receipt records the source and
-target engines and its execution semantics.
+Replace `engine="daft"` with `engine="ray"` and consume the returned
+`RayDataHandle`. The `data-daft` extra, Daft bindings, `DaftDataFrameHandle`,
+and the `tributo.daft_to_ray` adapter are no longer available. Check the
+selected Ray binding's capabilities: for example, the PostgreSQL binding
+rejects parallel shard requirements and supports a single read.
+For Lance, Ray does not support `asof` reads. Select an explicit numeric
+version or tag corresponding to the required point in time.
 
 ## Choose a source
 
@@ -90,8 +60,7 @@ with open_ingestion(IngestionRequest(source=source, engine="ray")) as result:
 
 The accepted scanner fields are `batch_size`, `batch_readahead`,
 `fragment_readahead`, `io_buffer_size`, and `late_materialization`. They tune
-scan execution and do not change the source identity. The Daft binding rejects
-non-empty `scanner_options`. These settings are not a hard process-memory
+scan execution and do not change the source identity. These settings are not a hard process-memory
 limit; `batch_readahead` must be positive, while `fragment_readahead` can be
 zero. Keep `io_buffer_size` large enough for the largest scanned batch.
 
@@ -115,7 +84,7 @@ with open_ingestion(IngestionRequest(source=source, engine="ray")) as result:
 
 The built-in route accepts only structured table reads over binary
 HiveServer2. Passwords use an environment-variable reference through
-`password_env`; raw SQL, Daft Hive, native ORC/HDFS files, HTTP transport, TLS,
+`password_env`; raw SQL, native ORC/HDFS files, HTTP transport, TLS,
 Kerberos, and writes are not part of this contract.
 
 ## Read a Doris table with Ray Data

@@ -1,4 +1,4 @@
-"""Candidate public contracts for bounded dual-engine ingestion."""
+"""Candidate public contracts for bounded Ray Data ingestion."""
 
 from __future__ import annotations
 
@@ -26,7 +26,6 @@ from tributo._common.logging import emit_event
 from tributo._common.storage_profiles import StorageProfileResolver
 from tributo.data._source_paths import resolve_file_source_path
 from tributo.data.contracts.handles import (
-    DaftDataFrameHandle,
     RayDataHandle,
 )
 from tributo.data.engine_ids import normalize_engine_id
@@ -309,7 +308,7 @@ class IngestionDescriptor(BaseModel):
     connector_id: str = Field(min_length=1)
     binding_id: str = Field(min_length=1)
     scan_kind: ScanKind
-    handle_kind: Literal["ray_data", "daft_dataframe"]
+    handle_kind: Literal["ray_data"]
     schema_contract_fingerprint: str | None = Field(
         default=None, pattern=r"^[0-9a-f]{64}$"
     )
@@ -369,7 +368,7 @@ class IngestionPlanReceipt(BaseModel):
         return self
 
 
-IngestionHandle: TypeAlias = RayDataHandle | DaftDataFrameHandle
+IngestionHandle: TypeAlias = RayDataHandle
 
 
 @PublicAPI(stability="alpha")
@@ -385,8 +384,8 @@ class IngestionOpenResult:
         close_callback: Callable[[], None] | None = None,
         cancel_callback: Callable[[], None] | None = None,
     ) -> None:
-        if not isinstance(handle, (RayDataHandle, DaftDataFrameHandle)):
-            raise TypeError("handle must be RayDataHandle or DaftDataFrameHandle")
+        if not isinstance(handle, RayDataHandle):
+            raise TypeError("handle must be RayDataHandle")
         if not isinstance(receipt, IngestionPlanReceipt):
             raise TypeError("receipt must be IngestionPlanReceipt")
         if not isinstance(ownership, HandleOwnership):
@@ -570,9 +569,7 @@ class IngestionGateway:
             connector_id=prepared.plan.connector_id,
             binding_id=descriptor.key.binding_id,
             scan_kind=prepared.plan.scan_kind,
-            handle_kind=(
-                "ray_data" if request.engine == "tributo.ray_data" else "daft_dataframe"
-            ),
+            handle_kind="ray_data",
             schema_contract_fingerprint=(
                 request.schema_contract.fingerprint
                 if request.schema_contract is not None
@@ -774,7 +771,6 @@ def open_ingestion(
 
 
 __all__ = [
-    "DaftDataFrameHandle",
     "DistributionVersionEvidence",
     "HandleOwnership",
     "IngestionDescriptor",

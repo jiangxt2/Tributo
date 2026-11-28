@@ -68,7 +68,6 @@ REQUIRED_IMPORTS = (
     "tributo.vector_index",
     "tributo.explainability",
     "tributo.registry",
-    "daft",
     "ray_hive",
     "ray_clickhouse",
     "lance_ray",
@@ -82,7 +81,6 @@ REQUIRED_IMPORTS = (
     "mlflow",
     "grpc",
     "torch_geometric",
-    "daft_doris",
     "ray_doris",
 )
 
@@ -91,7 +89,6 @@ REQUIRED_DISTRIBUTIONS = (
     "ray-hive",
     "ray-clickhouse",
     "tributo",
-    "daft",
     "lance-ray",
     "pylance",
     "pyiceberg",
@@ -106,7 +103,6 @@ REQUIRED_DISTRIBUTIONS = (
     "dowhy",
     "econml",
     "bayesian-optimization",
-    "daft-doris",
     "ray-doris",
     "clickhouse-connect",
     "PyMySQL",
@@ -116,5 +112,5 @@ REQUIRED_DISTRIBUTIONS = (
 )
 
 REQUIRED_DISTRIBUTION_VERSIONS = locked_versions(
-    ("ray-hive", "ray-clickhouse", "daft-doris", "ray-doris", "thrift")
+    ("ray-hive", "ray-clickhouse", "ray-doris", "thrift")
 )

@@ -1,12 +1,12 @@
 # Support matrix
 
-The Ray 2.59.0 / Daft 0.7.26 source revision has passed installation, targeted
+The preceding Ray 2.59.0 source revision passed installation, targeted
 contracts, focused local/S3 and Hive checks, exact-row coverage, SDK batch
 prediction and the full CPU runtime image gate on Linux arm64. Connector
 requirements declare minimum stable versions; the lock selects exact PyPI
 versions and hashes.
 Other algorithm and platform combinations retain their separate validation
-requirements; the route statuses below are not blanket certification.
+requirements; the route statuses below describe existing Ray paths, and the Daft-removal change requires its own validation.
 
 This page distinguishes implemented paths from extension contracts and
 prototypes.
@@ -50,26 +50,26 @@ platform, not a Tributo profile or control plane.
 | Capability | Status | Boundary |
 | --- | --- | --- |
 | Canonical source configuration and DatasetRef identity | Stable | Existing JSON shapes, fields, defaults, projection, and identity version 1; Provider/Gateway/Binding execution and provider-private options keep their own contracts |
-| Local/S3 Parquet and CSV reads | Verified | Native Ray Data or Daft handle through one Gateway |
-| Local/S3 Iceberg reads | Verified | Built-in bindings use PyIceberg `>=0.11.1,<0.12.0` with `PyArrowFileIO`; Ray may push `row_filter` into the scan, Daft applies it as a lazy residual filter, and empty-table schema is preserved from Iceberg metadata; broader Catalog/delete-file matrix remains gated |
-| Local/S3 Lance reads | Verified | Native Ray Data or Daft table reader; numeric versions and tags are supported, Daft also supports as-of, and Iceberg snapshot references fail closed |
-| Ray Lance scanner options | Verified | Ray Data accepts the validated `batch_size`, positive `batch_readahead`, non-negative `fragment_readahead`, `io_buffer_size`, and `late_materialization` subset as execution options; cluster binary-image conformance passed. Daft rejects them, and they are not a hard memory limit |
-| PostgreSQL structured table reads | Verified | Ray uses a single public SQL read and fails closed on parallel shard requirements; Daft may use native partition hints |
+| Local/S3 Parquet and CSV reads | Verified | Native Ray Data handle through one Gateway |
+| Local/S3 Iceberg reads | Verified | Built-in bindings use PyIceberg `>=0.11.1,<0.12.0` with `PyArrowFileIO`; Ray may push `row_filter` into the scan, and empty-table schema is preserved from Iceberg metadata; broader Catalog/delete-file matrix remains gated |
+| Local/S3 Lance reads | Verified | Native Ray Data table reader; numeric versions and tags are supported, and Iceberg snapshot references fail closed |
+| Ray Lance scanner options | Verified | Ray Data accepts the validated `batch_size`, positive `batch_readahead`, non-negative `fragment_readahead`, `io_buffer_size`, and `late_materialization` subset as execution options; cluster binary-image conformance passed. They are not a hard memory limit |
+| PostgreSQL structured table reads | Verified | Ray uses a single public SQL read and fails closed on parallel shard requirements |
 | ClickHouse query reads | Ray adapter | Trusted single read-only SELECT/WITH query via `SqlSourceConfig.sql` and `ray-clickhouse`; query transforms remain in Ray |
 | Doris raw SQL | Unsupported | Legacy shapes return a credential-free migration error; use structured table input or execute SQL outside Tributo ingestion |
 | HDFS Parquet/CSV reads | Adapter only | Ray binding exists; real HDFS/JVM/worker gate is pending |
 | ClickHouse reads | Ray filter path verified on one node | Locked `ray-clickhouse==1.1` owns single, physical-partition, integer-range reads and bounded Arrow blocks. ClickHouse 26.8.1.2041 single-node tests verify actual filtered SQL and native output; broader read and multi-node Conformance remain separate |
-| Doris reads | Ray filter path verified on one node; Daft adapter only | Locked `ray-doris==1.3` MySQL/Flight reads passed Doris 4.0.6 single-node filter tests. Tablet planning remains connector-owned; Daft uses `daft-doris==1.1` and retains its separate real-database Conformance requirement |
+| Doris reads | Ray filter path verified on one node | Locked `ray-doris==1.3` MySQL/Flight reads passed Doris 4.0.6 single-node filter tests. Tablet planning remains connector-owned |
 | Ray ClickHouse/Doris filter transforms | Restricted exact pushdown verified | Only the supported leading filter prefix is forwarded; original ordinals remain in receipts and unsupported steps retain ordered Ray execution. Integer, boolean, finite Float64 scalar and text equality/IN support is detailed in the [read guide](../data/user-guides/read-data.md); Decimal, Float32, temporal and string ordering comparisons remain residual. Ray 2.59.0 can fail on Unicode residual filters; see the read guide for the known limitation |
-| HiveServer2 structured table reads | Alpha, verified | `ProviderSourceConfig(provider="tributo.hive", uri="hive://host:port/database/table")` routes only to the Ray `tributo.ray.hive` Binding and locked `ray-hive==1.2`; Hive 4.2.0 Conformance verifies projection, schema, worker execution, and binary NOSASL transport. Raw SQL, Daft Hive, HTTP, TLS, Kerberos, and Hive writes are outside this contract |
+| HiveServer2 structured table reads | Alpha, verified | `ProviderSourceConfig(provider="tributo.hive", uri="hive://host:port/database/table")` routes only to the Ray `tributo.ray.hive` Binding and locked `ray-hive==1.2`; Hive 4.2.0 Conformance verifies projection, schema, worker execution, and binary NOSASL transport. Raw SQL, HTTP, TLS, Kerberos, and Hive writes are outside this contract |
 | Native ORC file reads | Unsupported | Tributo does not implement an ORC reader. The verified Hive fixture is ORC-backed, but HiveServer2 and `ray-hive` own its SQL execution and decoding; this is not HDFS or file-level ORC support |
 | Third-party ingestion Provider/Binding SPI | Implemented | Installed packages use `tributo.ingestion_providers` plus `tributo.ingestion_bindings`; bad plugins are isolated, duplicate routes never replace built-ins, and Binding selection can constrain filesystem, catalog, and storage format |
 | Lance output | Implemented as a generic ResultSink path | Declared fixed-shape Ray/Arrow tensor columns are strictly validated and normalized to Lance `FixedSizeList`; the user Predictor still owns vector semantics, and the sink does not pool, mathematically normalize embedding values, change dtype, or automatically invoke the separate vector-index workflow |
-| Native bounded writes | Basic local/S3 native round-trips are implemented through `WriteGateway` for Ray/Daft Parquet, CSV, Iceberg, and Lance. The optional Ray ClickHouse binding delegates append-only writes and native row/byte receipts to `ray-clickhouse==1.1`; real-database Tributo Conformance remains required. The Ray Doris binding delegates existing-table `load`, `upsert` and `partial_update` to `ray-doris==1.3`; these operations and receipts passed single-node Doris 4.0.6 tests, and supported operations depend on the target table model. Ray Lance delegates to locked `lance-ray==0.5.0`/PyLance 9; Daft delegates to `DataFrame.write_lance`. Mode support comes from the selected native Binding capability. Existing-target `CREATE`, missing-target `APPEND`, schema evolution, and empty writes remain provider-owned, are not general Tributo guarantees | Tributo owns control-plane validation only; Ray Data, Daft, or a native integration owns data-plane writes |
+| Native bounded writes | Basic local/S3 native round-trips are implemented through `WriteGateway` for Ray Parquet, CSV, Iceberg, and Lance. The optional Ray ClickHouse binding delegates append-only writes and native row/byte receipts to `ray-clickhouse==1.1`; real-database Tributo Conformance remains required. The Ray Doris binding delegates existing-table `load`, `upsert` and `partial_update` to `ray-doris==1.3`; these operations and receipts passed single-node Doris 4.0.6 tests, and supported operations depend on the target table model. Ray Lance delegates to locked `lance-ray==0.5.0`/PyLance 9. Mode support comes from the selected native Binding capability. Existing-target `CREATE`, missing-target `APPEND`, schema evolution, and empty writes remain provider-owned, are not general Tributo guarantees | Tributo owns control-plane validation only; Ray Data or a native integration owns data-plane writes |
 | Custom Hugging Face Predictor | User-provided Ray Data/Jobs extension point | Tokenization, task semantics, output interpretation, pooling, normalization, and metadata remain user-owned |
 | Database inference sinks | Adapter only | `DataWriteResultSink` routes generic targets through `WriteGateway`, including the ClickHouse and Doris bindings when installed. End-to-end inference to Doris remains unverified. Tributo does not implement a database-specific ResultSink, Distributed-table routing, or exactly-once semantics |
-| Ray/Daft transform compiler | Alpha | Portable bounded ETL subset with dual-engine Conformance |
-| File glob empty-match behavior | Engine-defined | Tributo delegates discovery; exception type and timing follow the selected Ray/Daft reader |
+| Ray transform compiler | Alpha | Portable bounded ETL subset with Ray Conformance |
+| File glob empty-match behavior | Engine-defined | Tributo delegates discovery; exception type and timing follow the selected Ray reader |
 | Bounded SQL empty result | Valid | Ingestion returns an empty native handle; Training, Inference, or another consumer decides whether empty input is acceptable |
 
 ## Training

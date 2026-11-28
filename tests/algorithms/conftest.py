@@ -106,12 +106,10 @@ def fake_input_compatibility(
     """Declare the development-only Fake input plus production bridge facts."""
     return BackendInputCompatibility(
         accepted_input_views=(
-            "daft_dataframe",
             "materialized_tabular",
             "ray_data",
         ),
         accepted_ingestion_engines=(
-            "tributo.daft",
             "tributo.fake_tabular",
             "tributo.ray_data",
         ),
@@ -120,7 +118,6 @@ def fake_input_compatibility(
             QualifiedReference.parse(reference)
             for reference in (
                 "tributo.algorithms.input.fake:prepare_input",
-                "tributo.integrations.algorithm_inputs.ingestion:prepare_daft_input",
                 "tributo.integrations.algorithm_inputs.ingestion:prepare_ingestion_input",
                 "tributo.integrations.algorithm_inputs.ingestion:prepare_ray_data_input",
             )

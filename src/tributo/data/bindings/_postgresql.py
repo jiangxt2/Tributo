@@ -59,35 +59,3 @@ class PsycopgConnectionFactory:
             f"host={self.target.host!r}, port={self.target.port!r}, "
             f"database={self.target.database!r}, username={self.target.username!r})"
         )
-
-
-@dataclass(frozen=True)
-class SqlAlchemyConnectionFactory:
-    """Picklable SQLAlchemy connection factory consumed by Daft."""
-
-    target: SqlBindingTarget = field(repr=False)
-
-    def __call__(self) -> Any:
-        from sqlalchemy import URL, create_engine
-        from sqlalchemy.pool import NullPool
-
-        url = URL.create(
-            "postgresql+psycopg",
-            username=self.target.username,
-            password=self.target.password,
-            host=self.target.host,
-            port=self.target.port,
-            database=self.target.database,
-        )
-        # The factory is invoked independently by Daft planning and workers.
-        # NullPool makes closing the returned SQLAlchemy Connection close the
-        # underlying DB-API connection instead of leaving it in an orphaned
-        # per-call Engine pool.
-        return create_engine(url, poolclass=NullPool).connect()
-
-    def __repr__(self) -> str:
-        return (
-            "SqlAlchemyConnectionFactory("
-            f"host={self.target.host!r}, port={self.target.port!r}, "
-            f"database={self.target.database!r}, username={self.target.username!r})"
-        )

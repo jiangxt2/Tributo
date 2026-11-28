@@ -7,18 +7,15 @@ from typing import Any
 import pyarrow as pa
 import pytest
 
-from tests.support.runtime_versions import DAFT_VERSION, RAY_VERSION
+from tests.support.runtime_versions import RAY_VERSION
 from tributo._common.storage_profiles import StorageProfile
 from tributo.data.bindings import (
-    _daft_parquet_descriptor,
     _ray_parquet_descriptor,
 )
 from tributo.data.bindings._shared import canonical_engine_schema
-from tributo.data.bindings.daft_parquet import DaftParquetBinding
 from tributo.data.bindings.ray_parquet import RayParquetBinding
 from tributo.data.engine_binding import BindingCompileRequest, EngineBindings
 from tributo.data.ingestion import (
-    DaftDataFrameHandle,
     IngestionRuntimeContext,
     RayDataHandle,
     ReadOptions,
@@ -82,23 +79,6 @@ def _request(
 class _RayDataset:
     def schema(self) -> pa.Schema:
         return SCHEMA
-
-
-class _DaftSchema:
-    def to_pyarrow_schema(self) -> pa.Schema:
-        return pa.schema([("id", pa.int64())])
-
-
-class _DaftDataFrame:
-    def __init__(self) -> None:
-        self.selected: tuple[str, ...] = ()
-
-    def select(self, *columns: str) -> "_DaftDataFrame":
-        self.selected = columns
-        return self
-
-    def schema(self) -> _DaftSchema:
-        return _DaftSchema()
 
 
 def test_ray_binding_calls_public_reader_with_native_projection(
@@ -208,42 +188,6 @@ def test_ray_s3_binding_resolves_shared_storage_profile(
             "force_virtual_addressing": False,
         }
     ]
-
-
-def test_daft_binding_calls_public_reader_and_keeps_native_handle(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[tuple[str, dict[str, Any]]] = []
-    dataframe = _DaftDataFrame()
-
-    def read_parquet(path: str, **kwargs: Any) -> _DaftDataFrame:
-        calls.append((path, kwargs))
-        return dataframe
-
-    monkeypatch.setattr("daft.read_parquet", read_parquet)
-    monkeypatch.setattr(
-        "tributo.data.bindings.daft_parquet.importlib.metadata.version",
-        lambda name: DAFT_VERSION,
-    )
-
-    result = DaftParquetBinding().compile(_request())
-
-    assert isinstance(result.handle, DaftDataFrameHandle)
-    assert result.handle.dataframe is dataframe
-    assert dataframe.selected == ("id",)
-    assert calls == [("/tmp/input.parquet", {})]
-
-
-def test_daft_binding_rejects_unmapped_read_hints() -> None:
-    bindings = EngineBindings()
-    bindings.register(_daft_parquet_descriptor())
-
-    with pytest.raises(JobConfigurationError, match="target_parallelism"):
-        bindings.describe(
-            engine_id="tributo.daft",
-            plan=_request().plan,
-            read_options=ReadOptions(target_parallelism=2),
-        )
 
 
 def test_ray_binding_rejects_unmapped_read_hints() -> None:

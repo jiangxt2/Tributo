@@ -9,18 +9,7 @@ a public annotation or moving a public object.
 Stable, Beta, and Alpha objects appear because Ray-style API policy requires
 documentation for every public stability tier.
 
-## `tributo.data.bindings._daft_sql`
-
-```{autoclass} tributo.data.bindings._daft_sql.DaftDorisBinding
-:no-members:
-```
-
-
 ## `tributo.data.contracts.handles`
-
-```{autoclass} tributo.data.contracts.handles.DaftDataFrameHandle
-:no-members:
-```
 
 ```{autoclass} tributo.data.contracts.handles.RayDataHandle
 :no-members:
@@ -49,20 +38,6 @@ documentation for every public stability tier.
 
 ```{autoclass} tributo.data.graph.GraphSchema
 :no-members:
-```
-
-
-## `tributo.data.handle_adapters`
-
-```{autoclass} tributo.data.handle_adapters.HandleConversionReceipt
-:no-members:
-```
-
-```{autoclass} tributo.data.handle_adapters.RayHandleAdaptation
-:no-members:
-```
-
-```{autofunction} tributo.data.handle_adapters.adapt_daft_result_to_ray
 ```
 
 

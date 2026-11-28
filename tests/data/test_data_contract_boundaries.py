@@ -36,7 +36,7 @@ def test_writing_core_does_not_depend_on_ingestion_or_legacy_base() -> None:
 
 
 def test_production_writers_do_not_reimplement_data_plane_commit() -> None:
-    """Keep file and snapshot commits owned by Ray or Daft native writers."""
+    """Keep file and snapshot commits owned by Ray native writers."""
     forbidden = (
         "LanceDataset.commit(",
         "lance.fragment.write_fragments(",

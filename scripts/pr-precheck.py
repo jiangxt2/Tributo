@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tributo PR pre-push static checks.
 
-Layered architecture (Ray/Daft-style):
+Layered architecture (Ray-style):
   Layer 0:  Format & Lint — ruff check + ruff format + mypy
   Layer 0.5: Dependency Resolution — cross-platform uv pip compile
   Layer 0.75: CI Test Policy — manifest, inventory, budgets, and workflows
@@ -1163,7 +1163,7 @@ def check_ci_parity_suite(root: str, *, allow_network: bool = False) -> list[str
     """Run the CI unit suite in a dev-only environment for every CI Python.
 
     The CI unit-tests job installs only the ``dev`` extra, while a local
-    worktree usually has the data/data-daft/postgresql extras installed.
+    worktree usually has the data/postgresql extras installed.
     Tests that import or execute optional engine/connector dependencies pass
     locally but fail in CI, either at collection or at runtime.  This layer
     rebuilds one dev-only environment per Python version declared in the CI

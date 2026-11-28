@@ -10,10 +10,6 @@ from typing import Any
 
 from tributo.data.writing.gateway import WriteGateway
 from tributo.data.writing.native_bindings import (
-    DaftCsvWriteBinding,
-    DaftIcebergWriteBinding,
-    DaftLanceWriteBinding,
-    DaftParquetWriteBinding,
     RayClickHouseWriteBinding,
     RayCsvWriteBinding,
     RayDorisWriteBinding,
@@ -44,10 +40,6 @@ def default_write_gateway() -> WriteGateway:
             _register_if_available(registry, RayLanceWriteBinding)
             _register_if_available(registry, RayClickHouseWriteBinding)
             _register_if_available(registry, RayDorisWriteBinding)
-            _register_if_available(registry, DaftParquetWriteBinding)
-            _register_if_available(registry, DaftCsvWriteBinding)
-            _register_if_available(registry, DaftIcebergWriteBinding)
-            _register_if_available(registry, DaftLanceWriteBinding)
             register_discovered_write_bindings(registry)
             _default_gateway = WriteGateway(
                 registry, target_registry=WriteTargetRegistry()
@@ -62,9 +54,7 @@ def _register_if_available(registry: WriteBindingRegistry, binding_type: Any) ->
         availability_check = getattr(binding_type, "is_available", None)
         if callable(availability_check) and not availability_check():
             return
-        engine_distribution = (
-            "ray" if descriptor.engine_id == "tributo.ray_data" else "daft"
-        )
+        engine_distribution = "ray"
         if not _distribution_available(engine_distribution):
             return
         if any(

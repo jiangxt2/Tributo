@@ -285,7 +285,6 @@
       "entrypoint": ["python", "-m", "pytest"],
       "args": [
         "tests/integration/test_export_s3.py",
-        "tests/data/test_ds_parquet_csv.py",
         "-o",
         "addopts=",
         "-m",
@@ -304,7 +303,7 @@
       "forbid_skips": true,
       "markers": ["ci_safe"],
       "log_contract": "pytest terminal output; infrastructure absence is a failure",
-      "rationale": "Small S3 compatibility contract, including explicitly selected shared-module cases, with no Docker or shared service."
+      "rationale": "Small S3 compatibility contract with no Docker or shared service."
     },
     {
       "id": "scheduled-core",
@@ -555,7 +554,7 @@
       "ci_allowed": false,
       "forbid_skips": true,
       "log_contract": "/tmp/tributo-it-logs/<project>-test.log and services.log",
-      "rationale": "Distributed Ray Data and Daft semantics require the owned Docker Ray cluster."
+      "rationale": "Distributed Ray Data semantics require the owned Docker Ray cluster."
     },
     {
       "id": "hdfs-ingestion-cluster",

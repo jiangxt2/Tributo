@@ -101,9 +101,7 @@ class WriteBindingRegistry:
                 "Write binding declares invalid version metadata"
             ) from exc
         try:
-            installed_engine = _installed_distribution_version(
-                "ray" if descriptor.engine_id == "tributo.ray_data" else "daft"
-            )
+            installed_engine = _installed_distribution_version("ray")
             installed_engine_version = Version(installed_engine)
         except (importlib.metadata.PackageNotFoundError, InvalidVersion) as exc:
             raise WriteCapabilityError(

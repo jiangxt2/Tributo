@@ -51,9 +51,7 @@ demand and Autoscaler.
 | Artifact planning, validation, publication, reading | Existing Tributo Bundle lifecycle |
 | Cluster provisioning, autoscaling, cleanup | Ray-native external substrate |
 
-Daft remains available for upstream ETL with an explicit versioned-storage
-handoff. The algorithm requires a Ray Dataset and does not add an implicit or
-streaming Daft-to-Ray bridge.
+The algorithm requires a Ray Dataset. External ETL can hand off data through versioned storage.
 
 ## Fixed causal composition
 

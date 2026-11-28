@@ -540,65 +540,6 @@ wheels = [
 ]
 
 [[package]]
-name = "daft"
-version = "0.7.26"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "packaging" },
-    { name = "pyarrow" },
-    { name = "tqdm" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/0d/91/f5e6aa0e441a4e1caefa2d15fc649e6206982d4b320ceaee6dade290de4e/daft-0.7.26.tar.gz", hash = "sha256:ec9034fecd87a76ed1dfb6bba059f81f60a4a363dc6a743ab616175d10ffd3b4", size = 3389855, upload-time = "2026-10-06T19:51:17.379Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/c1/70/194f3b32d9dd949fc1fc9e44c72b4344b68cd560661c9fdb905bf5a1903c/daft-0.7.26-cp310-abi3-manylinux_2_24_aarch64.whl", hash = "sha256:a57d2db079a9736acd65fdff8951ea31d9626f4cb0fa70caec5e298c63005f85", size = 54127726, upload-time = "2026-10-06T19:50:46.489Z" },
-]
-
-[package.optional-dependencies]
-lance = [
-    { name = "daft-lance" },
-]
-ray = [
-    { name = "ray", extra = ["client", "data"] },
-]
-
-[[package]]
-name = "daft-doris"
-version = "1.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "daft" },
-    { name = "pyarrow" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/d8/e5/e9725f04e5a0121b9ed2946bca0e21a36001d19816d0a861172bf6aef198/daft_doris-1.1.tar.gz", hash = "sha256:538e3e915f3c7393ecc86434bbe97075391650e3c8cef740ae4e231b5a6f19d8", size = 93814, upload-time = "2026-10-14T14:42:25.522Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/4e/41/4f61b794139f9d68622ed27e24990cb18cca9d96ef35aa5557b1b720a05c/daft_doris-1.1-py3-none-any.whl", hash = "sha256:5d9809fd15af871c7a4dc5e1ca6c1aa4c280fdc5b6dfdd893b27e2320274b90f", size = 69794, upload-time = "2026-10-14T14:42:24.02Z" },
-]
-
-[package.optional-dependencies]
-doris = [
-    { name = "pymysql" },
-]
-doris-flight = [
-    { name = "adbc-driver-flightsql" },
-    { name = "adbc-driver-manager" },
-    { name = "pymysql" },
-]
-
-[[package]]
-name = "daft-lance"
-version = "0.4.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "lance-namespace" },
-    { name = "lance-namespace-urllib3-client" },
-    { name = "pylance" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/d2/64/8a9b5e8356c86571b46c94ca97ff7d8f635ce2666da8135d4bb816aa5270/daft_lance-0.4.0.tar.gz", hash = "sha256:47c179f402870c434030083287676e154cff282779d5871844e79ae99f2f108e", size = 142385, upload-time = "2026-06-05T22:07:48.163Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d2/f5/b416b00e630940b2f7b1422782fa5ff32b712c831bdaee5c25f05be9d032/daft_lance-0.4.0-py3-none-any.whl", hash = "sha256:c3f35dd9d8b90246807eec9b8b3bef8fb412c7deff301e9ec7c1aa7f93c97693", size = 40928, upload-time = "2026-06-05T22:07:47.034Z" },
-]
-
-[[package]]
 name = "databricks-sdk"
 version = "0.123.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2480,9 +2421,6 @@ wheels = [
 ]
 
 [package.optional-dependencies]
-client = [
-    { name = "grpcio" },
-]
 data = [
     { name = "fsspec" },
     { name = "numpy" },
@@ -3161,9 +3099,6 @@ data = [
     { name = "pyiceberg" },
     { name = "pylance" },
 ]
-data-daft = [
-    { name = "daft", extra = ["lance", "ray"] },
-]
 dev = [
     { name = "httpx" },
     { name = "moto", extra = ["server"] },
@@ -3182,7 +3117,6 @@ dev = [
 doris-flight = [
     { name = "adbc-driver-flightsql" },
     { name = "adbc-driver-manager" },
-    { name = "daft-doris", extra = ["doris-flight"] },
     { name = "pymysql" },
     { name = "ray-doris", extra = ["flight"] },
 ]
@@ -3255,7 +3189,6 @@ model-export-torch = [
     { name = "torch" },
 ]
 mysql = [
-    { name = "daft-doris", extra = ["doris"] },
     { name = "pymysql" },
     { name = "ray-doris" },
 ]
@@ -3281,8 +3214,6 @@ test-integration = [
     { name = "catboost" },
     { name = "causal-learn" },
     { name = "clickhouse-connect", extra = ["arrow", "async"] },
-    { name = "daft", extra = ["lance", "ray"] },
-    { name = "daft-doris", extra = ["doris"] },
     { name = "dowhy" },
     { name = "lance-ray" },
     { name = "lightgbm" },
@@ -3308,8 +3239,6 @@ test-integration = [
 training = [
     { name = "boto3" },
     { name = "clickhouse-connect", extra = ["arrow", "async"] },
-    { name = "daft", extra = ["lance", "ray"] },
-    { name = "daft-doris", extra = ["doris"] },
     { name = "lance-ray" },
     { name = "ml-dtypes" },
     { name = "onnx" },
@@ -3338,7 +3267,6 @@ vector-index = [
 dev = [
     { name = "boto3" },
     { name = "clickhouse-connect", extra = ["arrow", "async"] },
-    { name = "daft" },
     { name = "grpcio-tools" },
     { name = "ml-dtypes" },
     { name = "moto", extra = ["server"] },
@@ -3364,9 +3292,6 @@ requires-dist = [
     { name = "causal-learn", marker = "extra == 'test-integration'", specifier = "==0.1.4.8" },
     { name = "click", specifier = ">=8.0.0" },
     { name = "clickhouse-connect", extras = ["arrow", "async"], marker = "extra == 'clickhouse'", specifier = ">=1.5,<1.6" },
-    { name = "daft", extras = ["lance", "ray"], marker = "extra == 'data-daft'", specifier = ">=0.7.26,<0.7.27" },
-    { name = "daft-doris", extras = ["doris"], marker = "extra == 'mysql'", specifier = ">=1.1" },
-    { name = "daft-doris", extras = ["doris-flight"], marker = "extra == 'doris-flight'", specifier = ">=1.1" },
     { name = "dowhy", marker = "extra == 'causal'", specifier = ">=0.11.0" },
     { name = "dowhy", marker = "extra == 'test-integration'", specifier = "==0.14" },
     { name = "econml", marker = "extra == 'causal'", specifier = ">=0.15.0" },
@@ -3428,7 +3353,7 @@ requires-dist = [
     { name = "torch-geometric", marker = "extra == 'graph'", specifier = ">=2.5.0" },
     { name = "transformers", marker = "extra == 'hf'", specifier = ">=4.40.0" },
     { name = "transformers", marker = "extra == 'model-export-hf'", specifier = ">=4.40.0,!=5.0.*,!=5.1.*,!=5.2.*,!=5.3.*,!=5.4.*,!=5.5.*,!=5.6.*,!=5.7.*,!=5.8.*,!=5.9.*,!=5.10.*,!=5.11.*,!=5.12.*,!=5.13.*,!=5.14.*,!=5.15.*,!=5.16.*,!=5.17.*,!=5.18.*,<5.23" },
-    { name = "tributo", extras = ["clickhouse", "data", "data-daft", "model-export", "mysql", "postgresql", "s3"], marker = "extra == 'training'" },
+    { name = "tributo", extras = ["clickhouse", "data", "model-export", "mysql", "postgresql", "s3"], marker = "extra == 'training'" },
     { name = "tributo", extras = ["data", "model-export"], marker = "extra == 'identity'" },
     { name = "tributo", extras = ["data", "s3"], marker = "extra == 'vector-index'" },
     { name = "tributo", extras = ["hf"], marker = "extra == 'streaming'" },
@@ -3441,13 +3366,12 @@ requires-dist = [
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.12.20250516" },
     { name = "xgboost", marker = "extra == 'test-integration'", specifier = ">=2.1,<4" },
 ]
-provides-extras = ["log-reporting", "dev", "data", "data-daft", "hive-ray", "vector-index", "kuberay", "postgresql", "clickhouse", "mysql", "doris-flight", "s3", "model-export", "model-export-torch", "hf", "model-export-hf", "training", "tune", "explainability", "identity", "streaming", "grpc", "registry", "graph", "causal", "test-integration"]
+provides-extras = ["log-reporting", "dev", "data", "hive-ray", "vector-index", "kuberay", "postgresql", "clickhouse", "mysql", "doris-flight", "s3", "model-export", "model-export-torch", "hf", "model-export-hf", "training", "tune", "explainability", "identity", "streaming", "grpc", "registry", "graph", "causal", "test-integration"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "boto3", specifier = ">=1.42.91" },
     { name = "clickhouse-connect", extras = ["arrow", "async"], specifier = ">=1.5,<1.6" },
-    { name = "daft", specifier = ">=0.7.26,<0.7.27" },
     { name = "grpcio-tools", specifier = ">=1.60.0" },
     { name = "ml-dtypes", specifier = ">=0.5.0" },
     { name = "moto", extras = ["server"], specifier = ">=5.1.0" },

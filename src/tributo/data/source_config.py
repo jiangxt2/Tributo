@@ -109,7 +109,7 @@ class SqlSourceConfig(StrictConfigModel):
     """Unified SQL data source for ClickHouse, Doris, PostgreSQL, and MySQL.
 
     The ``dialect`` field selects a logical Provider. Execution is delegated
-    to a Ray Data, Daft, or installed third-party Binding.
+    to a Ray Data or installed third-party Binding.
 
     Attributes:
         type: Discriminator value.
@@ -193,7 +193,7 @@ class SqlSourceConfig(StrictConfigModel):
 
 
 # ---------------------------------------------------------------------------
-# SQL partitioning hint — used by Daft Provider to split large query results
+# SQL partitioning hint for compatible source bindings
 # ---------------------------------------------------------------------------
 
 

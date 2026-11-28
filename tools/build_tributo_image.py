@@ -73,7 +73,6 @@ RUNTIME_IMAGE = re.compile(r"^[^\s@]+:[^\s@]+$")
 
 RUNTIME_EXTRAS = (
     "data",
-    "data-daft",
     "hive-ray",
     "vector-index",
     "postgresql",

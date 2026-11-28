@@ -142,8 +142,7 @@ def _default_runtime_context() -> IngestionRuntimeContext:
 def _require_ray_request(request: IngestionRequest) -> None:
     if request.engine != "tributo.ray_data":
         raise JobConfigurationError(
-            "RayMapBatchesExecutor requires ingestion engine 'ray'; automatic "
-            "engine selection, fallback, and Daft-to-Ray conversion are disabled"
+            "RayMapBatchesExecutor requires ingestion engine 'ray'"
         )
 
 

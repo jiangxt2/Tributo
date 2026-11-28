@@ -1,5 +1,7 @@
 # Data and Bundle contract namespaces
 
+> Historical decisions below describe their original context. The current data path uses Ray.
+
 **Status**: Accepted
 **Date**: 2026-08-02
 **Deciders**: Tributo maintainers

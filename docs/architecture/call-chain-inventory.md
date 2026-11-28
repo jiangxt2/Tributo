@@ -54,16 +54,15 @@ WriteTargetRegistry → LogicalWritePlan
   ↓
 WriteBindingRegistry → credential-free capability negotiation
   ↓
-WriteGateway.execute(typed RayDataHandle or DaftDataFrameHandle)
+WriteGateway.execute(typed RayDataHandle)
   ↓
 RayWriteBinding → ray.data.Dataset.write_*
-DaftWriteBinding → daft.DataFrame.write_*
   ↓
 WriteReceipt
 ```
 
 The Gateway owns request validation, target planning, capability checks,
-credential-free receipts, and error redaction. Ray Data or Daft owns the
+credential-free receipts, and error redaction. Ray Data owns the
 distributed data plane and native file/table commit. Iceberg catalog loading or
 table creation in a binding is control-plane preflight only. No Tributo
 consumer may bypass the Gateway with `to_arrow()`, a PyIceberg data mutation,
@@ -78,7 +77,7 @@ or a Lance fragment/commit helper.
   `tributo.ingestion_providers` descriptor discovery.
 - `data/binding_plugins.py` — narrow
   `tributo.ingestion_bindings` descriptor discovery.
-- `data/transform_compiler.py` — internal Ray/Daft expression translation.
+- `data/transform_compiler.py` — internal Ray expression translation.
 - The unused `SourcePlan` / `SourceRouter` auto-routing prototype was removed;
   engine selection is explicit in `IngestionRequest`.
 - `data/provider.py` owns logical normalization and planning;
@@ -94,7 +93,7 @@ CanonicalSourceInput (provider/uri or type/path/dialect shapes)
   → provider.plan() → LogicalScanPlan
   → EngineBindings.compile(engine_id, plan, binding_id, ...)
                                         descriptor selection and capability validation
-  → thin Binding → public Ray Data / Daft / installed connector API
+  → thin Binding → public Ray Data / installed connector API
   → IngestionOpenResult(Typed Handle, IngestionPlanReceipt, ownership)
 
 IngestionGateway.describe(IngestionRequest)
@@ -106,7 +105,7 @@ IngestionGateway.describe(IngestionRequest)
 IngestionGateway.open(IngestionRequest)
   → the same Provider → LogicalScanPlan route
   → EngineBindings.compile(engine_id, scan_kind, connector_id, binding_id)
-  → thin Binding → public Ray Data / Daft / installed connector reader API
+  → thin Binding → public Ray Data / installed connector reader API
   → IngestionOpenResult(Typed Handle, IngestionPlanReceipt, ownership)
 ```
 
@@ -121,7 +120,7 @@ selection and capability validation internally. `describe()` exposes the same
 validation without compiling an engine-native plan.
 
 Built-ins register explicitly. Independent packages contribute the logical
-Provider through `tributo.ingestion_providers` and the physical Ray/Daft
+Provider through `tributo.ingestion_providers` and the physical Ray
 Binding through `tributo.ingestion_bindings`. Both descriptor-only SPIs are
 versioned, discovered lazily, isolate bad plugins, and cannot replace an
 existing route. Provider-declared projection/path semantics plus declarative
@@ -300,14 +299,12 @@ credential-safe descriptor validation and atomic registration
 WriteBinding selection; native dependency import occurs at factory/execute
 ```
 
-Selected optional integrations (`ray-clickhouse==1.1`, `ray-doris==1.3`,
-`daft-doris==1.1`) also have thin built-in descriptors and explicit install
+Selected optional integrations (`ray-clickhouse==1.1`, `ray-doris==1.3`) also have thin built-in descriptors and explicit install
 diagnostics. The dependency requirements declare minimum stable versions in
 `pyproject.toml`; `uv.lock` selects exact PyPI versions for CI and images. Ray
 ClickHouse is included by its existing extra. The standard full-image exporter
 retains locked hashes and rejects local dependency paths. These adapters are not support
-claims until database infrastructure gates pass. Ray and Daft routes remain
-explicit and are not interchangeable.
+claims until database infrastructure gates pass. Ray routes remain explicit.
 
 ---
 
@@ -452,8 +449,7 @@ Plugin groups also discovered:
 
 | Issue | Location | Impact |
 |-------|----------|--------|
-| Existing downstream consumers still expect Ray Dataset values | Training / local runner / inference | Their compatibility functions explicitly select Ray and delegate the same Gateway; native Daft consumption requires a later consumer capability change |
-| A Ray-only consumer intentionally selects a Daft-only source | Consumer boundary | `adapt_daft_result_to_ray()` calls Daft's public adapter and records conversion evidence; the Gateway never performs this conversion implicitly |
+| Existing downstream consumers still expect Ray Dataset values | Training / local runner / inference | Their compatibility functions explicitly select Ray and delegate the same Gateway |
 | External model importers use explicit IDs and normalize to BundleRef | `inference/importers.py`, `integrations/model_importers/` | MLflow and typed ONNX/XGBoost artifacts pass Conformance and real-service IT |
 | Raw-artifact compatibility still exists | `BaseTrainer.run(..., legacy_export=True)` | Removal waits for the documented compatibility window and a separate E4 change |
 | ExportSourceProvider ≠ DataSourceProvider | `exporting/protocols.py` vs `data/provider.py` | The distinct names and ownership prevent model-checkpoint conversion from leaking into data ingestion |

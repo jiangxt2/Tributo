@@ -383,11 +383,7 @@ class InferenceRequest(_FrozenContract):
     @model_validator(mode="after")
     def _reject_plaintext_credentials(self) -> "InferenceRequest":
         if self.input.engine != "tributo.ray_data":
-            raise ValueError(
-                "batch inference currently requires ingestion engine 'ray'; "
-                "automatic engine selection, fallback, and Daft-to-Ray "
-                "conversion are disabled"
-            )
+            raise ValueError("batch inference requires ingestion engine 'ray'")
         if self.input.trace_context:
             raise ValueError(
                 "InferenceRequest.input.trace_context is reserved until a "

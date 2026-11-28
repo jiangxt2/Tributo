@@ -7,9 +7,8 @@ from typing import Any
 
 import pytest
 
-from tests.support.runtime_versions import DAFT_VERSION, RAY_VERSION
+from tests.support.runtime_versions import RAY_VERSION
 from tributo.data import (
-    DaftDataFrameHandle,
     IngestionGateway,
     IngestionRequest,
     ProviderSourceConfig,
@@ -125,12 +124,8 @@ class _ExternalHiveBinding:
         if not isinstance(request.plan, TableScan):
             raise AssertionError("Hive binding requires TableScan")
         self.seen_plan = request.plan
-        if self.engine_id == "tributo.ray_data":
-            handle = RayDataHandle(object())
-            engine_version = RAY_VERSION
-        else:
-            handle = DaftDataFrameHandle(object())
-            engine_version = DAFT_VERSION
+        handle = RayDataHandle(object())
+        engine_version = RAY_VERSION
         return BindingCompilation(
             handle=handle,
             engine_version=engine_version,
@@ -145,16 +140,14 @@ class _ExternalHiveBinding:
     ("engine_id", "expected_handle"),
     [
         ("tributo.ray_data", RayDataHandle),
-        ("tributo.daft", DaftDataFrameHandle),
     ],
 )
 def test_new_hive_provider_and_bindings_require_no_consumer_change(
     monkeypatch: pytest.MonkeyPatch,
     engine_id: str,
-    expected_handle: type[RayDataHandle] | type[DaftDataFrameHandle],
+    expected_handle: type[RayDataHandle],
 ) -> None:
     versions = {
-        "daft": DAFT_VERSION,
         "external-hive-connector": "1.0.0",
         "ray": RAY_VERSION,
     }
@@ -181,11 +174,7 @@ def test_new_hive_provider_and_bindings_require_no_consumer_change(
             ),
             distribution_name="external-hive-connector",
             distribution_version="1.0.0",
-            engine_version_spec=(
-                f"=={RAY_VERSION}"
-                if engine_id.endswith("ray_data")
-                else f"=={DAFT_VERSION}"
-            ),
+            engine_version_spec=f"=={RAY_VERSION}",
             constraints=BindingPlanConstraints(
                 catalog_ids=frozenset({"hive"}),
                 storage_format_ids=frozenset({"parquet", "orc", "iceberg"}),

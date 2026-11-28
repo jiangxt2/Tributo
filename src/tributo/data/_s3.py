@@ -9,7 +9,7 @@ Supports two environment variable naming conventions:
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING, Any, Mapping, TypedDict
+from typing import TYPE_CHECKING, Any, Mapping
 
 from tributo.exceptions import JobConfigurationError
 
@@ -31,19 +31,6 @@ _ICEBERG_CREDENTIAL_PROPERTIES = frozenset(
 )
 ICEBERG_FILE_IO_PROPERTY = "py-io-impl"
 PYARROW_ICEBERG_FILE_IO = "pyiceberg.io.pyarrow.PyArrowFileIO"
-
-
-class DaftS3Kwargs(TypedDict, total=False):
-    """Typed subset passed to Daft's public ``S3Config`` constructor."""
-
-    region_name: str
-    endpoint_url: str
-    key_id: str
-    session_token: str
-    access_key: str
-    use_ssl: bool
-    force_virtual_addressing: bool
-    profile_name: str
 
 
 def resolve_endpoint(explicit: str | None = None) -> str | None:
@@ -191,38 +178,6 @@ def to_pyarrow_s3_kwargs(
             kwargs["scheme"] = "http"
     if path_style:
         kwargs["force_virtual_addressing"] = False
-    return kwargs
-
-
-def to_daft_s3_kwargs(s3_config: S3Settings | None = None) -> DaftS3Kwargs:
-    """Convert ``S3Config`` and environment fallbacks to Daft S3 names."""
-    (
-        endpoint,
-        key_id,
-        access_key,
-        session_token,
-        region,
-        use_ssl,
-        path_style,
-        profile_name,
-    ) = _resolve_s3_fields(s3_config)
-    kwargs: DaftS3Kwargs = {}
-    if region:
-        kwargs["region_name"] = region
-    if endpoint:
-        kwargs["endpoint_url"] = endpoint
-    if key_id:
-        kwargs["key_id"] = key_id
-    if access_key:
-        kwargs["access_key"] = access_key
-    if session_token:
-        kwargs["session_token"] = session_token
-    if (endpoint and endpoint.startswith("http://")) or not use_ssl:
-        kwargs["use_ssl"] = False
-    if path_style:
-        kwargs["force_virtual_addressing"] = False
-    if profile_name and not key_id and not access_key:
-        kwargs["profile_name"] = profile_name
     return kwargs
 
 

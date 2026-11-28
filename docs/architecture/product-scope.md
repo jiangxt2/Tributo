@@ -17,7 +17,7 @@ Tributo is a **Ray-native ML Framework/SDK** — not a multi-tenant ML Platform.
 | Multi-tenancy | Not in this cycle | Project/Quota/RBAC, tenant isolation, audit |
 | Training | Distributed XGBoost, DNN, PU Learning, constrained algorithm SPI, and selected sklearn MapReduce adapters | AutoML, managed notebooks, experiment tracking UI |
 | Inference | Batch with Ray Data, explainability batches, and online Ray Serve or gRPC | A/B testing, canary, shadow, auto-rollback |
-| Data | Explicit Ray Data or Daft bounded ingestion and native writing | Managed ETL, data catalog, schema registry, unbounded streaming I/O |
+| Data | Explicit Ray Data bounded ingestion and native writing | Managed ETL, data catalog, schema registry, unbounded streaming I/O |
 | Vector indexing | Build, search, optimize, and compact existing Lance vector datasets through Lance-Ray | Vector database control plane, automatic embedding or index policy |
 | Observability | Framework-level metrics, logs, trace IDs | Centralized dashboard, alerting, cost attribution |
 
@@ -30,7 +30,7 @@ carry their own integrity and provenance.
 
 1. **Unify data source protocol**: Training, inference, and graph
    adapters consume typed bounded-ingestion handles behind one Gateway. Ray
-   Data and Daft perform reads; Tributo owns only contracts, translation,
+   Data performs reads; Tributo owns only contracts, translation,
    routing, error normalization, and provenance. Unbounded streaming I/O is an
    external connector responsibility and does not enter the Tributo ingestion
    or inference contracts.
@@ -66,15 +66,15 @@ when that trigger fires.
 ## Bounded Ingestion Boundary
 
 The bounded-ingestion architecture follows the separation used by Arrow
-Dataset, Ray Data, Daft, Iceberg, Lance, and database-specific distributed
+Dataset, Ray Data, Iceberg, Lance, and database-specific distributed
 connectors: Tributo describes *what* to read; an installed engine or Binding
 owns file discovery, decoding, SQL, split planning, transport, and batch loops.
 
-The current alpha implementation has real dual-engine Conformance evidence for
+The alpha implementation has real Ray Data Conformance evidence for
 Local/S3 Parquet and CSV, Local/S3 Iceberg and Lance, PostgreSQL, and structured
 Ray HiveServer2 table reads. The Hive vertical slice delegates all SQL,
 transport, ORC-backed fixture decoding, and worker execution to locked
-`ray-hive==1.2`; it does not provide native ORC/HDFS access or a Daft route.
+`ray-hive==1.2`; it does not provide native ORC/HDFS access.
 HDFS has a Ray Data adapter but still requires its cluster gate. ClickHouse and
 Doris have optional thin adapters for independent engine packages but remain
 unsupported until those packages pass real-infrastructure tests. A

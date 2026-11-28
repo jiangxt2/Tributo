@@ -1,4 +1,4 @@
-"""Required dual-engine ingestion conformance on local files and MinIO."""
+"""Ray Data ingestion conformance on local files and MinIO."""
 
 from __future__ import annotations
 
@@ -7,17 +7,15 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-import daft
 import pyarrow as pa
 import pyarrow.csv as pacsv
 import pyarrow.fs as pafs
 import pyarrow.parquet as pq
 import pytest
 
-from tests.data.ingestion_conformance import assert_dual_engine_conformance
+from tests.data.ingestion_conformance import assert_ray_conformance
 from tributo.data import (
     CsvSourceConfig,
-    DaftDataFrameHandle,
     FilterComparison,
     IngestionRequest,
     IngestionRuntimeContext,
@@ -32,7 +30,7 @@ from tributo.data import (
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.ingestion_conformance,
-    pytest.mark.usefixtures("native_daft_ray_local_runtime"),
+    pytest.mark.usefixtures("ray_local_runtime"),
     pytest.mark.filterwarnings(
         "ignore:Tip.*future versions of Ray.*:FutureWarning",
         "ignore::pytest.PytestUnraisableExceptionWarning",
@@ -50,7 +48,6 @@ def _input_table() -> pa.Table:
 
 
 def _assert_source_conformance(source: Any) -> None:
-    assert daft.get_or_create_runner().name == "native"
     context = IngestionRuntimeContext()
     transforms = TransformPipeline(
         steps=(
@@ -62,18 +59,11 @@ def _assert_source_conformance(source: Any) -> None:
         IngestionRequest(source=source, engine="ray", transforms=transforms),
         context,
     )
-    daft_result = open_ingestion(
-        IngestionRequest(source=source, engine="daft", transforms=transforms),
-        context,
-    )
     try:
         assert isinstance(ray_result.handle, RayDataHandle)
-        assert isinstance(daft_result.handle, DaftDataFrameHandle)
-        assert_dual_engine_conformance(
+        assert_ray_conformance(
             ray_result,
             ray_result.handle.dataset.take_all(),
-            daft_result,
-            daft_result.handle.dataframe.to_pylist(),
             expected_rows=[
                 {"id": 2, "category": "keep"},
                 {"id": 3, "category": "keep"},
@@ -83,11 +73,10 @@ def _assert_source_conformance(source: Any) -> None:
         )
     finally:
         ray_result.close()
-        daft_result.close()
 
 
 @pytest.mark.parametrize("file_format", ["parquet", "csv"])
-def test_local_file_dual_engine_conformance(tmp_path: Path, file_format: str) -> None:
+def test_local_file_ray_conformance(tmp_path: Path, file_format: str) -> None:
     path = tmp_path / f"input.{file_format}"
     if file_format == "parquet":
         pq.write_table(_input_table(), path)
@@ -102,7 +91,7 @@ def test_local_file_dual_engine_conformance(tmp_path: Path, file_format: str) ->
 @pytest.mark.minio_compat
 @pytest.mark.usefixtures("s3_environment")
 @pytest.mark.parametrize("file_format", ["parquet", "csv"])
-def test_s3_file_dual_engine_conformance(file_format: str) -> None:
+def test_s3_file_ray_conformance(file_format: str) -> None:
     endpoint = os.environ["S3_ENDPOINT"]
     access_key = os.environ["AWS_ACCESS_KEY_ID"]
     secret_key = os.environ["AWS_SECRET_ACCESS_KEY"]
