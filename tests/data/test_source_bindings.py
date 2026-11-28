@@ -12,15 +12,10 @@ import pyarrow as pa
 import pytest
 from fsspec.implementations.webhdfs import WebHDFS as RealWebHDFS
 
-from tests.support.runtime_versions import DAFT_VERSION, RAY_VERSION
+from tests.support.runtime_versions import RAY_VERSION
 from tributo.data._clickhouse_query import query_params_digest
 from tributo.data.bindings._postgresql import compile_table_query
 from tributo.data.bindings._sql_shared import resolve_sql_connection, resolve_sql_target
-from tributo.data.bindings.daft_csv import DaftCsvBinding
-from tributo.data.bindings.daft_doris import DaftDorisBinding
-from tributo.data.bindings.daft_iceberg import DaftIcebergBinding
-from tributo.data.bindings.daft_lance import DaftLanceBinding
-from tributo.data.bindings.daft_postgresql import DaftPostgreSqlBinding
 from tributo.data.bindings.ray_clickhouse import RayClickHouseBinding
 from tributo.data.bindings.ray_csv import RayCsvBinding
 from tributo.data.bindings.ray_doris import RayDorisBinding
@@ -37,7 +32,6 @@ from tributo.data.engine_binding import (
     EngineBinding,
 )
 from tributo.data.ingestion import (
-    DaftDataFrameHandle,
     IngestionRuntimeContext,
     RayDataHandle,
     ReadOptions,
@@ -68,28 +62,6 @@ class _RayDataset:
         return _SCHEMA
 
 
-class _DaftSchema:
-    def to_pyarrow_schema(self) -> pa.Schema:
-        return _SCHEMA
-
-
-class _DaftDataFrame:
-    def __init__(self) -> None:
-        self.selected: tuple[str, ...] = ()
-        self.predicates: tuple[str, ...] = ()
-
-    def where(self, predicate: str) -> "_DaftDataFrame":
-        self.predicates = (*self.predicates, predicate)
-        return self
-
-    def select(self, *columns: str) -> "_DaftDataFrame":
-        self.selected = columns
-        return self
-
-    def schema(self) -> _DaftSchema:
-        return _DaftSchema()
-
-
 def _request(
     plan: FileScan | TableScan | SqlScan,
     *,
@@ -110,24 +82,18 @@ def _request(
     ("binding", "engine_version", "handle_type"),
     [
         (RayCsvBinding(), RAY_VERSION, RayDataHandle),
-        (DaftCsvBinding(), DAFT_VERSION, DaftDataFrameHandle),
     ],
 )
 def test_csv_bindings_use_public_engine_readers(
     monkeypatch: pytest.MonkeyPatch,
     binding: EngineBinding,
     engine_version: str,
-    handle_type: type[RayDataHandle] | type[DaftDataFrameHandle],
+    handle_type: type[RayDataHandle],
 ) -> None:
     ray_calls: list[tuple[str, dict[str, Any]]] = []
-    daft_calls: list[tuple[str, dict[str, Any]]] = []
     monkeypatch.setattr(
         "ray.data.read_csv",
         lambda path, **kwargs: ray_calls.append((path, kwargs)) or _RayDataset(),
-    )
-    monkeypatch.setattr(
-        "daft.read_csv",
-        lambda path, **kwargs: daft_calls.append((path, kwargs)) or _DaftDataFrame(),
     )
     monkeypatch.setattr(
         f"{type(binding).__module__}.importlib.metadata.version",
@@ -144,8 +110,8 @@ def test_csv_bindings_use_public_engine_readers(
     result = binding.compile(_request(plan))
 
     assert isinstance(result.handle, handle_type)
-    assert result.reader_api in {"ray.data.read_csv", "daft.read_csv"}
-    assert len(ray_calls) + len(daft_calls) == 1
+    assert result.reader_api == "ray.data.read_csv"
+    assert len(ray_calls) == 1
 
 
 @pytest.mark.parametrize(
@@ -331,80 +297,22 @@ def test_ray_iceberg_binding_delegates_catalog_scan(
     assert result.reader_api == "ray.data.read_iceberg"
 
 
-def test_daft_iceberg_binding_delegates_catalog_and_scan(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    pytest.importorskip("daft")
-    pytest.importorskip("pyiceberg")
-    loaded_tables: list[str] = []
-    read_calls: list[tuple[Any, dict[str, Any]]] = []
-    table = object()
-
-    class _Catalog:
-        def load_table(self, identifier: str) -> object:
-            loaded_tables.append(identifier)
-            return table
-
-    catalog_module = ModuleType("pyiceberg.catalog")
-    catalog_module.load_catalog = lambda *args, **kwargs: _Catalog()
-    monkeypatch.setitem(sys.modules, "pyiceberg.catalog", catalog_module)
-    monkeypatch.setattr(
-        "daft.read_iceberg",
-        lambda value, **kwargs: read_calls.append((value, kwargs)) or _DaftDataFrame(),
-    )
-    monkeypatch.setattr(
-        "tributo.data.bindings.daft_iceberg.importlib.metadata.version",
-        lambda name: DAFT_VERSION,
-    )
-
-    plan = _iceberg_plan()
-    plan = TableScan(
-        provider_id=plan.provider_id,
-        connector_id=plan.connector_id,
-        table=plan.table,
-        options={"selected_fields": ["id"], "row_filter": "id > 0"},
-    )
-    result = DaftIcebergBinding().compile(
-        _request(
-            plan,
-            runtime_options={
-                "catalog_name": "prod",
-                "catalog_properties": {"type": "rest", "uri": "http://catalog"},
-            },
-        )
-    )
-
-    assert isinstance(result.handle, DaftDataFrameHandle)
-    assert loaded_tables == ["analytics.events"]
-    assert read_calls[0][0] is table
-    assert result.handle.dataframe.predicates == ("id > 0",)
-    assert result.handle.dataframe.selected == ("id",)
-    assert any("Daft lazy residual filter" in item for item in result.diagnostics)
-    assert result.reader_api == "daft.read_iceberg"
-
-
 @pytest.mark.parametrize(
     ("binding", "engine_version", "handle_type"),
     [
         (RayLanceBinding(), RAY_VERSION, RayDataHandle),
-        (DaftLanceBinding(), DAFT_VERSION, DaftDataFrameHandle),
     ],
 )
 def test_lance_bindings_use_public_engine_readers(
     monkeypatch: pytest.MonkeyPatch,
     binding: EngineBinding,
     engine_version: str,
-    handle_type: type[RayDataHandle] | type[DaftDataFrameHandle],
+    handle_type: type[RayDataHandle],
 ) -> None:
     ray_calls: list[tuple[str, dict[str, Any]]] = []
-    daft_calls: list[tuple[str, dict[str, Any]]] = []
     monkeypatch.setattr(
         "ray.data.read_lance",
         lambda uri, **kwargs: ray_calls.append((uri, kwargs)) or _RayDataset(),
-    )
-    monkeypatch.setattr(
-        "daft.read_lance",
-        lambda uri, **kwargs: daft_calls.append((uri, kwargs)) or _DaftDataFrame(),
     )
     monkeypatch.setattr(
         f"{type(binding).__module__}.importlib.metadata.version",
@@ -421,9 +329,9 @@ def test_lance_bindings_use_public_engine_readers(
     result = binding.compile(_request(plan))
 
     assert isinstance(result.handle, handle_type)
-    assert result.reader_api in {"ray.data.read_lance", "daft.read_lance"}
-    assert len(ray_calls) + len(daft_calls) == 1
-    calls = ray_calls or daft_calls
+    assert result.reader_api == "ray.data.read_lance"
+    assert len(ray_calls) == 1
+    calls = ray_calls
     assert "scanner_options" not in calls[0][1]
 
 
@@ -475,22 +383,7 @@ def test_ray_lance_binding_forwards_scanner_options(
     }
 
 
-def test_daft_lance_binding_rejects_scanner_options() -> None:
-    plan = TableScan(
-        provider_id="tributo.lance",
-        connector_id="lance",
-        table=UriTableRef(uri="/data/images.lance"),
-    )
-
-    with pytest.raises(BindingStageError) as exc_info:
-        DaftLanceBinding().compile(
-            _request(plan, runtime_options={"scanner_options": {"batch_size": 8}})
-        )
-
-    assert exc_info.value.diagnostic_code == "unsupported_lance_scanner_options"
-
-
-@pytest.mark.parametrize("binding", [RayLanceBinding(), DaftLanceBinding()])
+@pytest.mark.parametrize("binding", [RayLanceBinding()])
 def test_lance_bindings_reject_iceberg_snapshot_refs(
     binding: EngineBinding,
 ) -> None:
@@ -505,16 +398,6 @@ def test_lance_bindings_reject_iceberg_snapshot_refs(
         binding.compile(_request(plan))
 
     assert exc_info.value.diagnostic_code == "unsupported_lance_snapshot_ref"
-
-
-def test_daft_sql_parallel_reads_fail_closed() -> None:
-    with pytest.raises(
-        BindingStageError,
-        match="explicit 'parallel'.*unsupported",
-    ) as exc_info:
-        DaftDorisBinding().compile(_request(_sql_plan("doris")))
-
-    assert exc_info.value.diagnostic_code == "parallel_sql_read_unsupported"
 
 
 def test_sql_binding_port_error_is_structured(
@@ -554,62 +437,6 @@ def _auto_sql_plan(connector_id: str) -> SqlScan:
             target_partitions=6,
         ),
     )
-
-
-@pytest.mark.parametrize(
-    ("binding", "connector_id", "reader_name", "transport_id", "protocol"),
-    [
-        (DaftDorisBinding(), "doris", "read_doris", "mysql", "mysql"),
-        (DaftDorisBinding(), "doris", "read_doris", "flight", "flight"),
-    ],
-)
-def test_daft_sql_bindings_delegate_to_public_connector_facades(
-    monkeypatch: pytest.MonkeyPatch,
-    binding: EngineBinding,
-    connector_id: str,
-    reader_name: str,
-    transport_id: str,
-    protocol: str,
-) -> None:
-    calls: list[dict[str, Any]] = []
-    module_name = f"daft_{connector_id}"
-    module = ModuleType(module_name)
-
-    def reader(**kwargs: Any) -> _DaftDataFrame:
-        calls.append(kwargs)
-        return _DaftDataFrame()
-
-    setattr(module, reader_name, reader)
-    monkeypatch.setitem(sys.modules, module_name, module)
-    monkeypatch.setattr(
-        "tributo.data.bindings._daft_sql.importlib.metadata.version",
-        lambda name: DAFT_VERSION,
-    )
-
-    result = binding.compile(
-        _request(
-            _auto_sql_plan(connector_id),
-            runtime_options={
-                "host": "db.example",
-                "port": 9030,
-                "database": "analytics",
-                "user": "reader",
-                "password": "secret",
-                "protocol": protocol,
-            },
-            read_options=ReadOptions(batch_size=128),
-        )
-    )
-
-    assert isinstance(result.handle, DaftDataFrameHandle)
-    assert calls[0]["host"] == "db.example"
-    assert calls[0]["table"] == "events"
-    assert calls[0]["target_tasks"] == 6
-    assert calls[0]["batch_rows"] == 128
-    assert calls[0]["mysql_port"] == 9030
-    assert calls[0]["transport"] == protocol
-    assert result.reader_api == f"{module_name}.{reader_name}"
-    assert result.transport_id == transport_id
 
 
 def test_ray_doris_binding_delegates_to_external_connector(
@@ -796,16 +623,6 @@ def test_doris_query_schema_error_does_not_expose_sql(
             _request(plan, runtime_options={"database": "analytics", "sql": query})
         )
     assert query not in str(exc_info.value)
-
-
-def test_daft_doris_query_is_rejected() -> None:
-    plan = SqlScan(
-        provider_id="tributo.doris",
-        connector_id="doris",
-        target=ParameterizedQuery(digest("SELECT 1")),
-    )
-    with pytest.raises(BindingStageError, match="invalid_configuration"):
-        DaftDorisBinding().compile(_request(plan))
 
 
 def test_ray_clickhouse_binding_delegates_bounded_range_read(
@@ -1091,17 +908,15 @@ def test_ray_doris_binding_rejects_unvalidated_ray_remote_args(
     ("binding", "engine_version", "handle_type"),
     [
         (RayPostgreSqlBinding(), RAY_VERSION, RayDataHandle),
-        (DaftPostgreSqlBinding(), DAFT_VERSION, DaftDataFrameHandle),
     ],
 )
 def test_postgresql_bindings_delegate_to_public_sql_readers(
     monkeypatch: pytest.MonkeyPatch,
     binding: EngineBinding,
     engine_version: str,
-    handle_type: type[RayDataHandle] | type[DaftDataFrameHandle],
+    handle_type: type[RayDataHandle],
 ) -> None:
     ray_calls: list[tuple[str, Any, dict[str, Any]]] = []
-    daft_calls: list[tuple[str, Any, dict[str, Any]]] = []
     monkeypatch.setattr(
         "ray.data.read_sql",
         lambda query, factory, **kwargs: (
@@ -1109,16 +924,9 @@ def test_postgresql_bindings_delegate_to_public_sql_readers(
         ),
     )
     monkeypatch.setattr(
-        "daft.read_sql",
-        lambda query, factory, **kwargs: (
-            daft_calls.append((query, factory, kwargs)) or _DaftDataFrame()
-        ),
-    )
-    monkeypatch.setattr(
         f"{type(binding).__module__}.importlib.metadata.version",
         lambda name: engine_version,
     )
-    parallel = isinstance(binding, DaftPostgreSqlBinding)
     plan = SqlScan(
         provider_id="tributo.postgresql",
         connector_id="postgresql",
@@ -1127,15 +935,7 @@ def test_postgresql_bindings_delegate_to_public_sql_readers(
             table='event"facts',
             projection=("id",),
         ),
-        sharding=(
-            SqlShardRequirement(
-                mode=SqlShardMode.PARALLEL,
-                columns=("id",),
-                target_partitions=6,
-            )
-            if parallel
-            else SqlShardRequirement()
-        ),
+        sharding=SqlShardRequirement(),
         options={"partition_bound_strategy": "min-max"},
     )
 
@@ -1153,13 +953,10 @@ def test_postgresql_bindings_delegate_to_public_sql_readers(
     )
 
     assert isinstance(result.handle, handle_type)
-    calls = ray_calls or daft_calls
+    calls = ray_calls
     assert calls[0][0] == ('SELECT "id" FROM "feature_store"."event""facts"')
     assert "top-secret" not in repr(calls[0][1])
-    assert result.reader_api in {"ray.data.read_sql", "daft.read_sql"}
-    if daft_calls:
-        assert daft_calls[0][2]["partition_col"] == "id"
-        assert daft_calls[0][2]["num_partitions"] == 6
+    assert result.reader_api == "ray.data.read_sql"
 
 
 def test_ray_postgresql_parallel_read_fails_closed() -> None:
@@ -1178,7 +975,7 @@ def test_ray_postgresql_parallel_read_fails_closed() -> None:
         RayPostgreSqlBinding().compile(_request(plan))
 
     assert exc_info.value.diagnostic_code == "unsupported_postgresql_parallel_read"
-    assert "select Daft" in str(exc_info.value)
+    assert "use a single read" in str(exc_info.value)
 
 
 def test_postgresql_query_compiler_rejects_raw_query_plan() -> None:

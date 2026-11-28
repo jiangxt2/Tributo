@@ -4,16 +4,14 @@
 
 `IngestionRequest` selects a source and an engine. The gateway produces a
 logical scan, resolves one compatible binding, and returns a typed
-`RayDataHandle` or `DaftDataFrameHandle` with an `IngestionPlanReceipt`.
+`RayDataHandle` with an `IngestionPlanReceipt`.
 
 The gateway never silently falls back to a different engine. Consumers that
-require Ray Data must request Ray explicitly or use a documented, explicit
-handle adapter.
+require Ray Data must request Ray explicitly.
 
 ## Portable transforms
 
-`TransformPipeline` describes the subset that Tributo can compile for both Ray
-Data and Daft. The selected engine still owns expression execution. Provider
+`TransformPipeline` describes the subset that Tributo can compile for Ray Data. The selected engine still owns expression execution. Provider
 pushdown and a residual transform are different facts and appear separately in
 planning evidence.
 
@@ -22,7 +20,7 @@ planning evidence.
 `WriteRequest` identifies an engine, target kind, destination, write mode, and
 bounded options. `WriteGateway` selects a matching native binding and returns a
 credential-free `WriteReceipt`. The binding delegates to an engine API such as
-`ray.data.Dataset.write_parquet` or `DataFrame.write_lance`.
+`ray.data.Dataset.write_parquet` or `lance_ray.write_lance`.
 
 Tributo does not implement file, fragment, transaction, manifest, or commit
 writers.

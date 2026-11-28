@@ -98,9 +98,7 @@ Source profile resolution and source-local S3 precedence are owned by the Data
 Gateway. Inference does not merge provider options or copy source credentials
 into its model and sink adapters.
 
-Batch inference in v1.0.0 requires the explicit Ray ingestion engine. It does
-not auto-select an engine, switch engines after a failure, or implicitly
-convert a Daft handle to Ray. Input feature projection is appended through the
+Batch inference in v1.0.0 requires the explicit Ray ingestion engine. Input feature projection is appended through the
 shared Data Transform IR. The final result includes the Data Gateway's
 credential-free ingestion receipt alongside the sink receipt.
 

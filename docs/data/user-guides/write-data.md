@@ -11,7 +11,7 @@ documented engine boundary.
 
 ## Select a verified combination
 
-Ray and Daft bindings cover different target and dependency combinations.
+Ray bindings cover different target and dependency combinations.
 Parquet, CSV, Iceberg, and Lance also expose different mode and option sets.
 Call `WriteGateway.plan()` when you need to inspect the selected descriptor
 before execution.

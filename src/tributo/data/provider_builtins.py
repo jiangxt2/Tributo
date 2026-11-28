@@ -1,7 +1,7 @@
 """Built-in logical providers for canonical bounded ingestion.
 
 Parquet, CSV, Iceberg, Lance, ClickHouse, Doris, PostgreSQL, and Hive normalize input
-and build logical plans. Execution is delegated directly to Ray Data, Daft, or
+and build logical plans. Execution is delegated directly to Ray Data or
 an installed engine Binding. Provider IDs identify logical sources, not
 execution engines.
 
@@ -892,7 +892,7 @@ class IcebergProvider(DataSourceProvider):
 
 
 class LanceProvider(DataSourceProvider):
-    """Logical Lance table source delegated to Ray Data or Daft."""
+    """Logical Lance table source delegated to Ray Data."""
 
     provider_id = "tributo.lance"
     aliases = frozenset({"lance"})
@@ -1435,7 +1435,7 @@ class DorisProvider(_SqlProvider):
 
 
 class PostgreSqlProvider(_SqlProvider):
-    """Logical PostgreSQL source for Ray Data and Daft SQL readers."""
+    """Logical PostgreSQL source for Ray Data SQL readers."""
 
     provider_id = "tributo.postgresql"
     aliases = frozenset({"postgresql"})

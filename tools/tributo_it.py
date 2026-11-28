@@ -625,10 +625,6 @@ def _version_check_code(identity: RuntimeIdentity) -> str:
                 "assert torch.version.cuda is None",
             )
         )
-    if "daft_prefix" in contract:
-        checks.append(
-            f"assert metadata.version('daft').startswith({contract['daft_prefix']!r})"
-        )
     if "java" in contract:
         checks.append("import os")
     if "java" in contract or "hadoop_client" in contract:
@@ -654,7 +650,6 @@ def _version_check_code(identity: RuntimeIdentity) -> str:
         ("pyiceberg", "pyiceberg"),
         ("ray_hive", "ray-hive"),
         ("ray_clickhouse", "ray-clickhouse"),
-        ("daft_doris", "daft-doris"),
         ("ray_doris", "ray-doris"),
         ("thrift", "thrift"),
     ):

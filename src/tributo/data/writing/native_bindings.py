@@ -1,4 +1,4 @@
-"""Built-in Ray and Daft write bindings.
+"""Built-in Ray write bindings.
 
 Each binding is deliberately thin: it validates the typed handle, prepares
 engine-native options, invokes the corresponding public ``write_*`` API, and
@@ -16,16 +16,11 @@ from typing import Any, Literal, cast
 from urllib.parse import unquote, urlsplit
 
 from tributo._common.runtime_versions import (
-    SUPPORTED_DAFT_VERSION as DAFT_ENGINE_VERSION,
-)
-from tributo._common.runtime_versions import (
     SUPPORTED_RAY_VERSION as RAY_ENGINE_VERSION,
 )
-from tributo.data.contracts.handles import DaftDataFrameHandle, RayDataHandle
+from tributo.data.contracts.handles import RayDataHandle
 from tributo.data.contracts.modes import WriteMode
 from tributo.data.writing._native import (
-    daft_io_config,
-    daft_path,
     descriptor,
     ensure_iceberg_table,
     iceberg_context,
@@ -76,26 +71,6 @@ def _ray_descriptor(
             if target_kind == "doris"
             else None
         ),
-    )
-
-
-def _daft_descriptor(
-    target_kind: str, binding_id: str, capabilities: WriteCapability
-) -> WriteDescriptor:
-    dependencies: tuple[str, ...] = (
-        ("pyiceberg",)
-        if target_kind == "iceberg"
-        else ("pylance", "daft-lance")
-        if target_kind == "lance"
-        else ()
-    )
-    return descriptor(
-        engine_id="tributo.daft",
-        target_kind=target_kind,
-        binding_id=binding_id,
-        engine_version=DAFT_ENGINE_VERSION,
-        dependency_distributions=dependencies,
-        capabilities=capabilities,
     )
 
 
@@ -539,188 +514,6 @@ class RayDorisWriteBinding:
         )
 
 
-class DaftParquetWriteBinding:
-    """Delegate Parquet writes to ``daft.DataFrame.write_parquet``."""
-
-    binding_id = "tributo.daft.parquet"
-    _descriptor = _daft_descriptor(
-        "parquet",
-        binding_id,
-        WriteCapability(
-            supported_modes=_FILE_MODES,
-            supported_options=frozenset({"compression"}),
-            distributed=True,
-            native_metrics=False,
-            can_create_target=True,
-        ),
-    )
-
-    def describe(
-        self, plan: LogicalWritePlan, input_handle: WriteHandle
-    ) -> WriteDescriptor:
-        input_handle = _require_daft(plan, input_handle, "parquet")
-        return self._descriptor.model_copy(deep=True)
-
-    def execute(
-        self,
-        plan: LogicalWritePlan,
-        input_handle: WriteHandle,
-        context: WriteExecutionContext,
-    ) -> WriteReceipt:
-        input_handle = _require_daft(plan, input_handle, "parquet")
-        kwargs: dict[str, Any] = {
-            "compression": str(plan.options.get("compression", "zstd")),
-            "write_mode": plan.mode.value,
-        }
-        io_config = daft_io_config(
-            context.runtime_options,
-            required=plan.target.lower().startswith("s3://"),
-        )
-        if io_config is not None:
-            kwargs["io_config"] = io_config
-        input_handle.dataframe.write_parquet(daft_path(plan.target), **kwargs)
-        return write_receipt(
-            plan=plan,
-            binding_id=self.binding_id,
-            native_api="daft.DataFrame.write_parquet",
-        )
-
-
-class DaftCsvWriteBinding:
-    """Delegate CSV writes to ``daft.DataFrame.write_csv``."""
-
-    binding_id = "tributo.daft.csv"
-    _descriptor = _daft_descriptor(
-        "csv",
-        binding_id,
-        WriteCapability(
-            supported_modes=_FILE_MODES,
-            distributed=True,
-            native_metrics=False,
-            can_create_target=True,
-        ),
-    )
-
-    def describe(
-        self, plan: LogicalWritePlan, input_handle: WriteHandle
-    ) -> WriteDescriptor:
-        input_handle = _require_daft(plan, input_handle, "csv")
-        return self._descriptor.model_copy(deep=True)
-
-    def execute(
-        self,
-        plan: LogicalWritePlan,
-        input_handle: WriteHandle,
-        context: WriteExecutionContext,
-    ) -> WriteReceipt:
-        input_handle = _require_daft(plan, input_handle, "csv")
-        kwargs: dict[str, Any] = {"write_mode": plan.mode.value}
-        io_config = daft_io_config(
-            context.runtime_options,
-            required=plan.target.lower().startswith("s3://"),
-        )
-        if io_config is not None:
-            kwargs["io_config"] = io_config
-        input_handle.dataframe.write_csv(daft_path(plan.target), **kwargs)
-        return write_receipt(
-            plan=plan, binding_id=self.binding_id, native_api="daft.DataFrame.write_csv"
-        )
-
-
-class DaftIcebergWriteBinding:
-    """Delegate Iceberg writes to ``daft.DataFrame.write_iceberg``."""
-
-    binding_id = "tributo.daft.iceberg"
-    _descriptor = _daft_descriptor(
-        "iceberg",
-        binding_id,
-        WriteCapability(
-            supported_modes=frozenset({WriteMode.APPEND, WriteMode.OVERWRITE}),
-            supported_options=_ICEBERG_OPTIONS,
-            distributed=True,
-            native_metrics=False,
-            can_create_target=True,
-        ),
-    )
-
-    def describe(
-        self, plan: LogicalWritePlan, input_handle: WriteHandle
-    ) -> WriteDescriptor:
-        input_handle = _require_daft(plan, input_handle, "iceberg")
-        return self._descriptor.model_copy(deep=True)
-
-    def execute(
-        self,
-        plan: LogicalWritePlan,
-        input_handle: WriteHandle,
-        context: WriteExecutionContext,
-    ) -> WriteReceipt:
-        input_handle = _require_daft(plan, input_handle, "iceberg")
-        table, _, _ = ensure_iceberg_table(
-            input_handle, "tributo.daft", context.runtime_options, plan.target
-        )
-        kwargs: dict[str, Any] = {
-            "mode": plan.mode.value,
-            "io_config": daft_io_config(
-                context.runtime_options,
-                required=plan.target.lower().startswith("s3://"),
-            ),
-        }
-        if "snapshot_properties" in plan.options:
-            kwargs["snapshot_properties"] = dict(plan.options["snapshot_properties"])
-        input_handle.dataframe.write_iceberg(table, **kwargs)
-        return write_receipt(
-            plan=plan,
-            binding_id=self.binding_id,
-            native_api="daft.DataFrame.write_iceberg",
-        )
-
-
-class DaftLanceWriteBinding:
-    """Delegate Lance writes to ``daft.DataFrame.write_lance``."""
-
-    binding_id = "tributo.daft.lance"
-    _descriptor = _daft_descriptor(
-        "lance",
-        binding_id,
-        WriteCapability(
-            supported_modes=_LANCE_MODES,
-            distributed=True,
-            native_metrics=False,
-            can_create_target=True,
-        ),
-    )
-
-    def describe(
-        self, plan: LogicalWritePlan, input_handle: WriteHandle
-    ) -> WriteDescriptor:
-        input_handle = _require_daft(plan, input_handle, "lance")
-        return self._descriptor.model_copy(deep=True)
-
-    def execute(
-        self,
-        plan: LogicalWritePlan,
-        input_handle: WriteHandle,
-        context: WriteExecutionContext,
-    ) -> WriteReceipt:
-        input_handle = _require_daft(plan, input_handle, "lance")
-        input_handle.dataframe.write_lance(
-            daft_path(plan.target),
-            mode=cast(
-                Literal["create", "append", "overwrite", "merge"], plan.mode.value
-            ),
-            io_config=daft_io_config(
-                context.runtime_options,
-                required=plan.target.lower().startswith("s3://"),
-            ),
-        )
-        return write_receipt(
-            plan=plan,
-            binding_id=self.binding_id,
-            native_api="daft.DataFrame.write_lance",
-        )
-
-
 def _clickhouse_target(target: str) -> tuple[str, int, str, str]:
     parsed = urlsplit(target)
     if (
@@ -844,14 +637,4 @@ def _require_ray(
         raise WriteCapabilityError("Ray write binding received an incompatible plan")
     if not isinstance(handle, RayDataHandle):
         raise WriteCapabilityError("Ray write binding requires a RayDataHandle")
-    return handle
-
-
-def _require_daft(
-    plan: LogicalWritePlan, handle: WriteHandle, target_kind: str
-) -> DaftDataFrameHandle:
-    if plan.engine_id != "tributo.daft" or plan.target_kind != target_kind:
-        raise WriteCapabilityError("Daft write binding received an incompatible plan")
-    if not isinstance(handle, DaftDataFrameHandle):
-        raise WriteCapabilityError("Daft write binding requires a DaftDataFrameHandle")
     return handle

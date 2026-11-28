@@ -1,4 +1,4 @@
-"""Real PostgreSQL conformance for Ray Data and Daft SQL readers."""
+"""Real PostgreSQL conformance for Ray Data SQL readers."""
 
 from __future__ import annotations
 
@@ -11,15 +11,13 @@ import pytest
 # when the optional engine/connector dependencies are absent. The dedicated
 # integration jobs install them via their extras.
 try:
-    import daft
     import psycopg
     from psycopg import sql
 except ModuleNotFoundError:
     pytest.skip("requires the data and postgresql extras", allow_module_level=True)
 
-from tests.data.ingestion_conformance import assert_dual_engine_conformance
+from tests.data.ingestion_conformance import assert_ray_conformance
 from tributo.data import (
-    DaftDataFrameHandle,
     IngestionRequest,
     IngestionRuntimeContext,
     RayDataHandle,
@@ -32,7 +30,7 @@ from tributo.exceptions import JobConfigurationError
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.ingestion_conformance,
-    pytest.mark.usefixtures("native_daft_ray_local_runtime"),
+    pytest.mark.usefixtures("ray_local_runtime"),
     pytest.mark.filterwarnings(
         "ignore:Tip.*future versions of Ray.*:FutureWarning",
         "ignore::pytest.PytestUnraisableExceptionWarning",
@@ -40,7 +38,7 @@ pytestmark = [
 ]
 
 
-def test_postgresql_dual_engine_conformance() -> None:
+def test_postgresql_ray_conformance() -> None:
     host = os.environ.get("TRIBUTO_POSTGRESQL_HOST", "127.0.0.1")
     port = int(os.environ.get("TRIBUTO_POSTGRESQL_PORT", "5432"))
     database = os.environ.get("TRIBUTO_POSTGRESQL_DB", "tributo")
@@ -80,21 +78,13 @@ def test_postgresql_dual_engine_conformance() -> None:
         table=table,
         columns=["id", "category"],
     )
-    assert daft.get_or_create_runner().name == "native"
     context = IngestionRuntimeContext()
     ray_result = open_ingestion(IngestionRequest(source=source, engine="ray"), context)
-    daft_result = open_ingestion(
-        IngestionRequest(source=source, engine="daft"), context
-    )
-    daft_parallel_result = None
     try:
         assert isinstance(ray_result.handle, RayDataHandle)
-        assert isinstance(daft_result.handle, DaftDataFrameHandle)
-        assert_dual_engine_conformance(
+        assert_ray_conformance(
             ray_result,
             ray_result.handle.dataset.take_all(),
-            daft_result,
-            daft_result.handle.dataframe.to_pylist(),
             expected_rows=[
                 {"id": 1, "category": "drop"},
                 {"id": 2, "category": "keep"},
@@ -111,22 +101,8 @@ def test_postgresql_dual_engine_conformance() -> None:
             open_ingestion(
                 IngestionRequest(source=parallel_source, engine="ray"), context
             )
-        daft_parallel_result = open_ingestion(
-            IngestionRequest(source=parallel_source, engine="daft"), context
-        )
-        assert isinstance(daft_parallel_result.handle, DaftDataFrameHandle)
-        assert sorted(
-            daft_parallel_result.handle.dataframe.to_pylist(), key=lambda row: row["id"]
-        ) == [
-            {"id": 1, "category": "drop"},
-            {"id": 2, "category": "keep"},
-            {"id": 3, "category": "keep"},
-        ]
     finally:
         ray_result.close()
-        daft_result.close()
-        if daft_parallel_result is not None:
-            daft_parallel_result.close()
         with psycopg.connect(**connection_options) as connection:
             with connection.cursor() as cursor:
                 cursor.execute(

@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import cast
 
 import pytest
 
 from tests.support.runtime_versions import RAY_VERSION
 from tributo.data import (
-    DaftDataFrameHandle,
     IngestionDescriptor,
     IngestionOpenResult,
     IngestionPlanReceipt,
@@ -17,7 +17,7 @@ from tributo.data import (
     RayDataHandle,
 )
 from tributo.data.source_config import ParquetSourceConfig
-from tributo.exceptions import DataSourceError, JobConfigurationError
+from tributo.exceptions import DataSourceError
 from tributo.inference.contracts import ResolvedInputSelection
 from tributo.inference.input_resolver import IngestionGatewayInputResolver
 
@@ -143,7 +143,7 @@ class TestIngestionGatewayInputResolver:
     def test_daft_request_is_rejected_before_gateway_access(self) -> None:
         gateway = _Gateway([])
 
-        with pytest.raises(JobConfigurationError, match="Daft-to-Ray conversion"):
+        with pytest.raises(ValueError, match="engine must be one of"):
             _resolver(gateway).describe(_request(engine="daft"))
 
         assert gateway.describe_calls == []
@@ -202,10 +202,11 @@ class TestIngestionGatewayInputResolver:
         descriptor = _descriptor("2")
         cancel_calls: list[str] = []
         result = IngestionOpenResult(
-            handle=DaftDataFrameHandle(object()),
+            handle=RayDataHandle(object()),
             receipt=_receipt(descriptor),
             cancel_callback=lambda: cancel_calls.append("cancel"),
         )
+        result.handle = cast(RayDataHandle, object())
         gateway = _Gateway([descriptor], result)
         selection = ResolvedInputSelection(
             request=_request(binding_id=descriptor.binding_id),

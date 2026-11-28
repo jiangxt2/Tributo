@@ -39,7 +39,6 @@ def test_connector_extras_declare_minimum_supported_versions() -> None:
         "ray-doris": ">=2.0",
         "ray-hive": ">=1.2",
         "ray-clickhouse": ">=1.1",
-        "daft-doris": ">=1.1",
     }
     seen = set()
     for requirements in project["optional-dependencies"].values():
@@ -154,7 +153,6 @@ def test_full_runtime_profile_matches_the_image_builder_contract() -> None:
     assert profile["version_contract"]["ray"] == RAY_VERSION
     assert project["project"]["optional-dependencies"]["hive-ray"] == ["ray-hive>=1.2"]
     for package, contract_key in {
-        "daft-doris": "daft_doris",
         "ray-doris": "ray_doris",
         "ray-hive": "ray_hive",
         "thrift": "thrift",

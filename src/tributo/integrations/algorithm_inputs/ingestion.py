@@ -27,22 +27,19 @@ from tributo.algorithms.spi import (
     WorkerInputPayloadSet,
 )
 from tributo.data import (
-    DaftDataFrameHandle,
     IngestionDescriptor,
     IngestionGateway,
     IngestionOpenResult,
     IngestionRequest,
     IngestionRuntimeContext,
     RayDataHandle,
-    RayHandleAdaptation,
-    adapt_daft_result_to_ray,
 )
 from tributo.util.annotations import DeveloperAPI, PublicAPI
 
 INGESTION_RESOLVER_ID = "tributo.ingestion"
 _BRIDGE_DESCRIPTOR_VERSION = 1
 _REQUEST_KEY = re.compile(r"^[a-z][a-z0-9_.-]+$")
-_SUPPORTED_HANDLE_KINDS = frozenset({"ray_data", "daft_dataframe"})
+_SUPPORTED_HANDLE_KINDS = frozenset({"ray_data"})
 _MAX_MATERIALIZED_ROWS = 1_000_000
 _ADAPTER_MODULE = "tributo.integrations.algorithm_inputs.ingestion"
 _GENERIC_ADAPTER_REF = f"{_ADAPTER_MODULE}:prepare_ingestion_input"
@@ -50,11 +47,8 @@ _RAY_BATCH_ADAPTER_REF = f"{_ADAPTER_MODULE}:prepare_ray_batch_input"
 _RAY_TRAIN_ADAPTER_REF = f"{_ADAPTER_MODULE}:prepare_ray_train_input"
 _HANDLE_ADAPTER_REFS = {
     "ray_data": f"{_ADAPTER_MODULE}:prepare_ray_data_input",
-    "daft_dataframe": f"{_ADAPTER_MODULE}:prepare_daft_input",
 }
-HandleKind = Literal["ray_data", "daft_dataframe"]
-HandleAdapterId = Literal["tributo.daft_to_ray"]
-_DAFT_TO_RAY_ADAPTER_ID: HandleAdapterId = "tributo.daft_to_ray"
+HandleKind = Literal["ray_data"]
 
 
 @PublicAPI(stability="alpha")
@@ -90,10 +84,7 @@ class IngestionInputInvocation:
         repr=False,
         compare=False,
     )
-    handle_adapter_id: HandleAdapterId | None = field(
-        default=None,
-        kw_only=True,
-    )
+    handle_adapter_id: None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         if not isinstance(self.request, IngestionRequest):
@@ -104,10 +95,9 @@ class IngestionInputInvocation:
             self.runtime_context, IngestionRuntimeContext
         ):
             raise AlgorithmInputError("ingestion runtime context has an invalid type")
-        if self.handle_adapter_id not in (None, _DAFT_TO_RAY_ADAPTER_ID):
+        if self.handle_adapter_id is not None:
             raise AlgorithmInputError(
-                "unsupported ingestion handle adapter; expected "
-                f"{_DAFT_TO_RAY_ADAPTER_ID!r}"
+                "ingestion handle adapters are no longer supported"
             )
 
 
@@ -139,15 +129,12 @@ class IngestionInputResolver:
         self,
         gateway: IngestionGateway | None = None,
         *,
-        accepted_handle_kinds: Sequence[HandleKind] = (
-            "ray_data",
-            "daft_dataframe",
-        ),
+        accepted_handle_kinds: Sequence[HandleKind] = ("ray_data",),
     ) -> None:
         accepted = frozenset(accepted_handle_kinds)
         if not accepted or not accepted.issubset(_SUPPORTED_HANDLE_KINDS):
             raise AlgorithmInputError(
-                "accepted ingestion handle kinds must be ray_data and/or daft_dataframe"
+                "accepted ingestion handle kinds must be ray_data"
             )
         self._gateway = gateway or IngestionGateway()
         self._accepted_handle_kinds = accepted
@@ -165,10 +152,7 @@ class IngestionInputResolver:
         """Map one side-effect-free Gateway descriptor into the Core plan."""
         invocation = self._lookup_invocation(binding, context.values)
         source_descriptor = self._describe_request(invocation.request)
-        ingestion_descriptor = self._describe_adapted_handle(
-            source_descriptor,
-            invocation.handle_adapter_id,
-        )
+        ingestion_descriptor = source_descriptor
         if ingestion_descriptor.handle_kind not in self._accepted_handle_kinds:
             raise AlgorithmInputError(
                 "ingestion handle kind is incompatible with this algorithm runtime: "
@@ -203,7 +187,7 @@ class IngestionInputResolver:
                 "source_ingestion_descriptor": source_descriptor.model_dump(
                     mode="json"
                 ),
-                "handle_adapter_id": invocation.handle_adapter_id,
+                "handle_adapter_id": None,
             },
             compatible_worker_input_adapter_refs=tuple(
                 sorted(
@@ -245,10 +229,6 @@ class IngestionInputResolver:
         result = self._open_request(invocation)
         try:
             self._validate_open_result(result, expected)
-            adaptation = self._adapt_open_result(
-                result,
-                invocation.handle_adapter_id,
-            )
         except AlgorithmInputError as exc:
             try:
                 result.cancel()
@@ -271,17 +251,8 @@ class IngestionInputResolver:
             "dataset_ref": result.receipt.dataset_ref,
             "receipt": receipt,
         }
-        lease_handle: RayDataHandle | DaftDataFrameHandle = result.handle
-        if adaptation is not None:
-            lease_handle = adaptation.handle
-            provenance.update(
-                {
-                    "handle_adapter_id": _DAFT_TO_RAY_ADAPTER_ID,
-                    "conversion_receipt": adaptation.receipt.model_dump(mode="json"),
-                }
-            )
         return ResolvedInputLease(
-            handle=lease_handle,
+            handle=result.handle,
             binding=binding,
             provenance=provenance,
             close_callback=owner.close,
@@ -316,31 +287,6 @@ class IngestionInputResolver:
             raise AlgorithmInputError("IngestionGateway returned an invalid descriptor")
         return descriptor
 
-    @staticmethod
-    def _describe_adapted_handle(
-        descriptor: IngestionDescriptor,
-        adapter_id: HandleAdapterId | None,
-    ) -> IngestionDescriptor:
-        """Project the source descriptor into the explicitly requested handle."""
-        if adapter_id is None:
-            return descriptor
-        if adapter_id != _DAFT_TO_RAY_ADAPTER_ID:
-            raise AlgorithmInputError(
-                f"unsupported ingestion handle adapter {adapter_id!r}"
-            )
-        if descriptor.engine_id != "tributo.daft" or descriptor.handle_kind != (
-            "daft_dataframe"
-        ):
-            raise AlgorithmInputError(
-                "tributo.daft_to_ray requires a DaftDataFrameHandle source"
-            )
-        return descriptor.model_copy(
-            update={
-                "engine_id": "tributo.ray_data",
-                "handle_kind": "ray_data",
-            }
-        )
-
     def _open_request(
         self,
         invocation: IngestionInputInvocation,
@@ -361,24 +307,6 @@ class IngestionInputResolver:
         return result
 
     @staticmethod
-    def _adapt_open_result(
-        result: IngestionOpenResult,
-        adapter_id: HandleAdapterId | None,
-    ) -> RayHandleAdaptation | None:
-        if adapter_id is None:
-            return None
-        if adapter_id != _DAFT_TO_RAY_ADAPTER_ID:
-            raise AlgorithmInputError(
-                f"unsupported ingestion handle adapter {adapter_id!r}"
-            )
-        try:
-            return adapt_daft_result_to_ray(result)
-        except Exception as exc:
-            raise AlgorithmInputError(
-                f"Daft-to-Ray handle adaptation failed: {type(exc).__name__}"
-            ) from exc
-
-    @staticmethod
     def _validate_open_result(
         result: IngestionOpenResult,
         descriptor: ResolvedInputDescriptor,
@@ -396,8 +324,6 @@ class IngestionInputResolver:
         handle_kind: HandleKind
         if isinstance(result.handle, RayDataHandle):
             handle_kind = "ray_data"
-        elif isinstance(result.handle, DaftDataFrameHandle):
-            handle_kind = "daft_dataframe"
         else:
             raise AlgorithmInputError("Gateway returned an unsupported input handle")
         receipt = result.receipt
@@ -431,17 +357,12 @@ class IngestionInputRuntimeAdapter:
         plan: ResolvedAlgorithmPlan,
     ) -> RuntimeInputBinding:
         """Create a Worker payload without converting between ingestion engines."""
-        if not isinstance(lease.handle, (RayDataHandle, DaftDataFrameHandle)):
+        if not isinstance(lease.handle, RayDataHandle):
             raise AlgorithmInputError(
                 "ingestion runtime adapter requires a typed Gateway handle"
             )
         binding = lease.binding or plan.primary_input_binding
         if plan.runtime.topology is RuntimeTopology.RAY_TRAIN_TORCH:
-            if not isinstance(lease.handle, RayDataHandle):
-                raise AlgorithmInputError(
-                    "Ray Train Torch input requires RayDataHandle; no implicit "
-                    "Daft-to-Ray conversion is permitted"
-                )
             return RuntimeInputBinding(
                 tuple(
                     WorkerInputPayload(
@@ -459,11 +380,6 @@ class IngestionInputRuntimeAdapter:
             RuntimeTopology.RAY_MAP_REDUCE,
             RuntimeTopology.RAY_ITERATIVE_OPTIMIZATION,
         }:
-            if not isinstance(lease.handle, RayDataHandle):
-                raise AlgorithmInputError(
-                    "distributed input requires RayDataHandle; no implicit Daft-to-Ray "
-                    "conversion is permitted"
-                )
             try:
                 expected_total_rows = (
                     lease.handle.dataset.count()
@@ -705,34 +621,6 @@ def prepare_ray_data_input(
 
 
 @DeveloperAPI
-def prepare_daft_input(
-    payload: WorkerInputPayload | WorkerInputPayloadSet,
-) -> PreparedInput:
-    """Materialize required columns from a Daft DataFrame inside the Worker."""
-    if isinstance(payload, WorkerInputPayloadSet):
-        return _prepare_role_payloads(payload, prepare_daft_input)
-    if not isinstance(payload.value, DaftDataFrameHandle):
-        raise AlgorithmInputError("Daft input adapter requires DaftDataFrameHandle")
-    required = _required_columns(payload.binding)
-    try:
-        selected = payload.value.dataframe.select(*required).limit(
-            _MAX_MATERIALIZED_ROWS + 1
-        )
-        raw_columns = selected.to_pydict()
-        columns = {
-            name: _column_values(raw_columns[name], column=name) for name in required
-        }
-    except AlgorithmInputError:
-        raise
-    except Exception as exc:
-        raise AlgorithmInputError(
-            f"Daft input preparation failed: {type(exc).__name__}"
-        ) from exc
-    _enforce_materialized_row_limit(columns)
-    return _prepared_view(payload, columns)
-
-
-@DeveloperAPI
 def prepare_ingestion_input(
     payload: WorkerInputPayload | WorkerInputPayloadSet,
 ) -> PreparedInput:
@@ -741,8 +629,6 @@ def prepare_ingestion_input(
         return _prepare_role_payloads(payload, prepare_ingestion_input)
     if isinstance(payload.value, (RayDataHandle, _RayDataIteratorPayload)):
         return prepare_ray_data_input(payload)
-    if isinstance(payload.value, DaftDataFrameHandle):
-        return prepare_daft_input(payload)
     raise AlgorithmInputError("unsupported typed ingestion handle")
 
 
@@ -751,7 +637,6 @@ __all__ = [
     "IngestionInputResolver",
     "IngestionInputRuntimeAdapter",
     "IngestionRequestRef",
-    "prepare_daft_input",
     "prepare_ingestion_input",
     "prepare_ray_batch_input",
     "prepare_ray_data_input",

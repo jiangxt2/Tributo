@@ -22,7 +22,6 @@
         "registry",
         "model-export-hf",
         "graph",
-        "data-daft",
         "hive-ray",
         "vector-index",
         "postgresql",
@@ -33,11 +32,8 @@
       "postgres_image": "postgres:16.14@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b",
       "clickhouse_image": "clickhouse/clickhouse-server:26.8.1.2041@sha256:9f8fa0d51f86611fda226c4085cdafdddce35312a60c934de2e4450d61fcb99a",
       "runtime_repository": "tributo-it-runtime",
-      "version_contract": {
-        "daft_prefix": "0.7."
-      },
+      "version_contract": {},
       "locked_version_contract": [
-        "daft-doris",
         "lance-ray",
         "pyarrow",
         "pylance",
@@ -87,7 +83,6 @@
       "dockerfile": "docker/tributo-runtime/Dockerfile",
       "extras": [
         "data",
-        "data-daft",
         "hive-ray",
         "vector-index",
         "postgresql",
@@ -111,11 +106,8 @@
       ],
       "minio_image": "minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e",
       "runtime_repository": "tributo-runtime",
-      "version_contract": {
-        "daft_prefix": "0.7."
-      },
+      "version_contract": {},
       "locked_version_contract": [
-        "daft-doris",
         "lance-ray",
         "pyarrow",
         "pylance",

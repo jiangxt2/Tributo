@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from tests.support.runtime_versions import RAY_VERSION
-from tributo.data.contracts.handles import DaftDataFrameHandle, RayDataHandle
+from tributo.data.contracts.handles import RayDataHandle
 from tributo.data.engine_ids import ENGINE_ALIASES
 from tributo.data.writing import (
     WriteBindingError,
@@ -123,16 +123,7 @@ def test_write_capability_does_not_assume_empty_input_support() -> None:
 
 def test_read_and_write_engine_aliases_are_identical() -> None:
     assert ENGINE_ALIASES["ray"] == "tributo.ray_data"
-    assert ENGINE_ALIASES["daft"] == "tributo.daft"
-    assert (
-        WriteRequest(
-            engine="daft",
-            target_kind="parquet",
-            target="/tmp/output",
-            mode=WriteMode.OVERWRITE,
-        ).engine
-        == "tributo.daft"
-    )
+    assert "daft" not in ENGINE_ALIASES
 
 
 def test_gateway_plans_and_executes_without_closing_input(
@@ -165,7 +156,7 @@ def test_gateway_rejects_mismatched_engine_handle(
     with pytest.raises(
         WriteCapabilityError, match="Ray writes require a RayDataHandle"
     ):
-        WriteGateway(registry).execute(_request(), DaftDataFrameHandle(object()))
+        WriteGateway(registry).execute(_request(), cast(RayDataHandle, object()))
 
 
 def test_gateway_rejects_inconsistent_descriptor(

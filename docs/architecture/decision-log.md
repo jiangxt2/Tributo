@@ -1,5 +1,7 @@
 # Architecture decision log
 
+> Historical decisions below describe their original context. The current data path uses Ray.
+
 Purpose: Record every Go/No-Go decision for condition tracks, including timing,
 evidence, and maintainer determination. Each track is re-evaluated when its
 trigger condition is met.

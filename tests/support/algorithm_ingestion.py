@@ -7,9 +7,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Literal
 
-from tests.support.runtime_versions import DAFT_VERSION, RAY_VERSION
+from tests.support.runtime_versions import RAY_VERSION
 from tributo.data import (
-    DaftDataFrameHandle,
     IngestionDescriptor,
     IngestionOpenResult,
     IngestionPlanReceipt,
@@ -19,7 +18,6 @@ from tributo.data import (
 )
 from tributo.data.scan_plan import ScanKind
 from tributo.integrations.algorithm_inputs import IngestionInputInvocation
-from tributo.integrations.algorithm_inputs.ingestion import HandleAdapterId
 
 
 def _digest(value: str) -> str:
@@ -82,38 +80,6 @@ class StubRayDataset:
 
 
 @dataclass
-class StubDaftFrame:
-    columns: Mapping[str, Sequence[object]]
-    selected: tuple[str, ...] = ()
-    row_limit: int | None = None
-    ray_conversion_calls: int = 0
-    to_ray_dataset_calls: int = 0
-    ray_dataset: StubRayDataset | None = None
-
-    def select(self, *columns: str) -> StubDaftFrame:
-        missing = sorted(set(columns) - set(self.columns))
-        if missing:
-            raise ValueError(f"missing columns: {missing}")
-        self.selected = tuple(columns)
-        return self
-
-    def limit(self, count: int) -> StubDaftFrame:
-        self.row_limit = count
-        return self
-
-    def to_pydict(self) -> dict[str, list[object]]:
-        return {
-            name: list(self.columns[name][: self.row_limit]) for name in self.selected
-        }
-
-    def to_ray_dataset(self) -> object:
-        self.ray_conversion_calls += 1
-        self.to_ray_dataset_calls += 1
-        self.ray_dataset = StubRayDataset(self.columns)
-        return self.ray_dataset
-
-
-@dataclass
 class StubIngestionGateway:
     """Return typed handles while preserving the real Gateway contracts."""
 
@@ -121,15 +87,12 @@ class StubIngestionGateway:
     lifecycle_events: list[str] = field(default_factory=list)
     describe_calls: int = 0
     open_calls: int = 0
-    last_daft_frame: StubDaftFrame | None = None
 
     def describe(self, request: IngestionRequest) -> IngestionDescriptor:
         self.describe_calls += 1
         request_digest = _digest(request.model_dump_json())
-        handle_kind: Literal["ray_data", "daft_dataframe"] = (
-            "ray_data" if request.engine == "tributo.ray_data" else "daft_dataframe"
-        )
-        distribution = "ray" if handle_kind == "ray_data" else "daft"
+        handle_kind: Literal["ray_data"] = "ray_data"
+        distribution = "ray"
         return IngestionDescriptor(
             request_digest=request_digest,
             source_ref=_digest(f"source:{request_digest}"),
@@ -143,9 +106,7 @@ class StubIngestionGateway:
             handle_kind=handle_kind,
             deferred_validations=("runtime_connectivity", "worker_versions"),
             binding_distribution=distribution,
-            binding_distribution_version=RAY_VERSION
-            if distribution == "ray"
-            else DAFT_VERSION,
+            binding_distribution_version=RAY_VERSION,
             capability_version=1,
         )
 
@@ -157,13 +118,8 @@ class StubIngestionGateway:
         del runtime_context
         self.open_calls += 1
         descriptor = self.describe(request)
-        if descriptor.handle_kind == "ray_data":
-            handle = RayDataHandle(StubRayDataset(self.columns))
-            engine_version = RAY_VERSION
-        else:
-            self.last_daft_frame = StubDaftFrame(self.columns)
-            handle = DaftDataFrameHandle(self.last_daft_frame)
-            engine_version = DAFT_VERSION
+        handle = RayDataHandle(StubRayDataset(self.columns))
+        engine_version = RAY_VERSION
         receipt = IngestionPlanReceipt(
             request_digest=descriptor.request_digest,
             engine_id=descriptor.engine_id,
@@ -193,9 +149,8 @@ class StubIngestionGateway:
 
 def ingestion_invocation(
     *,
-    engine: Literal["ray", "daft"] = "ray",
+    engine: Literal["ray"] = "ray",
     credentials: bool = False,
-    handle_adapter_id: HandleAdapterId | None = None,
 ) -> IngestionInputInvocation:
     s3 = (
         {
@@ -214,12 +169,10 @@ def ingestion_invocation(
             engine=engine,
             trace_context={"trace_id": "algorithm-input-test"},
         ),
-        handle_adapter_id=handle_adapter_id,
     )
 
 
 __all__ = [
-    "StubDaftFrame",
     "StubIngestionGateway",
     "StubRayDataset",
     "ingestion_invocation",

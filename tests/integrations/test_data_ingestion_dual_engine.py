@@ -1,7 +1,7 @@
-"""Dual-engine ingestion and native-write integration test for Docker Ray.
+"""Ingestion and native-write integration test for Docker Ray.
 
 Run inside ``ray-head`` with ``TRIBUTO_DOCKER_RAY_TEST=1``. The test path is
-under the cluster's shared writable work mount so Ray and Daft workers see the
+under the cluster's shared writable work mount so Ray workers see the
 same files, while every node imports from one read-only source snapshot. The
 MinIO case also exercises native Parquet, CSV, Iceberg, and Lance writes over S3.
 """
@@ -16,7 +16,6 @@ from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
-import daft
 import numpy as np
 import pyarrow as pa
 import pyarrow.fs as pafs
@@ -29,12 +28,11 @@ try:
 except ModuleNotFoundError:  # Docker image intentionally omits test dependencies.
     pytest = None
 
-from tests.data.ingestion_conformance import assert_dual_engine_conformance
+from tests.data.ingestion_conformance import assert_ray_conformance
 from tests.support.runtime_versions import RAY_VERSION
 from tributo.data import (
     CastColumn,
     ColumnRename,
-    DaftDataFrameHandle,
     DropColumns,
     FillNull,
     FilterComparison,
@@ -90,7 +88,6 @@ def _configure_cluster() -> None:
         raise RuntimeError(
             "Docker ingestion gate requires a Ray head and at least one worker"
         )
-    daft.set_runner_ray(address="auto", noop_if_initialized=True)
     _assert_source_snapshot_identity(alive_nodes)
 
 
@@ -169,31 +166,17 @@ def _assert_conformance(source: ParquetSourceConfig) -> None:
                 context,
             )
         )
-        daft_result = stack.enter_context(
-            open_ingestion(
-                IngestionRequest(
-                    source=source,
-                    engine="tributo.daft",
-                    transforms=pipeline,
-                ),
-                context,
-            )
-        )
 
         assert isinstance(ray_result.handle, RayDataHandle)
-        assert isinstance(daft_result.handle, DaftDataFrameHandle)
-        assert_dual_engine_conformance(
+        assert_ray_conformance(
             ray_result,
             ray_result.handle.dataset.take_all(),
-            daft_result,
-            daft_result.handle.dataframe.to_pylist(),
             expected_rows=[
                 {"id": 2, "score": 0.7, "label": "keep", "numeric": 2},
                 {"id": 3, "score": 0.9, "label": "keep", "numeric": 3},
             ],
             limit=10,
         )
-    assert daft.get_or_create_runner().name == "ray"
 
     null_pipeline = TransformPipeline(
         steps=(FilterNull(column="active"), SelectColumns(columns=("id",)))
@@ -205,19 +188,9 @@ def _assert_conformance(source: ParquetSourceConfig) -> None:
                 context,
             )
         )
-        daft_null = stack.enter_context(
-            open_ingestion(
-                IngestionRequest(
-                    source=source, engine="daft", transforms=null_pipeline
-                ),
-                context,
-            )
-        )
-        assert_dual_engine_conformance(
+        assert_ray_conformance(
             ray_null,
             ray_null.handle.dataset.take_all(),
-            daft_null,
-            daft_null.handle.dataframe.to_pylist(),
             expected_rows=[{"id": 3}],
         )
 
@@ -231,14 +204,9 @@ def _assert_empty_conformance(source: ParquetSourceConfig) -> None:
         ray_result = stack.enter_context(
             open_ingestion(IngestionRequest(source=source, engine="ray"), context)
         )
-        daft_result = stack.enter_context(
-            open_ingestion(IngestionRequest(source=source, engine="daft"), context)
-        )
-        assert_dual_engine_conformance(
+        assert_ray_conformance(
             ray_result,
             ray_result.handle.dataset.take_all(),
-            daft_result,
-            daft_result.handle.dataframe.to_pylist(),
             expected_rows=[],
         )
 
@@ -261,17 +229,9 @@ def _assert_not_equal_null_conformance(source: ParquetSourceConfig) -> None:
                 context,
             )
         )
-        daft_result = stack.enter_context(
-            open_ingestion(
-                IngestionRequest(source=source, engine="daft", transforms=pipeline),
-                context,
-            )
-        )
-        assert_dual_engine_conformance(
+        assert_ray_conformance(
             ray_result,
             ray_result.handle.dataset.take_all(),
-            daft_result,
-            daft_result.handle.dataframe.to_pylist(),
             expected_rows=[{"id": 2}, {"id": 3}],
         )
 
@@ -294,23 +254,15 @@ def _assert_empty_isin_conformance(source: ParquetSourceConfig) -> None:
                 context,
             )
         )
-        daft_result = stack.enter_context(
-            open_ingestion(
-                IngestionRequest(source=source, engine="daft", transforms=pipeline),
-                context,
-            )
-        )
-        assert_dual_engine_conformance(
+        assert_ray_conformance(
             ray_result,
             ray_result.handle.dataset.take_all(),
-            daft_result,
-            daft_result.handle.dataframe.to_pylist(),
             expected_rows=[],
         )
 
 
 def _assert_native_write_conformance() -> None:
-    """Exercise every built-in Ray/Daft writer on the shared Ray cluster."""
+    """Exercise every built-in Ray writer on the shared Ray cluster."""
     from pyiceberg.catalog import load_catalog
 
     output_root = Path("/workspace/tributo-work") / (
@@ -320,14 +272,10 @@ def _assert_native_write_conformance() -> None:
     gateway = default_write_gateway()
     rows = [{"id": 1, "category": "a"}, {"id": 2, "category": "b"}]
 
-    for engine in ("ray", "daft"):
+    for engine in ("ray",):
         for target_kind in ("parquet", "csv"):
             target = output_root / f"{engine}-{target_kind}"
-            handle = (
-                RayDataHandle(ray.data.from_items(rows))
-                if engine == "ray"
-                else DaftDataFrameHandle(daft.from_pylist(rows))
-            )
+            handle = RayDataHandle(ray.data.from_items(rows))
             receipt = gateway.execute(
                 WriteRequest(
                     engine=engine,
@@ -344,11 +292,7 @@ def _assert_native_write_conformance() -> None:
             assert list(target.rglob("*." + target_kind))
 
         lance_target = output_root / f"{engine}-lance"
-        handle = (
-            RayDataHandle(ray.data.from_items(rows))
-            if engine == "ray"
-            else DaftDataFrameHandle(daft.from_pylist(rows))
-        )
+        handle = RayDataHandle(ray.data.from_items(rows))
         receipt = gateway.execute(
             WriteRequest(
                 engine=engine,
@@ -373,11 +317,7 @@ def _assert_native_write_conformance() -> None:
         )
         catalog.create_namespace("default")
         table_identifier = "default.events"
-        handle = (
-            RayDataHandle(ray.data.from_items(rows))
-            if engine == "ray"
-            else DaftDataFrameHandle(daft.from_pylist(rows))
-        )
+        handle = RayDataHandle(ray.data.from_items(rows))
         receipt = gateway.execute(
             WriteRequest(
                 engine=engine,
@@ -401,7 +341,7 @@ def _assert_native_write_conformance() -> None:
 
 
 def _assert_native_s3_write_conformance(s3: S3Config) -> None:
-    """Exercise native Ray/Daft Parquet, CSV, Iceberg, and Lance on MinIO."""
+    """Exercise native Ray Parquet, CSV, Iceberg, and Lance on MinIO."""
     from pyiceberg.catalog import load_catalog
 
     from tributo.data._s3 import merge_iceberg_properties
@@ -430,14 +370,10 @@ def _assert_native_s3_write_conformance(s3: S3Config) -> None:
         assert any(info.type == pafs.FileType.File for info in infos), prefix
 
     try:
-        for engine in ("ray", "daft"):
+        for engine in ("ray",):
             for target_kind in ("parquet", "csv"):
                 prefix = f"{bucket}/{engine}-{target_kind}"
-                handle = (
-                    RayDataHandle(ray.data.from_items(rows))
-                    if engine == "ray"
-                    else DaftDataFrameHandle(daft.from_pylist(rows))
-                )
+                handle = RayDataHandle(ray.data.from_items(rows))
                 receipt = gateway.execute(
                     WriteRequest(
                         engine=engine,
@@ -455,11 +391,7 @@ def _assert_native_s3_write_conformance(s3: S3Config) -> None:
                 assert_files(prefix)
 
             lance_prefix = f"{bucket}/{engine}-lance"
-            handle = (
-                RayDataHandle(ray.data.from_items(rows))
-                if engine == "ray"
-                else DaftDataFrameHandle(daft.from_pylist(rows))
-            )
+            handle = RayDataHandle(ray.data.from_items(rows))
             receipt = gateway.execute(
                 WriteRequest(
                     engine=engine,
@@ -490,11 +422,7 @@ def _assert_native_s3_write_conformance(s3: S3Config) -> None:
             )
             catalog.create_namespace("default")
             table_identifier = "default.events"
-            handle = (
-                RayDataHandle(ray.data.from_items(rows))
-                if engine == "ray"
-                else DaftDataFrameHandle(daft.from_pylist(rows))
-            )
+            handle = RayDataHandle(ray.data.from_items(rows))
             receipt = gateway.execute(
                 WriteRequest(
                     engine=engine,
@@ -547,19 +475,10 @@ def _assert_iceberg_s3_read_conformance(
                 context,
             )
         )
-        daft_result = stack.enter_context(
-            open_ingestion(
-                IngestionRequest(source=source, engine="tributo.daft"),
-                context,
-            )
-        )
         assert isinstance(ray_result.handle, RayDataHandle)
-        assert isinstance(daft_result.handle, DaftDataFrameHandle)
-        assert_dual_engine_conformance(
+        assert_ray_conformance(
             ray_result,
             ray_result.handle.dataset.take_all(),
-            daft_result,
-            daft_result.handle.dataframe.to_pylist(),
             expected_rows=expected_rows,
         )
 
@@ -864,4 +783,4 @@ if __name__ == "__main__":
     test_hive_server2_projection_on_worker()
     test_clickhouse_append_round_trip_and_native_receipt()
     test_exact_coverage_and_batch_inference_on_audited_ray()
-    print("dual-engine ingestion conformance passed")
+    print("Ray ingestion conformance passed")

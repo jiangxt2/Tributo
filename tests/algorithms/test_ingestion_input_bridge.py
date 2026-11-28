@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 from types import SimpleNamespace
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
-import daft
 import pytest
 
 from tests.support.algorithm_ingestion import (
@@ -33,7 +32,6 @@ from tributo.algorithms.spi import (
     WorkerInputPayload,
 )
 from tributo.data import (
-    DaftDataFrameHandle,
     IngestionGateway,
     IngestionOpenResult,
     IngestionRequest,
@@ -72,10 +70,7 @@ class _ReceiptDriftGateway(StubIngestionGateway):
 def _resolver(
     gateway: StubIngestionGateway,
     *,
-    accepted: tuple[Literal["ray_data", "daft_dataframe"], ...] = (
-        "ray_data",
-        "daft_dataframe",
-    ),
+    accepted: tuple[Literal["ray_data"], ...] = ("ray_data",),
 ) -> IngestionInputResolver:
     return IngestionInputResolver(
         cast(IngestionGateway, gateway),
@@ -110,6 +105,15 @@ def test_invocation_keeps_runtime_context_as_second_positional_argument() -> Non
     assert restored.request == invocation.request
     assert restored.runtime_context is context
     assert restored.handle_adapter_id is None
+
+
+def test_removed_handle_adapter_is_rejected() -> None:
+    invocation = ingestion_invocation()
+    invocation_type: Any = type(invocation)
+    with pytest.raises(
+        AlgorithmInputError, match="handle adapters are no longer supported"
+    ):
+        invocation_type(invocation.request, handle_adapter_id="tributo.daft_to_ray")
 
 
 def test_planned_descriptor_contains_gateway_facts_but_not_request_body() -> None:
@@ -149,28 +153,12 @@ def test_planned_descriptor_contains_gateway_facts_but_not_request_body() -> Non
     assert "materializable" in plan.input_descriptor.input_capabilities
     assert "shardable" in plan.input_descriptor.input_capabilities
     assert plan.input_descriptor.resolver_payload["bridge_descriptor_version"] == 1
+    assert plan.input_descriptor.resolver_payload["handle_adapter_id"] is None
     assert "fixture-access-key" not in serialized
     assert "fixture-secret-key" not in serialized
     assert "fixture-bucket" not in serialized
     assert "trace_id" not in serialized
     assert gateway.open_calls == 0
-
-
-def test_daft_descriptor_does_not_claim_shardable_capability() -> None:
-    gateway = StubIngestionGateway(_COLUMNS)
-    resolver = _resolver(gateway)
-    binding = _binding()
-    descriptor = resolver.describe(
-        binding,
-        InputResolutionContext(
-            values={binding.reference: ingestion_invocation(engine="daft")}
-        ),
-    )
-
-    assert descriptor.engine_id == "tributo.daft"
-    assert descriptor.view_kind == "daft_dataframe"
-    assert "materializable" in descriptor.input_capabilities
-    assert "shardable" not in descriptor.input_capabilities
 
 
 def test_planner_rejects_incompatible_worker_adapter_before_gateway_open() -> None:
@@ -211,7 +199,7 @@ def test_request_drift_fails_before_gateway_open() -> None:
             binding,
             descriptor,
             InputExecutionContext(
-                {binding.reference: ingestion_invocation(engine="daft")}
+                {binding.reference: ingestion_invocation(credentials=True)}
             ),
         )
 
@@ -260,149 +248,6 @@ def test_opened_receipt_drift_is_rejected_and_owner_is_cancelled() -> None:
     assert gateway.lifecycle_events == ["cancelled"]
 
 
-def test_daft_handle_is_materialized_without_implicit_ray_conversion() -> None:
-    gateway = StubIngestionGateway(_COLUMNS)
-    resolver = _resolver(gateway)
-    binding = _binding()
-    invocation = ingestion_invocation(engine="daft")
-    descriptor = resolver.describe(
-        binding,
-        InputResolutionContext(values={binding.reference: invocation}),
-    )
-    lease = resolver.open(
-        binding,
-        descriptor,
-        InputExecutionContext({binding.reference: invocation}),
-    )
-
-    prepared = prepare_ingestion_input(
-        WorkerInputPayload("train", binding, lease.handle)
-    )
-    view = prepared.views["train"]
-
-    assert cast(MaterializedTabularInputView, view).row_count == 4
-    assert gateway.last_daft_frame is not None
-    assert gateway.last_daft_frame.ray_conversion_calls == 0
-    prepared.close()
-    lease.close()
-
-
-def test_explicit_daft_to_ray_adapter_produces_ray_descriptor_and_receipt(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        daft,
-        "get_or_create_runner",
-        lambda: SimpleNamespace(name="ray"),
-    )
-    gateway = StubIngestionGateway(_COLUMNS)
-    resolver = _resolver(gateway)
-    binding = _binding()
-    invocation = ingestion_invocation(
-        engine="daft",
-        handle_adapter_id="tributo.daft_to_ray",
-    )
-
-    descriptor = resolver.describe(
-        binding,
-        InputResolutionContext(values={binding.reference: invocation}),
-    )
-
-    assert descriptor.engine_id == "tributo.ray_data"
-    assert descriptor.view_kind == "ray_data"
-    assert "shardable" in descriptor.input_capabilities
-    assert descriptor.resolver_payload["handle_adapter_id"] == "tributo.daft_to_ray"
-    assert (
-        descriptor.resolver_payload["source_ingestion_descriptor"]["handle_kind"]
-        == "daft_dataframe"
-    )
-
-    lease = resolver.open(
-        binding,
-        descriptor,
-        InputExecutionContext({binding.reference: invocation}),
-    )
-    try:
-        assert isinstance(lease.handle, RayDataHandle)
-        assert gateway.last_daft_frame is not None
-        assert gateway.last_daft_frame.ray_conversion_calls == 1
-        conversion = cast(dict[str, object], lease.provenance["conversion_receipt"])
-        assert conversion["adapter_id"] == "tributo.daft_to_ray"
-        assert conversion["full_driver_materialization"] is False
-        assert lease.provenance["engine_id"] == "tributo.daft"
-        assert lease.provenance["handle_kind"] == "ray_data"
-    finally:
-        lease.close()
-
-
-def test_explicit_daft_to_ray_adapter_rejects_native_runner_and_cancels(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        daft,
-        "get_or_create_runner",
-        lambda: SimpleNamespace(name="native"),
-    )
-    gateway = StubIngestionGateway(_COLUMNS)
-    resolver = _resolver(gateway)
-    binding = _binding()
-    invocation = ingestion_invocation(
-        engine="daft",
-        handle_adapter_id="tributo.daft_to_ray",
-    )
-    descriptor = resolver.describe(
-        binding,
-        InputResolutionContext(values={binding.reference: invocation}),
-    )
-
-    with pytest.raises(AlgorithmInputError, match="adaptation failed"):
-        resolver.open(
-            binding,
-            descriptor,
-            InputExecutionContext({binding.reference: invocation}),
-        )
-
-    assert gateway.last_daft_frame is not None
-    assert gateway.last_daft_frame.ray_conversion_calls == 0
-    assert gateway.lifecycle_events == ["cancelled"]
-
-
-def test_daft_to_ray_adapter_is_rejected_for_ray_source_during_planning() -> None:
-    gateway = StubIngestionGateway(_COLUMNS)
-    resolver = _resolver(gateway)
-    binding = _binding()
-    invocation = ingestion_invocation(
-        engine="ray",
-        handle_adapter_id="tributo.daft_to_ray",
-    )
-
-    with pytest.raises(AlgorithmInputError, match="requires a DaftDataFrameHandle"):
-        resolver.describe(
-            binding,
-            InputResolutionContext(values={binding.reference: invocation}),
-        )
-
-    assert gateway.open_calls == 0
-
-
-def test_real_daft_handle_uses_public_worker_materialization_api() -> None:
-    binding = _binding()
-    prepared = prepare_ingestion_input(
-        WorkerInputPayload(
-            "train",
-            binding,
-            DaftDataFrameHandle(
-                daft.from_pydict(
-                    {name: list(values) for name, values in _COLUMNS.items()}
-                )
-            ),
-        )
-    )
-
-    assert cast(MaterializedTabularInputView, prepared.views["train"]).row_count == 4
-    prepared.close()
-
-
 def test_managed_materialization_fails_closed_above_row_limit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -428,27 +273,10 @@ def test_managed_materialization_rejects_nested_column_values() -> None:
         prepare_ingestion_input(WorkerInputPayload("train", _binding(), handle))
 
 
-def test_unsupported_daft_handle_fails_during_planning() -> None:
-    gateway = StubIngestionGateway(_COLUMNS)
-    resolver = _resolver(gateway, accepted=("ray_data",))
-    binding = _binding()
-
-    with pytest.raises(AlgorithmInputError, match="incompatible"):
-        resolver.describe(
-            binding,
-            InputResolutionContext(
-                values={binding.reference: ingestion_invocation(engine="daft")}
-            ),
-        )
-
-    assert gateway.open_calls == 0
-
-
 def _data_parallel_plan(
     gateway: StubIngestionGateway,
     *,
-    engine: Literal["ray", "daft"],
-    handle_adapter_id: Literal["tributo.daft_to_ray"] | None = None,
+    engine: Literal["ray"],
 ) -> tuple[
     IngestionInputResolver,
     AlgorithmRequest,
@@ -475,7 +303,6 @@ def _data_parallel_plan(
     )
     invocation = ingestion_invocation(
         engine=engine,
-        handle_adapter_id=handle_adapter_id,
     )
     resolution_context = InputResolutionContext(
         values={request.input_binding.reference: invocation}
@@ -554,51 +381,4 @@ def test_map_reduce_binding_counts_input_before_public_streaming_split() -> None
         ] == [len(_COLUMNS["x0"]), len(_COLUMNS["x0"])]
     finally:
         runtime_binding.close()
-        lease.close()
-
-
-def test_data_parallel_daft_input_is_rejected_before_gateway_open() -> None:
-    gateway = StubIngestionGateway(_COLUMNS)
-
-    with pytest.raises(AlgorithmConfigurationError, match="shardable"):
-        _data_parallel_plan(gateway, engine="daft")
-
-    assert gateway.open_calls == 0
-
-
-def test_explicit_daft_to_ray_adapter_supports_data_parallel_sharding(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        daft,
-        "get_or_create_runner",
-        lambda: SimpleNamespace(name="ray"),
-    )
-    gateway = StubIngestionGateway(_COLUMNS)
-    resolver, request, plan, execution_context = _data_parallel_plan(
-        gateway,
-        engine="daft",
-        handle_adapter_id="tributo.daft_to_ray",
-    )
-
-    lease = resolver.open(
-        request.input_binding,
-        plan.input_descriptor,
-        execution_context,
-    )
-    try:
-        runtime_binding = IngestionInputRuntimeAdapter().bind(lease, plan)
-        try:
-            assert isinstance(lease.handle, RayDataHandle)
-            assert gateway.last_daft_frame is not None
-            assert gateway.last_daft_frame.ray_conversion_calls == 1
-            assert gateway.last_daft_frame.to_ray_dataset_calls == 1
-            assert gateway.last_daft_frame.ray_dataset is not None
-            assert gateway.last_daft_frame.ray_dataset.streaming_split_calls == [
-                (2, False)
-            ]
-            assert len(runtime_binding.payloads) == 2
-        finally:
-            runtime_binding.close()
-    finally:
         lease.close()

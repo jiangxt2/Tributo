@@ -202,7 +202,7 @@ def sample_entrypoint():
 
 @contextmanager
 def _bounded_ray_local_runtime() -> Iterator[None]:
-    """Own one bounded local Ray runtime without selecting a Daft runner."""
+    """Own one bounded local Ray runtime for data contract tests."""
     import ray
     from ray._private import ray_constants
 
@@ -245,21 +245,6 @@ def _bounded_ray_local_runtime() -> Iterator[None]:
 @pytest.fixture(scope="module")
 def ray_local_runtime() -> Iterator[None]:
     """Run Ray data contract tests in one bounded local runtime per module."""
-    with _bounded_ray_local_runtime():
-        yield
-
-
-@pytest.fixture(scope="module")
-def native_daft_ray_local_runtime() -> Iterator[None]:
-    """Lock Daft to its native runner before starting a local Ray runtime."""
-    import daft
-
-    runner = daft.get_or_create_runner()
-    if runner.name != "native":
-        pytest.fail(
-            "Native Daft conformance requires a fresh process whose Daft runner "
-            "has not already been locked to Ray"
-        )
     with _bounded_ray_local_runtime():
         yield
 

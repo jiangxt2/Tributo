@@ -1,4 +1,4 @@
-"""Built-in thin bindings for public Ray Data and Daft reader APIs."""
+"""Built-in thin bindings for public Ray Data reader APIs."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from collections.abc import Callable
 from packaging.specifiers import SpecifierSet
 from packaging.version import InvalidVersion, Version
 
-from tributo._common.runtime_versions import DAFT_SQL_VERSION_SPEC, RAY_VERSION_SPEC
+from tributo._common.runtime_versions import RAY_VERSION_SPEC
 from tributo.data.engine_binding import (
     BindingDescriptor,
     BindingKey,
@@ -23,18 +23,10 @@ from tributo.exceptions import EngineNotAvailableError
 _DEFAULT_BINDINGS: EngineBindings | None = None
 _DEFAULT_BINDINGS_LOCK = threading.Lock()
 _RAY_VERSION_SPEC = RAY_VERSION_SPEC
-_DAFT_VERSION_SPEC = ">=0.7.0,<0.8.0"
-_DAFT_SQL_VERSION_SPEC = DAFT_SQL_VERSION_SPEC
 _RAY_INSTALL_HINT = f"pip install 'ray[default,serve,tune]{RAY_VERSION_SPEC}'"
-_DAFT_INSTALL_HINT = "pip install 'tributo[data-daft]'"
-_DAFT_LANCE_INSTALL_HINT = "pip install 'tributo[data,data-daft]'"
 _DATA_INSTALL_HINT = "pip install 'tributo[data]'"
 _RAY_CLICKHOUSE_INSTALL_HINT = (
     "Install ray-clickhouse: uv sync --locked --extra clickhouse"
-)
-_DAFT_DORIS_INSTALL_HINT = (
-    "Install daft-doris: "
-    "uv sync --locked --extra mysql; use --extra doris-flight for Flight"
 )
 _RAY_DORIS_INSTALL_HINT = (
     "Install ray-doris: "
@@ -93,28 +85,6 @@ def _ray_parquet_descriptor() -> BindingDescriptor:
     )
 
 
-def _daft_parquet_descriptor() -> BindingDescriptor:
-    from tributo.data.bindings.daft_parquet import DaftParquetBinding
-
-    return BindingDescriptor(
-        key=BindingKey(
-            "tributo.daft",
-            ScanKind.FILE,
-            "parquet",
-            "tributo.daft.parquet",
-        ),
-        factory=DaftParquetBinding,
-        capabilities=frozenset({SourceCapability.PROJECTION}),
-        distribution_name="tributo",
-        distribution_version=_distribution_version("tributo") or "1.3.0.dev0",
-        engine_version_spec=_DAFT_VERSION_SPEC,
-        constraints=BindingPlanConstraints(
-            filesystem_ids=frozenset({"local", "file", "s3"})
-        ),
-        install_hint=_DAFT_INSTALL_HINT,
-    )
-
-
 def _ray_csv_descriptor() -> BindingDescriptor:
     from tributo.data.bindings.ray_csv import RayCsvBinding
 
@@ -132,23 +102,6 @@ def _ray_csv_descriptor() -> BindingDescriptor:
             {ReadHint.TARGET_PARALLELISM, ReadHint.CONCURRENCY}
         ),
         install_hint=_RAY_INSTALL_HINT,
-    )
-
-
-def _daft_csv_descriptor() -> BindingDescriptor:
-    from tributo.data.bindings.daft_csv import DaftCsvBinding
-
-    return BindingDescriptor(
-        key=BindingKey("tributo.daft", ScanKind.FILE, "csv", "tributo.daft.csv"),
-        factory=DaftCsvBinding,
-        capabilities=frozenset({SourceCapability.PROJECTION}),
-        distribution_name="tributo",
-        distribution_version=_distribution_version("tributo") or "1.3.0.dev0",
-        engine_version_spec=_DAFT_VERSION_SPEC,
-        constraints=BindingPlanConstraints(
-            filesystem_ids=frozenset({"local", "file", "s3"})
-        ),
-        install_hint=_DAFT_INSTALL_HINT,
     )
 
 
@@ -210,33 +163,6 @@ def _ray_iceberg_descriptor() -> BindingDescriptor:
     )
 
 
-def _daft_iceberg_descriptor() -> BindingDescriptor:
-    from tributo.data.bindings.daft_iceberg import DaftIcebergBinding
-
-    return BindingDescriptor(
-        key=BindingKey(
-            "tributo.daft",
-            ScanKind.TABLE,
-            "iceberg",
-            "tributo.daft.iceberg",
-        ),
-        factory=DaftIcebergBinding,
-        capabilities=frozenset(
-            {
-                SourceCapability.PROJECTION,
-                SourceCapability.SNAPSHOT,
-                SourceCapability.SCHEMA_EVOLUTION,
-                SourceCapability.PARTITION_PRUNING,
-            }
-        ),
-        distribution_name="tributo",
-        distribution_version=_distribution_version("tributo") or "1.3.0.dev0",
-        engine_version_spec=_DAFT_VERSION_SPEC,
-        dependency_distributions=("pyiceberg",),
-        install_hint=_DATA_INSTALL_HINT,
-    )
-
-
 def _ray_lance_descriptor() -> BindingDescriptor:
     from tributo.data.bindings.ray_lance import RayLanceBinding
 
@@ -260,27 +186,6 @@ def _ray_lance_descriptor() -> BindingDescriptor:
             {ReadHint.TARGET_PARALLELISM, ReadHint.CONCURRENCY}
         ),
         install_hint=_DATA_INSTALL_HINT,
-    )
-
-
-def _daft_lance_descriptor() -> BindingDescriptor:
-    from tributo.data.bindings.daft_lance import DaftLanceBinding
-
-    return BindingDescriptor(
-        key=BindingKey("tributo.daft", ScanKind.TABLE, "lance", "tributo.daft.lance"),
-        factory=DaftLanceBinding,
-        capabilities=frozenset(
-            {
-                SourceCapability.PROJECTION,
-                SourceCapability.PREDICATE_PUSHDOWN,
-                SourceCapability.SNAPSHOT,
-            }
-        ),
-        distribution_name="tributo",
-        distribution_version=_distribution_version("tributo") or "1.3.0.dev0",
-        engine_version_spec=_DAFT_VERSION_SPEC,
-        dependency_distributions=("pylance", "daft-lance"),
-        install_hint=_DAFT_LANCE_INSTALL_HINT,
     )
 
 
@@ -311,29 +216,6 @@ def _ray_clickhouse_descriptor() -> BindingDescriptor:
             }
         ),
         install_hint=_RAY_CLICKHOUSE_INSTALL_HINT,
-    )
-
-
-def _daft_doris_descriptor() -> BindingDescriptor:
-    from tributo.data.bindings.daft_doris import DaftDorisBinding
-
-    return BindingDescriptor(
-        key=BindingKey(
-            "tributo.daft",
-            ScanKind.SQL,
-            "doris",
-            "daft_doris.daft.doris",
-        ),
-        factory=DaftDorisBinding,
-        capabilities=frozenset({SourceCapability.PROJECTION}),
-        distribution_name="daft-doris",
-        distribution_version=_require_distribution_version("daft-doris"),
-        engine_version_spec=_DAFT_SQL_VERSION_SPEC,
-        dependency_distributions=("PyMySQL",),
-        supported_read_hints=frozenset(
-            {ReadHint.TARGET_PARALLELISM, ReadHint.BATCH_SIZE}
-        ),
-        install_hint=_DAFT_DORIS_INSTALL_HINT,
     )
 
 
@@ -407,31 +289,6 @@ def _ray_postgresql_descriptor() -> BindingDescriptor:
         engine_version_spec=_RAY_VERSION_SPEC,
         dependency_distributions=("psycopg", "psycopg-binary"),
         supported_read_hints=frozenset({ReadHint.CONCURRENCY}),
-        install_hint=_POSTGRESQL_INSTALL_HINT,
-    )
-
-
-def _daft_postgresql_descriptor() -> BindingDescriptor:
-    from tributo.data.bindings.daft_postgresql import DaftPostgreSqlBinding
-
-    return BindingDescriptor(
-        key=BindingKey(
-            "tributo.daft",
-            ScanKind.SQL,
-            "postgresql",
-            "tributo.daft.postgresql",
-        ),
-        factory=DaftPostgreSqlBinding,
-        capabilities=frozenset({SourceCapability.PROJECTION}),
-        distribution_name="tributo",
-        distribution_version=_distribution_version("tributo") or "1.3.0.dev0",
-        engine_version_spec=_DAFT_VERSION_SPEC,
-        dependency_distributions=(
-            "psycopg",
-            "psycopg-binary",
-            "SQLAlchemy",
-            "sqlglot",
-        ),
         install_hint=_POSTGRESQL_INSTALL_HINT,
     )
 
@@ -545,20 +402,6 @@ def default_engine_bindings() -> EngineBindings:
                 (),
             ),
             (
-                _daft_parquet_descriptor,
-                BindingKey(
-                    "tributo.daft",
-                    ScanKind.FILE,
-                    "parquet",
-                    "tributo.daft.parquet",
-                ),
-                "daft",
-                _DAFT_VERSION_SPEC,
-                _DAFT_INSTALL_HINT,
-                file_constraints,
-                (),
-            ),
-            (
                 _ray_csv_descriptor,
                 BindingKey(
                     "tributo.ray_data",
@@ -569,20 +412,6 @@ def default_engine_bindings() -> EngineBindings:
                 "ray",
                 _RAY_VERSION_SPEC,
                 _RAY_INSTALL_HINT,
-                file_constraints,
-                (),
-            ),
-            (
-                _daft_csv_descriptor,
-                BindingKey(
-                    "tributo.daft",
-                    ScanKind.FILE,
-                    "csv",
-                    "tributo.daft.csv",
-                ),
-                "daft",
-                _DAFT_VERSION_SPEC,
-                _DAFT_INSTALL_HINT,
                 file_constraints,
                 (),
             ),
@@ -620,20 +449,6 @@ def default_engine_bindings() -> EngineBindings:
                 ("pyiceberg",),
             ),
             (
-                _daft_iceberg_descriptor,
-                BindingKey(
-                    "tributo.daft",
-                    ScanKind.TABLE,
-                    "iceberg",
-                    "tributo.daft.iceberg",
-                ),
-                "daft",
-                _DAFT_VERSION_SPEC,
-                _DATA_INSTALL_HINT,
-                None,
-                ("pyiceberg",),
-            ),
-            (
                 _ray_lance_descriptor,
                 BindingKey(
                     "tributo.ray_data",
@@ -646,20 +461,6 @@ def default_engine_bindings() -> EngineBindings:
                 _DATA_INSTALL_HINT,
                 None,
                 ("pylance",),
-            ),
-            (
-                _daft_lance_descriptor,
-                BindingKey(
-                    "tributo.daft",
-                    ScanKind.TABLE,
-                    "lance",
-                    "tributo.daft.lance",
-                ),
-                "daft",
-                _DAFT_VERSION_SPEC,
-                _DAFT_LANCE_INSTALL_HINT,
-                None,
-                ("pylance", "daft-lance"),
             ),
             (
                 _ray_clickhouse_descriptor,
@@ -678,20 +479,6 @@ def default_engine_bindings() -> EngineBindings:
                     ("clickhouse-connect", ">=1.5,<1.6"),
                     ("pyarrow", ">=19,<20"),
                 ),
-            ),
-            (
-                _daft_doris_descriptor,
-                BindingKey(
-                    "tributo.daft",
-                    ScanKind.SQL,
-                    "doris",
-                    "daft_doris.daft.doris",
-                ),
-                "daft",
-                _DAFT_SQL_VERSION_SPEC,
-                _DAFT_DORIS_INSTALL_HINT,
-                None,
-                ("daft-doris", "PyMySQL"),
             ),
             (
                 _ray_doris_descriptor,
@@ -734,20 +521,6 @@ def default_engine_bindings() -> EngineBindings:
                 _POSTGRESQL_INSTALL_HINT,
                 None,
                 ("psycopg", "psycopg-binary"),
-            ),
-            (
-                _daft_postgresql_descriptor,
-                BindingKey(
-                    "tributo.daft",
-                    ScanKind.SQL,
-                    "postgresql",
-                    "tributo.daft.postgresql",
-                ),
-                "daft",
-                _DAFT_VERSION_SPEC,
-                _POSTGRESQL_INSTALL_HINT,
-                None,
-                ("psycopg", "psycopg-binary", "SQLAlchemy", "sqlglot"),
             ),
         )
         for (

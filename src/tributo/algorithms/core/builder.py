@@ -52,7 +52,6 @@ class AlgorithmBuilder:
     _PRODUCTION_INPUT_ADAPTERS = tuple(
         QualifiedReference.parse(reference)
         for reference in (
-            "tributo.integrations.algorithm_inputs.ingestion:prepare_daft_input",
             "tributo.integrations.algorithm_inputs.ingestion:prepare_ingestion_input",
             "tributo.integrations.algorithm_inputs.ingestion:prepare_ray_data_input",
         )
@@ -63,14 +62,8 @@ class AlgorithmBuilder:
         *topologies: RuntimeTopology,
     ) -> BackendInputCompatibility:
         return BackendInputCompatibility(
-            accepted_input_views=(
-                "daft_dataframe",
-                "ray_data",
-            ),
-            accepted_ingestion_engines=(
-                "tributo.daft",
-                "tributo.ray_data",
-            ),
+            accepted_input_views=("ray_data",),
+            accepted_ingestion_engines=("tributo.ray_data",),
             required_input_capabilities=("materializable",),
             supported_explicit_adapters=AlgorithmBuilder._PRODUCTION_INPUT_ADAPTERS,
             distribution_policy=topologies,

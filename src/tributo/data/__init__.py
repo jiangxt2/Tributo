@@ -1,6 +1,6 @@
 """Tributo bounded-ingestion, neutral contract, and native-write APIs.
 
-Ray Data, Daft, or an installed binding owns physical reads and writes.
+Ray Data or an installed binding owns physical reads and writes.
 Tributo owns typed requests, logical plans, engine bindings, ETL translation,
 errors, and provenance.  The former ``DataConnector`` facade and registry are
 intentionally not exported.
@@ -22,13 +22,7 @@ from importlib import import_module
 
 from tributo.data.contracts import S3Config, WriteMode
 from tributo.data.graph import GraphDataBundle, GraphSchema
-from tributo.data.handle_adapters import (
-    HandleConversionReceipt,
-    RayHandleAdaptation,
-    adapt_daft_result_to_ray,
-)
 from tributo.data.ingestion import (
-    DaftDataFrameHandle,
     DistributionVersionEvidence,
     HandleOwnership,
     IngestionDescriptor,
@@ -139,10 +133,6 @@ __all__ = [
     # Graph data abstraction
     "GraphSchema",
     "GraphDataBundle",
-    # Explicit native-handle adapters
-    "HandleConversionReceipt",
-    "RayHandleAdaptation",
-    "adapt_daft_result_to_ray",
     # Bounded-ingestion contract
     "IngestionRequest",
     "IngestionRuntimeContext",
@@ -158,7 +148,6 @@ __all__ = [
     "DistributionVersionEvidence",
     "PhysicalSplitSummary",
     "RayDataHandle",
-    "DaftDataFrameHandle",
     "describe_ingestion",
     "open_ingestion",
     "ray_worker_distribution_probe",
